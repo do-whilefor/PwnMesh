@@ -25,6 +25,8 @@
 
 X-Loom 是用于辅助研究的执行框架，**不是一键自动确认漏洞的扫描器**。模型生成的判断、工具输出与安全结论均需结合授权范围和原始证据人工复核。
 
+重构前版本SHA：af4e25236dc1d7ba6b55bcd6aebc836a47097094
+
 ## 核心能力
 
 - **多 Worker 协作：** Dispatcher 按配置管理任务并发与 Worker 容量，按需创建执行容器。
@@ -66,8 +68,6 @@ X-Loom 是用于辅助研究的执行框架，**不是一键自动确认漏洞�
                           ▼
                        Web 工作台
 ```
-
-> 结构图为主要组件关系示意，不代表所有内部调用都必须经过图示的单一路径。
 
 ## 适用场景
 
@@ -112,8 +112,6 @@ ANTHROPIC_BASE_URL=your_api_base_url
 ANTHROPIC_DEFAULT_FABLE_MODEL=your_model_name
 ```
 
-`ANTHROPIC_AUTH_TOKEN` 是模型访问凭证；其余两项分别指定 API 地址与模型名称。请使用与你的服务商及接口协议兼容的配置，**不要将真实 Token 提交至 Git 仓库**。
-
 按需要修改 `dispatch.yaml` 中的并发、超时和 Worker 配置。默认 Worker 镜像应保持：
 
 ```yaml
@@ -129,6 +127,7 @@ container:
 docker build -t xloom:dev .
 docker build -f container/Dockerfile -t xloom-worker:dev .
 ```
+Worker 镜像内的工具与知识资料以 [`container/Dockerfile`](./container/Dockerfile) 为准。工具已安装不表示任意目标都可测试，也不保证每项工具、模板和 PoC 在所有环境下都可直接使用。
 
 ### 4. 启动服务
 
@@ -152,16 +151,6 @@ docker compose down
 ```
 
 默认使用命名卷 `xloom-data` 保存 Server 数据。`docker compose down` 通常保留该卷；执行带 `-v` 的删除命令前，请确认是否仍需要其中的任务数据。
-
-## 使用方式
-
-1. 打开 Web 工作台，确认 Server 与 Dispatcher 正常运行。
-2. 在合法授权范围内创建项目或提交任务，说明研究目标、范围、限制条件和预期结果。
-3. Dispatcher 根据任务类型和并发配置创建 Worker；Worker 使用镜像中的 Agent 与工具开展分析或验证。
-4. 在工作台查看任务状态与执行输出，结合请求响应、代码位置和其他原始证据复核结果。
-5. 对未证实的问题保持待验证状态；对可能造成破坏或超出授权范围的动作停止执行并重新确认授权。
-
-Worker 镜像内的工具与知识资料以 [`container/Dockerfile`](./container/Dockerfile) 为准。工具已安装不表示任意目标都可测试，也不保证每项工具、模板和 PoC 在所有环境下都可直接使用。
 
 ## 使用限制与安全提示
 
