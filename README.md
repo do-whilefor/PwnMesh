@@ -11,7 +11,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Linux-555?logo=linux&logoColor=white)](#环境要求)
 [![License](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-orange)](./LICENSE)
 
-[项目简介](#项目简介) · [核心能力](#核心能力) · [快速开始](#快速开始) · [使用方式](#使用方式) · [使用限制](#使用限制与安全提示) · [授权说明](#授权说明)
+[项目简介](#项目简介) · [核心能力](#核心能力) · [快速开始](#快速开始) · [使用限制](#使用限制与安全提示) · [授权说明](#授权说明)
 
 </div>
 
