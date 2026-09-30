@@ -1,0 +1,471 @@
+package agent
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"sync"
+	"time"
+)
+
+type Loop struct {
+	Provider Provider
+	Tools    []Tool
+	History  []Message
+	Emit     Emit
+	// SaveState atomically persists the request view and its checkpoint.
+	// Original messages remain in message_end events.
+	SaveState  func([]Message, *ContextCheckpoint) error
+	Checkpoint *ContextCheckpoint
+	Steering   <-chan string
+	FollowUp   <-chan string
+	Concluding bool
+	Repairing  bool
+	// Task and conclusion instructions remain verbatim across every compaction.
+	TaskPrompt       string
+	ConclusionPrompt string
+	RepairPrompt     string
+	// ContextData retains bounded runtime task data verbatim during compaction.
+	// Callers persist and restore it separately from task and phase instructions.
+	ContextData []string
+	// BeforeRequest prepares external task data at a settled history boundary,
+	// before compaction and each normal model request. Summary requests and an
+	// immediate context-overflow retry reuse that boundary without calling it.
+	// A non-nil replacement context bounds subsequent work.
+	BeforeRequest func(context.Context, *Loop) (context.Context, error)
+	// OnTurnEnd runs at a settled model/tool boundary. A returned prompt keeps
+	// the same session running; a replacement context bounds subsequent turns.
+	OnTurnEnd func(context.Context, *Loop, Message) (context.Context, string, error)
+	// StopResult lets the runtime end immediately after an authoritative tool
+	// commit. Remaining calls are settled without executing more side effects.
+	StopResult func() (string, bool)
+	// StopResultTools is an exhaustive opt-in declaration of tools that can
+	// change StopResult. With a nonempty list, other tools retain ordinary
+	// Parallel execution between serial barriers. Such tools must not change
+	// the terminal state, and StopResult must permit concurrent reads. An empty
+	// list preserves the safe serial behavior for existing runtime callbacks.
+	StopResultTools []string
+	// A byte budget is an approximation, not a provider token count.
+	ContextBytes int
+	// ContextTokens is an optional input allowance after reserving output space.
+	// Token estimates are labelled estimates; ContextBytes remains a hard cap.
+	ContextTokens int
+	// ContextTargetTokens bounds the rebuilt request after compaction without
+	// changing its trigger. Zero retains the legacy compaction allocation.
+	ContextTargetTokens int
+	RecentBytes         int
+	SummaryBytes        int
+	SummaryMaxTokens    int
+	ObserveRequests     bool
+	mu                  sync.Mutex
+	stateOwned          bool
+}
+
+func (l *Loop) emit(e Event) {
+	if l.Emit != nil {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		switch e.Type {
+		case "agent_start", "agent_end", "turn_start", "turn_end", "model_call_start", "model_call_end", "tool_start", "tool_end":
+			e.At = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		if e.Message != nil {
+			message := cloneMessage(*e.Message)
+			e.Message = &message
+		}
+		if e.Request != nil {
+			request := *e.Request
+			request.Usage = cloneUsage(request.Usage)
+			e.Request = &request
+		}
+		if e.Compaction != nil {
+			record := *e.Compaction
+			record.Quotes = slices.Clone(record.Quotes)
+			record.Usage = cloneUsage(record.Usage)
+			record.View = cloneMessages(record.View)
+			e.Compaction = &record
+		}
+		l.Emit(e)
+	}
+}
+func (l *Loop) append(m Message) error {
+	l.ownState()
+	if err := l.initCheckpoint(); err != nil {
+		return err
+	}
+	l.Checkpoint.LastSequence++
+	m.Sequence = l.Checkpoint.LastSequence
+	l.History = append(l.History, cloneMessage(m))
+	l.emit(Event{Type: "message_end", Message: &m})
+	return l.saveState()
+}
+
+func (l *Loop) saveState() error {
+	if l.SaveState != nil {
+		return l.SaveState(cloneMessages(l.History), cloneCheckpoint(l.Checkpoint))
+	}
+	return nil
+}
+
+// AppendInstruction adds a runtime instruction at a settled turn boundary.
+// The caller must first settle any interrupted tool group with RepairHistory.
+func (l *Loop) AppendInstruction(prompt string) error { return l.append(Text("user", prompt)) }
+func queued(ch <-chan string) (string, bool) {
+	if ch == nil {
+		return "", false
+	}
+	select {
+	case s, ok := <-ch:
+		return s, ok
+	default:
+		return "", false
+	}
+}
+func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
+	if l.Provider == nil {
+		return "", errors.New("missing model provider")
+	}
+	l.ownState()
+	if err := l.initCheckpoint(); err != nil {
+		return "", err
+	}
+	if l.TaskPrompt == "" {
+		if len(l.History) > 0 {
+			l.TaskPrompt = l.History[0].Text()
+		} else {
+			l.TaskPrompt = prompt
+		}
+	}
+	if l.Concluding && l.ConclusionPrompt == "" && prompt != "" {
+		l.ConclusionPrompt = prompt
+	}
+	if err := l.RepairHistory(); err != nil {
+		return "", err
+	}
+	if prompt != "" {
+		if err := l.append(Text("user", prompt)); err != nil {
+			return "", err
+		}
+	}
+	if len(l.History) == 0 {
+		return "", errors.New("empty agent context")
+	}
+	l.emit(Event{Type: "agent_start"})
+	defer l.emit(Event{Type: "agent_end"})
+	last := ""
+	for { // Outer loop: queued follow-up after an otherwise settled run.
+		for { // Inner loop: model, tools and steering at turn boundaries.
+			if err := ctx.Err(); err != nil {
+				return last, err
+			}
+			if s, ok := queued(l.Steering); ok {
+				if err := l.append(Text("user", s)); err != nil {
+					return last, err
+				}
+			}
+			if l.BeforeRequest != nil {
+				next, err := l.BeforeRequest(ctx, l)
+				if err != nil {
+					return last, err
+				}
+				if next != nil {
+					ctx = next
+				}
+			}
+			if err := l.compact(ctx); err != nil {
+				return last, err
+			}
+			defs := l.definitions()
+			l.emit(Event{Type: "turn_start"})
+			m, err := l.generate(ctx, l.History, defs, 0)
+			if err != nil {
+				var modelErr *ModelError
+				if errors.As(err, &modelErr) && modelErr.Kind == ErrorContextOverflow && l.Checkpoint.OverflowRetries < 1 {
+					// Persist the allowance before the recovery attempt. Restarting
+					// this run must not grant another attempt or replay any tool.
+					l.Checkpoint.OverflowRetries++
+					if saveErr := l.saveState(); saveErr != nil {
+						return last, saveErr
+					}
+					if compactErr := l.compactForced(ctx); compactErr != nil {
+						return last, compactErr
+					}
+					m, err = l.generate(ctx, l.History, defs, 0)
+				}
+			}
+			if err != nil {
+				var modelErr *ModelError
+				if errors.As(err, &modelErr) && modelErr.Kind == ErrorToolArguments && l.Checkpoint.ToolArgumentRetries == 0 && ctx.Err() == nil {
+					// The provider rejected the whole response before any calls ran.
+					// Persist one allowance until a tool succeeds, including across restarts.
+					l.Checkpoint.ToolArgumentRetries++
+					if saveErr := l.append(Text("user", "The previous response had invalid JSON tool arguments; none of its calls ran. Return valid JSON tool arguments.")); saveErr != nil {
+						return last, saveErr
+					}
+					l.emit(Event{Type: "tool_argument_retry", Error: err.Error()})
+					l.emit(Event{Type: "turn_end"})
+					// Refresh runtime inputs and cancellation at the normal boundary.
+					continue
+				}
+				return last, err
+			}
+			if m.Role != "assistant" {
+				return last, errors.New("provider returned a non-assistant message")
+			}
+			if err := validateCalls(m); err != nil {
+				return last, err
+			}
+			// A truncated argument fragment cannot be marshaled into a valid
+			// session. Preserve the call identity but never execute any of its calls.
+			if m.StopReason == "max_tokens" || m.StopReason == "length" {
+				for n := range m.Content {
+					if m.Content[n].Type == "tool_use" && !json.Valid(m.Content[n].Input) {
+						m.Content[n].Input = json.RawMessage(`{}`)
+					}
+				}
+			}
+			if err = l.append(m); err != nil {
+				return last, err
+			}
+			last = m.Text()
+			calls := []Block{}
+			for _, b := range m.Content {
+				if b.Type == "tool_use" {
+					calls = append(calls, b)
+				}
+			}
+			if len(calls) > 0 {
+				results := l.execute(ctx, calls, m.StopReason == "max_tokens" || m.StopReason == "length")
+				argumentRetries := l.Checkpoint.ToolArgumentRetries
+				// A later, independent argument error must not discard useful work.
+				// Replenish only with a successful tool receipt, saved atomically
+				// below; text or error receipts cannot replenish the allowance.
+				for _, result := range results {
+					if !result.IsError {
+						l.Checkpoint.ToolArgumentRetries = 0
+						break
+					}
+				}
+				// Always settle every emitted tool id, including after cancellation.
+				if err = l.append(Message{Role: "user", Content: results}); err != nil {
+					l.Checkpoint.ToolArgumentRetries = argumentRetries
+					return last, err
+				}
+			}
+			l.emit(Event{Type: "turn_end"})
+			if l.StopResult != nil {
+				if result, done := l.StopResult(); done {
+					l.emit(Event{Type: "runtime_result", Text: result})
+					return result, nil
+				}
+			}
+			if err = ctx.Err(); err != nil {
+				return last, err
+			}
+			if l.OnTurnEnd != nil {
+				next, instruction, hookErr := l.OnTurnEnd(ctx, l, m)
+				if hookErr != nil {
+					return last, hookErr
+				}
+				if next != nil {
+					ctx = next
+				}
+				if instruction != "" {
+					if l.Repairing {
+						l.RepairPrompt = instruction
+					} else if l.Concluding {
+						l.ConclusionPrompt = instruction
+					}
+					if err = l.append(Text("user", instruction)); err != nil {
+						return last, err
+					}
+					continue
+				}
+			}
+			if len(calls) > 0 {
+				continue
+			}
+			if s, ok := queued(l.Steering); ok {
+				if err = l.append(Text("user", s)); err != nil {
+					return last, err
+				}
+				continue
+			}
+			break
+		}
+		if s, ok := queued(l.FollowUp); ok {
+			if err := l.append(Text("user", s)); err != nil {
+				return last, err
+			}
+			continue
+		}
+		return last, nil
+	}
+}
+func (l *Loop) execute(ctx context.Context, calls []Block, truncated bool) []Block {
+	out := make([]Block, len(calls))
+	find := func(name string) *Tool {
+		for n := range l.Tools {
+			if l.Tools[n].Name == name {
+				return &l.Tools[n]
+			}
+		}
+		return nil
+	}
+	parallel := func(c Block) bool {
+		if l.StopResult != nil && (len(l.StopResultTools) == 0 || slices.Contains(l.StopResultTools, c.Name)) {
+			return false
+		}
+		t := find(c.Name)
+		return t != nil && t.Parallel
+	}
+	run := func(n int) {
+		c := calls[n]
+		l.emit(Event{Type: "tool_start", ToolID: c.ID, ToolName: c.Name})
+		var text string
+		var err error
+		stopped := false
+		if l.StopResult != nil {
+			_, stopped = l.StopResult()
+		}
+		switch t := find(c.Name); {
+		case truncated:
+			err = errors.New("response was truncated; reissue this tool call with complete arguments")
+		case stopped:
+			err = errors.New("the runtime already committed a terminal result; remaining calls were not executed")
+		case ctx.Err() != nil:
+			err = ctx.Err()
+		case l.Concluding:
+			err = errors.New("all tools are disabled during conclusion; use the supplied snapshot and session evidence")
+		case l.Repairing:
+			err = errors.New("all tools are disabled during result-format repair; use existing session evidence")
+		case t == nil:
+			err = fmt.Errorf("unknown tool %q", c.Name)
+		default:
+			// Validate the schema once at dispatch; executors retain semantic
+			// checks such as file paths, hashes, cancellation and business scope.
+			if err = ValidateArguments(t.Schema, c.Input); err == nil {
+				text, err = invoke(ctx, t, c.Input)
+			}
+		}
+		e := Event{Type: "tool_end", ToolID: c.ID, ToolName: c.Name}
+		if err != nil {
+			e.Error = err.Error()
+			if text != "" {
+				text += "\n"
+			}
+			text += err.Error()
+		}
+		content, _ := json.Marshal(text)
+		out[n] = Block{Type: "tool_result", ToolUseID: c.ID, Content: content, IsError: err != nil}
+		l.emit(e)
+	}
+	// Serial tools are barriers, not a reason to serialize independent reads
+	// elsewhere in the response. No tool crosses a write or terminal commit.
+	for start := 0; start < len(calls); {
+		end := start
+		for end < len(calls) && parallel(calls[end]) {
+			end++
+		}
+		if end <= start+1 {
+			run(start)
+			start++
+			continue
+		}
+		var wg sync.WaitGroup
+		for n := start; n < end; n++ {
+			wg.Add(1)
+			go func(n int) { defer wg.Done(); run(n) }(n)
+		}
+		wg.Wait()
+		start = end
+	}
+	return out
+}
+
+func invoke(ctx context.Context, t *Tool, raw json.RawMessage) (text string, err error) {
+	defer func() {
+		if v := recover(); v != nil {
+			err = fmt.Errorf("tool panicked: %v", v)
+		}
+	}()
+	if t.Execute == nil {
+		return "", errors.New("tool has no executor")
+	}
+	return t.Execute(ctx, slices.Clone(raw))
+}
+
+func validateCalls(m Message) error {
+	seen := map[string]bool{}
+	for _, b := range m.Content {
+		if b.Type != "tool_use" {
+			continue
+		}
+		if b.ID == "" || b.Name == "" {
+			return errors.New("tool call missing id or name")
+		}
+		if seen[b.ID] {
+			return fmt.Errorf("duplicate tool call id %q", b.ID)
+		}
+		seen[b.ID] = true
+	}
+	return nil
+}
+
+// RepairHistory settles interrupted tool batches with errors. Replaying them
+// could repeat a side effect that completed before the session was saved.
+func (l *Loop) RepairHistory() error {
+	l.ownState()
+	var pending []Block
+	for i, m := range l.History {
+		if len(pending) > 0 {
+			if m.Role != "user" || len(m.Content) < len(pending) {
+				return errors.New("session has orphaned tool calls")
+			}
+			for n, c := range pending {
+				if m.Content[n].Type != "tool_result" || m.Content[n].ToolUseID != c.ID {
+					return errors.New("session tool result order or id mismatch")
+				}
+			}
+			for _, b := range m.Content[len(pending):] {
+				if b.Type == "tool_result" {
+					return errors.New("session has extra tool results")
+				}
+			}
+			pending = nil
+		} else if hasResults(m) {
+			return errors.New("session has orphaned tool results")
+		}
+		if m.Role == "assistant" {
+			if err := validateCalls(m); err != nil {
+				return err
+			}
+			for _, b := range m.Content {
+				if b.Type == "tool_use" {
+					pending = append(pending, b)
+				}
+			}
+		}
+		if m.Role != "user" && m.Role != "assistant" {
+			return fmt.Errorf("invalid session role at message %d", i)
+		}
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	results := make([]Block, len(pending))
+	for n, c := range pending {
+		results[n] = Block{Type: "tool_result", ToolUseID: c.ID, IsError: true, Content: json.RawMessage(`"Execution was interrupted; do not assume this action completed. Inspect existing evidence before deciding to retry."`)}
+	}
+	return l.append(Message{Role: "user", Content: results})
+}
+func hasResults(m Message) bool {
+	for _, b := range m.Content {
+		if b.Type == "tool_result" {
+			return true
+		}
+	}
+	return false
+}

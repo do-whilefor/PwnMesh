@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="color-scheme" content="light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>X-Loom · 任务工作台</title>
+  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/graph.css">
+  <script defer src="/static/api.js"></script><script defer src="/static/data.js"></script><script defer src="/static/graph-data.js"></script>
+  <script defer src="/static/layout.js"></script>
+  <script defer src="/static/canvas.js"></script>
+  <script defer src="/static/routing.js"></script>
+  <script defer src="/static/graph-view.js"></script>
+  <script defer src="/static/graph.js"></script>
+  <script defer src="/static/app.js"></script>
+</head>
+<body>
+  <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 6 7-6 7"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4c5-4 9 4 14 0v10c-5 4-9-4-14 0"/></symbol>
+    <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m7 11 9-5M7 13l9 5"/></symbol>
+    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><rect x="8" y="8" width="8" height="8" rx="1"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r=".7"/><circle cx="12" cy="12" r=".7"/><circle cx="19" cy="12" r=".7"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
+    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 4v6h6M3 10a9 9 0 1 1 1 9"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></symbol>
+    <symbol id="i-message" viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v9ZM7 8h9M7 12h6"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 6 6 6-6 6m9 0h7"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8Zm0 0v5h5M8 12h8M8 16h6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-node" viewBox="0 0 24 24"><path d="m12 3 9 5v8l-9 5-9-5V8ZM3 8l9 5 9-5m-9 5v8"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+  </defs></svg>
+
+  <aside class="sidebar" id="sidebar" aria-label="项目导航">
+    <a class="brand" href="/"><img src="/static/mark.svg" alt=""><span>X-Loom<small>自主探索，清晰可见。</small></span></a>
+    <button class="button primary create-button" id="new-project"><svg class="icon"><use href="#i-plus"/></svg>创建项目<kbd>N</kbd></button>
+    <label class="project-search"><svg class="icon"><use href="#i-search"/></svg><input type="search" id="project-search" placeholder="搜索项目…" aria-label="搜索项目"><kbd>/</kbd></label>
+    <div class="sidebar-label"><span class="project-list-heading">我的项目<span id="project-count">0</span></span><span class="running-total" aria-live="polite"><i class="status-dot active" aria-hidden="true"></i><span id="running-project-count">0</span>运行中</span></div>
+    <nav class="project-list" id="project-list" aria-label="项目列表"></nav>
+  </aside>
+
+  <div class="workbench">
+    <header class="topbar">
+      <div class="breadcrumbs"><span>工作空间</span><svg class="icon"><use href="#i-chevron"/></svg><strong id="breadcrumb-title">工作台</strong></div>
+    </header>
+    <p class="workspace-error" id="workspace-error" role="alert" hidden></p><div class="workspace">
+      <main class="main-pane">
+        <header class="project-heading">
+          <div class="heading-top"><div class="project-type" id="project-type"></div><span class="round-label" id="round-label">第 1 次推理</span></div>
+          <div class="title-row"><h1 id="project-title">工作台</h1><span class="status-badge" id="project-status"></span></div>
+          <div class="project-meta"><span><svg class="icon"><use href="#i-clock"/></svg><time id="project-start"></time></span><span id="project-end"></span><div class="header-controls"><div class="graph-summary" aria-label="任务概览"><div class="graph-heading"><span class="count-pill" id="node-count"></span></div><div class="graph-progress"><span id="task-progress"></span><div class="progress-track"><i id="progress-fill"></i></div></div></div><button class="button compact secondary" id="toggle-running"></button><button class="button compact secondary" id="add-hint"><svg class="icon"><use href="#i-message"/></svg>补充</button></div></div>
+        </header>
+        <section class="graph-stage" id="graph-stage" aria-label="从起点发散并汇聚到终点的任务图">
+          <div class="canvas-caption"><span class="status-dot"></span><span id="canvas-caption">探索正在展开</span></div>
+          <div id="graph-host" class="graph-host"></div>
+          <div class="graph-empty" id="graph-empty" hidden><img src="/static/mark.svg" alt=""><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" id="empty-create">创建项目</button></div>
+          <div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小任务图"><svg class="icon"><use href="#i-minus"/></svg></button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大任务图"><svg class="icon"><use href="#i-plus"/></svg></button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布"><svg class="icon"><use href="#i-fit"/></svg></button><button class="icon-button" id="arrange-graph" aria-label="重新随机分布" title="重新随机分布"><svg class="icon"><use href="#i-restart"/></svg></button></div></div>
+        </section>
+        <div class="graph-legend" role="group" aria-label="按状态筛选卡片"><button type="button" data-status-filter="done" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot done" aria-hidden="true"></i>已完成</button><button type="button" data-status-filter="running" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot running" aria-hidden="true"></i>运行中</button><button type="button" data-status-filter="pending" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot pending" aria-hidden="true"></i>待执行</button><span class="legend-guide">点击节点追溯来源 · 点击连线查看过程</span></div>
+      </main>
+      <aside class="activity-pane" aria-label="运行观察">
+        <div class="activity-top">
+        <header class="activity-heading"><h2>运行观察</h2><span id="activity-live">等待连接</span></header>
+        <div class="activity-tabs" role="tablist" aria-label="运行信息"><button id="tab-board" data-tab="board" role="tab" aria-controls="activity-content" aria-selected="true">黑板日志</button><button id="tab-system" data-tab="system" role="tab" aria-controls="activity-content" aria-selected="false" tabindex="-1">系统日志<span class="tab-alert" id="system-alert"></span></button><button id="tab-result" data-tab="result" role="tab" aria-controls="activity-content" aria-selected="false" tabindex="-1">最终结果</button></div>
+        </div>
+        <div class="activity-body">
+        <div class="activity-tools" id="activity-tools"></div>
+        <div class="node-inspector" id="node-inspector" hidden></div>
+        <section class="activity-content" id="activity-content" role="tabpanel" aria-labelledby="tab-board" tabindex="0"></section>
+        </div>
+        <footer class="activity-footer"><span id="last-update">等待刷新</span><span id="activity-count"></span></footer>
+      </aside>
+    </div>
+  </div>
+
+  <dialog id="create-dialog" aria-labelledby="create-title">
+    <form id="create-form"><header class="dialog-heading"><div><span class="dialog-kicker">开始新的探索</span><h2 id="create-title">创建项目</h2></div><button type="button" class="icon-button" data-close="create-dialog" aria-label="关闭创建项目"><svg class="icon"><use href="#i-close"/></svg></button></header>
+      <fieldset class="scenario-field"><legend>项目类型</legend><div class="scenario-options" id="scenario-options"></div></fieldset>
+      <label class="field-label" for="create-name">项目名称</label><input id="create-name" name="title" required maxlength="200" placeholder="例如：认证服务安全评估" autocomplete="off">
+      <label class="field-label" for="create-origin">起点 / 已知信息</label><textarea id="create-origin" name="origin" required maxlength="32768" rows="2" placeholder="目标地址、代码位置，或你已经掌握的线索"></textarea>
+      <label class="field-label" for="create-goal">终点 / 项目目标</label><textarea id="create-goal" name="goal" required maxlength="32768" rows="2" placeholder="希望解决什么问题？怎样算完成？"></textarea>
+      <p class="form-error" id="create-error" role="alert"></p><footer class="dialog-footer"><span>保存至 X-Loom 服务</span><button class="button secondary" type="button" data-close="create-dialog">取消</button><button class="button primary" type="submit" id="submit-create">创建并开始<svg class="icon"><use href="#i-chevron"/></svg></button></footer>
+    </form>
+  </dialog>
+  <dialog id="hint-dialog" aria-labelledby="hint-title" aria-describedby="hint-project hint-caption">
+    <form id="hint-form" novalidate>
+      <header class="dialog-heading"><div><span id="hint-project" class="dialog-kicker"></span><h2 id="hint-title">补充提示</h2></div><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充提示"><svg class="icon"><use href="#i-close"/></svg></button></header>
+      <label class="field-label" for="hint-input">补充背景，或调整探索方向</label>
+      <textarea id="hint-input" rows="5" maxlength="32768" placeholder="告诉 Agent 优先关注什么，或补充新的线索…" aria-label="补充提示内容" aria-describedby="hint-error" autofocus></textarea>
+      <p id="hint-caption" class="hint-caption">提示将写入当前项目的黑板</p><p id="hint-error" class="form-error" role="alert"></p>
+      <footer class="dialog-footer"><span>Ctrl / ⌘ + Enter 发送</span><button type="button" class="button secondary" data-close="hint-dialog">取消</button><button type="submit" class="button primary" id="send-hint">发送补充<svg class="icon"><use href="#i-arrow"/></svg></button></footer>
+    </form>
+  </dialog>
+  <dialog id="confirm-dialog" class="small-dialog" aria-labelledby="confirm-title"><form id="confirm-form"><header class="dialog-heading"><h2 id="confirm-title"></h2><button type="button" class="icon-button" data-close="confirm-dialog" aria-label="关闭操作确认"><svg class="icon"><use href="#i-close"/></svg></button></header><p id="confirm-message"></p><p class="form-error" id="confirm-error" role="alert"></p><footer class="dialog-footer"><button class="button secondary" type="button" data-close="confirm-dialog">取消</button><button class="button primary" type="submit" id="confirm-action">确认</button></footer></form></dialog>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

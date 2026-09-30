@@ -1,0 +1,60 @@
+# ============================================================
+# X-Loom
+# ============================================================
+
+# ---- 第三方参考源码（不纳入版本控制）----
+# pi-main / 参考资料，仅作本地重写参考
+/refer/
+/docs/
+/design/
+/tpm/
+
+# ---- 开发计划与验收记录仅保留本地 ----
+/DEVELOPMENT*.md
+/VALIDATION*.md
+/internal/dispatcher/testdata/fgs-live-20260923.md
+
+# ---- 本地 AI 协作说明（不纳入版本控制）----
+/AGENTS.md
+
+# ---- Go ----
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+/vendor/
+bin/
+dist/
+build/
+
+# ---- 环境变量与密钥 ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# ---- 运行时生成 ----
+.webounty/
+*.log
+logs/
+tmp/
+.cache/
+.xloom/
+*.db
+*.db-shm
+*.db-wal
+__pycache__/
+.pytest_cache/
+
+# ---- 编辑器 / 系统 ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+/dispatch.yaml

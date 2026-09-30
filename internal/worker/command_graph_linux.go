@@ -1,0 +1,517 @@
+//go:build linux
+
+package worker
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
+	"xloom/internal/agent"
+	"xloom/internal/process"
+	"xloom/internal/workergraph"
+)
+
+var commandGraphID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+type commandGraphSpec struct {
+	Key         string             `json:"key"`
+	Parallelism int                `json:"parallelism,omitempty"`
+	Nodes       []commandGraphNode `json:"nodes"`
+}
+
+type commandGraphNode struct {
+	ID        string                   `json:"id"`
+	Kind      string                   `json:"kind,omitempty"`
+	Command   string                   `json:"command,omitempty"`
+	Task      string                   `json:"task,omitempty"`
+	Timeout   int                      `json:"timeout,omitempty"`
+	DependsOn []workergraph.Dependency `json:"depends_on,omitempty"`
+	Resources []string                 `json:"resources"`
+	Artifacts []string                 `json:"artifacts,omitempty"`
+	Optional  bool                     `json:"optional,omitempty"`
+	When      *commandGraphWhen        `json:"when,omitempty"`
+}
+
+type commandGraphWhen struct {
+	Node     string `json:"node"`
+	Status   string `json:"status,omitempty"`
+	Contains string `json:"contains,omitempty"`
+}
+
+type commandGraphOutput struct {
+	Stdout     string `json:"stdout"`
+	OutputPath string `json:"output_path"`
+	ExitCode   int    `json:"exit_code"`
+}
+
+type commandGraphEvidence struct {
+	NodeID          string `json:"node_id"`
+	Path            string `json:"path"`
+	SHA256          string `json:"sha256"`
+	PreviewComplete bool   `json:"preview_complete"`
+	StartLine       int    `json:"start_line,omitempty"`
+	EndLine         int    `json:"end_line,omitempty"`
+}
+
+// Each call runs the currently known graph. The parent Loop can observe its
+// results and append tasks on a later call; every child owns a separate Loop.
+func commandGraphTool(j Job, o Options) agent.Tool {
+	tool := agent.Tool{Definition: agent.Definition{
+		Name:        "run_graph",
+		Description: "Coordinate a command/agent graph across model turns. Choose roles, count and dependencies from the task and results. To extend, reuse the key with the full cumulative nodes list; retain every prior node unchanged. Completed nodes are reverified and reused; parallelism may change. succeeded covers submitted tasks, not Step completion. kind=command (default) uses bash; kind=agent runs an independent original Agent Loop with task text and local file/bash tools. Delegate reasoning to Agents and deterministic work to commands. Children cannot delegate, publish blackboard records or finish the Step. Supply sufficient context and synthesize their results; agreement within one Run is not independent review. Bounds: 1..64 cumulative nodes, parallelism 1..16 (default min(node count,16)), command timeout <=120s, Agent <=600s, all within the parent deadline. Nodes have private directories in the shared container, not security sandboxes. XLOOM_WORKSPACE and XLOOM_NODE_DIR are absolute directories; XLOOM_DEPENDENCIES is the FILE PATH of dependencies.json (an array, empty for no dependencies). output.value.stdout previews 8000 bytes of stdout/stderr; output.value.output_path locates the full SHA-256-bound stdout.log. Declare extra relative output files in artifacts. Retained files must fit 64 MiB; commands also enforce that write limit. Required dependencies must succeed; optional dependencies allow failed/skipped inputs. Optional failures permit follow-up tasks; required failures remain terminal. when checks dependency status (default succeeded) and optional successful-output contains text; failed/skipped routes require optional dependencies. Agent stdout.log is its account, not raw proof. Declare resources for shared mutable files/objects and order nodes sharing keys by dependencies; resources:[] asserts independent effects. Reuse verifies prior successful outputs before dispatch; unresolved interruptions block new work and are never replayed. Inspect uncertain effects before using a new key. Results include ordered node statuses, errors and timings.",
+		Schema:      json.RawMessage(`{"type":"object","properties":{"key":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"parallelism":{"type":"integer","minimum":1,"maximum":16},"nodes":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"kind":{"type":"string","enum":["command","agent"]},"command":{"type":"string","minLength":1,"maxLength":32768},"task":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":600},"depends_on":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string"},"optional":{"type":"boolean"}},"required":["id"],"additionalProperties":false}},"resources":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}},"artifacts":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":256}},"optional":{"type":"boolean"},"when":{"type":"object","properties":{"node":{"type":"string"},"status":{"type":"string","enum":["succeeded","failed","skipped"]},"contains":{"type":"string","minLength":1,"maxLength":256}},"required":["node"],"additionalProperties":false}},"required":["id","resources"],"additionalProperties":false}}},"required":["key","nodes"],"additionalProperties":false}`),
+	}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
+		return runCommandGraph(ctx, j, o, raw)
+	}}
+	tool.Description += ` Read dependencies with json.load(open(os.environ["XLOOM_DEPENDENCIES"])); each entry has id, status, output.value and output.artifacts (path/sha256). For machine-readable results, declare a separate JSON artifact instead of parsing combined logs. verified_evidence contains only successful command logs, never Agent accounts; preview_complete=true includes exact UTF-8 content and line bounds usable in finish_step or a final fact. Assess meaning directly; reread only additional/truncated evidence, not merely to recertify unchanged files. observed_at is verification time, not Step acceptance.`
+	return tool
+}
+
+func validateCommandGraph(spec *commandGraphSpec) error {
+	if !commandGraphID.MatchString(spec.Key) || len(spec.Nodes) < 1 || len(spec.Nodes) > 64 {
+		return errors.New("run_graph requires a safe key and 1..64 cumulative nodes")
+	}
+	if spec.Parallelism == 0 {
+		spec.Parallelism = min(len(spec.Nodes), 16)
+	}
+	if spec.Parallelism < 1 || spec.Parallelism > 16 {
+		return errors.New("run_graph parallelism must be 1..16")
+	}
+	byID := make(map[string]commandGraphNode, len(spec.Nodes))
+	for i := range spec.Nodes {
+		n := &spec.Nodes[i]
+		if n.Kind == "" {
+			n.Kind = "command"
+		}
+		if (n.Kind != "command" && n.Kind != "agent") || (n.Kind == "command" && (strings.TrimSpace(n.Command) == "" || n.Task != "")) || (n.Kind == "agent" && (strings.TrimSpace(n.Task) == "" || n.Command != "")) {
+			return errors.New("node requires either command or agent task matching its kind")
+		}
+		if !commandGraphID.MatchString(n.ID) || len(n.Command) > 32768 || len(n.Task) > 32768 || len(n.DependsOn) > 64 || n.Resources == nil || len(n.Resources) > 16 || len(n.Artifacts) > 16 {
+			return errors.New("invalid command graph node")
+		}
+		if _, exists := byID[n.ID]; exists {
+			return errors.New("duplicate command graph node")
+		}
+		limit := 120
+		if n.Kind == "agent" {
+			limit = 600
+		}
+		if n.Timeout == 0 {
+			n.Timeout = limit
+		}
+		if n.Timeout < 1 || n.Timeout > limit {
+			return fmt.Errorf("%s node timeout must be 1..%d seconds", n.Kind, limit)
+		}
+		for _, resource := range n.Resources {
+			if strings.TrimSpace(resource) == "" || len(resource) > 128 {
+				return errors.New("invalid shared resource key")
+			}
+		}
+		for _, path := range n.Artifacts {
+			if !commandArtifactPath(path) {
+				return errors.New("artifacts must be clean relative paths inside their node directory")
+			}
+		}
+		slices.Sort(n.Resources)
+		n.Resources = slices.Compact(n.Resources)
+		slices.Sort(n.Artifacts)
+		n.Artifacts = slices.Compact(n.Artifacts)
+		slices.SortFunc(n.DependsOn, func(a, b workergraph.Dependency) int { return strings.Compare(a.ID, b.ID) })
+		byID[n.ID] = *n
+	}
+	// Validate all edges before any node can execute. Reachability also makes
+	// shared resource ordering explicit instead of blocking a goroutine on locks.
+	ancestors := map[string]map[string]bool{}
+	visiting := map[string]bool{}
+	var visit func(string) error
+	visit = func(id string) error {
+		if visiting[id] {
+			return errors.New("command graph dependency cycle")
+		}
+		if ancestors[id] != nil {
+			return nil
+		}
+		n, ok := byID[id]
+		if !ok {
+			return errors.New("unknown command graph dependency")
+		}
+		visiting[id] = true
+		a := map[string]bool{}
+		for i, dep := range n.DependsOn {
+			if i > 0 && dep.ID == n.DependsOn[i-1].ID {
+				return errors.New("duplicate command graph dependency")
+			}
+			if err := visit(dep.ID); err != nil {
+				return err
+			}
+			a[dep.ID] = true
+			for parent := range ancestors[dep.ID] {
+				a[parent] = true
+			}
+		}
+		if n.When != nil {
+			if n.When.Status == "" {
+				n.When.Status = "succeeded"
+			}
+			if !slices.Contains([]string{"succeeded", "failed", "skipped"}, n.When.Status) || len(n.When.Contains) > 256 || !slices.ContainsFunc(n.DependsOn, func(d workergraph.Dependency) bool { return d.ID == n.When.Node }) || (n.When.Status != "succeeded" && n.When.Contains != "") {
+				return errors.New("when requires a direct dependency, a terminal status and optional successful-output contains text")
+			}
+		}
+		visiting[id], ancestors[id] = false, a
+		return nil
+	}
+	for id := range byID {
+		if err := visit(id); err != nil {
+			return err
+		}
+	}
+	for i, a := range spec.Nodes {
+		for _, b := range spec.Nodes[i+1:] {
+			if ancestors[a.ID][b.ID] || ancestors[b.ID][a.ID] {
+				continue
+			}
+			for _, resource := range a.Resources {
+				if slices.Contains(b.Resources, resource) {
+					return fmt.Errorf("shared resource %q requires ordered nodes %s and %s", resource, a.ID, b.ID)
+				}
+			}
+		}
+	}
+	slices.SortFunc(spec.Nodes, func(a, b commandGraphNode) int { return strings.Compare(a.ID, b.ID) })
+	return nil
+}
+
+func commandArtifactPath(path string) bool {
+	return path != "" && len(path) <= 256 && path != "." && path != ".." && !filepath.IsAbs(path) && filepath.Clean(path) == path && !strings.HasPrefix(path, "../") && path != "dependencies.json" && path != "stdout.log" && path != "session.json" && path != "events.jsonl"
+}
+
+// The run root is already identity-bound by runSession. Reject symlinked child
+// directories so a reused key cannot redirect checkpoint or artifact writes.
+func commandGraphDirectory(root string, elements ...string) (string, error) {
+	dir := root
+	for _, element := range elements {
+		dir = filepath.Join(dir, element)
+		if err := os.Mkdir(dir, 0700); err != nil && !os.IsExist(err) {
+			return "", err
+		}
+		info, err := os.Lstat(dir)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return "", errors.New("command graph directory must be a real directory")
+		}
+	}
+	return dir, nil
+}
+
+func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	var spec commandGraphSpec
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&spec); err != nil {
+		return "", err
+	}
+	if err := validateCommandGraph(&spec); err != nil {
+		return "", err
+	}
+	identity, err := identityFor(j, o.RunDir)
+	if err != nil {
+		return "", err
+	}
+	dir, err := commandGraphDirectory(o.RunDir, "graph-tools", spec.Key)
+	if err != nil {
+		return "", err
+	}
+	unlock, err := process.Lock(dir)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	input, err := json.Marshal(struct {
+		Identity executionIdentity `json:"identity"`
+		Key      string            `json:"key"`
+	}{identity, spec.Key})
+	if err != nil {
+		return "", err
+	}
+	definition := workergraph.Definition{Version: "mixed-dag-v2"}
+	for _, specNode := range spec.Nodes {
+		nodeSpec := specNode
+		nodeDir := filepath.Join(dir, "nodes", nodeSpec.ID)
+		nodeInput, _ := json.Marshal(nodeSpec)
+		node := workergraph.Node{ID: nodeSpec.ID, Kind: "function", Input: nodeInput, DependsOn: nodeSpec.DependsOn, Optional: nodeSpec.Optional}
+		if nodeSpec.Kind == "agent" {
+			node.Kind = "agent"
+		}
+		node.Run = func(ctx context.Context, in workergraph.Input) (workergraph.Output, error) {
+			if err := process.CheckLaunch(o.RunDir); err != nil {
+				return workergraph.Output{}, err
+			}
+			if process.Cancelled(o.RunDir) {
+				return workergraph.Output{}, context.Canceled
+			}
+			if _, err := commandGraphDirectory(dir, "nodes", nodeSpec.ID); err != nil {
+				return workergraph.Output{}, err
+			}
+			if !o.graphDeadline.IsZero() {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithDeadline(ctx, o.graphDeadline)
+				defer cancel()
+			}
+			if nodeSpec.Kind == "agent" {
+				return executeAgentNode(ctx, j, o, spec.Key, nodeDir, nodeSpec, in.Dependencies)
+			}
+			return executeCommandNode(ctx, o.RunDir, j.Workspace, nodeDir, nodeSpec, in.Dependencies)
+		}
+		node.Verify = func(ctx context.Context, _ workergraph.Input, out workergraph.Output) error {
+			var value commandGraphOutput
+			if json.Unmarshal(out.Value, &value) != nil || value.ExitCode != 0 || value.OutputPath != filepath.Join(nodeDir, "stdout.log") || len(out.Artifacts) != len(nodeSpec.Artifacts)+1 {
+				return errors.New("invalid command node output")
+			}
+			paths := append([]string{"stdout.log"}, nodeSpec.Artifacts...)
+			for i, path := range paths {
+				previewLimit := 0
+				if i == 0 {
+					previewLimit = 8000
+				}
+				artifact, preview, err := commandFile(ctx, nodeDir, path, previewLimit)
+				if err != nil {
+					return err
+				}
+				if out.Artifacts[i] != artifact {
+					return errors.New("command node artifact SHA-256 changed")
+				}
+				if i == 0 && value.Stdout != preview {
+					return errors.New("command node stdout preview differs from its artifact")
+				}
+			}
+			return nil
+		}
+		if nodeSpec.When != nil {
+			node.When = func(ctx context.Context, in workergraph.Input) (bool, string, error) {
+				if err := ctx.Err(); err != nil {
+					return false, "", err
+				}
+				for _, dep := range in.Dependencies {
+					if dep.ID == nodeSpec.When.Node {
+						var value commandGraphOutput
+						if dep.Status == nodeSpec.When.Status && (nodeSpec.When.Contains == "" || (json.Unmarshal(dep.Output.Value, &value) == nil && strings.Contains(value.Stdout, nodeSpec.When.Contains))) {
+							return true, "", nil
+						}
+						return false, "dependency status or output did not match condition", nil
+					}
+				}
+				return false, "", errors.New("condition dependency missing")
+			}
+		}
+		// No Reconcile callback: a crash after shell side effects but before the
+		// durable receipt requires inspection, never an automatic command replay.
+		definition.Nodes = append(definition.Nodes, node)
+	}
+	started := time.Now()
+	checkpoint, runErr := workergraph.Run(ctx, definition, workergraph.Options{RunID: j.RunID, Input: input, Dir: dir, Parallelism: spec.Parallelism, Extend: true})
+	response := struct {
+		Key            string                  `json:"key"`
+		Status         string                  `json:"status"`
+		ElapsedMS      float64                 `json:"elapsed_ms"`
+		Nodes          []workergraph.NodeState `json:"nodes"`
+		ObservedAt     string                  `json:"observed_at"`
+		Verification   string                  `json:"verification"`
+		Evidence       []commandGraphEvidence  `json:"verified_evidence"`
+		EvidenceErrors map[string]string       `json:"evidence_errors,omitempty"`
+		Error          string                  `json:"error,omitempty"`
+	}{Key: spec.Key, Status: checkpoint.Status, ElapsedMS: float64(time.Since(started)) / float64(time.Millisecond), Nodes: checkpoint.Nodes,
+		ObservedAt:   time.Now().UTC().Format(time.RFC3339Nano),
+		Verification: "Only verified_evidence entries passed final regular-file, no-symlink, full-file SHA-256 and stdout-preview checks after successful node execution. Node statuses describe execution history; evidence_errors identify outputs that changed or became unreadable before handoff. This verifies retained bytes, not task meaning or Step acceptance.",
+		Evidence:     []commandGraphEvidence{}, EvidenceErrors: map[string]string{}}
+	for _, node := range checkpoint.Nodes {
+		if runErr != nil {
+			break // Recovery errors may leave old succeeded statuses unverified.
+		}
+		// An Agent's final account is an interpretation, not a raw observation.
+		// Keep it in node output for the parent to assess, but never offer it as
+		// the direct evidence shortcut accepted by finish_step.
+		if node.Kind != "function" || node.Status != "succeeded" || len(node.Output.Artifacts) == 0 {
+			continue
+		}
+		artifact := node.Output.Artifacts[0]
+		var value commandGraphOutput
+		if json.Unmarshal(node.Output.Value, &value) != nil {
+			continue
+		}
+		current, preview, err := inspectCommandFile(ctx, filepath.Join(dir, "nodes", node.ID), "stdout.log", 8000)
+		if err != nil {
+			response.EvidenceErrors[node.ID] = err.Error()
+			continue
+		}
+		if current != artifact || preview.Text != value.Stdout {
+			response.EvidenceErrors[node.ID] = "stdout changed after node verification"
+			continue
+		}
+		ref := commandGraphEvidence{NodeID: node.ID, Path: artifact.Path, SHA256: artifact.SHA256}
+		// Completeness and hashing come from the same streaming read. A large
+		// unchanged file remains verified, but needs an explicit excerpt.
+		if preview.Complete {
+			ref.PreviewComplete = true
+			ref.StartLine = 1
+			ref.EndLine = strings.Count(preview.Text, "\n")
+			if !strings.HasSuffix(preview.Text, "\n") {
+				ref.EndLine++
+			}
+		}
+		response.Evidence = append(response.Evidence, ref)
+	}
+	if runErr != nil {
+		response.Error = runErr.Error()
+	}
+	encoded, err := json.Marshal(response)
+	return string(encoded), errors.Join(runErr, err)
+}
+
+func executeCommandNode(ctx context.Context, runDir, workspace, dir string, spec commandGraphNode, dependencies []workergraph.NodeState) (workergraph.Output, error) {
+	if dependencies == nil {
+		dependencies = []workergraph.NodeState{}
+	}
+	deps, err := json.Marshal(dependencies)
+	if err != nil {
+		return workergraph.Output{}, err
+	}
+	depsPath := filepath.Join(dir, "dependencies.json")
+	if err := commandNewFile(depsPath, deps); err != nil {
+		return workergraph.Output{}, err
+	}
+	path := filepath.Join(dir, "stdout.log")
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return workergraph.Output{}, err
+	}
+	child, cancel := context.WithTimeout(ctx, time.Duration(spec.Timeout)*time.Second)
+	defer cancel()
+	// Bash sets both soft and hard limits when neither -S nor -H is supplied.
+	// Its file-size unit is 1024 bytes; children inherit this per-file ceiling.
+	// Pass model commands as an argument, never interpolate them in the wrapper.
+	args := append(graphNodeEnvironment(workspace, dir), "bash", "-c", `ulimit -f 65536 || exit; exec bash -c "$1"`, "xloom-run-graph", spec.Command)
+	commandErr := process.Run(child, dir, runDir, f, "env", args...)
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		return workergraph.Output{}, errors.Join(commandErr, err)
+	}
+	if ctx.Err() != nil {
+		return workergraph.Output{}, ctx.Err()
+	}
+	exitCode := 0
+	if commandErr != nil {
+		var exit *exec.ExitError
+		if errors.As(commandErr, &exit) {
+			exitCode = exit.ExitCode()
+		} else {
+			return workergraph.Output{}, fmt.Errorf("command failed; inspect %s: %w", path, commandErr)
+		}
+	}
+	artifact, preview, err := commandFile(ctx, dir, "stdout.log", 8000)
+	if err != nil {
+		return workergraph.Output{}, errors.Join(commandErr, err)
+	}
+	value, _ := json.Marshal(commandGraphOutput{Stdout: preview, OutputPath: path, ExitCode: exitCode})
+	out := workergraph.Output{Value: value, Artifacts: []workergraph.Artifact{artifact}}
+	if commandErr != nil {
+		return out, fmt.Errorf("command exited %d; inspect %s: %w", exitCode, path, commandErr)
+	}
+	for _, name := range spec.Artifacts {
+		artifact, _, err := commandFile(ctx, dir, name, 0)
+		if err != nil {
+			return out, err
+		}
+		out.Artifacts = append(out.Artifacts, artifact)
+	}
+	return out, nil
+}
+
+func graphNodeEnvironment(workspace, dir string) []string {
+	return []string{"XLOOM_WORKSPACE=" + workspace, "XLOOM_NODE_DIR=" + dir, "XLOOM_DEPENDENCIES=" + filepath.Join(dir, "dependencies.json")}
+}
+
+func commandNewFile(path string, raw []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := f.Write(raw)
+	return errors.Join(writeErr, f.Sync(), f.Close())
+}
+
+// Stream full artifacts into the digest while retaining only a bounded preview.
+func commandFile(ctx context.Context, dir, name string, previewLimit int) (workergraph.Artifact, string, error) {
+	artifact, preview, err := inspectCommandFile(ctx, dir, name, previewLimit)
+	return artifact, preview.Text, err
+}
+
+type commandPreview struct {
+	Text     string
+	Complete bool
+}
+
+func inspectCommandFile(ctx context.Context, dir, name string, previewLimit int) (workergraph.Artifact, commandPreview, error) {
+	path := filepath.Join(dir, name)
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil || resolved != path {
+		return workergraph.Artifact{}, commandPreview{}, errors.New("command artifact must exist and not use symlinks")
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return workergraph.Artifact{}, commandPreview{}, err
+	}
+	f := os.NewFile(uintptr(fd), path)
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 {
+		return workergraph.Artifact{}, commandPreview{}, errors.New("command artifact must be a regular file no larger than 64 MiB")
+	}
+	digest := sha256.New()
+	buffer := make([]byte, 64<<10)
+	preview := make([]byte, 0, previewLimit)
+	var size int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return workergraph.Artifact{}, commandPreview{}, err
+		}
+		n, readErr := f.Read(buffer)
+		if n > 0 {
+			size += int64(n)
+			if size > 64<<20 {
+				return workergraph.Artifact{}, commandPreview{}, errors.New("command artifact grew beyond 64 MiB")
+			}
+			digest.Write(buffer[:n])
+			preview = append(preview, buffer[:min(n, previewLimit-len(preview))]...)
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return workergraph.Artifact{}, commandPreview{}, readErr
+		}
+	}
+	after, err := f.Stat()
+	if err != nil || info.Size() != size || after.Size() != size || !info.ModTime().Equal(after.ModTime()) {
+		return workergraph.Artifact{}, commandPreview{}, errors.New("command artifact changed while reading")
+	}
+	text := strings.ToValidUTF8(string(preview), "�")
+	if previewLimit > 0 && info.Size() > int64(previewLimit) {
+		text += "\n[Preview truncated; read output_path for full output.]"
+	}
+	return workergraph.Artifact{Path: path, SHA256: hex.EncodeToString(digest.Sum(nil))}, commandPreview{Text: text, Complete: size == int64(len(preview)) && utf8.Valid(preview) && strings.TrimSpace(text) != ""}, nil
+}
