@@ -411,6 +411,11 @@ func validateReleaseAuditReuseHTTP(requests map[string]int) []string {
 		}
 	}
 	for key, count := range requests {
+		// A root connectivity probe is within the authorized origin and does
+		// not acquire business inputs or retry a join. Keep its observation.
+		if key == "GET / 404" {
+			continue
+		}
 		if _, allowed := wanted[key]; !allowed && count != 0 {
 			failures = append(failures, "unexpected fixture request: "+key)
 		}
@@ -473,6 +478,47 @@ func TestReleaseAuditReuseHTTPRequiresSingleAcquisitionAndOneFailedJoin(t *testi
 			changed[test.key] = test.count
 			if failures := validateReleaseAuditReuseHTTP(changed); len(failures) == 0 || !strings.Contains(strings.Join(failures, "\n"), test.key) {
 				t.Fatalf("missing independent HTTP violation: %v", failures)
+			}
+		})
+	}
+}
+
+func TestReleaseAuditReuseHTTPOptionalOriginProbePreservesBusinessCounts(t *testing.T) {
+	valid := releaseAuditReuseHTTPFixture(t)
+	for _, test := range []struct {
+		name, key string
+		count     int
+	}{
+		{"only optional origin probe", "", 0},
+		{"catalog still downloaded twice", "GET /catalog/android.json 200", 2},
+		{"package still downloaded twice", "GET /packages/linux-0.zip 200", 2},
+		{"missing package still attempted twice", "GET /packages/android-3.zip 404", 2},
+		{"fault still bypassed", "GET /fault/android/join 503", 0},
+		{"join still requested three times", "GET /fault/linux/join 200", 2},
+		{"unknown package still rejected", "GET /packages/unknown.zip 404", 1},
+		{"unknown catalog still rejected", "GET /catalog/unknown.json 404", 1},
+		{"unknown gate still rejected", "GET /fault/unknown/join 404", 1},
+		{"other root status still rejected", "GET / 200", 1},
+		{"other root method still rejected", "POST / 404", 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests := make(map[string]int, len(valid)+2)
+			for key, count := range valid {
+				requests[key] = count
+			}
+			// The task authorizes the local origin but only constrains business
+			// acquisition and join retries. A root probe is neither operation.
+			requests["GET / 404"] = 1
+			if test.key != "" {
+				requests[test.key] = test.count
+			}
+			failures := validateReleaseAuditReuseHTTP(requests)
+			if test.key == "" {
+				if len(failures) != 0 {
+					t.Fatalf("authorized origin connectivity probe counted as repeated work: %v", failures)
+				}
+			} else if len(failures) == 0 || !strings.Contains(strings.Join(failures, "\n"), test.key) {
+				t.Fatalf("origin probe masked a business request violation: %v", failures)
 			}
 		})
 	}
