@@ -222,9 +222,13 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 	if err != nil || publicUpstream == nil || (publicUpstream.Scheme != "http" && publicUpstream.Scheme != "https") || publicUpstream.Host == "" || publicUpstream.User != nil {
 		t.Fatal("invalid live model upstream")
 	}
-	workerBase, workerToken, observationMode := base, token, "direct"
+	observationMode, observationReason, err := liveModelObservationMode(base, os.Getenv("PWNMESH_LIVE_DIRECT_MODEL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerBase, workerToken := base, token
 	observations := &liveProxyRecorder{}
-	if os.Getenv("PWNMESH_LIVE_DIRECT_MODEL") != "1" {
+	if observationMode == "proxy" {
 		proxy, recorder, err := newLiveModelProxy(base, token)
 		if err != nil {
 			t.Fatal("invalid live proxy configuration")
@@ -232,6 +236,8 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 		defer proxy.Close()
 		workerBase, workerToken, observationMode = proxy.URL, "local-observation-proxy", "proxy"
 		observations = recorder
+	} else {
+		t.Logf("model observation mode=direct reason=%s; provider URL preserved, proxy HTTP observations unavailable", observationReason)
 	}
 	store, err := board.Open(filepath.Join(output, "project.db"))
 	if err != nil {
@@ -312,6 +318,7 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 	publicUpstream.User, publicUpstream.RawQuery, publicUpstream.Fragment = nil, "", ""
 	manifest := map[string]any{"project_id": pid, "started": started, "model": model, "upstream": publicUpstream.String(), "reasoning_effort": "max", "reasoning_effort_by_role": knobs.effectiveEfforts(), "request_timeout_seconds": 180, "decision_timeout_seconds": 300, "max_workers": c.Runtime.MaxWorkers, "max_project_workers": c.Runtime.MaxProjectWorkers, "worker_max_running": c.Workers[0].MaxRunning, "require_parallel_workers": knobs.RequireParallelWorkers, "source_commit": os.Getenv("PWNMESH_SOURCE_COMMIT"), "image": image, "namespace": namespace, "healthcheck": "disabled", "cost_status": "unknown_no_verified_account_pricing", "scope": "synthetic local files; real model, scheduler and Docker workers"}
 	manifest["http_observation_mode"] = observationMode
+	manifest["http_observation_reason"] = observationReason
 	manifest["orchestration_version"] = mode
 	manifest["workload_title"], manifest["validation_scope"] = title, validationScope
 	manifest["comparison_protocol_version"] = 1

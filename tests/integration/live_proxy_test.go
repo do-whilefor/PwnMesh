@@ -22,6 +22,9 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/provider"
 )
 
 type liveHTTPUsage struct {
@@ -248,10 +251,34 @@ func (a *liveProxyAttempt) transportFailure(kind string) {
 
 type liveProxyContextKey struct{}
 
+// Replacing the provider endpoint with localhost can change the request before
+// the byte-transparent proxy sees it. OpenRouter chooses adaptive thinking from
+// its hostname; preserve that hostname instead of rewriting the model payload.
+// Direct runs retain Worker/session observations, but have no proxy HTTP data.
+func liveModelObservationMode(upstream, direct string) (mode, reason string, err error) {
+	target, err := url.Parse(upstream)
+	if err != nil || target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil {
+		return "", "", errors.New("invalid live model upstream")
+	}
+	if direct != "" && direct != "0" && direct != "1" {
+		return "", "", errors.New("PWNMESH_LIVE_DIRECT_MODEL must be 0 or 1")
+	}
+	if direct == "1" {
+		return "direct", "explicit_direct_model", nil
+	}
+	if strings.EqualFold(target.Hostname(), "openrouter.ai") {
+		return "direct", "preserve_openrouter_hostname_for_adaptive_thinking", nil
+	}
+	return "proxy", "byte_transparent_reverse_proxy", nil
+}
+
 func newLiveModelProxy(upstream, token string) (*httptest.Server, *liveProxyRecorder, error) {
 	target, err := url.Parse(upstream)
 	if err != nil || target == nil || (target.Scheme != "http" && target.Scheme != "https") || target.Host == "" || target.User != nil {
 		return nil, nil, errors.New("invalid live model upstream")
+	}
+	if mode, _, _ := liveModelObservationMode(upstream, ""); mode == "direct" {
+		return nil, nil, errors.New("OpenRouter requires its original provider hostname; use direct model mode instead of a localhost reverse proxy")
 	}
 	recorder := &liveProxyRecorder{}
 	proxy := httputil.NewSingleHostReverseProxy(target)
@@ -324,6 +351,79 @@ func newLiveModelProxy(upstream, token string) (*httptest.Server, *liveProxyReco
 	}))
 	server.Config.RegisterOnShutdown(transport.CloseIdleConnections)
 	return server, recorder, nil
+}
+
+func TestLiveModelObservationModePreservesEndpointSemantics(t *testing.T) {
+	for _, test := range []struct {
+		name, upstream, direct, mode, reason string
+	}{
+		{"default OpenRouter", "https://openrouter.ai/api", "", "direct", "preserve_openrouter_hostname_for_adaptive_thinking"},
+		{"OpenRouter casing and port", "https://OPENROUTER.AI:443/api/v1/messages", "0", "direct", "preserve_openrouter_hostname_for_adaptive_thinking"},
+		{"explicit direct", "https://openrouter.ai/api", "1", "direct", "explicit_direct_model"},
+		{"default gateway proxy", provider.DefaultBaseURL, "", "proxy", "byte_transparent_reverse_proxy"},
+		{"explicit direct gateway", provider.DefaultBaseURL, "1", "direct", "explicit_direct_model"},
+		{"hostname suffix is not OpenRouter", "https://openrouter.ai.example.invalid/api", "", "proxy", "byte_transparent_reverse_proxy"},
+		{"path is not hostname", "https://example.invalid/openrouter.ai/api", "", "proxy", "byte_transparent_reverse_proxy"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mode, reason, err := liveModelObservationMode(test.upstream, test.direct)
+			if err != nil || mode != test.mode || reason != test.reason {
+				t.Fatalf("mode=%s reason=%s err=%v", mode, reason, err)
+			}
+		})
+	}
+	for _, value := range []struct{ upstream, direct string }{{"file:///tmp/model", ""}, {"https://user:secret@example.invalid", ""}, {"https://example.invalid", "yes"}} {
+		if _, _, err := liveModelObservationMode(value.upstream, value.direct); err == nil {
+			t.Fatal("invalid observation configuration accepted")
+		}
+	}
+	if proxy, _, err := newLiveModelProxy("https://openrouter.ai/api", "unused"); err == nil {
+		proxy.Close()
+		t.Fatal("hostname-sensitive upstream accepted by the reverse proxy")
+	}
+}
+
+type liveObservationTransport func(*http.Request) (*http.Response, error)
+
+func (f liveObservationTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// The production provider builds both requests, while the in-memory transport
+// prevents external traffic. This regression reproduces the broken localhost
+// request and proves the harness selection preserves the direct wire payload.
+func TestLiveModelObservationSelectionKeepsOpenRouterThinking(t *testing.T) {
+	capture := func(base string) map[string]json.RawMessage {
+		t.Helper()
+		var payload map[string]json.RawMessage
+		p := provider.Anthropic{BaseURL: base, Token: "test-token", Model: "fixture-model", MaxTokens: 1000, ReasoningEffort: "high", Client: &http.Client{Transport: liveObservationTransport(func(r *http.Request) (*http.Response, error) {
+			raw, err := io.ReadAll(r.Body)
+			if err != nil || json.Unmarshal(raw, &payload) != nil {
+				t.Fatal("cannot inspect generated request", err)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`)), Request: r}, nil
+		})}}
+		if _, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "Inspect local fixture")}, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	const original = "https://openrouter.ai/api"
+	mode, _, err := liveModelObservationMode(original, "")
+	workerBase := original
+	if mode == "proxy" {
+		workerBase = "http://127.0.0.1:12345"
+	}
+	if err != nil || mode != "direct" {
+		t.Fatalf("unsafe observation mode: %s %v", mode, err)
+	}
+	direct, selected, broken := capture(original), capture(workerBase), capture("http://127.0.0.1:12345")
+	if string(direct["thinking"]) != `{"type":"adaptive"}` || string(selected["thinking"]) != string(direct["thinking"]) || string(broken["thinking"]) != `{"type":"enabled"}` {
+		t.Fatal("provider hostname-dependent thinking contract changed")
+	}
+	for key, value := range direct {
+		if !bytes.Equal(value, selected[key]) {
+			t.Fatalf("observation mode changed request field %s", key)
+		}
+	}
 }
 
 type liveObservedBody struct {
