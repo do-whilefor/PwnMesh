@@ -24,6 +24,82 @@ func artifactContractSpec() commandGraphSpec {
 	}}
 }
 
+func TestArtifactContractModelLoopRejectsOmittedInputsBeforeAnyNodeStarts(t *testing.T) {
+	job, dir := graphWrapperJob(t), t.TempDir()
+	tool := commandGraphTool(job, Options{RunDir: dir})
+	execute := tool.Execute
+	var executions atomic.Int32
+	tool.Execute = func(ctx context.Context, raw json.RawMessage) (string, error) {
+		executions.Add(1)
+		return execute(ctx, raw)
+	}
+	turns := 0
+	loop := agent.Loop{Tools: []agent.Tool{tool}, Provider: scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
+		turns++
+		if turns == 1 {
+			return draftModelCall("missing-contract", "run_graph", `{"key":"missing-contract","nodes":[{"id":"first","command":"touch \"$PWNMESH_WORKSPACE/forbidden\"","resources":[],"inputs":[]},{"id":"second","command":"true","resources":[]}]}`), nil
+		}
+		if turns != 2 {
+			return agent.Message{}, fmt.Errorf("unexpected model turn %d", turns)
+		}
+		_, err := dynamicToolReply(history, "missing-contract")
+		if err == nil || !strings.Contains(err.Error(), "arguments.nodes[1].inputs") {
+			return agent.Message{}, fmt.Errorf("missing input contract did not return a precise tool validation error: %v", err)
+		}
+		return agent.Text("assistant", "Input declaration must be corrected before execution."), nil
+	})}
+	if _, err := loop.Run(context.Background(), "Submit the graph"); err != nil || turns != 2 || executions.Load() != 0 {
+		t.Fatalf("model call bypassed schema validation: %v turns=%d executions=%d", err, turns, executions.Load())
+	}
+	if _, err := os.Stat(filepath.Join(job.Workspace, "forbidden")); !os.IsNotExist(err) {
+		t.Fatal("another node executed before the omitted input contract was rejected")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "graph-tools")); !os.IsNotExist(err) {
+		t.Fatal("schema-invalid model call reached graph execution")
+	}
+}
+
+func TestArtifactContractExplicitInputsPreserveLegacyCanonicalIdentity(t *testing.T) {
+	tool := commandGraphTool(Job{}, Options{})
+	for _, spec := range []commandGraphSpec{
+		{Key: "empty", Nodes: []commandGraphNode{{ID: "source", Command: "true", Resources: []string{}}}},
+		artifactContractSpec(),
+	} {
+		raw, err := marshalCommandGraphCall(spec)
+		if err != nil || agent.ValidateArguments(tool.Schema, raw) != nil {
+			t.Fatalf("explicit empty or named inputs rejected: %s %v", raw, err)
+		}
+		var decoded commandGraphSpec
+		if err := json.Unmarshal(raw, &decoded); err != nil {
+			t.Fatal(err)
+		}
+		before, _ := json.Marshal(spec)
+		after, _ := json.Marshal(decoded)
+		if string(before) != string(after) {
+			t.Fatalf("tool encoding changed durable canonical node definitions: before=%s after=%s", before, after)
+		}
+	}
+	job, dir := graphWrapperJob(t), t.TempDir()
+	spec := commandGraphSpec{Key: "legacy", Nodes: []commandGraphNode{{ID: "source", Command: `printf 'once\n' >> "$PWNMESH_WORKSPACE/effects"; printf observed`, Resources: []string{}}}}
+	legacy, _ := json.Marshal(spec)
+	if strings.Contains(string(legacy), `"inputs"`) {
+		t.Fatal("legacy canonical node JSON unexpectedly declares inputs")
+	}
+	reply, err := runCommandGraph(context.Background(), job, Options{RunDir: dir}, legacy)
+	var before workergraph.Checkpoint
+	if err != nil || json.Unmarshal([]byte(reply), &before) != nil || before.Status != "succeeded" {
+		t.Fatalf("historical direct call stopped working: %s %v", reply, err)
+	}
+	after, err := commandGraphCall(t, context.Background(), job, dir, spec)
+	if err != nil || after.Status != "succeeded" || len(after.Nodes) != 1 || after.Nodes[0].DefinitionSHA256 != before.Nodes[0].DefinitionSHA256 || after.Nodes[0].InputSHA256 != before.Nodes[0].InputSHA256 || !after.Nodes[0].StartedAt.Equal(before.Nodes[0].StartedAt) {
+		t.Fatalf("explicit inputs:[] prevented legacy checkpoint reuse: %+v %v", after, err)
+	}
+	effects, err := os.ReadFile(filepath.Join(job.Workspace, "effects"))
+	if err != nil || string(effects) != "once\n" {
+		t.Fatalf("new model schema caused historical work to rerun: %q %v", effects, err)
+	}
+}
+
 func TestArtifactContractRejectsUndeclaredInputsBeforeAnyExecution(t *testing.T) {
 	job, dir := graphWrapperJob(t), t.TempDir()
 	spec := artifactContractSpec()

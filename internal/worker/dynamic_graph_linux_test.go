@@ -176,7 +176,7 @@ func TestDynamicGraphParentLoopDelegatesFromObservedResults(t *testing.T) {
 				default:
 					return agent.Message{}, fmt.Errorf("parent unexpectedly needed turn %d", turns)
 				}
-				raw, err := json.Marshal(spec)
+				raw, err := marshalCommandGraphCall(spec)
 				if err != nil {
 					return agent.Message{}, err
 				}

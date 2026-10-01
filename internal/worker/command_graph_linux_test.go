@@ -20,7 +20,7 @@ import (
 
 func commandGraphCall(t *testing.T, ctx context.Context, job Job, dir string, spec commandGraphSpec) (workergraph.Checkpoint, error) {
 	t.Helper()
-	raw, err := json.Marshal(spec)
+	raw, err := marshalCommandGraphCall(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,6 +36,27 @@ func commandGraphCall(t *testing.T, ctx context.Context, job Job, dir string, sp
 		}
 	}
 	return response, callErr
+}
+
+// Model calls must state their input contract. Keep this boundary encoding
+// separate from canonical node JSON, which omits empty inputs for old hashes.
+func marshalCommandGraphCall(spec commandGraphSpec) ([]byte, error) {
+	type toolNode struct {
+		commandGraphNode
+		Inputs []commandGraphInput `json:"inputs"`
+	}
+	nodes := make([]toolNode, 0, len(spec.Nodes))
+	for _, node := range spec.Nodes {
+		inputs := node.Inputs
+		if inputs == nil {
+			inputs = []commandGraphInput{}
+		}
+		nodes = append(nodes, toolNode{node, inputs})
+	}
+	return json.Marshal(struct {
+		commandGraphSpec
+		Nodes []toolNode `json:"nodes"`
+	}{spec, nodes})
 }
 
 func commandNodeValue(t *testing.T, checkpoint workergraph.Checkpoint, id string) (workergraph.NodeState, commandGraphOutput) {
@@ -372,7 +393,7 @@ func TestCommandGraphCancellationAndUncertainRecoveryNeverReplay(t *testing.T) {
 	}
 }
 
-func TestCommandGraphFailureAndTimeoutStopSubprocesses(t *testing.T) {
+func TestCommandGraphDrainAndTimeoutStopSubprocesses(t *testing.T) {
 	for _, kind := range []string{"required-failure", "timeout"} {
 		t.Run(kind, func(t *testing.T) {
 			job, dir := graphWrapperJob(t), t.TempDir()
@@ -385,8 +406,18 @@ func TestCommandGraphFailureAndTimeoutStopSubprocesses(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			checkpoint, err := commandGraphCall(t, ctx, job, dir, spec)
-			if err == nil || ctx.Err() != nil || checkpoint.Status != "failed" {
-				t.Fatalf("failed graph did not promptly stop: %+v %v", checkpoint, err)
+			if err == nil || checkpoint.Status != "failed" {
+				t.Fatalf("failed graph lost its terminal failure: %+v %v", checkpoint, err)
+			}
+			if kind == "required-failure" {
+				// The started sibling is drained until the parent deadline,
+				// then joined without replaying its uncertain side effects.
+				slow, _ := commandNodeValue(t, checkpoint, "slow")
+				if !errors.Is(ctx.Err(), context.DeadlineExceeded) || slow.Status != "running" {
+					t.Fatalf("required failure did not drain until cancellation: %+v parent=%v", checkpoint, ctx.Err())
+				}
+			} else if ctx.Err() != nil {
+				t.Fatalf("node timeout did not promptly stop: %+v %v", checkpoint, err)
 			}
 			if !strings.Contains(err.Error(), "stdout.log") {
 				t.Fatalf("failed command lost its diagnostic output path: %v", err)
@@ -443,7 +474,7 @@ func TestCommandGraphCapacityAndAutomaticParallelism(t *testing.T) {
 		for i := 0; i < count-1; i++ {
 			spec.Nodes[count-1].DependsOn = append(spec.Nodes[count-1].DependsOn, workergraph.Dependency{ID: spec.Nodes[i].ID})
 		}
-		raw, err := json.Marshal(spec)
+		raw, err := marshalCommandGraphCall(spec)
 		if err != nil || agent.ValidateArguments(tool.Schema, raw) != nil {
 			t.Fatalf("tool schema rejected %d nodes: %v", count, err)
 		}
@@ -548,7 +579,7 @@ func TestCommandGraphActualLoopUsesDefaultToolWithoutExtraPlanning(t *testing.T)
 			t.Fatal("default execution tools omit run_graph")
 		}
 		if turns == 1 {
-			return agent.Message{Role: "assistant", StopReason: "tool_use", Content: []agent.Block{{Type: "tool_use", ID: "graph-call", Name: "run_graph", Input: json.RawMessage(`{"key":"loop","nodes":[{"id":"one","command":"printf result","resources":[]}]}`)}}}, nil
+			return agent.Message{Role: "assistant", StopReason: "tool_use", Content: []agent.Block{{Type: "tool_use", ID: "graph-call", Name: "run_graph", Input: json.RawMessage(`{"key":"loop","nodes":[{"id":"one","command":"printf result","resources":[],"inputs":[]}]}`)}}}, nil
 		}
 		if turns != 2 || len(history) == 0 || history[len(history)-1].Content[0].IsError {
 			t.Fatalf("graph did not complete within one tool turn: %+v", history)
