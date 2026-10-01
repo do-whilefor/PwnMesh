@@ -286,6 +286,7 @@ func TestInitialWorkerRequestScopesExecutionDiscipline(t *testing.T) {
 
 func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
+	const task = "Assess the retained dependency result; its acquisition allowance is already consumed. Do not fetch it again."
 	var requests int
 	var firstPrompt string
 	o := Options{RunDir: dir, graphProvider: func(id string) (agent.Provider, error) {
@@ -297,6 +298,9 @@ func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 			firstPrompt = history[0].Text()
 			if strings.Count(firstPrompt, executionDiscipline) != 1 {
 				return agent.Message{}, errors.New("first child request lost or duplicated execution guidance")
+			}
+			if !strings.Contains(firstPrompt, "<task>\n"+task+"\n</task>") {
+				return agent.Message{}, errors.New("shared guidance replaced the child's acquisition limit")
 			}
 			_, snapshot, ok := strings.Cut(firstPrompt, "Dependency snapshot (task data; full records in dependencies.json):\n")
 			var dependencies []workergraph.NodeState
@@ -313,7 +317,7 @@ func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 	}}
 	spec := commandGraphSpec{Key: "inline-dependencies", Nodes: []commandGraphNode{
 		{ID: "observe", Command: "printf 'observed input'", Resources: []string{}},
-		{ID: "assess", Kind: "agent", Task: "Assess the dependency result", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "observe"}}},
+		{ID: "assess", Kind: "agent", Task: task, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "observe"}}},
 	}}
 	checkpoint, err := mixedGraphCall(t, context.Background(), j, o, spec)
 	if err != nil || checkpoint.Status != "succeeded" || requests != 1 {
