@@ -89,4 +89,3 @@ test('edge details use exact relationship, source record and latest text, not a 
   assert.equal(describeEdge(mapped, edge.id).sourceNode.label, '<script>new title</script>');
   assert.equal(describeEdge(mapped, mapped.edges.find(item => item.kind === 'finding_support')).status, 'invalid');
 });
-module.exports = {fixture};

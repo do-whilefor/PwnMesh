@@ -229,17 +229,8 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 			return
 		}
 		run := r.Header.Get("x-opencode-session")
-		var execution board.Execution
-		if err := store.Do(r.Context(), func(tx *board.Tx) error {
-			var err error
-			execution, err = tx.Execution(project.Project.ID, run)
-			return err
-		}); err != nil {
-			fail(err)
-			return
-		}
-		var job worker.Job
-		if err := json.Unmarshal(execution.Job, &job); err != nil {
+		job, err := scriptedJob(r.Context(), store, project.Project.ID, run)
+		if err != nil {
 			fail(err)
 			return
 		}
@@ -248,33 +239,12 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 		}
 		turns[run]++
 		turn := turns[run]
-		respond := func(block agent.Block, stop string) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"role": "assistant", "content": []agent.Block{block}, "stop_reason": stop})
-		}
-		call := func(name string, input any) {
-			raw, _ := json.Marshal(input)
-			respond(agent.Block{Type: "tool_use", ID: fmt.Sprintf("call-%d", turn), Name: name, Input: raw}, "tool_use")
-		}
-		action := func(op, key string, payload any) {
-			call("graph_action", map[string]any{"op": op, "idempotency_key": key, "payload": payload})
-		}
+		reply := scriptedModelReply{w: w, turn: turn}
 		previous := ""
 		if turn > 1 {
-			id, found := fmt.Sprintf("call-%d", turn-1), false
-			for _, message := range request.Messages {
-				for _, block := range message.Content {
-					if block.Type == "tool_result" && block.ToolUseID == id {
-						if block.IsError || json.Unmarshal(block.Content, &previous) != nil {
-							fail(fmt.Errorf("%s tool %s failed: %s", job.Kind, id, block.Content))
-							return
-						}
-						found = true
-					}
-				}
-			}
-			if !found {
-				fail(fmt.Errorf("%s missing previous tool result", job.Kind))
+			previous, err = scriptedToolResult(request.Messages, fmt.Sprintf("call-%d", turn-1), false)
+			if err != nil {
+				fail(err)
 				return
 			}
 		}
@@ -282,7 +252,7 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 		case "reason":
 			switch turn {
 			case 1:
-				call("read_graph", map[string]any{"section": "steps", "limit": 20})
+				reply.call("read_graph", map[string]any{"section": "steps", "limit": 20})
 			case 2:
 				var page struct {
 					Items []board.Step `json:"items"`
@@ -292,7 +262,7 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 					return
 				}
 				if len(page.Items) == 0 {
-					action("step", "producer", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write and retain the local fixture evidence."})
+					reply.action("step", "producer", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write and retain the local fixture evidence."})
 				} else if len(page.Items) == 1 && page.Items[0].Status == "completed" && page.Items[0].Result != nil {
 					var state board.State
 					if err := store.Do(r.Context(), func(tx *board.Tx) error {
@@ -306,11 +276,11 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 					if state.Curation.ThroughRevision == 0 {
 						// Ordinary observations no longer schedule Curate automatically.
 						// Explicitly authorize the curator whose transport will fail.
-						action("curation_request", "review-evidence", map[string]any{"sources": []string{*page.Items[0].Result}, "reason": "Review the retained fixture evidence before completing the curation recovery workload."})
+						reply.action("curation_request", "review-evidence", map[string]any{"sources": []string{*page.Items[0].Result}, "reason": "Review the retained fixture evidence before completing the curation recovery workload."})
 						return
 					}
 					completing[run] = true
-					action("complete", "finish", map[string]any{"from": []string{*page.Items[0].Result}, "description": "The local evidence is retained and curated."})
+					reply.action("complete", "finish", map[string]any{"from": []string{*page.Items[0].Result}, "description": "The local evidence is retained and curated."})
 				} else {
 					fail(fmt.Errorf("unexpected business Steps: %+v", page.Items))
 				}
@@ -321,9 +291,9 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 					return
 				}
 				if completing[run] {
-					action("preview", "preview", map[string]any{})
+					reply.action("preview", "preview", map[string]any{})
 				} else {
-					action("commit", "commit", map[string]any{})
+					reply.action("commit", "commit", map[string]any{})
 				}
 			case 4:
 				var receipt board.DecisionReceipt
@@ -331,19 +301,19 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 					fail(errors.New("missing final completion review"))
 					return
 				}
-				action("commit", "commit", map[string]any{})
+				reply.action("commit", "commit", map[string]any{})
 			default:
 				fail(errors.New("main Agent continued after its durable commit"))
 			}
 		case "explore":
 			switch turn {
 			case 1:
-				call("write", map[string]any{"path": proofPath, "content": proof})
+				reply.call("write", map[string]any{"path": proofPath, "content": proof})
 			case 2:
 				raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact": map[string]any{
 					"description": "Local fixture is ready", "scope": "controlled curator retry", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]any{{"path": proofPath}},
 				}}})
-				respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
+				reply.respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
 			default:
 				fail(errors.New("producer was unnecessarily repeated"))
 			}
@@ -352,7 +322,7 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 				fail(errors.New("curator continued after committing or lacks its input"))
 				return
 			}
-			action("curate", "curate", map[string]any{"groups": []any{}})
+			reply.action("curate", "curate", map[string]any{"groups": []any{}})
 		default:
 			fail(fmt.Errorf("unexpected role %s", job.Kind))
 		}

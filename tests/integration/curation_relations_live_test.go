@@ -191,48 +191,16 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 			return
 		}
 		run := r.Header.Get("x-opencode-session")
-		var execution board.Execution
-		if err := store.Do(r.Context(), func(tx *board.Tx) error {
-			var err error
-			execution, err = tx.Execution(project.Project.ID, run)
-			return err
-		}); err != nil {
-			fail(err)
-			return
-		}
-		var job worker.Job
-		if err := json.Unmarshal(execution.Job, &job); err != nil {
+		job, err := scriptedJob(r.Context(), store, project.Project.ID, run)
+		if err != nil {
 			fail(err)
 			return
 		}
 		turns[run]++
 		turn := turns[run]
-		respond := func(block agent.Block, stop string) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"role": "assistant", "content": []agent.Block{block}, "stop_reason": stop})
-		}
-		call := func(name string, input any) {
-			raw, _ := json.Marshal(input)
-			respond(agent.Block{Type: "tool_use", ID: fmt.Sprintf("call-%d", turn), Name: name, Input: raw}, "tool_use")
-		}
-		action := func(op, key string, payload any) {
-			call("graph_action", map[string]any{"op": op, "idempotency_key": key, "payload": payload})
-		}
+		reply := scriptedModelReply{w: w, turn: turn}
 		last := func(wantError bool) (string, error) {
-			id := fmt.Sprintf("call-%d", turn-1)
-			for n := len(request.Messages) - 1; n >= 0; n-- {
-				for _, b := range request.Messages[n].Content {
-					if b.Type == "tool_result" && b.ToolUseID == id {
-						if b.IsError != wantError {
-							return "", fmt.Errorf("%s %s unexpected error=%t: %s", job.Kind, id, b.IsError, b.Content)
-						}
-						var text string
-						err := json.Unmarshal(b.Content, &text)
-						return text, err
-					}
-				}
-			}
-			return "", fmt.Errorf("missing %s result %s", job.Kind, id)
+			return scriptedToolResult(request.Messages, fmt.Sprintf("call-%d", turn-1), wantError)
 		}
 		if turn > 1 {
 			if _, err := last(job.Kind == "curate" && turn == 2); err != nil {
@@ -244,7 +212,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 		case "reason":
 			switch turn {
 			case 1:
-				call("read_graph", map[string]any{"section": "steps", "limit": 20})
+				reply.call("read_graph", map[string]any{"section": "steps", "limit": 20})
 			case 2:
 				text, _ := last(false)
 				var page struct {
@@ -255,7 +223,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 					return
 				}
 				if len(page.Items) == 0 {
-					action("step", "producer", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Retain the mistaken transcription, recalculate the same fixed input and publish a correction."})
+					reply.action("step", "producer", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Retain the mistaken transcription, recalculate the same fixed input and publish a correction."})
 				} else if len(page.Items) == 1 && page.Items[0].Status == "completed" && correctedID != "" {
 					var state board.State
 					if err := store.Do(r.Context(), func(tx *board.Tx) error {
@@ -269,10 +237,10 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 					if state.Curation.ThroughRevision == 0 {
 						// This workload requires reconciliation even though its facts
 						// could otherwise support goal-scoped completion directly.
-						action("curation_request", "review-correction", map[string]any{"sources": []string{oldID, correctedID}, "reason": curationReason})
+						reply.action("curation_request", "review-correction", map[string]any{"sources": []string{oldID, correctedID}, "reason": curationReason})
 						return
 					}
-					action("complete", "finish", map[string]any{"from": []string{correctedID}, "description": "Recalculation corrected the mistaken interpretation; original evidence and curator relation are retained."})
+					reply.action("complete", "finish", map[string]any{"from": []string{correctedID}, "description": "Recalculation corrected the mistaken interpretation; original evidence and curator relation are retained."})
 				} else {
 					fail(fmt.Errorf("unexpected planner Steps: %+v", page.Items))
 				}
@@ -287,9 +255,9 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 					return
 				}
 				if draft.Op == "complete" {
-					action("preview", "preview", map[string]any{})
+					reply.action("preview", "preview", map[string]any{})
 				} else {
-					action("commit", "commit", map[string]any{})
+					reply.action("commit", "commit", map[string]any{})
 				}
 			case 4:
 				text, _ := last(false)
@@ -298,7 +266,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 					fail(errors.New("missing completion review"))
 					return
 				}
-				action("commit", "commit", map[string]any{})
+				reply.action("commit", "commit", map[string]any{})
 			default:
 				fail(errors.New("planner continued after commit"))
 			}
@@ -315,28 +283,28 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 			}
 			calculate := func() {
 				command := `set -eu; sum=0; while IFS= read -r value; do sum=$((sum + value)); done < ` + curationValuesPath + `; hash=$(sha256sum ` + curationValuesPath + `); hash=${hash%% *}; printf '{"sum":%d,"dataset_sha256":"%s"}\n' "$sum" "$hash" | tee ` + curationCorrectedPath
-				call("bash", map[string]any{"command": command, "timeout": 10})
+				reply.call("bash", map[string]any{"command": command, "timeout": 10})
 			}
 			correct := func() {
-				action("fact", "correction", map[string]any{"description": curationNewClaim, "scope": "sample-v1", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]any{{"path": curationValuesPath, "start_line": 1, "end_line": 3}, {"path": curationCorrectedPath, "start_line": 1, "end_line": 1}}})
+				reply.action("fact", "correction", map[string]any{"description": curationNewClaim, "scope": "sample-v1", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]any{{"path": curationValuesPath, "start_line": 1, "end_line": 3}, {"path": curationCorrectedPath, "start_line": 1, "end_line": 1}}})
 			}
 			finish := func() {
 				result, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact_id": correctedID}})
-				respond(agent.Block{Type: "text", Text: string(result)}, "end_turn")
+				reply.respond(agent.Block{Type: "text", Text: string(result)}, "end_turn")
 			}
 			switch turn {
 			case 1:
-				call("write", map[string]any{"path": curationValuesPath, "content": curationValues})
+				reply.call("write", map[string]any{"path": curationValuesPath, "content": curationValues})
 			case 2:
-				call("write", map[string]any{"path": curationOriginalPath, "content": curationOriginal})
+				reply.call("write", map[string]any{"path": curationOriginalPath, "content": curationOriginal})
 			case 3:
-				action("fact", "original", map[string]any{"description": curationOldClaim, "scope": "sample-v1", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]any{{"path": curationOriginalPath, "start_line": 1, "end_line": 1}}})
+				reply.action("fact", "original", map[string]any{"description": curationOldClaim, "scope": "sample-v1", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]any{{"path": curationOriginalPath, "start_line": 1, "end_line": 1}}})
 			case 4:
 				if !captureID("original fact", &oldID) {
 					return
 				}
 				if withCandidates {
-					action("candidate", "tentative", map[string]any{"claim": curationSupportClaim, "scope": "sample-v1", "status": "candidate", "sources": []string{oldID}, "evidence": []map[string]any{{"path": curationOriginalPath, "start_line": 1, "end_line": 1}}, "reason": "The initial transcription is unverified; the common claim remains tentative."})
+					reply.action("candidate", "tentative", map[string]any{"claim": curationSupportClaim, "scope": "sample-v1", "status": "candidate", "sources": []string{oldID}, "evidence": []map[string]any{{"path": curationOriginalPath, "start_line": 1, "end_line": 1}}, "reason": "The initial transcription is unverified; the common claim remains tentative."})
 				} else {
 					calculate()
 				}
@@ -359,7 +327,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 				if !withCandidates || !captureID("corrected fact", &correctedID) {
 					return
 				}
-				action("candidate", "verified", map[string]any{"claim": curationSupportClaim, "scope": "sample-v1", "status": "verified", "sources": []string{correctedID}, "evidence": []map[string]any{{"path": curationValuesPath, "start_line": 1, "end_line": 3}, {"path": curationCorrectedPath, "start_line": 1, "end_line": 1}}, "reason": "The retained input was independently summed by the deterministic command."})
+				reply.action("candidate", "verified", map[string]any{"claim": curationSupportClaim, "scope": "sample-v1", "status": "verified", "sources": []string{correctedID}, "evidence": []map[string]any{{"path": curationValuesPath, "start_line": 1, "end_line": 3}, {"path": curationCorrectedPath, "start_line": 1, "end_line": 1}}, "reason": "The retained input was independently summed by the deterministic command."})
 			case 8:
 				if withCandidates && captureID("verified candidate", &freshCandidateID) {
 					finish()
@@ -385,7 +353,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 			case 1:
 				// The first relation would be valid in isolation. The protected
 				// origin target must reject the entire batch, including its cursor.
-				action("curate", "invalid-batch", map[string]any{"groups": groups, "relations": []any{relation, map[string]any{"kind": "refutes", "source": correctedID, "target": "origin", "reason": "must be rejected"}}})
+				reply.action("curate", "invalid-batch", map[string]any{"groups": groups, "relations": []any{relation, map[string]any{"kind": "refutes", "source": correctedID, "target": "origin", "reason": "must be rejected"}}})
 			case 2:
 				var current board.State
 				var frozen board.State
@@ -405,7 +373,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 					return
 				}
 				rollbackChecked = true
-				action("curate", "valid-batch", map[string]any{"groups": groups, "relations": []any{relation}})
+				reply.action("curate", "valid-batch", map[string]any{"groups": groups, "relations": []any{relation}})
 			default:
 				fail(errors.New("curator continued after its committed receipt"))
 			}

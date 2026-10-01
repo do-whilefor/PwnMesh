@@ -80,14 +80,7 @@ func TestDockerStaleDecisionCancelsModelWithoutStoppingExecute(t *testing.T) {
 		}
 		stale := decide && run == staleRun
 		mu.Unlock()
-		respond := func(block agent.Block, stop string) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"role": "assistant", "content": []agent.Block{block}, "stop_reason": stop})
-		}
-		call := func(name string, input any) {
-			raw, _ := json.Marshal(input)
-			respond(agent.Block{Type: "tool_use", ID: fmt.Sprintf("call-%d", turn), Name: name, Input: raw}, "tool_use")
-		}
+		reply := scriptedModelReply{w: w, turn: turn}
 		if stale {
 			if turn == 1 {
 				// Send response headers and one valid SSE event, then hold the body
@@ -107,7 +100,7 @@ func TestDockerStaleDecisionCancelsModelWithoutStoppingExecute(t *testing.T) {
 			return
 		}
 		if decide {
-			call("graph_action", map[string]any{"op": "commit", "idempotency_key": "empty-plan", "payload": map[string]any{}})
+			reply.call("graph_action", map[string]any{"op": "commit", "idempotency_key": "empty-plan", "payload": map[string]any{}})
 			return
 		}
 		path := "/workspace/.pwnmesh/runs/" + run + "/output-sibling.txt"
@@ -120,14 +113,14 @@ func TestDockerStaleDecisionCancelsModelWithoutStoppingExecute(t *testing.T) {
 				siblingDisconnected <- struct{}{}
 				return
 			}
-			call("write", map[string]string{"path": path, "content": "sibling-proof-preserved\n"})
+			reply.call("write", map[string]string{"path": path, "content": "sibling-proof-preserved\n"})
 		case 2:
 			raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{
 				"fact": map[string]any{"description": "The synthetic sibling file was written after stale Decide cancellation.",
 					"scope": "local synthetic fixture", "observed_at": time.Now().UTC().Format(time.RFC3339),
 					"evidence": []map[string]string{{"path": path}}},
 			}})
-			respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
+			reply.respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
 		default:
 			mu.Lock()
 			modelErrors = append(modelErrors, fmt.Sprintf("unexpected Execute model turn %d", turn))

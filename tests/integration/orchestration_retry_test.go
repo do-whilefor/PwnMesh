@@ -71,48 +71,15 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 			return
 		}
 		run := r.Header.Get("x-opencode-session")
-		var execution board.Execution
-		if err := store.Do(r.Context(), func(tx *board.Tx) error {
-			var err error
-			execution, err = tx.Execution(project.Project.ID, run)
-			return err
-		}); err != nil {
-			fail(err)
-			return
-		}
-		var job worker.Job
-		if err := json.Unmarshal(execution.Job, &job); err != nil {
+		job, err := scriptedJob(r.Context(), store, project.Project.ID, run)
+		if err != nil {
 			fail(err)
 			return
 		}
 		turns[run]++
-		respond := func(block agent.Block, stop string) {
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{"role": "assistant", "content": []agent.Block{block}, "stop_reason": stop})
-		}
-		call := func(name string, input any) {
-			raw, _ := json.Marshal(input)
-			respond(agent.Block{Type: "tool_use", ID: fmt.Sprintf("call-%d", turns[run]), Name: name, Input: raw}, "tool_use")
-		}
-		action := func(op, key string, payload any) {
-			call("graph_action", map[string]any{"op": op, "idempotency_key": key, "payload": payload})
-		}
+		reply := scriptedModelReply{w: w, turn: turns[run]}
 		lastResult := func() (string, error) {
-			id := fmt.Sprintf("call-%d", turns[run]-1)
-			for n := len(request.Messages) - 1; n >= 0; n-- {
-				for _, block := range request.Messages[n].Content {
-					if block.Type != "tool_result" || block.ToolUseID != id {
-						continue
-					}
-					if block.IsError {
-						return "", fmt.Errorf("%s tool %s failed: %s", job.Kind, id, block.Content)
-					}
-					var text string
-					err := json.Unmarshal(block.Content, &text)
-					return text, err
-				}
-			}
-			return "", fmt.Errorf("%s missing tool response %s", job.Kind, id)
+			return scriptedToolResult(request.Messages, fmt.Sprintf("call-%d", turns[run]-1), false)
 		}
 		switch job.Kind {
 		case "curate":
@@ -120,12 +87,12 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 				fail(errors.New("curator continued after its committed receipt"))
 				return
 			}
-			action("curate", "curate", map[string]any{"groups": []any{}})
+			reply.action("curate", "curate", map[string]any{"groups": []any{}})
 		case "reason":
 			switch stages[run] {
 			case "":
 				stages[run] = "read_steps"
-				call("read_graph", map[string]any{"section": "steps", "limit": 20})
+				reply.call("read_graph", map[string]any{"section": "steps", "limit": 20})
 			case "read_steps":
 				text, err := lastResult()
 				if err != nil {
@@ -142,7 +109,7 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 				switch {
 				case len(page.Items) == 0:
 					stages[run] = "step_staged"
-					action("step", "fixture-step", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write the observed fixture status. If unavailable report incomplete; a new business attempt requires explicit main-Agent authorization."})
+					reply.action("step", "fixture-step", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write the observed fixture status. If unavailable report incomplete; a new business attempt requires explicit main-Agent authorization."})
 				case len(page.Items) == 1 && page.Items[0].Status == "failed":
 					step := page.Items[0]
 					if !board.ValidExecutionID(step.LatestRunID) {
@@ -156,10 +123,10 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 						return
 					}
 					stages[run] = "retry_staged"
-					action("step", "retry-once", map[string]any{"action": "retry", "id": step.ID, "latest_run_id": step.LatestRunID, "reason": "Authorize exactly one fresh attempt after the fixture prerequisite changed."})
+					reply.action("step", "retry-once", map[string]any{"action": "retry", "id": step.ID, "latest_run_id": step.LatestRunID, "reason": "Authorize exactly one fresh attempt after the fixture prerequisite changed."})
 				case len(page.Items) == 1 && page.Items[0].Status == "completed" && page.Items[0].Result != nil:
 					stages[run] = "complete_staged"
-					action("complete", "finish", map[string]any{"from": []string{*page.Items[0].Result}, "description": "The authorized successor completed with new evidence; the original failed attempt remains auditable."})
+					reply.action("complete", "finish", map[string]any{"from": []string{*page.Items[0].Result}, "description": "The authorized successor completed with new evidence; the original failed attempt remains auditable."})
 				default:
 					fail(fmt.Errorf("unexpected Steps in scripted planner: %+v", page.Items))
 				}
@@ -179,13 +146,13 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 				}
 				if stages[run] == "complete_staged" {
 					stages[run] = "completion_review"
-					action("preview", "preview", map[string]any{})
+					reply.action("preview", "preview", map[string]any{})
 				} else {
 					if stages[run] == "retry_staged" {
 						t.Logf("phase=retry_authorization_commit_requested elapsed=%.3fs model=local-scripted", time.Since(started).Seconds())
 					}
 					stages[run] = "committed"
-					action("commit", "commit", map[string]any{})
+					reply.action("commit", "commit", map[string]any{})
 				}
 			case "completion_review":
 				text, err := lastResult()
@@ -199,7 +166,7 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 					return
 				}
 				stages[run] = "committed"
-				action("commit", "commit", map[string]any{})
+				reply.action("commit", "commit", map[string]any{})
 			default:
 				fail(errors.New("planner continued after commit"))
 			}
@@ -211,13 +178,13 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 			name := "/workspace/.pwnmesh/runs/" + run + "/output-business-proof.txt"
 			switch turns[run] {
 			case 1:
-				call("write", map[string]any{"path": name, "content": proof})
+				reply.call("write", map[string]any{"path": name, "content": proof})
 			case 2:
 				if _, err := lastResult(); err != nil {
 					fail(err)
 					return
 				}
-				action("fact", "attempt-observation", map[string]any{"description": strings.TrimSpace(proof), "scope": "Synthetic local retry fixture", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]any{{"path": name, "start_line": 1, "end_line": 1}}})
+				reply.action("fact", "attempt-observation", map[string]any{"description": strings.TrimSpace(proof), "scope": "Synthetic local retry fixture", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]any{{"path": name, "start_line": 1, "end_line": 1}}})
 			case 3:
 				text, err := lastResult()
 				if err != nil {
@@ -234,7 +201,7 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 					result = map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact_id": receipt.ID}}
 				}
 				raw, _ := json.Marshal(result)
-				respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
+				reply.respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
 			default:
 				fail(fmt.Errorf("unexpected business-attempt turn %d", turns[run]))
 			}

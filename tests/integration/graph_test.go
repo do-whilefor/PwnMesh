@@ -88,36 +88,13 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 			fail(fmt.Errorf("unexpected tool capabilities: %v", names))
 			return
 		}
-		respond := func(content []agent.Block, stop string) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"role": "assistant", "content": content, "stop_reason": stop})
-		}
+		reply := scriptedModelReply{w: w, turn: turns[run]}
 		completed := func(value any) {
 			raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": value})
-			respond([]agent.Block{{Type: "text", Text: string(raw)}}, "end_turn")
-		}
-		call := func(name string, input any) {
-			raw, _ := json.Marshal(input)
-			respond([]agent.Block{{Type: "tool_use", ID: fmt.Sprintf("call-%d", turns[run]), Name: name, Input: raw}}, "tool_use")
+			reply.respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
 		}
 		lastResult := func() (string, error) {
-			// Runtime review/update context can follow the last settled tool
-			// response. Bind to its call ID instead of the final message slot.
-			id := fmt.Sprintf("call-%d", turns[run]-1)
-			for n := len(request.Messages) - 1; n >= 0; n-- {
-				for _, block := range request.Messages[n].Content {
-					if block.Type != "tool_result" || block.ToolUseID != id {
-						continue
-					}
-					if block.IsError {
-						return "", fmt.Errorf("previous tool failed: %+v", block)
-					}
-					var text string
-					err := json.Unmarshal(block.Content, &text)
-					return text, err
-				}
-			}
-			return "", fmt.Errorf("missing settled response to %s", id)
+			return scriptedToolResult(request.Messages, fmt.Sprintf("call-%d", turns[run]-1), false)
 		}
 		var state board.State
 		if err := client.Do(r.Context(), "GET", "/projects/"+project.Project.ID+"/state", nil, &state, nil); err != nil {
@@ -140,22 +117,19 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 		}
 		if decide {
 			decisionRuns[run] = true
-			action := func(op, key string, payload any) {
-				call("graph_action", map[string]any{"op": op, "idempotency_key": key, "payload": payload})
-			}
 			switch decisionStages[run] {
 			case "":
 				if len(state.Steps) == 0 {
 					decisionStages[run] = "step_staged"
-					action("step", "plan-one", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write synthetic evidence, submit a Fact and Candidate, then finish."})
+					reply.action("step", "plan-one", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write synthetic evidence, submit a Fact and Candidate, then finish."})
 				} else if len(state.Candidates) > 0 && state.Steps[0].Status == "completed" {
 					decisionStages[run] = "completion_staged"
-					action("complete", "finish", map[string]any{"from": []string{factID}, "description": "Verified synthetic evidence and Candidate are retained."})
+					reply.action("complete", "finish", map[string]any{"from": []string{factID}, "description": "Verified synthetic evidence and Candidate are retained."})
 				} else {
 					// Facts may trigger another Decide while Execute is still
 					// running. Commit an empty batch; final JSON cannot publish it.
 					decisionStages[run] = "committing"
-					action("commit", "commit", map[string]any{})
+					reply.action("commit", "commit", map[string]any{})
 				}
 				return
 			case "step_staged", "completion_staged":
@@ -179,10 +153,10 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 				}
 				if wantOp == "complete" {
 					decisionStages[run] = "completion_preview"
-					action("preview", "preview", map[string]any{})
+					reply.action("preview", "preview", map[string]any{})
 				} else {
 					decisionStages[run] = "committing"
-					action("commit", "commit", map[string]any{})
+					reply.action("commit", "commit", map[string]any{})
 				}
 				return
 			case "completion_preview":
@@ -207,7 +181,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 				}
 				completionReviewed = true
 				decisionStages[run] = "committing"
-				action("commit", "commit", map[string]any{})
+				reply.action("commit", "commit", map[string]any{})
 				return
 			default:
 				// A commit either ends successfully or terminates this stale run.
@@ -223,13 +197,13 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 		evidence := []map[string]any{{"path": path, "start_line": 1, "end_line": 1}}
 		switch turns[run] {
 		case 1:
-			call("write", map[string]any{"path": path, "content": proof})
+			reply.call("write", map[string]any{"path": path, "content": proof})
 		case 2:
 			if _, err := lastResult(); err != nil {
 				fail(err)
 				return
 			}
-			call("graph_action", map[string]any{"op": "fact", "idempotency_key": "fact-one", "payload": map[string]any{"description": "The controlled evidence file contains synthetic-proof-verified.", "scope": "Synthetic local test only", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": evidence}})
+			reply.call("graph_action", map[string]any{"op": "fact", "idempotency_key": "fact-one", "payload": map[string]any{"description": "The controlled evidence file contains synthetic-proof-verified.", "scope": "Synthetic local test only", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": evidence}})
 		case 3:
 			text, err := lastResult()
 			if err != nil {
@@ -255,7 +229,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 					}
 				}
 			}
-			call("graph_action", map[string]any{"op": "candidate", "idempotency_key": "candidate-one", "payload": map[string]any{"claim": "Synthetic evidence is retained and verified.", "reason": "The retained file was observed during this Step.", "scope": "Synthetic local test only", "status": "verified", "sources": []string{factID}, "evidence": evidence}})
+			reply.call("graph_action", map[string]any{"op": "candidate", "idempotency_key": "candidate-one", "payload": map[string]any{"claim": "Synthetic evidence is retained and verified.", "reason": "The retained file was observed during this Step.", "scope": "Synthetic local test only", "status": "verified", "sources": []string{factID}, "evidence": evidence}})
 		case 4:
 			text, err := lastResult()
 			if err != nil {
