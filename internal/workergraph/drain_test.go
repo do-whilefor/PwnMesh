@@ -162,3 +162,44 @@ func TestDrainOnFailureStillCancelsOnUncertainOrInvalidResults(t *testing.T) {
 		})
 	}
 }
+
+func TestDrainOnFailureEscalatesSubsequentVerificationFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	started, verifying, conditioning, draining := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	failure := errors.New("original required command failure")
+	definition := Definition{Version: "drain-v1", Nodes: []Node{
+		{ID: "a-running", Kind: "agent", Run: func(ctx context.Context, _ Input) (Output, error) {
+			close(started)
+			<-ctx.Done()
+			return Output{}, ctx.Err()
+		}},
+		{ID: "b-failure", Kind: "function", Run: func(context.Context, Input) (Output, error) {
+			<-started
+			<-verifying
+			<-conditioning
+			return Output{}, failure
+		}},
+		{ID: "c-verifying", Kind: "function", Run: successful, Verify: func(ctx context.Context, _ Input, _ Output) error {
+			close(verifying)
+			select {
+			case <-draining:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return errors.New("retained evidence changed during drain")
+		}},
+		{ID: "d-condition", Kind: "function", When: func(ctx context.Context, _ Input) (bool, string, error) {
+			close(conditioning)
+			<-ctx.Done()
+			close(draining)
+			return false, "", ctx.Err()
+		}, Run: successful},
+	}}
+	options := fixtureOptions(t, 4)
+	options.DrainOnFailure = true
+	checkpoint, err := Run(ctx, definition, options)
+	if !errors.Is(err, failure) || ctx.Err() != nil || checkpoint.Status != "failed" || stateByID(checkpoint, "a-running").Status != "running" || stateByID(checkpoint, "c-verifying").Status != "failed" || stateByID(checkpoint, "d-condition").Status != "blocked" {
+		t.Fatalf("later verification failure did not cancel draining work: %+v %v parent=%v", checkpoint, err, ctx.Err())
+	}
+}
