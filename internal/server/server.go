@@ -572,7 +572,7 @@ func changeIntent(t *b.Tx, project, intent string, fence b.ExecutionFence, op, w
 			return 200, *i, err
 		}
 		if op == "heartbeat" {
-			if err := t.StepReady(g.Project.ID, i.ID); err != nil {
+			if err := t.StepHeartbeatReady(g.Project.ID, i.ID, fence.Run); err != nil {
 				if i.Worker != nil {
 					return 0, nil, b.Err(409, "dependency_invalidated: "+err.Error())
 				}

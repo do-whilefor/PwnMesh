@@ -565,6 +565,11 @@ func TestExecuteExplicitAbandonCancelsWorkerAndKeepsIndependentObservation(t *te
 	}()
 	f.awaitTool(started, done)
 	f.correct(source)
+	// Exercise the production renewal after correction regardless of how fast
+	// the fixture reaches the next publish relative to the heartbeat ticker.
+	if err := f.scheduler.renewLease(f.ctx, run); err != nil {
+		t.Fatalf("corrected premise revoked a running observation lease: %v", err)
+	}
 	observation := f.publish(run, "Independent response retained a rate-limit header")
 	f.decide("step", map[string]string{"action": "abandon", "id": run.Job.Intent.ID, "reason": "The corrected premise makes further fixture work unnecessary"})
 	// The production heartbeat observes revoked ownership and cancels the

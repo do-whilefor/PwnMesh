@@ -133,6 +133,39 @@ func TestStepInvalidationRejectsHTTPStartAfterRegistration(t *testing.T) {
 	}
 }
 
+func TestStepInvalidationHeartbeatRequiresRunningRegisteredOwner(t *testing.T) {
+	for _, phase := range []string{"unregistered", "prepared", "running", "retryable", "result_pending"} {
+		t.Run(phase, func(t *testing.T) {
+			f := newStepInvalidationFixture(t)
+			f.claim(http.StatusOK)
+			if phase != "unregistered" {
+				f.registerInline(f.registration(), http.StatusCreated)
+				if phase != "prepared" {
+					f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
+				}
+				if phase == "retryable" {
+					f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "retryable"}, true, http.StatusOK, nil)
+				} else if phase == "result_pending" {
+					f.pending(`{"accepted":false,"reason":"No completed result"}`)
+				}
+			}
+			f.refute()
+			want := http.StatusConflict
+			if phase == "running" || phase == "result_pending" {
+				want = http.StatusOK
+			}
+			f.request("POST", f.base()+"/intents/"+f.intent+"/heartbeat", map[string]string{"worker": f.lease}, true, want, nil)
+			f.claim(http.StatusConflict)
+			other := *f.executionProtocolFixture
+			other.run, other.lease = "other-run", "planner@other-run"
+			other.request("POST", other.base()+"/intents/"+other.intent+"/heartbeat", map[string]string{"worker": other.lease}, true, http.StatusConflict, nil)
+			if got := f.step(); board.Value(got.Worker) != f.lease || len(got.InvalidSources) != 1 {
+				t.Fatalf("heartbeat changed ownership or hid the corrected premise: %+v", got)
+			}
+		})
+	}
+}
+
 func TestStepInvalidationKeepsRunningObservationUntilHTTPAbandon(t *testing.T) {
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
@@ -143,7 +176,8 @@ func TestStepInvalidationKeepsRunningObservationUntilHTTPAbandon(t *testing.T) {
 	if step.Status != "running" || len(step.InvalidSources) != 1 || step.InvalidSources[0] != f.source || board.Value(step.Worker) != f.lease {
 		t.Fatalf("correction silently stopped running work or hid its invalid source: %+v", step)
 	}
-	f.claim(http.StatusConflict) // Updated dependency validation also fences an existing owner.
+	f.claim(http.StatusConflict) // An unfenced claim still requires valid premises.
+	f.request("POST", f.base()+"/intents/"+f.intent+"/heartbeat", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)
 	payload := map[string]any{
 		"description": "An independent request shows a rate-limit header", "scope": "One test endpoint response",
 		"observed_at": "2026-09-22T10:00:00Z", "evidence": []map[string]string{{

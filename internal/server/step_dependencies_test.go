@@ -122,3 +122,15 @@ func TestDependencyHTTPInvalidationStopsHeartbeatAndRejectsPendingSuccess(t *tes
 		t.Fatal("dependency invalidation deleted the independent raw observation")
 	}
 }
+
+func TestDependencyHTTPInvalidationStopsRunningHeartbeat(t *testing.T) {
+	f, producer, consumer := dependencyHTTPPlan(t)
+	fact := completeDependencyHTTPProducer(t, f, producer)
+	prepareSnapshot(t, f, dependencyHTTPTemplate(f, consumer, "consumer"))
+	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
+	invalidateDependencyHTTPFact(t, f, fact)
+	response := f.request("POST", f.base()+"/intents/"+consumer+"/heartbeat", map[string]string{"worker": f.lease}, true, http.StatusConflict, nil)
+	if !strings.Contains(response, "dependency_invalidated:") {
+		t.Fatalf("running heartbeat ignored its accepted upstream dependency: %s", response)
+	}
+}
