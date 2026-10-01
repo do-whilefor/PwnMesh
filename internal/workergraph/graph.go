@@ -84,6 +84,11 @@ type Options struct {
 	Input       json.RawMessage
 	Dir         string
 	Parallelism int
+	// DrainOnFailure lets already-started independent Run callbacks finish
+	// after an ordinary required Run failure. No further Run callbacks start.
+	// Conditions are cancelled; interruption, required verification/condition
+	// failure, parent cancellation and checkpoint errors still stop active work.
+	DrainOnFailure bool
 	// Extend allows adding nodes to the same run after validating every saved
 	// node. Existing definitions, results and failure boundaries stay intact.
 	Extend bool
@@ -522,6 +527,8 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 	}
 	child, cancel := context.WithCancel(ctx)
 	defer cancel()
+	conditions, cancelConditions := context.WithCancel(child)
+	defer cancelConditions()
 	type completion struct {
 		node       Node
 		input      Input
@@ -530,6 +537,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		reason     string
 		output     Output
 		err        error
+		runFailed  bool
 		durationMS float64
 		verifyMS   float64
 	}
@@ -549,6 +557,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 			// Malformed JSON must reach validation, not become empty success.
 			result.output = cloneOutput(output)
 			result.err = callErr
+			result.runFailed = callErr != nil
 			if result.err == nil && ctx.Err() == nil {
 				started = time.Now()
 				result.err = accept(child, node, input, result.output)
@@ -627,7 +636,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 					go func(node Node, input Input) {
 						started := time.Now()
 						decision, conditionErr := invoke("condition", false, func() (completion, error) {
-							run, reason, err := node.When(child, cloneInput(input))
+							run, reason, err := node.When(conditions, cloneInput(input))
 							return completion{run: run, reason: reason}, err
 						})
 						decision.node, decision.input, decision.condition = node, input, true
@@ -675,13 +684,15 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		if result.condition {
 			delete(conditioning, result.node.ID)
 			state.ConditionDurationMS += result.durationMS
-			cancelledCondition := child.Err() != nil && (errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded))
+			cancelledCondition := conditions.Err() != nil && (errors.Is(result.err, context.Canceled) || errors.Is(result.err, context.DeadlineExceeded))
 			if result.err != nil && !cancelledCondition {
 				// A definite required failure remains terminal even if a sibling
 				// interruption was delivered first. Cancellation is not a failure.
 				state.Status, state.Error, state.FinishedAt = "failed", result.err.Error(), time.Now().UTC()
-				if !result.node.Optional && !terminalFailure {
-					aborted, terminalFailure, firstError = true, true, result.err
+				if !result.node.Optional {
+					if !terminalFailure {
+						aborted, terminalFailure, firstError = true, true, result.err
+					}
 					cancel()
 				}
 			} else if aborted || child.Err() != nil {
@@ -731,9 +742,15 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				state.Status, state.Output = "succeeded", result.output
 			} else {
 				state.Status, state.Error = "failed", result.err.Error()
-				if !result.node.Optional && !terminalFailure {
-					aborted, terminalFailure, firstError = true, true, result.err
-					cancel()
+				if !result.node.Optional {
+					if !terminalFailure {
+						aborted, terminalFailure, firstError = true, true, result.err
+					}
+					if options.DrainOnFailure && result.runFailed {
+						cancelConditions()
+					} else {
+						cancel()
+					}
 				}
 			}
 		}
