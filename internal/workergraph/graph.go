@@ -249,9 +249,22 @@ func invoke[T any](phase string, uncertain bool, callback func() (T, error)) (va
 }
 
 func nodeInput(node Node, state NodeState, initial json.RawMessage, states map[string]*NodeState) Input {
-	input := Input{NodeID: node.ID, Attempt: state.Attempt, Initial: append(json.RawMessage(nil), initial...), Value: append(json.RawMessage(nil), node.Input...)}
+	// The scheduler owns these immutable bytes. Keep a read-only view here;
+	// every callback gets its own cloneInput at the invocation boundary.
+	// Copy dependency metadata so later recovery timing updates cannot alter it.
+	input := Input{NodeID: node.ID, Attempt: state.Attempt, Initial: initial, Value: node.Input}
+	// Preserve the existing hash representation for empty RawMessage slices.
+	if len(input.Initial) == 0 {
+		input.Initial = nil
+	}
+	if len(input.Value) == 0 {
+		input.Value = nil
+	}
+	if len(node.DependsOn) > 0 {
+		input.Dependencies = make([]NodeState, 0, len(node.DependsOn))
+	}
 	for _, dep := range node.DependsOn {
-		input.Dependencies = append(input.Dependencies, cloneNodeState(*states[dep.ID]))
+		input.Dependencies = append(input.Dependencies, *states[dep.ID])
 	}
 	return input
 }
@@ -263,7 +276,7 @@ func inputHash(input Input) string {
 		ID, Status, Reason, Error string
 		Output                    Output
 	}
-	deps := []dependency{}
+	deps := make([]dependency, 0, len(input.Dependencies))
 	for _, state := range input.Dependencies {
 		deps = append(deps, dependency{state.ID, state.Status, state.Reason, state.Error, state.Output})
 	}
@@ -405,10 +418,10 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 			if state == nil {
 				continue // New nodes do not exist durably until recovery succeeds.
 			}
-			input := nodeInput(node, *state, options.Input, states)
 			if state.Status == "pending" || state.Status == "blocked" || state.Status == "cancelled" || state.Status == "failed" {
 				continue
 			}
+			input := nodeInput(node, *state, options.Input, states)
 			if state.InputSHA256 != inputHash(input) {
 				return checkpoint, fmt.Errorf("node %s input binding changed", node.ID)
 			}
