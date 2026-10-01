@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -135,15 +136,26 @@ func releaseAuditReuseObservations(raw []byte) map[string][]releaseAuditReuseObs
 			}
 			var text string
 			var receipt struct {
-				Key, Status string
-				Nodes       []workergraph.NodeState
+				Key, Status, Error string
+				Nodes              []workergraph.NodeState
 			}
-			if json.Unmarshal(block.Content, &text) != nil || json.Unmarshal([]byte(text), &receipt) != nil || receipt.Key != observation.Call.Key {
+			if json.Unmarshal(block.Content, &text) != nil {
+				continue
+			}
+			decoder := json.NewDecoder(strings.NewReader(text))
+			var receiptJSON json.RawMessage
+			if decoder.Decode(&receiptJSON) != nil || json.Unmarshal(receiptJSON, &receipt) != nil || receipt.Key != observation.Call.Key {
+				continue
+			}
+			// The Agent tool wrapper appends the same error after a failed JSON
+			// receipt. Other text or a second JSON value is not a bound receipt.
+			trailer := strings.TrimSpace(text[decoder.InputOffset():])
+			if trailer != "" && (!block.IsError || receipt.Error == "" || trailer != receipt.Error) {
 				continue
 			}
 			observation.Returned = index
 			observation.Receipt.Status, observation.Receipt.Nodes = receipt.Status, receipt.Nodes
-			observation.Files = releaseAuditReuseViewFiles([]byte(text), true)
+			observation.Files = releaseAuditReuseViewFiles(receiptJSON, true)
 			result[receipt.Key] = append(result[receipt.Key], observation)
 			delete(pending, block.ToolUseID)
 		}
@@ -389,6 +401,21 @@ func (observations *releaseAuditReuseHTTP) snapshot() map[string]int {
 	return result
 }
 
+func releaseAuditDiagnosticRequest(key string) bool {
+	requestPath, get := strings.CutPrefix(key, "GET ")
+	requestPath, notFound := strings.CutSuffix(requestPath, " 404")
+	if !get || !notFound || !strings.HasPrefix(requestPath, "/") {
+		return false
+	}
+	requestPath = path.Clean(requestPath)
+	for _, business := range []string{"/catalog", "/packages", "/fault"} {
+		if requestPath == business || strings.HasPrefix(requestPath, business+"/") {
+			return false
+		}
+	}
+	return true
+}
+
 func validateReleaseAuditReuseHTTP(requests map[string]int) []string {
 	files, expected := releaseAuditFixture()
 	wanted := map[string]int{}
@@ -411,9 +438,9 @@ func validateReleaseAuditReuseHTTP(requests map[string]int) []string {
 		}
 	}
 	for key, count := range requests {
-		// A root connectivity probe is within the authorized origin and does
-		// not acquire business inputs or retry a join. Keep its observation.
-		if key == "GET / 404" {
+		// GET/404 probes outside business routes neither acquire inputs nor
+		// retry joins. Keep their observations without inventing a total cap.
+		if releaseAuditDiagnosticRequest(key) {
 			continue
 		}
 		if _, allowed := wanted[key]; !allowed && count != 0 {
@@ -468,7 +495,7 @@ func TestReleaseAuditReuseHTTPRequiresSingleAcquisitionAndOneFailedJoin(t *testi
 		{"missing package not attempted", "GET /packages/android-3.zip 404", 0},
 		{"failure bypassed", "GET /fault/android/join 503", 0},
 		{"join requested three times", "GET /fault/linux/join 200", 2},
-		{"unexpected request", "GET /unexpected 404", 1},
+		{"unexpected business request", "GET /packages/unlisted.zip 404", 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			changed := make(map[string]int, len(valid))
@@ -521,6 +548,98 @@ func TestReleaseAuditReuseHTTPOptionalOriginProbePreservesBusinessCounts(t *test
 				t.Fatalf("origin probe masked a business request violation: %v", failures)
 			}
 		})
+	}
+}
+
+func TestReleaseAuditReuseHTTPDiagnosticsRespectBusinessRouteBoundaries(t *testing.T) {
+	valid := releaseAuditReuseHTTPFixture(t)
+	for _, test := range []struct {
+		key     string
+		allowed bool
+	}{
+		{"GET / 404", true},
+		{"GET /arbitrary-diagnostics/connection-probe 404", true},
+		{"GET /catalogue 404", true},
+		{"GET /packages-info 404", true},
+		{"GET /faults 404", true},
+		{"GET /catalog 404", false},
+		{"GET /packages 404", false},
+		{"GET /fault 404", false},
+		{"GET /catalog/unknown.json 404", false},
+		{"GET /packages/unlisted.zip 404", false},
+		{"GET /fault/unknown/join 404", false},
+		{"GET /probe/../packages/unlisted.zip 404", false},
+		{"GET //fault/unknown/join 404", false},
+		{"HEAD /arbitrary-diagnostics 404", false},
+		{"POST /arbitrary-diagnostics 404", false},
+		{"GET /arbitrary-diagnostics 200", false},
+		{"GET /arbitrary-diagnostics 503", false},
+	} {
+		t.Run(test.key, func(t *testing.T) {
+			requests := make(map[string]int, len(valid)+1)
+			for key, count := range valid {
+				requests[key] = count
+			}
+			requests[test.key] = 2
+			failures := validateReleaseAuditReuseHTTP(requests)
+			if test.allowed && len(failures) != 0 || !test.allowed && (len(failures) == 0 || !strings.Contains(strings.Join(failures, "\n"), test.key)) {
+				t.Fatalf("diagnostic classification differs from the task contract: %v", failures)
+			}
+		})
+	}
+}
+
+func TestReleaseAuditReuseReceiptsAcceptOnlyBoundErrorTrailer(t *testing.T) {
+	files := releaseAuditReuseGraphFixture(t)
+	journalPath := "/workspace/.pwnmesh/runs/audit-run/events.jsonl"
+	for _, test := range []struct {
+		name, trailer string
+		isError       bool
+		wantReceipt   bool
+	}{
+		{"plain JSON receipt", "", false, true},
+		{"actual failed tool wrapper", "\ncontrolled join failure", true, true},
+		{"arbitrary trailing prose", "\nuntrusted explanation", true, false},
+		{"second JSON value", "\n{\"status\":\"succeeded\"}", true, false},
+		{"different failure text", "\na different failure", true, false},
+		{"matching error plus extra prose", "\ncontrolled join failure\nextra", true, false},
+		{"trailer on non-error result", "\ncontrolled join failure", false, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lines := bytes.Split(bytes.TrimSpace(files[journalPath]), []byte{'\n'})
+			var event agent.Event
+			_ = json.Unmarshal(lines[1], &event)
+			block := &event.Message.Content[0]
+			var text string
+			_ = json.Unmarshal(block.Content, &text)
+			var receipt map[string]any
+			_ = json.Unmarshal([]byte(text), &receipt)
+			receipt["error"] = "controlled join failure"
+			receiptJSON, _ := json.Marshal(receipt)
+			block.Content, _ = json.Marshal(string(receiptJSON) + test.trailer)
+			block.IsError = test.isError
+			lines[1], _ = json.Marshal(event)
+			observations := releaseAuditReuseObservations(bytes.Join(lines, []byte{'\n'}))
+			original := observations["release-android"]
+			if test.wantReceipt {
+				if len(original) != 1 || len(observations["release-android-recovered"]) != 1 || original[0].Files["download"]["catalog.json"].Path == "" {
+					t.Fatalf("valid wrapped receipt lost its node files: %+v", observations)
+				}
+			} else if len(original) != 0 {
+				t.Fatal("unbound tool trailer accepted as a failed graph receipt")
+			}
+		})
+	}
+	// Parsing the real wrapper does not turn repeated graph executions into a
+	// single accepted attempt. Each separately paired call stays observable.
+	lines := bytes.Split(bytes.TrimSpace(files[journalPath]), []byte{'\n'})
+	journal := bytes.Join(append(append([][]byte{}, lines[:2]...), lines...), []byte{'\n'})
+	if observations := releaseAuditReuseObservations(journal); len(observations["release-android"]) != 2 {
+		t.Fatal("duplicate original graph execution was hidden")
+	}
+	files[journalPath] = journal
+	if failures := validateReleaseAuditReuseGraph("audit-run", "android", files); len(failures) == 0 {
+		t.Fatal("duplicate original graph execution accepted")
 	}
 }
 
