@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -227,6 +228,12 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 		return out, err
 	}
 	out.Blocked = out.Pending || (tried && out.PreviousRunID == "")
+	if !out.Blocked && q.Kind == "explore" {
+		out.Blocked, err = t.stepWriteBlocked(q.ProjectID, q.Intent)
+		if err != nil {
+			return out, err
+		}
+	}
 	err = t.QueryRow(`SELECT COUNT(*) FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND generation=? AND retry_key=?`, q.Namespace, q.ProjectID, q.Kind, q.Generation, q.RetryKey).Scan(&out.Attempts)
 	if err != nil {
 		return out, err
@@ -279,6 +286,17 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, intents []Intent
 	for _, step := range steps {
 		stepState[step.ID] = step
 	}
+	var writeOwners []Step
+	if slices.ContainsFunc(steps, func(step Step) bool { return len(step.WritePaths) != 0 || step.Repair != nil }) {
+		data, _, _, err := t.stateData(project)
+		if err != nil {
+			return nil, err
+		}
+		writeOwners, err = t.activeStepWriteOwners(project, data.Steps)
+		if err != nil {
+			return nil, err
+		}
+	}
 	values := make([]string, 0, len(intents))
 	args := make([]any, 0, 3*len(intents)+6)
 	for _, i := range intents {
@@ -286,6 +304,10 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, intents []Intent
 		if i.To == nil && i.ConcludedAt == nil && i.Description == "bootstrap" && i.Creator == "dispatcher.bootstrap" && len(i.From) == 1 && i.From[0] == "origin" {
 			kind = "bootstrap"
 		} else if step := stepState[i.ID]; i.To != nil || i.ConcludedAt != nil || i.Worker != nil || step.Status == "abandoned" || len(step.InvalidSources) > 0 || len(step.BlockedBy) > 0 {
+			continue
+		}
+		if stepWriteConflict(stepState[i.ID], writeOwners) != "" {
+			checks[kind+":"+i.ID] = ExecutionCheck{Blocked: true}
 			continue
 		}
 		values = append(values, "(?,?,?)")

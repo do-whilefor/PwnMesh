@@ -16,10 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/provider"
 	"pwnmesh/internal/worker"
 )
 
@@ -70,6 +68,7 @@ type Scheduler struct {
 	curationWaits     map[string]reasonWait
 	controlConflicts  map[string]time.Time
 	unhealthy         map[string]time.Time
+	incompatible      map[string]string
 	rejected          map[string]time.Time
 	cleanup           map[string]string
 	cleaned           map[string]string
@@ -107,23 +106,14 @@ func (s *Scheduler) Health(ctx context.Context, force bool) error {
 	}
 	var result error
 	for _, w := range s.Config.Workers {
-		if err := s.health(ctx, w); err != nil {
-			s.unhealthy[w.Name] = time.Now().Add(5 * time.Second)
+		err := s.health(ctx, w)
+		s.recordHealth(w.Name, err)
+		if err != nil {
 			result = errors.Join(result, fmt.Errorf("worker %s: %w", w.Name, err))
 			slog.Warn("worker health failed", "worker", w.Name, "error", err)
 		}
 	}
 	return result
-}
-func (s *Scheduler) health(ctx context.Context, w config.Worker) error {
-	if s.CheckHealth != nil {
-		return s.CheckHealth(ctx, w)
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.Config.Runtime.HealthTimeout)*time.Second)
-	defer cancel()
-	p := provider.Anthropic{BaseURL: w.Env["ANTHROPIC_BASE_URL"], Token: w.Env["ANTHROPIC_AUTH_TOKEN"], Model: w.Env["ANTHROPIC_MODEL"], MaxTokens: 10}
-	_, err := p.Generate(ctx, []agent.Message{agent.Text("user", "Reply OK")}, nil, nil)
-	return err
 }
 func (s *Scheduler) Run(ctx context.Context) error {
 	var settings board.Settings
@@ -209,7 +199,7 @@ func (s *Scheduler) reap() {
 			}
 			key := s.rejectKey(f.Task.Job.Graph.Project.ID, f.Task.Job.Kind, f.Task.Worker.Name)
 			if f.Outcome == "unhealthy" {
-				s.unhealthy[f.Task.Worker.Name] = time.Now().Add(5 * time.Second)
+				s.recordHealth(f.Task.Worker.Name, f.Err)
 			} else {
 				delete(s.unhealthy, f.Task.Worker.Name)
 			}
@@ -758,6 +748,9 @@ func (s *Scheduler) choose(project, kind string) *config.Worker {
 		if w.Type != "go" {
 			continue
 		}
+		if s.incompatible[w.Name] != "" {
+			continue
+		}
 		if !slices.Contains(w.TaskTypes, kind) || counts[w.Name] >= w.MaxRunning {
 			continue
 		}
@@ -891,14 +884,6 @@ func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runEr
 		defer c()
 		_ = s.Client.Do(releaseCtx, "POST", s.leasePath(t)+"/release", map[string]string{"worker": t.Lease.Run}, nil, nil)
 	}()
-	if s.Config.Runtime.HealthMode == "startup_and_task" {
-		if err := s.health(ctx, t.Worker); err != nil {
-			if ctx.Err() != nil {
-				return "cancelled", ctx.Err()
-			}
-			return "unhealthy", err
-		}
-	}
 	return s.runRegistered(ctx, t, func() { stopLease(); <-heartbeatDone })
 }
 func (s *Scheduler) leasePath(t *task) string {

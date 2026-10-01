@@ -27,6 +27,15 @@ func (t *Tx) stepReady(project, id, lease string) error {
 			if len(step.BlockedBy) != 0 {
 				return Err(409, "Step dependency "+step.BlockedBy[0]+" is not ready")
 			}
+			if len(stepWritePaths(step)) != 0 {
+				blocked, err := t.stepWriteBlocked(project, id)
+				if err != nil {
+					return err
+				}
+				if blocked {
+					return Err(409, "write_conflict: another Step reserves an overlapping write path")
+				}
+			}
 			premiseErr := s.ValidateFactSources(step.From, false)
 			if premiseErr == nil || lease == "" {
 				return premiseErr

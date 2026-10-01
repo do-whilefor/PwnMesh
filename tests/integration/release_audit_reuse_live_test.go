@@ -22,6 +22,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 	"pwnmesh/internal/workergraph"
 )
 
@@ -31,6 +32,7 @@ func TestLiveReleaseAuditReuseProject(t *testing.T) {
 	}
 	fixture, observations := newReleaseAuditReuseHTTP(t)
 	origin := fmt.Sprintf(`Audit synthetic Android and Linux client releases at %s using two independent platform Steps and a separate delivery Step whose structured depends_on names both successful platform Steps. Only this local HTTP origin and /workspace are authorized; do not contact manifest endpoints, read credentials, install software, or execute downloaded files. Python stdlib is sufficient. These are inert ZIP fixtures, not runnable APKs or binaries. Preserve this acceptance contract in delegated tasks.
+Declare the immutable Step write_paths exactly as follows: Android ["/workspace/release-audit/android"], Linux ["/workspace/release-audit/linux"], delivery ["/workspace/release-audit/report.json"]. The platform Steps have no depends_on; delivery depends_on names both platform Step IDs. Keep branch outputs private and give delivery sole ownership of the final report; do not declare the common /workspace/release-audit parent.
 For each platform, retain original /catalog/{platform}.json at /workspace/release-audit/{platform}/source.json, attempt each catalog package path exactly once, and retain original successful bytes at /workspace/release-audit/{platform}/downloads/{id}.zip. Missing files are findings, not failed download nodes. Catalog entries have id/product/version/path/sha256, ZIP manifest.json has product/version/debug/endpoints. Inspect all available packages even if their hash mismatches. Do not fetch any catalog or package a second time.
 Each platform must first submit one complete mixed run_graph with key release-{platform} and exactly these IDs: download (command), manifest (child Agent), integrity (command), join (command). download declares artifacts ["catalog.json","acquisition.json"] in its private node directory, in addition to retained workspace copies; acquisition.json records every HTTP status. manifest and integrity both depend on download, explicitly list inputs [{"node":"download","artifact":"catalog.json"},{"node":"download","artifact":"acquisition.json"}], and run concurrently with resources:[]. manifest inspects embedded versions/debug/endpoints and declares manifests.json; integrity computes hashes, missing packages and duplicate catalog product+version, declaring integrity.json. Shared original downloads are read-only. Do not simulate the child Agent in shell. Child task text must contain this context, exact file contracts and checks.
 join depends on all three predecessors and explicitly lists the four required input files using inputs:[{node,artifact}]. PWNMESH_DEPENDENCIES is the path of a JSON file containing node receipts; look up each declared dependency file through dependency.output.files[artifact_name]. Do not treat stdout logs or the artifacts array as positional business data. All four original nodes use resources:[], each command may print human diagnostics to stdout, and machine-readable data must be declared files. Keep normal default graph parallelism.
@@ -42,6 +44,7 @@ After both platform Steps succeed, delivery reads bound results, verifies report
 		"release_audit_verified_reuse_after_join_failure_v1", func(state board.State, files map[string][]byte) []string {
 			requests := observations.snapshot()
 			failures := append(validateReleaseAuditDeliveryWithGraphs(state, files, validateReleaseAuditReuseGraph), validateReleaseAuditReuseHTTP(requests)...)
+			failures = append(failures, validateReleaseAuditReuseWrites(state, files)...)
 			if err := saveLiveJSON(filepath.Join(os.Getenv("PWNMESH_LIVE_OUTPUT"), "release-http-requests.json"), requests); err != nil {
 				failures = append(failures, "cannot retain fixture HTTP observations: "+err.Error())
 			}
@@ -80,8 +83,138 @@ func TestRetainedReleaseAuditReuseProject(t *testing.T) {
 		t.Fatal(err)
 	}
 	failures := append(validateReleaseAuditDeliveryWithGraphs(state, files, validateReleaseAuditReuseGraph), validateReleaseAuditReuseHTTP(requests)...)
+	failures = append(failures, validateReleaseAuditReuseWrites(state, files)...)
 	if len(failures) != 0 {
 		t.Fatal(failures)
+	}
+}
+
+// Check the accepted task declarations against the original Worker input, not
+// a later narrative that merely claims the platform writers were independent.
+func validateReleaseAuditReuseWrites(state board.State, files map[string][]byte) []string {
+	var failures []string
+	facts := map[string]board.FactRecord{}
+	steps := map[string]board.Step{}
+	for _, fact := range state.FactRecords {
+		facts[fact.ID] = fact
+	}
+	for _, step := range state.Steps {
+		if step.Result != nil {
+			scope := facts[*step.Result].Scope
+			if scope == "release-audit/android" || scope == "release-audit/linux" || scope == "release-audit/delivery" {
+				if _, duplicate := steps[scope]; duplicate {
+					failures = append(failures, scope+": duplicate accepted write scope")
+				}
+				steps[scope] = step
+			}
+		}
+	}
+	for _, role := range []string{"android", "linux", "delivery"} {
+		scope := "release-audit/" + role
+		step, exists := steps[scope]
+		if !exists || step.Worker == nil || step.ID == "" {
+			failures = append(failures, scope+": missing Step write declaration")
+			continue
+		}
+		wantPath := releaseAuditRoot + role
+		var wantDeps []string
+		if role == "delivery" {
+			wantPath = releaseAuditRoot + "report.json"
+			wantDeps = []string{steps["release-audit/android"].ID, steps["release-audit/linux"].ID}
+		}
+		validDependencies := func(ids []string) bool {
+			if len(ids) != len(wantDeps) {
+				return false
+			}
+			for _, id := range wantDeps {
+				if id == "" || !slices.Contains(ids, id) {
+					return false
+				}
+			}
+			return len(ids) < 2 || ids[0] != ids[1]
+		}
+		if !slices.Equal(step.WritePaths, []string{wantPath}) || !validDependencies(step.DependsOn) {
+			failures = append(failures, scope+": Step write_paths or depends_on violates independent platform/single delivery ownership")
+		}
+		run := orchestrationRunID(*step.Worker)
+		var job worker.Job
+		if json.Unmarshal(files["/workspace/.pwnmesh/runs/"+run+"/job.json"], &job) != nil || run == "" || job.RunID != run || job.Kind != "explore" || job.Graph.Project.ID != state.Graph.Project.ID || job.Graph.Project.Generation != state.Graph.Project.Generation || job.Intent == nil || job.Intent.ID != step.ID {
+			failures = append(failures, scope+": missing matching original Worker job for write declaration")
+			continue
+		}
+		var view struct {
+			Steps []board.Step `json:"steps"`
+		}
+		matching := 0
+		if json.Unmarshal(job.InputView, &view) == nil {
+			for _, original := range view.Steps {
+				if original.ID == step.ID {
+					matching++
+					if !slices.Equal(original.WritePaths, []string{wantPath}) || !validDependencies(original.DependsOn) {
+						failures = append(failures, scope+": original Step write_paths or depends_on differs from its authorized contract")
+					}
+				}
+			}
+		}
+		if matching != 1 {
+			failures = append(failures, scope+": original Worker input omitted or duplicated the Step write declaration")
+		}
+	}
+	return failures
+}
+
+func TestReleaseAuditReuseWritesRequireOriginalIndependentDeclarations(t *testing.T) {
+	fixture := func() (board.State, map[string][]byte) {
+		state := board.State{Graph: board.Graph{Project: board.Project{ID: "fixture", OrchestrationVersion: 1}}}
+		files := map[string][]byte{}
+		for _, role := range []string{"android", "linux", "delivery"} {
+			step := board.Step{ID: role, Result: board.Ptr("fact-" + role), Worker: board.Ptr("worker@" + role), WritePaths: []string{releaseAuditRoot + role}}
+			if role == "delivery" {
+				step.WritePaths, step.DependsOn = []string{releaseAuditRoot + "report.json"}, []string{"linux", "android"}
+			}
+			state.Steps = append(state.Steps, step)
+			state.FactRecords = append(state.FactRecords, board.FactRecord{ID: *step.Result, Scope: "release-audit/" + role})
+			view, _ := json.Marshal(map[string]any{"steps": []board.Step{step}})
+			files["/workspace/.pwnmesh/runs/"+role+"/job.json"], _ = json.Marshal(worker.Job{RunID: role, Kind: "explore", Graph: state.Graph, Intent: &board.Intent{ID: role}, InputView: view})
+		}
+		return state, files
+	}
+	for name, change := range map[string]func(*board.State, map[string][]byte){
+		"valid":               func(*board.State, map[string][]byte) {},
+		"missing declaration": func(state *board.State, _ map[string][]byte) { state.Steps[0].WritePaths = nil },
+		"common parent serializes platforms": func(state *board.State, _ map[string][]byte) {
+			state.Steps[0].WritePaths = []string{strings.TrimSuffix(releaseAuditRoot, "/")}
+		},
+		"platform dependency": func(state *board.State, _ map[string][]byte) { state.Steps[1].DependsOn = []string{"android"} },
+		"delivery omits platform": func(state *board.State, _ map[string][]byte) {
+			state.Steps[2].DependsOn = []string{"android", "android"}
+		},
+		"original input omits writes": func(_ *board.State, files map[string][]byte) {
+			key := "/workspace/.pwnmesh/runs/android/job.json"
+			var job worker.Job
+			_ = json.Unmarshal(files[key], &job)
+			job.InputView = json.RawMessage(`{"steps":[{"id":"android"}]}`)
+			files[key], _ = json.Marshal(job)
+		},
+		"original input wrong dependency": func(_ *board.State, files map[string][]byte) {
+			key := "/workspace/.pwnmesh/runs/delivery/job.json"
+			var job worker.Job
+			_ = json.Unmarshal(files[key], &job)
+			job.InputView = json.RawMessage(`{"steps":[{"id":"delivery","write_paths":["/workspace/release-audit/report.json"],"depends_on":["android"]}]}`)
+			files[key], _ = json.Marshal(job)
+		},
+		"unbound original job": func(_ *board.State, files map[string][]byte) {
+			delete(files, "/workspace/.pwnmesh/runs/linux/job.json")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state, files := fixture()
+			change(&state, files)
+			failures := validateReleaseAuditReuseWrites(state, files)
+			if name == "valid" && len(failures) != 0 || name != "valid" && len(failures) == 0 {
+				t.Fatalf("unexpected write contract acceptance: %v", failures)
+			}
+		})
 	}
 }
 
@@ -293,7 +426,9 @@ func validateReleaseAuditReuseGraph(run, platform string, files map[string][]byt
 			for _, input := range wanted {
 				check(slices.Contains(spec.Inputs, input) && slices.ContainsFunc(spec.DependsOn, func(dep workergraph.Dependency) bool { return dep.ID == input.Node && !dep.Optional }), "consumer omitted a required named file: "+id+"/"+input.Artifact)
 				file, exists := dependencyFiles[input.Node][input.Artifact]
-				check(exists && slices.Contains(graph.nodes[input.Node].Output.Artifacts, file), "consumer view omitted its named dependency file: "+id+"/"+input.Artifact)
+				producer := initial.Files[input.Node][input.Artifact]
+				body, retained := files[file.Path]
+				check(exists && retained && path.Clean(file.Path) == file.Path && strings.HasPrefix(file.Path, graph.base+"nodes/"+id+"/.inputs-") && file.SHA256 == producer.SHA256 && fmt.Sprintf("%x", sha256.Sum256(body)) == producer.SHA256 && bytes.Equal(body, files[producer.Path]), "consumer view lacks its verified private input copy: "+id+"/"+input.Artifact)
 			}
 		}
 	}
@@ -738,7 +873,21 @@ func releaseAuditReuseGraphFixture(t *testing.T) map[string][]byte {
 			for _, dep := range spec.DependsOn {
 				for _, node := range graph.checkpoint.Nodes {
 					if node.ID == dep.ID {
-						dependencies = append(dependencies, view(node))
+						projected := view(node)
+						declared := projected["output"].(map[string]any)["files"].(map[string]workergraph.Artifact)
+						frozen := map[string]workergraph.Artifact{}
+						for _, input := range spec.Inputs {
+							if input.Node != node.ID {
+								continue
+							}
+							artifact := declared[input.Artifact]
+							copyPath := graph.base + "nodes/" + spec.ID + "/.inputs-fixture/" + node.ID + "-" + input.Artifact
+							files[copyPath] = bytes.Clone(files[artifact.Path])
+							artifact.Path = copyPath
+							frozen[input.Artifact] = artifact
+						}
+						projected["output"].(map[string]any)["files"] = frozen
+						dependencies = append(dependencies, projected)
 					}
 				}
 			}
@@ -784,6 +933,20 @@ func TestReleaseAuditReuseGraphRejectsRepeatedOrUnboundWork(t *testing.T) {
 				delete(dependency["output"].(map[string]any), "files")
 			}
 			files[path], _ = json.Marshal(dependencies)
+		},
+		"frozen input changed": func(files map[string][]byte) {
+			files[base+"release-android-recovered/nodes/join/.inputs-fixture/download-catalog.json"] = []byte(`{"changed":true}`)
+		},
+		"dependency still points at producer": func(files map[string][]byte) {
+			dependencyPath := base + "release-android-recovered/nodes/join/dependencies.json"
+			var dependencies []map[string]any
+			_ = json.Unmarshal(files[dependencyPath], &dependencies)
+			for _, dependency := range dependencies {
+				if dependency["id"] == "download" {
+					dependency["output"].(map[string]any)["files"].(map[string]any)["catalog.json"].(map[string]any)["path"] = base + "release-android/nodes/download/catalog.json"
+				}
+			}
+			files[dependencyPath], _ = json.Marshal(dependencies)
 		},
 		"report differs from joined artifact": func(files map[string][]byte) {
 			files[releaseAuditRoot+"android/report.json"] = []byte(`{"different":true}`)

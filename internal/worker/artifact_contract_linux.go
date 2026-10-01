@@ -5,7 +5,9 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -91,33 +93,68 @@ func validateCommandInputs(spec *commandGraphSpec) error {
 	return nil
 }
 
-// Recheck requested bytes immediately before launching a consumer. A durable
-// success receipt alone does not prove another node left its files unchanged.
-func validateCommandInputFiles(ctx context.Context, spec commandGraphNode, dependencies []workergraph.NodeState) error {
-	byID := make(map[string]workergraph.NodeState, len(dependencies))
-	for _, dependency := range dependencies {
-		byID[dependency.ID] = dependency
+// Freeze only declared inputs before starting a consumer. Hash the same bytes
+// that are copied, then expose their private paths through output.files. Raw
+// producer receipts remain unchanged for provenance and checkpoint binding.
+func freezeCommandInputs(ctx context.Context, dir string, spec commandGraphNode, dependencies []workergraph.NodeState) ([]commandGraphNodeView, error) {
+	views := commandGraphViews(dependencies)
+	byID := make(map[string]int, len(views))
+	for i := range views {
+		byID[views[i].ID] = i
+		views[i].Output.Files = map[string]workergraph.Artifact{}
 	}
-	for _, input := range spec.Inputs {
-		dependency, exists := byID[input.Node]
-		if !exists || dependency.Status != "succeeded" {
-			return fmt.Errorf("node %s input %s/%s requires a successful producer receipt", spec.ID, input.Node, input.Artifact)
+	if len(spec.Inputs) == 0 {
+		return views, nil
+	}
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil || !filepath.IsAbs(dir) || resolved != dir {
+		return nil, errors.New("consumer input directory must be an absolute directory without symlinks")
+	}
+	root, err := os.MkdirTemp(dir, ".inputs-")
+	if err != nil {
+		return nil, err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			os.RemoveAll(root)
 		}
-		artifact, exists := commandOutputFiles(dependency.Output)[input.Artifact]
+	}()
+	for _, input := range spec.Inputs {
+		if !commandGraphID.MatchString(input.Node) || !commandArtifactPath(input.Artifact) {
+			return nil, fmt.Errorf("node %s input requires a safe producer node and declared artifact path", spec.ID)
+		}
+		index, exists := byID[input.Node]
+		if !exists || views[index].Status != "succeeded" {
+			return nil, fmt.Errorf("node %s input %s/%s requires a successful producer receipt", spec.ID, input.Node, input.Artifact)
+		}
+		dependency := &views[index]
+		artifact, exists := commandOutputFiles(dependency.NodeState.Output)[input.Artifact]
 		if !exists {
-			return fmt.Errorf("node %s input %s/%s is missing from its producer receipt", spec.ID, input.Node, input.Artifact)
+			return nil, fmt.Errorf("node %s input %s/%s is missing from its producer receipt", spec.ID, input.Node, input.Artifact)
 		}
 		var value commandGraphOutput
 		if err := json.Unmarshal(dependency.Output.Value, &value); err != nil {
-			return err
+			return nil, err
 		}
-		current, _, err := commandFile(ctx, filepath.Dir(value.OutputPath), input.Artifact, 0)
+		f, err := os.CreateTemp(root, "input-")
 		if err != nil {
-			return fmt.Errorf("node %s input %s/%s: %w", spec.ID, input.Node, input.Artifact, err)
+			return nil, err
 		}
-		if current != artifact {
-			return fmt.Errorf("node %s input %s/%s SHA-256 changed since its producer succeeded", spec.ID, input.Node, input.Artifact)
+		var writeErr error
+		current, _, readErr := inspectCommandFileChunks(ctx, filepath.Dir(value.OutputPath), input.Artifact, 0, func(chunk []byte) {
+			if writeErr == nil {
+				_, writeErr = f.Write(chunk)
+			}
+		})
+		if readErr == nil && current != artifact {
+			readErr = errors.New("SHA-256 changed since its producer succeeded")
 		}
+		if err = errors.Join(readErr, writeErr, f.Chmod(0400), f.Sync(), f.Close()); err != nil {
+			return nil, fmt.Errorf("node %s input %s/%s: %w", spec.ID, input.Node, input.Artifact, err)
+		}
+		dependency.Output.Files[input.Artifact] = workergraph.Artifact{Path: f.Name(), SHA256: artifact.SHA256}
 	}
-	return nil
+	complete = true
+	return views, nil
 }

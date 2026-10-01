@@ -260,10 +260,6 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		if backendCount >= t.Worker.MaxRunning {
 			continue
 		}
-		if until := s.unhealthy[t.Worker.Name]; time.Now().Before(until) {
-			s.wakeAt(until)
-			continue
-		}
 		if err := s.Client.Do(ctx, "GET", executionPath(t)+"?namespace="+url.QueryEscape(s.namespace()), nil, &t.Execution, nil); err != nil {
 			var pe *ProtocolError
 			if errors.As(err, &pe) && pe.Status == 404 {
@@ -286,6 +282,30 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		if t.Job.EnvironmentID != s.environmentID(t.Worker) {
 			s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
 			continue
+		}
+		// Readiness only gates model work. Results already accepted by the
+		// server can finish delivery even while this backend is unavailable.
+		until := s.unhealthy[t.Worker.Name]
+		if t.Execution.Status != "result_pending" && (s.incompatible[t.Worker.Name] != "" || time.Now().Before(until)) {
+			committed, err := s.decisionCommitted(ctx, t)
+			if err != nil {
+				return err
+			}
+			if committed {
+				continue // Decide commits its execution status atomically.
+			}
+			if t.Job.Kind == "curate" {
+				committed, err = s.curationCommitted(ctx, t)
+				if err != nil {
+					return err
+				}
+			}
+			if !committed {
+				if s.incompatible[t.Worker.Name] == "" {
+					s.wakeAt(until)
+				}
+				continue
+			}
 		}
 		err := s.Client.Do(ctx, "POST", executionPath(t)+"/resume", map[string]any{}, &t.Execution, &t.Lease)
 		if err != nil {
@@ -311,6 +331,14 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 		}
 		return "interrupted", err
 	}
+	if t.Job.Kind == "curate" && t.Execution.Resumes > 0 {
+		if committed, err := s.finishCommittedCuration(ctx, t); committed || err != nil {
+			if err != nil {
+				return "interrupted", err
+			}
+			return "success", nil
+		}
+	}
 	var result worker.Result
 	if t.Execution.Status == "result_pending" {
 		if err := json.Unmarshal(t.Execution.Result, &result); err != nil {
@@ -318,6 +346,14 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 		}
 	}
 	if t.Execution.Status != "result_pending" {
+		if s.Config.Runtime.HealthMode == "startup_and_task" {
+			if err := s.health(ctx, t.Worker, t.Job.Budget); err != nil {
+				if ctx.Err() != nil {
+					return "cancelled", ctx.Err()
+				}
+				return "unhealthy", err
+			}
+		}
 		for attempt := 0; attempt <= 2; attempt++ {
 			if err := s.status(ctx, t, "running", worker.Result{}); err != nil {
 				var pe *ProtocolError

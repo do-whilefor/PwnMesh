@@ -103,6 +103,7 @@ type Step struct {
 	InvalidSources []string            `json:"invalid_sources,omitempty"`
 	DisputeID      string              `json:"dispute_id,omitempty"`
 	DependsOn      []string            `json:"depends_on,omitempty"`
+	WritePaths     []string            `json:"write_paths,omitempty"`
 	BlockedBy      []string            `json:"blocked_by,omitempty"`
 	SupportValid   bool                `json:"support_valid,omitempty"`
 	// The latest failed or retry-authorized attempt. Ordinary first starts do
@@ -162,18 +163,19 @@ type stateData struct {
 // Keep the legacy status key for rollback readers, but persist only the one
 // status not projected from the authoritative Intent and execution records.
 type stepMetadata struct {
-	Repair    *artifactcheck.Spec `json:"repair,omitempty"`
-	ID        string              `json:"id"`
-	GoalID    string              `json:"goal_id"`
-	Priority  int                 `json:"priority"`
-	Reason    string              `json:"reason,omitempty"`
-	Status    string              `json:"status,omitempty"`
-	DisputeID string              `json:"dispute_id,omitempty"`
-	DependsOn []string            `json:"depends_on,omitempty"`
+	Repair     *artifactcheck.Spec `json:"repair,omitempty"`
+	ID         string              `json:"id"`
+	GoalID     string              `json:"goal_id"`
+	Priority   int                 `json:"priority"`
+	Reason     string              `json:"reason,omitempty"`
+	Status     string              `json:"status,omitempty"`
+	DisputeID  string              `json:"dispute_id,omitempty"`
+	DependsOn  []string            `json:"depends_on,omitempty"`
+	WritePaths []string            `json:"write_paths,omitempty"`
 }
 
 func stepMetadataFrom(step Step) stepMetadata {
-	metadata := stepMetadata{ID: step.ID, GoalID: step.GoalID, Priority: step.Priority, Reason: step.Reason, DisputeID: step.DisputeID, DependsOn: append([]string(nil), step.DependsOn...), Repair: step.Repair}
+	metadata := stepMetadata{ID: step.ID, GoalID: step.GoalID, Priority: step.Priority, Reason: step.Reason, DisputeID: step.DisputeID, DependsOn: append([]string(nil), step.DependsOn...), WritePaths: append([]string(nil), step.WritePaths...), Repair: step.Repair}
 	if step.Status == "abandoned" {
 		metadata.Status = "abandoned"
 	}
@@ -295,6 +297,7 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 				step.DisputeID = metadata.DisputeID
 				step.Repair = metadata.Repair
 				step.DependsOn = append([]string(nil), metadata.DependsOn...)
+				step.WritePaths = append([]string(nil), metadata.WritePaths...)
 				if metadata.Status == "abandoned" {
 					step.Status = "abandoned"
 				}
@@ -982,6 +985,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		Reason      string              `json:"reason"`
 		DisputeID   string              `json:"dispute_id"`
 		DependsOn   []string            `json:"depends_on"`
+		WritePaths  []string            `json:"write_paths"`
 		LatestRunID string              `json:"latest_run_id"`
 		Repair      *artifactcheck.Spec `json:"repair"`
 	}
@@ -1009,6 +1013,10 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		if err := validateStepDependencies(*s, input.DependsOn); err != nil {
 			return "", nil, false, err
 		}
+		writePaths, err := normalizeStepWritePaths(input.WritePaths, input.Repair)
+		if err != nil {
+			return "", nil, false, err
+		}
 		if input.GoalID == "" {
 			input.GoalID = "goal"
 		}
@@ -1024,7 +1032,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 				return "", nil, false, err
 			}
 		}
-		if existing, ok := s.matchingRepairStep(input.GoalID, input.From, input.Description, input.DependsOn, input.Repair); ok {
+		if existing, ok := s.matchingRepairStep(input.GoalID, input.From, input.Description, input.DependsOn, input.Repair, writePaths); ok {
 			if existing.DisputeID != input.DisputeID {
 				return "", nil, false, Err(409, "matching task has a different dispute binding")
 			}
@@ -1037,7 +1045,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		if err != nil {
 			return "", nil, false, err
 		}
-		step := Step{ID: id, From: input.From, GoalID: input.GoalID, Description: strings.TrimSpace(input.Description), Status: "open", Priority: input.Priority, CreatedAt: t.Now, DisputeID: input.DisputeID, DependsOn: append([]string(nil), input.DependsOn...), Repair: input.Repair}
+		step := Step{ID: id, From: input.From, GoalID: input.GoalID, Description: strings.TrimSpace(input.Description), Status: "open", Priority: input.Priority, CreatedAt: t.Now, DisputeID: input.DisputeID, DependsOn: append([]string(nil), input.DependsOn...), WritePaths: writePaths, Repair: input.Repair}
 		if input.DisputeID != "" {
 			for n := range d.Disputes {
 				if d.Disputes[n].ID == input.DisputeID {
@@ -1054,6 +1062,9 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 	}
 	if input.Repair != nil {
 		return "", nil, false, Err(422, "repair is an immutable step add contract")
+	}
+	if input.WritePaths != nil {
+		return "", nil, false, Err(422, "write_paths is an immutable step add contract")
 	}
 	if input.Action == "retry" {
 		if !required(input.ID, 256) || !ValidExecutionID(input.LatestRunID) || !required(input.Reason, 8192) || input.GoalID != "" || len(input.From) != 0 || input.Description != "" || input.DisputeID != "" || input.DependsOn != nil || input.Priority != 0 {

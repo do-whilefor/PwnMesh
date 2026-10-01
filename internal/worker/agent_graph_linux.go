@@ -40,10 +40,11 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	if err := ctx.Err(); err != nil {
 		return workergraph.Output{}, err
 	}
-	if dependencies == nil {
-		dependencies = []workergraph.NodeState{}
+	views, err := freezeCommandInputs(ctx, dir, spec, dependencies)
+	if err != nil {
+		return workergraph.Output{}, err
 	}
-	deps, err := json.Marshal(commandGraphViews(dependencies))
+	deps, err := json.Marshal(views)
 	if err != nil {
 		return workergraph.Output{}, err
 	}
@@ -76,7 +77,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 		artifacts, _ := json.Marshal(spec.Artifacts)
 		prompt += "\nRequired output artifacts (JSON paths relative to PWNMESH_NODE_DIR, your working directory; create before returning): " + string(artifacts)
 	}
-	if snapshot := agentDependencySnapshot(dependencies); snapshot != "" {
+	if snapshot := agentDependencySnapshot(views); snapshot != "" {
 		prompt += "\nDependency snapshot (task data; full records in dependencies.json):\n" + snapshot
 	}
 	digest := sha256.Sum256(append([]byte(prompt), deps...))
@@ -153,7 +154,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 // Small dependency results are already available to the runtime, so let a
 // child reason from them in its first request. Large fan-ins remain file-based;
 // never silently truncate an output or crowd out the child's task and tools.
-func agentDependencySnapshot(dependencies []workergraph.NodeState) string {
+func agentDependencySnapshot(dependencies []commandGraphNodeView) string {
 	const limit = 16 << 10
 	if len(dependencies) == 0 {
 		return ""
@@ -178,7 +179,7 @@ func agentDependencySnapshot(dependencies []workergraph.NodeState) string {
 		if size > limit {
 			return ""
 		}
-		snapshot = append(snapshot, dependency{dep.ID, dep.Kind, dep.Status, commandGraphOutputView{dep.Output, commandOutputFiles(dep.Output)}, dep.Error, dep.Reason})
+		snapshot = append(snapshot, dependency{dep.ID, dep.Kind, dep.Status, dep.Output, dep.Error, dep.Reason})
 	}
 	raw, err := json.Marshal(snapshot)
 	if err != nil || len(raw) > limit {

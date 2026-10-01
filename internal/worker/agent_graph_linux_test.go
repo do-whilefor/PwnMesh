@@ -299,7 +299,7 @@ func TestAgentDependencySnapshotIsBoundedAndPreservesResults(t *testing.T) {
 		{ID: "failed", Kind: "agent", Status: "failed", Error: "model unavailable", Attempt: 1, StartedAt: time.Now(), RunDurationMS: 100, InputSHA256: "internal-input"},
 		{ID: "skipped", Kind: "function", Status: "skipped", Reason: "condition unmatched", DefinitionSHA256: "internal-definition"},
 	}
-	snapshot := agentDependencySnapshot(dependencies)
+	snapshot := agentDependencySnapshot(commandGraphViews(dependencies))
 	var decoded []workergraph.NodeState
 	if json.Unmarshal([]byte(snapshot), &decoded) != nil || len(decoded) != 2 || decoded[0].Error != dependencies[0].Error || decoded[1].Reason != dependencies[1].Reason {
 		t.Fatalf("failure or skip context was lost: %s", snapshot)
@@ -313,7 +313,7 @@ func TestAgentDependencySnapshotIsBoundedAndPreservesResults(t *testing.T) {
 	// the entire snapshot when it cannot fit rather than implying completeness.
 	for _, content := range []string{strings.Repeat("x", 16<<10), strings.Repeat("<", 4000)} {
 		dependencies[0].Output.Value, _ = json.Marshal(content)
-		if got := agentDependencySnapshot(dependencies); got != "" {
+		if got := agentDependencySnapshot(commandGraphViews(dependencies)); got != "" {
 			t.Fatalf("oversized dependency snapshot reached the model: %d bytes", len(got))
 		}
 	}

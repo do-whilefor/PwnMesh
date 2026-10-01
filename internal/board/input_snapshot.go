@@ -163,7 +163,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 		}
 		p.Intents = append(p.Intents, i)
 		step := steps[i.ID]
-		p.Steps = append(p.Steps, Step{ID: step.ID, Status: step.Status, Priority: step.Priority, InvalidSources: step.InvalidSources[:min(1, len(step.InvalidSources))], DependsOn: step.DependsOn, BlockedBy: step.BlockedBy, SupportValid: step.SupportValid})
+		p.Steps = append(p.Steps, Step{ID: step.ID, Status: step.Status, Priority: step.Priority, InvalidSources: step.InvalidSources[:min(1, len(step.InvalidSources))], DependsOn: step.DependsOn, WritePaths: stepWritePaths(step), BlockedBy: step.BlockedBy, SupportValid: step.SupportValid})
 	}
 	if end < len(s.Graph.Intents) {
 		p.NextOffset = end

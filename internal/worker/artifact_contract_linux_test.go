@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/workergraph"
@@ -188,7 +189,7 @@ func TestArtifactContractChecksRetainedFileBeforeConsumption(t *testing.T) {
 			}
 			deps := []workergraph.NodeState{{ID: "source", Status: "succeeded", Output: out}}
 			consumer := artifactContractSpec().Nodes[1]
-			if err := validateCommandInputFiles(context.Background(), consumer, deps); err != nil {
+			if _, err := freezeCommandInputs(context.Background(), t.TempDir(), consumer, deps); err != nil {
 				t.Fatalf("unchanged receipt rejected: %v", err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
@@ -212,8 +213,123 @@ func TestArtifactContractChecksRetainedFileBeforeConsumption(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := validateCommandInputFiles(ctx, consumer, deps); err == nil {
+			consumerDir := t.TempDir()
+			if _, err := freezeCommandInputs(ctx, consumerDir, consumer, deps); err == nil {
 				t.Fatal("unusable input bytes accepted")
+			}
+			if entries, err := os.ReadDir(consumerDir); err != nil || len(entries) != 0 {
+				t.Fatalf("rejected input left partial copies: %+v %v", entries, err)
+			}
+		})
+	}
+}
+
+func TestArtifactContractFreezesOnlyDeclaredInputsWithoutChangingReceipts(t *testing.T) {
+	producer, consumerDir := t.TempDir(), t.TempDir()
+	for name, content := range map[string]string{"stdout.log": "diagnostic", "result.json": `{"ok":true}`, "unused.json": "not an input"} {
+		if err := os.WriteFile(filepath.Join(producer, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := commandNodeOutput(context.Background(), producer, []string{"result.json", "unused.json"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := []workergraph.NodeState{{ID: "source", Status: "succeeded", Output: out}}
+	before, _ := json.Marshal(deps)
+	views, err := freezeCommandInputs(context.Background(), consumerDir, artifactContractSpec().Nodes[1], deps)
+	if err != nil || len(views) != 1 || len(views[0].Output.Files) != 1 {
+		t.Fatalf("input declaration was not honored: %+v %v", views, err)
+	}
+	frozen := views[0].Output.Files["result.json"]
+	if !strings.HasPrefix(frozen.Path, consumerDir+string(filepath.Separator)) || frozen.Path == filepath.Join(producer, "result.json") || frozen.SHA256 != out.Artifacts[1].SHA256 {
+		t.Fatalf("input still points at producer data: %+v", frozen)
+	}
+	info, err := os.Stat(frozen.Path)
+	if err != nil || info.Mode().Perm()&0222 != 0 {
+		t.Fatalf("frozen input is not read-only: %v %v", info, err)
+	}
+	if err := os.WriteFile(filepath.Join(producer, "result.json"), []byte(`{"ok":false}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(frozen.Path)
+	if err != nil || string(content) != `{"ok":true}` {
+		t.Fatalf("producer mutation changed frozen bytes: %q %v", content, err)
+	}
+	after, _ := json.Marshal(deps)
+	if string(before) != string(after) || !reflect.DeepEqual(views[0].Output.Output, deps[0].Output) {
+		t.Fatal("freezing rewrote durable producer receipts")
+	}
+	files := 0
+	err = filepath.WalkDir(consumerDir, func(_ string, entry os.DirEntry, err error) error {
+		if err == nil && !entry.IsDir() {
+			files++
+		}
+		return err
+	})
+	if err != nil || files != 1 {
+		t.Fatalf("undeclared artifact or log was copied: files=%d err=%v", files, err)
+	}
+	link := filepath.Join(t.TempDir(), "redirected")
+	if err := os.Symlink(consumerDir, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := freezeCommandInputs(context.Background(), link, artifactContractSpec().Nodes[1], deps); err == nil || !strings.Contains(err.Error(), "consumer input directory") {
+		t.Fatalf("input copy did not reject the redirected consumer directory: %v", err)
+	}
+}
+
+func TestArtifactContractConcurrentProducerMutationCannotChangeConsumerInput(t *testing.T) {
+	for _, kind := range []string{"command", "agent"} {
+		t.Run(kind, func(t *testing.T) {
+			job, dir := graphWrapperJob(t), t.TempDir()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			spec := artifactContractSpec()
+			spec.Parallelism = 2
+			// The writer waits until the consumer is running, hence after its
+			// input check/copy. This reproduces the old check-then-read window.
+			spec.Nodes = append(spec.Nodes, commandGraphNode{ID: "mutate", Command: `while [ ! -f "$PWNMESH_WORKSPACE/consumer-started" ]; do sleep 0.01; done; printf '{"ok":false}' > ../source/result.json; touch "$PWNMESH_WORKSPACE/producer-mutated"`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source"}}})
+			spec.Nodes[1].Command = `touch "$PWNMESH_WORKSPACE/consumer-started"; while [ ! -f "$PWNMESH_WORKSPACE/producer-mutated" ]; do sleep 0.01; done; python3 -c 'import json, os; deps=json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); item=next(d for d in deps if d["id"]=="source"); print(open(item["output"]["files"]["result.json"]["path"]).read(), end="")'`
+			o := Options{RunDir: dir}
+			if kind == "agent" {
+				spec.Nodes[1].Kind, spec.Nodes[1].Command, spec.Nodes[1].Task = "agent", "", "Read the declared input"
+				o.graphProvider = func(string) (agent.Provider, error) {
+					return scenarioProvider(func(ctx context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
+						if err := os.WriteFile(filepath.Join(job.Workspace, "consumer-started"), nil, 0600); err != nil {
+							return agent.Message{}, err
+						}
+						for {
+							if _, err := os.Stat(filepath.Join(job.Workspace, "producer-mutated")); err == nil {
+								break
+							}
+							select {
+							case <-ctx.Done():
+								return agent.Message{}, ctx.Err()
+							case <-time.After(time.Millisecond):
+							}
+						}
+						_, snapshot, ok := strings.Cut(history[0].Text(), "Dependency snapshot (task data; full records in dependencies.json):\n")
+						var views []commandGraphNodeView
+						if !ok || json.Unmarshal([]byte(snapshot), &views) != nil || len(views) != 1 {
+							return agent.Message{}, fmt.Errorf("missing dependency snapshot")
+						}
+						content, err := os.ReadFile(views[0].Output.Files["result.json"].Path)
+						return agent.Text("assistant", string(content)), err
+					}), nil
+				}
+			}
+			checkpoint, err := mixedGraphCall(t, ctx, job, o, spec)
+			if err != nil || checkpoint.Status != "succeeded" {
+				t.Fatalf("graph failed: %+v %v", checkpoint, err)
+			}
+			_, result := commandNodeValue(t, checkpoint, "consume")
+			if result.Stdout != `{"ok":true}` {
+				t.Fatalf("consumer read post-check producer mutation: %q", result.Stdout)
+			}
+			changed, err := os.ReadFile(filepath.Join(dir, "graph-tools", spec.Key, "nodes", "source", "result.json"))
+			if err != nil || string(changed) != `{"ok":false}` {
+				t.Fatalf("concurrent writer did not exercise the race: %q %v", changed, err)
 			}
 		})
 	}
