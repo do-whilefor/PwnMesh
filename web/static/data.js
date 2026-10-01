@@ -1,7 +1,7 @@
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomData = api;
+  else root.PwnMeshData = api;
 }(typeof window === 'object' ? window : globalThis, function () {
   'use strict';
 

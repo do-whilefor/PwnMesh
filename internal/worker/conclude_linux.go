@@ -15,8 +15,8 @@ import (
 	"syscall"
 	"unicode/utf8"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 const (

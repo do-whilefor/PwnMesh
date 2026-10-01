@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/artifactcheck"
+	"pwnmesh/internal/artifactcheck"
 )
 
 const stateSchema = `

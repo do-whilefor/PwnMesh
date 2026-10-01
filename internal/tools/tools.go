@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package tools exposes exactly the seven initial X-Loom tools.
+// Package tools exposes exactly the seven initial PwnMesh tools.
 package tools
 
 import (
@@ -19,8 +19,8 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"xloom/internal/agent"
-	"xloom/internal/process"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/process"
 )
 
 type Set struct {

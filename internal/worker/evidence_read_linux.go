@@ -15,8 +15,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 const maxEvidencePageBytes = 16 << 10
@@ -168,7 +168,13 @@ func readRetainedEvidence(ctx context.Context, workspace string, ref board.Evide
 	name := filepath.Base(ref.Path)
 	digest := strings.TrimSuffix(name, ".raw")
 	decoded, err := hex.DecodeString(digest)
-	expected := filepath.Join(root, ".xloom", "runs", ref.RunID, "evidence", name)
+	stateDir := ".pwnmesh"
+	// Existing evidence references keep their original hash-bound path.
+	// Read legacy snapshots directly, without moving files or following links.
+	if ref.Path == filepath.Join(root, ".xloom", "runs", ref.RunID, "evidence", name) {
+		stateDir = ".xloom"
+	}
+	expected := filepath.Join(root, stateDir, "runs", ref.RunID, "evidence", name)
 	if err != nil || len(decoded) != 32 || digest != strings.ToLower(digest) || name != digest+".raw" || ref.Path != expected {
 		return nil, errors.New("raw evidence is unavailable: reference is not a retained snapshot in this project workspace")
 	}
@@ -180,7 +186,7 @@ func readRetainedEvidence(ctx context.Context, workspace string, ref board.Evide
 		return nil, err
 	}
 	defer func() { unix.Close(dir) }()
-	for _, part := range []string{".xloom", "runs", ref.RunID, "evidence"} {
+	for _, part := range []string{stateDir, "runs", ref.RunID, "evidence"} {
 		next, err := unix.Openat(dir, part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return nil, err

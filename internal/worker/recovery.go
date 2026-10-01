@@ -9,8 +9,8 @@ import (
 	"net"
 	"syscall"
 
-	"xloom/internal/agent"
-	"xloom/internal/provider"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/provider"
 )
 
 // Only infrastructure failures may continue the same run. A valid declined

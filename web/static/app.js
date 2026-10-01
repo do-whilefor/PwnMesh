@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  const data = window.XLoomData, api = new window.XLoomAPI.Client(), requests = new window.XLoomAPI.RequestScope();
+  const data = window.PwnMeshData, api = new window.PwnMeshAPI.Client(), requests = new window.PwnMeshAPI.RequestScope();
   const $ = id => document.getElementById(id), NS = 'http://www.w3.org/2000/svg';
   const eventCache = new Map(), drafts = new Map(), expandedLogs = new Set();
   let logBodyId = 0;
@@ -8,13 +8,13 @@
   let selectedNode = null, selectedEdge = null, tab = 'board', systemFilter = 'all', logLimit = 300;
   let timer, toastTimer, management = null, hintProjectId = '', mutating = false, connected = false;
   let projectsSignature = '', activitySignature = '', createDraft = false, updatingGraph = false;
-  try { selectedId = new URLSearchParams(location.search).get('project') || localStorage.getItem('xloom.selected-project') || ''; } catch {}
+  try { selectedId = new URLSearchParams(location.search).get('project') || localStorage.getItem('pwnmesh.selected-project') || ''; } catch {}
   const pathFor = id => '/projects/' + encodeURIComponent(id);
   const current = () => state?.graph?.project || projects.find(project => project.id === selectedId);
   const nodeKey = node => node ? node.key || node.type + ':' + node.id : '';
   const cssStatus = status => status === 'stopped' ? 'paused' : status;
   const scenarioIcon = project => ({pentest:'shield',audit:'code',ctf:'flag'})[project?.scenario] || 'graph';
-  const graph = new window.XLoomGraph($('graph-host'), {onSelect:selectNode, onSelectEdge:selectEdge});
+  const graph = new window.PwnMeshGraph($('graph-host'), {onSelect:selectNode, onSelectEdge:selectEdge});
 
   function el(tag, cls, text) {
     const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node;
@@ -198,7 +198,7 @@
   function updateGraph(value) { updatingGraph = true; try { graph.setState(value); } finally { updatingGraph = false; } }
   function resetSelection(id) {
     selectedId = id; state = null; executions = []; events = []; logs = []; selectedNode = null; selectedEdge = null; logLimit = 300; activitySignature = '';
-    updateGraph(null); renderHeader(); renderActivity({reset:true}); try { if (id) localStorage.setItem('xloom.selected-project', id); else localStorage.removeItem('xloom.selected-project'); } catch {}
+    updateGraph(null); renderHeader(); renderActivity({reset:true}); try { if (id) localStorage.setItem('pwnmesh.selected-project', id); else localStorage.removeItem('pwnmesh.selected-project'); } catch {}
   }
   async function selectProject(id) { if (mutating) return; if (id !== selectedId || !state) resetSelection(id); closeMenus(); renderProjects(); await loadWorkspace(id); }
   async function loadWorkspace(preferred = selectedId) {

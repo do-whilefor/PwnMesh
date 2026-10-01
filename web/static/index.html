@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="color-scheme" content="light">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>X-Loom · 任务工作台</title>
+  <title>PwnMesh · 任务工作台</title>
   <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/style.css">
   <link rel="stylesheet" href="/static/graph.css">
@@ -45,7 +45,7 @@
   </defs></svg>
 
   <aside class="sidebar" id="sidebar" aria-label="项目导航">
-    <a class="brand" href="/"><img src="/static/mark.svg" alt=""><span>X-Loom<small>自主探索，清晰可见。</small></span></a>
+    <a class="brand" href="/"><img src="/static/mark.svg" alt=""><span>PwnMesh<small>自主探索，清晰可见。</small></span></a>
     <button class="button primary create-button" id="new-project"><svg class="icon"><use href="#i-plus"/></svg>创建项目<kbd>N</kbd></button>
     <label class="project-search"><svg class="icon"><use href="#i-search"/></svg><input type="search" id="project-search" placeholder="搜索项目…" aria-label="搜索项目"><kbd>/</kbd></label>
     <div class="sidebar-label"><span class="project-list-heading">我的项目<span id="project-count">0</span></span><span class="running-total" aria-live="polite"><i class="status-dot active" aria-hidden="true"></i><span id="running-project-count">0</span>运行中</span></div>
@@ -92,7 +92,7 @@
       <label class="field-label" for="create-name">项目名称</label><input id="create-name" name="title" required maxlength="200" placeholder="例如：认证服务安全评估" autocomplete="off">
       <label class="field-label" for="create-origin">起点 / 已知信息</label><textarea id="create-origin" name="origin" required maxlength="32768" rows="2" placeholder="目标地址、代码位置，或你已经掌握的线索"></textarea>
       <label class="field-label" for="create-goal">终点 / 项目目标</label><textarea id="create-goal" name="goal" required maxlength="32768" rows="2" placeholder="希望解决什么问题？怎样算完成？"></textarea>
-      <p class="form-error" id="create-error" role="alert"></p><footer class="dialog-footer"><span>保存至 X-Loom 服务</span><button class="button secondary" type="button" data-close="create-dialog">取消</button><button class="button primary" type="submit" id="submit-create">创建并开始<svg class="icon"><use href="#i-chevron"/></svg></button></footer>
+      <p class="form-error" id="create-error" role="alert"></p><footer class="dialog-footer"><span>保存至 PwnMesh 服务</span><button class="button secondary" type="button" data-close="create-dialog">取消</button><button class="button primary" type="submit" id="submit-create">创建并开始<svg class="icon"><use href="#i-chevron"/></svg></button></footer>
     </form>
   </dialog>
   <dialog id="hint-dialog" aria-labelledby="hint-title" aria-describedby="hint-project hint-caption">

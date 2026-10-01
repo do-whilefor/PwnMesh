@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strconv"
 
-	b "xloom/internal/board"
-	"xloom/internal/worker"
+	b "pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 func (s *Server) schedulingInput(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
@@ -27,6 +27,24 @@ func (s *Server) schedulingInput(t *b.Tx, _ *request, r *http.Request) (int, any
 		namespace, err = executionNamespace(r)
 		if err == nil {
 			p.ExecutionChecks, err = t.ScheduleExecutionChecks(p.Project.ID, namespace, p.Intents, p.Steps)
+		}
+		if err == nil && offset == 0 {
+			// Control admission shares the scheduling snapshot. Return it once,
+			// alongside Execute checks, instead of adding a round trip per role.
+			for _, kind := range []string{"reason", "curate"} {
+				key := p.RetryKey
+				if kind == "curate" {
+					if !p.CurationNeeded {
+						continue
+					}
+					key = p.CurationRetryKey
+				}
+				check, checkErr := t.CheckExecutions(b.ExecutionCheckQuery{ProjectID: p.Project.ID, Namespace: namespace, Generation: p.Project.Generation, Kind: kind, RetryKey: key})
+				if checkErr != nil {
+					return 0, nil, checkErr
+				}
+				p.ExecutionChecks[kind+":"] = check
+			}
 		}
 	}
 	return 200, p, err
@@ -59,7 +77,7 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	if (j.Kind == "reason" || j.Kind == "curate") && j.Intent != nil {
 		return 0, nil, b.Err(422, "Control preparation must not carry an intent")
 	}
-	if r.Header.Get("X-Xloom-Run") != e.Lease || r.Header.Get("X-Xloom-Lease") != e.Kind || r.Header.Get("X-Xloom-Intent") != e.Intent {
+	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Execution preparation requires its lease")
 	}
 	canonical, err := json.Marshal(e)
@@ -227,7 +245,7 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 	if err != nil {
 		return 0, nil, err
 	}
-	if r.Header.Get("X-Xloom-Run") != e.Lease || r.Header.Get("X-Xloom-Lease") != e.Kind || r.Header.Get("X-Xloom-Intent") != e.Intent {
+	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Snapshot read requires its execution lease")
 	}
 	current, err := t.Load(e.ProjectID)

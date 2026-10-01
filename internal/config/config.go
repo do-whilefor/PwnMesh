@@ -25,7 +25,7 @@ type Task struct {
 	Timeout         int `yaml:"timeout" json:"timeout"`
 	ConcludeTimeout int `yaml:"conclude_timeout" json:"conclude_timeout"`
 	MaxIntents      int `yaml:"max_intents" json:"max_intents"`
-	// Empty inherits the backend's XLOOM_REASONING_EFFORT. An explicit role
+	// Empty inherits the backend's PWNMESH_REASONING_EFFORT. An explicit role
 	// policy is persisted in the Job, so same-run recovery keeps that choice.
 	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
 }
@@ -94,7 +94,7 @@ func (c *Config) Validate() error {
 		c.Container.Socket = "/var/run/docker.sock"
 	}
 	if c.Container.Namespace == "" {
-		c.Container.Namespace = "xloom"
+		c.Container.Namespace = "pwnmesh"
 	}
 	u, err := url.Parse(c.Server)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -177,6 +177,16 @@ func (c *Config) Validate() error {
 			})
 			if missing != "" {
 				return fmt.Errorf("environment variable %s is required for worker %q", missing, w.Name)
+			}
+		}
+		// Normalize after merging so execution and its environment identity use
+		// the same value. An explicitly empty canonical setting still wins.
+		for key, value := range env {
+			if suffix, legacy := strings.CutPrefix(key, "XLOOM_"); legacy {
+				canonical := "PWNMESH_" + suffix
+				if _, exists := env[canonical]; !exists {
+					env[canonical] = value
+				}
 			}
 		}
 		w.Env = env

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"slices"
 	"sort"
@@ -15,9 +16,9 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 func digest(v any) string {
@@ -27,7 +28,7 @@ func digest(v any) string {
 }
 func (s *Scheduler) namespace() string {
 	if s.Config.Container.Namespace == "" {
-		return "xloom"
+		return "pwnmesh"
 	}
 	return s.Config.Container.Namespace
 }
@@ -35,11 +36,11 @@ func (s *Scheduler) environmentID(w config.Worker) string {
 	// Credentials are intentionally excluded; rotating a token must not change
 	// the task. Provider/model/container configuration is part of its identity.
 	env := map[string]string{}
-	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "XLOOM_REASONING_EFFORT", "XLOOM_MAX_OUTPUT_TOKENS", "XLOOM_CONTEXT_BYTES", "XLOOM_REQUEST_TIMEOUT"} {
+	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {
 		env[key] = w.Env[key]
 	}
 	// Keep existing identities stable when these newer settings are absent.
-	for _, key := range []string{"XLOOM_CONTEXT_TOKENS", "XLOOM_CONTEXT_TARGET_TOKENS"} {
+	for _, key := range []string{"PWNMESH_CONTEXT_TOKENS", "PWNMESH_CONTEXT_TARGET_TOKENS"} {
 		if value := w.Env[key]; value != "" {
 			env[key] = value
 		}
@@ -99,7 +100,11 @@ func (s *Scheduler) executionCheck(ctx context.Context, g board.Graph, kind stri
 }
 
 func (s *Scheduler) candidateCheck(ctx context.Context, input board.SchedulePage, g board.Graph, kind string, intent *board.Intent) (board.ExecutionCheck, error) {
-	if check, ok := input.ExecutionChecks[kind+":"+intent.ID]; ok {
+	intentID := ""
+	if intent != nil {
+		intentID = intent.ID
+	}
+	if check, ok := input.ExecutionChecks[kind+":"+intentID]; ok {
 		return check, nil
 	}
 	// Targeted callers may not carry the precomputed scheduling checks.
@@ -396,7 +401,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			}
 		}
 		if err := s.status(ctx, t, "result_pending", result); err != nil {
-			return "interrupted", err
+			return s.resultDeliveryFailure(ctx, t, result, err)
 		}
 	}
 	// Finish the business transaction before another heartbeat can observe a
@@ -407,27 +412,36 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 	}
 	err := s.Client.Do(ctx, "POST", executionPath(t)+"/apply", map[string]any{}, &receipt, &t.Lease)
 	if err != nil {
-		if decisionStateChanged(context.Cause(ctx)) {
-			// A cancelled HTTP call may wrap its heartbeat ProtocolError. That
-			// is not an apply rejection; reconcile the committed receipt after
-			// joining the heartbeat before recording a terminal failure.
-			return "interrupted", context.Cause(ctx)
-		}
-		var pe *ProtocolError
-		if errors.As(err, &pe) && pe.Status >= 400 && pe.Status < 500 {
-			result.Status, result.FailureKind, result.Error = "failed", "invalid_output", err.Error()
-			if pe.Status == 409 && strings.Contains(pe.Detail, "state_changed") {
-				result.FailureKind = "state_changed"
-			}
-			s.terminal(t, "failed", result)
-			return "failed", err
-		}
-		return "interrupted", err
+		return s.resultDeliveryFailure(ctx, t, result, err)
 	}
 	if receipt.Status == "rejected" {
 		return "rejected", nil
 	}
 	return "success", nil
+}
+
+// Publishing and applying a result share the same failure boundary. Invalid
+// output cannot become valid by replaying the saved Worker result; temporary
+// delivery failures must leave that result available for same-run recovery.
+func (s *Scheduler) resultDeliveryFailure(ctx context.Context, t *task, result worker.Result, err error) (string, error) {
+	if decisionStateChanged(context.Cause(ctx)) {
+		// A cancelled HTTP call may wrap its heartbeat ProtocolError. Reconcile
+		// the receipt after joining the heartbeat before recording a failure.
+		return "interrupted", context.Cause(ctx)
+	}
+	var pe *ProtocolError
+	if !errors.As(err, &pe) || pe.Status < 400 || pe.Status >= 500 || pe.Status == http.StatusRequestTimeout || pe.Status == http.StatusTooManyRequests {
+		return "interrupted", err
+	}
+	status := "failed"
+	result.Status, result.Retryable, result.FailureKind, result.Error = "failed", false, "invalid_output", err.Error()
+	if decisionStateChanged(err) {
+		result.FailureKind = "state_changed"
+	} else if dependencyInvalidated(err) {
+		status, result.FailureKind = "cancelled", "dependency_invalidated"
+	}
+	s.terminal(t, status, result)
+	return status, err
 }
 
 func dependencyInvalidated(err error) bool {

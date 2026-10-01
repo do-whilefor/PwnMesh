@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	b "xloom/internal/board"
+	b "pwnmesh/internal/board"
 )
 
 func executionNamespace(r *http.Request) (string, error) {

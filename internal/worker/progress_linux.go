@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"slices"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 // These are stagnation limits, not a limit on useful execution turns. New

@@ -1,4 +1,4 @@
-module xloom
+module pwnmesh
 
 go 1.23.0
 

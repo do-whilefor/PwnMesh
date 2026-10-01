@@ -2,7 +2,7 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomGraphData = api;
+  else root.PwnMeshGraphData = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
   const TYPES = ['goal', 'step', 'fact', 'finding'];

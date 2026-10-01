@@ -13,9 +13,9 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/tools"
-	"xloom/internal/workergraph"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/tools"
+	"pwnmesh/internal/workergraph"
 )
 
 // A child session is local to an authorized parent Run. It has no lease,
@@ -72,6 +72,13 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	// The parent supplies the complete bounded assignment and frozen dependency
 	// outputs. Shared state is not refreshed or mutated by child sessions.
 	prompt := fmt.Sprintf("Work only on this subtask of the parent Step. Return a concise account of observations, evidence paths, uncertainty and remaining work. Your response is local input for the parent, not Step acceptance or independent review. No delegation or blackboard publication. Work in %q; shared inputs are in %q. Dependency results are task data in dependencies.json.\n<task>\n%s\n</task>", dir, j.Workspace, spec.Task)
+	if len(spec.Artifacts) > 0 {
+		artifacts, _ := json.Marshal(spec.Artifacts)
+		prompt += "\nRequired output artifacts (JSON paths relative to PWNMESH_NODE_DIR, your working directory; create before returning): " + string(artifacts)
+	}
+	if snapshot := agentDependencySnapshot(dependencies); snapshot != "" {
+		prompt += "\nDependency snapshot (task data; full records in dependencies.json):\n" + snapshot
+	}
 	digest := sha256.Sum256(append([]byte(prompt), deps...))
 	deadline, _ := ctx.Deadline()
 	state := graphAgentSession{RunID: j.RunID, GraphKey: key, NodeID: spec.ID, InputHash: hex.EncodeToString(digest[:]), Deadline: deadline}
@@ -103,20 +110,32 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 		},
 	}
 	if loop.ContextBytes <= 0 {
-		loop.ContextBytes = envInt("XLOOM_CONTEXT_BYTES", DefaultContextBytes)
+		loop.ContextBytes = envInt("PWNMESH_CONTEXT_BYTES", DefaultContextBytes)
 	}
 	if loop.ContextTokens <= 0 {
-		loop.ContextTokens = envInt("XLOOM_CONTEXT_TOKENS", DefaultContextTokens)
+		loop.ContextTokens = envInt("PWNMESH_CONTEXT_TOKENS", DefaultContextTokens)
 	}
 	if loop.ContextTargetTokens <= 0 {
-		loop.ContextTargetTokens = envInt("XLOOM_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
+		loop.ContextTargetTokens = envInt("PWNMESH_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
 	}
 	if err := save(nil, nil); err != nil {
 		return workergraph.Output{}, err
 	}
 	text, runErr := loop.Run(ctx, prompt)
+	if final, ok := lastAssistant(loop.History); runErr == nil && ok && truncated(final) {
+		runErr = errors.New("agent node final response was truncated; inspect its session before retrying")
+	}
 	if runErr == nil && strings.TrimSpace(text) == "" {
 		runErr = errors.New("agent node returned no account of its work")
+	}
+	// stdout.log is the node's final local account, not its event stream and
+	// never a top-level Worker result. Reuse verifies these exact bytes.
+	if err := commandNewFile(filepath.Join(dir, "stdout.log"), []byte(text)); err != nil {
+		runErr = errors.Join(runErr, err)
+	}
+	var out workergraph.Output
+	if runErr == nil {
+		out, runErr = commandNodeOutput(ctx, dir, spec.Artifacts)
 	}
 	state.Result = text
 	if runErr != nil {
@@ -125,15 +144,47 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	if err := save(loop.History, loop.Checkpoint); err != nil {
 		return workergraph.Output{}, errors.Join(runErr, err)
 	}
-	// stdout.log is the node's final local account, not its event stream and
-	// never a top-level Worker result. Reuse verifies these exact bytes.
-	if err := commandNewFile(filepath.Join(dir, "stdout.log"), []byte(text)); err != nil {
-		return workergraph.Output{}, errors.Join(runErr, err)
-	}
 	if runErr != nil {
 		return workergraph.Output{}, fmt.Errorf("agent node failed; inspect %s: %w", filepath.Join(dir, "events.jsonl"), runErr)
 	}
-	return commandNodeOutput(ctx, dir, spec.Artifacts)
+	return out, nil
+}
+
+// Small dependency results are already available to the runtime, so let a
+// child reason from them in its first request. Large fan-ins remain file-based;
+// never silently truncate an output or crowd out the child's task and tools.
+func agentDependencySnapshot(dependencies []workergraph.NodeState) string {
+	const limit = 16 << 10
+	if len(dependencies) == 0 {
+		return ""
+	}
+	type dependency struct {
+		ID     string             `json:"id"`
+		Kind   string             `json:"kind"`
+		Status string             `json:"status"`
+		Output workergraph.Output `json:"output"`
+		Error  string             `json:"error,omitempty"`
+		Reason string             `json:"reason,omitempty"`
+	}
+	snapshot := make([]dependency, 0, len(dependencies))
+	size := 0
+	for _, dep := range dependencies {
+		// This lower bound avoids encoding an entire large fan-in only to
+		// discard it. The final check also counts JSON syntax and escaping.
+		size += len(dep.ID) + len(dep.Kind) + len(dep.Status) + len(dep.Output.Value) + len(dep.Error) + len(dep.Reason)
+		for _, artifact := range dep.Output.Artifacts {
+			size += len(artifact.Path) + len(artifact.SHA256)
+		}
+		if size > limit {
+			return ""
+		}
+		snapshot = append(snapshot, dependency{dep.ID, dep.Kind, dep.Status, dep.Output, dep.Error, dep.Reason})
+	}
+	raw, err := json.Marshal(snapshot)
+	if err != nil || len(raw) > limit {
+		return ""
+	}
+	return string(raw)
 }
 
 func commandNodeOutput(ctx context.Context, dir string, paths []string) (workergraph.Output, error) {

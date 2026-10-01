@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	b "xloom/internal/board"
-	"xloom/internal/worker"
+	b "pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 func (s *Server) registerObservationRoutes(m *http.ServeMux) {

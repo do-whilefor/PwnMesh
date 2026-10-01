@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 const MaxGraphRPCBytes = 128 << 10

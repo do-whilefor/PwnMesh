@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 const committedCurationText = `{"accepted":true,"data":{"curated":true}}`

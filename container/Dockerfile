@@ -1,13 +1,13 @@
-# 在仓库根目录构建；先构建 xloom:dev，再构建本 Worker 镜像。
-ARG XLOOM_IMAGE=xloom:dev
-FROM --platform=linux/amd64 ${XLOOM_IMAGE} AS application
+# 在仓库根目录构建；先构建 pwnmesh:dev，再构建本 Worker 镜像。
+ARG PWNMESH_IMAGE=pwnmesh:dev
+FROM --platform=linux/amd64 ${PWNMESH_IMAGE} AS application
 
 # kali-linux-headless 是 APT 元包：在官方 Kali 基础镜像中安装其工具集。
 FROM --platform=linux/amd64 kalilinux/kali-rolling@sha256:30399bd65187e06525008dd13eecc2b3439d26a82b2c6b0ba32dee72bd843117 AS runtime
 
 ARG KALI_MIRROR=
 ENV TZ=Asia/Shanghai \
-    XLOOM_WORKER_ENVIRONMENT=kali-headless \
+    PWNMESH_WORKER_ENVIRONMENT=kali-headless \
     PYTHONUNBUFFERED=1 \
     REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt \
     PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright \
@@ -50,9 +50,9 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && rm -rf /var/lib/apt/lists/*
 
 # pwntools 4.15 尚未完整支持 Python 3.14；任务环境使用 3.13。
-RUN python3.13 -m venv /opt/xloom-venv \
+RUN python3.13 -m venv /opt/pwnmesh-venv \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd
-ENV PATH="/opt/xloom-venv/bin:${PATH}"
+ENV PATH="/opt/pwnmesh-venv/bin:${PATH}"
 
 ARG PWNTOOLS_VERSION=4.15.0
 ARG PYMONGO_VERSION=4.18.1
@@ -85,11 +85,11 @@ RUN npm install --global --no-audit --no-fund @playwright/cli@latest \
     && cd /tmp/playwright-setup \
     && playwright-cli install \
     && ln -s "$(node -e 'process.stdout.write(require(process.argv[1]).chromium.executablePath())' \
-        "$(npm root -g)/@playwright/cli/node_modules/playwright-core")" /usr/local/bin/xloom-chromium \
+        "$(npm root -g)/@playwright/cli/node_modules/playwright-core")" /usr/local/bin/pwnmesh-chromium \
     && cd / \
     && rm -rf /tmp/playwright-setup \
     && npm cache clean --force
-ENV PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/local/bin/xloom-chromium
+ENV PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/local/bin/pwnmesh-chromium
 
 # 保留手动使用的 kali 用户；Dispatcher 注入的私有任务文件仍由 root 读取。
 RUN if ! id kali >/dev/null 2>&1; then useradd -m -s /bin/bash kali; fi \
@@ -100,17 +100,17 @@ RUN if ! id kali >/dev/null 2>&1; then useradd -m -s /bin/bash kali; fi \
     && git -C /workspace init -q \
     && git config --system --add safe.directory /workspace
 
-COPY container/environment.md container/check-worker.sh /usr/local/share/xloom/
+COPY container/environment.md container/check-worker.sh /usr/local/share/pwnmesh/
 # Kali 为 Nmap 设置的 CAP_NET_ADMIN 超出 Docker 默认权限，连 --version 也会无法执行。
 # 去掉文件 capabilities，让默认 root 进程沿用容器已有权限。
-RUN chmod 0755 /usr/local/share/xloom/check-worker.sh \
+RUN chmod 0755 /usr/local/share/pwnmesh/check-worker.sh \
     && if [ -f /usr/lib/nmap/nmap ] && [ -n "$(getcap /usr/lib/nmap/nmap)" ]; then \
         setcap -r /usr/lib/nmap/nmap; \
     fi
-COPY --from=application /usr/local/bin/xloom /usr/local/bin/xloom
+COPY --from=application /usr/local/bin/pwnmesh /usr/local/bin/pwnmesh
 
 USER root
 WORKDIR /workspace
-RUN --network=none /usr/local/share/xloom/check-worker.sh
-ENTRYPOINT ["/usr/local/bin/xloom"]
+RUN --network=none /usr/local/share/pwnmesh/check-worker.sh
+ENTRYPOINT ["/usr/local/bin/pwnmesh"]
 CMD ["worker", "--help"]

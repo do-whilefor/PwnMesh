@@ -80,7 +80,7 @@ func RegisterWorker(runDir string) error {
 // Docker supplies a per-launch token outside the immutable Job. A late exec
 // from an interrupted HTTP start must not claim the same run after recovery.
 func CheckLaunch(runDir string) error {
-	token := os.Getenv("XLOOM_LAUNCH_TOKEN")
+	token := os.Getenv("PWNMESH_LAUNCH_TOKEN")
 	if token == "" {
 		return nil
 	}
@@ -144,11 +144,11 @@ func Run(ctx context.Context, dir, runDir string, output *os.File, name string, 
 	token := hex.EncodeToString(random)
 	cmd := exec.CommandContext(ctx, name, args...)
 	for _, env := range os.Environ() {
-		if !strings.HasPrefix(env, "XLOOM_PROCESS_TOKEN=") {
+		if !strings.HasPrefix(env, "PWNMESH_PROCESS_TOKEN=") {
 			cmd.Env = append(cmd.Env, env)
 		}
 	}
-	cmd.Env = append(cmd.Env, "XLOOM_PROCESS_TOKEN="+token)
+	cmd.Env = append(cmd.Env, "PWNMESH_PROCESS_TOKEN="+token)
 	cmd.Dir = dir
 	cmd.Stdout = output
 	cmd.Stderr = output
@@ -207,7 +207,7 @@ func killToken(token string) error {
 		return err
 	}
 	var result error
-	needle := "\x00XLOOM_PROCESS_TOKEN=" + token + "\x00"
+	needle := "\x00PWNMESH_PROCESS_TOKEN=" + token + "\x00"
 	for _, entry := range entries {
 		pid, err := strconv.Atoi(entry.Name())
 		if err != nil || pid <= 1 || pid == os.Getpid() {

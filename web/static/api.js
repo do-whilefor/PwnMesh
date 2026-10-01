@@ -1,7 +1,7 @@
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomAPI = api;
+  else root.PwnMeshAPI = api;
 }(typeof window === 'object' ? window : globalThis, function () {
   'use strict';
   class APIError extends Error {
@@ -50,7 +50,7 @@
         if (signal?.aborted) throw error;
         if (controller.signal.aborted) throw new APIError('连接超时，请稍后重试');
         if (error instanceof APIError) throw error;
-        throw new APIError('无法连接 X-Loom，请检查服务状态');
+        throw new APIError('无法连接 PwnMesh，请检查服务状态');
       } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
     }
   }

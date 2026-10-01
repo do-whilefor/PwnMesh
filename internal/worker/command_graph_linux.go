@@ -3,6 +3,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -20,9 +21,9 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
-	"xloom/internal/agent"
-	"xloom/internal/process"
-	"xloom/internal/workergraph"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/process"
+	"pwnmesh/internal/workergraph"
 )
 
 var commandGraphID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
@@ -72,12 +73,12 @@ type commandGraphEvidence struct {
 func commandGraphTool(j Job, o Options) agent.Tool {
 	tool := agent.Tool{Definition: agent.Definition{
 		Name:        "run_graph",
-		Description: "Coordinate a command/agent graph across model turns. Choose roles, count and dependencies from the task and results. To extend, reuse the key with the full cumulative nodes list; retain every prior node unchanged. Completed nodes are reverified and reused; parallelism may change. succeeded covers submitted tasks, not Step completion. kind=command (default) uses bash; kind=agent runs an independent original Agent Loop with task text and local file/bash tools. Delegate reasoning to Agents and deterministic work to commands. Children cannot delegate, publish blackboard records or finish the Step. Supply sufficient context and synthesize their results; agreement within one Run is not independent review. Bounds: 1..64 cumulative nodes, parallelism 1..16 (default min(node count,16)), command timeout <=120s, Agent <=600s, all within the parent deadline. Nodes have private directories in the shared container, not security sandboxes. XLOOM_WORKSPACE and XLOOM_NODE_DIR are absolute directories; XLOOM_DEPENDENCIES is the FILE PATH of dependencies.json (an array, empty for no dependencies). output.value.stdout previews 8000 bytes of stdout/stderr; output.value.output_path locates the full SHA-256-bound stdout.log. Declare extra relative output files in artifacts. Retained files must fit 64 MiB; commands also enforce that write limit. Required dependencies must succeed; optional dependencies allow failed/skipped inputs. Optional failures permit follow-up tasks; required failures remain terminal. when checks dependency status (default succeeded) and optional successful-output contains text; failed/skipped routes require optional dependencies. Agent stdout.log is its account, not raw proof. Declare resources for shared mutable files/objects and order nodes sharing keys by dependencies; resources:[] asserts independent effects. Reuse verifies prior successful outputs before dispatch; unresolved interruptions block new work and are never replayed. Inspect uncertain effects before using a new key. Results include ordered node statuses, errors and timings.",
+		Description: "Coordinate a command/agent graph across model turns. Choose roles, count and dependencies from the task and results. To extend, reuse the key with the full cumulative nodes list; retain every prior node unchanged. Completed nodes are reverified and reused; parallelism may change. succeeded covers submitted tasks, not Step completion. kind=command (default) uses bash; kind=agent runs an independent original Agent Loop with task text and local file/bash tools. Delegate reasoning to Agents and deterministic work to commands. Children cannot delegate, publish blackboard records or finish the Step. Supply sufficient context and synthesize their results; agreement within one Run is not independent review. Bounds: 1..64 cumulative nodes, parallelism 1..16 (default min(node count,16)), command timeout <=120s, Agent <=600s, all within the parent deadline. Nodes have private directories in the shared container, not security sandboxes. PWNMESH_WORKSPACE and PWNMESH_NODE_DIR are absolute directories; PWNMESH_DEPENDENCIES is the FILE PATH of dependencies.json (an array, empty for no dependencies). output.value.stdout previews 8000 bytes of stdout/stderr; output.value.output_path locates the full SHA-256-bound stdout.log. Declare required output files in artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there. Retained files must fit 64 MiB; commands also enforce that write limit. Required dependencies must succeed; optional dependencies allow failed/skipped inputs. Optional failures permit follow-up tasks; required failures remain terminal. when checks dependency status (default succeeded) and optional full SHA-256-bound stdout.log contains text; failed/skipped routes require optional dependencies. Agent stdout.log is its account, not raw proof. Declare resources for shared mutable files/objects and order nodes sharing keys by dependencies; resources:[] asserts independent effects. Reuse verifies prior successful outputs before dispatch; unresolved interruptions block new work and are never replayed. Inspect uncertain effects before using a new key. Results include ordered node statuses, errors and timings.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"key":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"parallelism":{"type":"integer","minimum":1,"maximum":16},"nodes":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"kind":{"type":"string","enum":["command","agent"]},"command":{"type":"string","minLength":1,"maxLength":32768},"task":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":600},"depends_on":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string"},"optional":{"type":"boolean"}},"required":["id"],"additionalProperties":false}},"resources":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}},"artifacts":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":256}},"optional":{"type":"boolean"},"when":{"type":"object","properties":{"node":{"type":"string"},"status":{"type":"string","enum":["succeeded","failed","skipped"]},"contains":{"type":"string","minLength":1,"maxLength":256}},"required":["node"],"additionalProperties":false}},"required":["id","resources"],"additionalProperties":false}}},"required":["key","nodes"],"additionalProperties":false}`),
 	}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 		return runCommandGraph(ctx, j, o, raw)
 	}}
-	tool.Description += ` Read dependencies with json.load(open(os.environ["XLOOM_DEPENDENCIES"])); each entry has id, status, output.value and output.artifacts (path/sha256). For machine-readable results, declare a separate JSON artifact instead of parsing combined logs. verified_evidence contains only successful command logs, never Agent accounts; preview_complete=true includes exact UTF-8 content and line bounds usable in finish_step or a final fact. Assess meaning directly; reread only additional/truncated evidence, not merely to recertify unchanged files. observed_at is verification time, not Step acceptance.`
+	tool.Description += ` Read dependencies with json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); each entry has id, status, output.value and output.artifacts (path/sha256). For machine-readable results, declare a separate JSON artifact instead of parsing combined logs. verified_evidence contains only successful command logs, never Agent accounts; preview_complete=true includes exact UTF-8 content and line bounds usable in finish_step or a final fact. Assess meaning directly; reread only additional/truncated evidence, not merely to recertify unchanged files. observed_at is verification time, not Step acceptance.`
 	return tool
 }
 
@@ -309,8 +310,15 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 				}
 				for _, dep := range in.Dependencies {
 					if dep.ID == nodeSpec.When.Node {
-						var value commandGraphOutput
-						if dep.Status == nodeSpec.When.Status && (nodeSpec.When.Contains == "" || (json.Unmarshal(dep.Output.Value, &value) == nil && strings.Contains(value.Stdout, nodeSpec.When.Contains))) {
+						matches := dep.Status == nodeSpec.When.Status
+						if matches && nodeSpec.When.Contains != "" {
+							var err error
+							matches, err = commandOutputContains(ctx, filepath.Join(dir, "nodes", dep.ID), dep.Output, nodeSpec.When.Contains)
+							if err != nil {
+								return false, "", err
+							}
+						}
+						if matches {
 							return true, "", nil
 						}
 						return false, "dependency status or output did not match condition", nil
@@ -405,7 +413,7 @@ func executeCommandNode(ctx context.Context, runDir, workspace, dir string, spec
 	// Bash sets both soft and hard limits when neither -S nor -H is supplied.
 	// Its file-size unit is 1024 bytes; children inherit this per-file ceiling.
 	// Pass model commands as an argument, never interpolate them in the wrapper.
-	args := append(graphNodeEnvironment(workspace, dir), "bash", "-c", `ulimit -f 65536 || exit; exec bash -c "$1"`, "xloom-run-graph", spec.Command)
+	args := append(graphNodeEnvironment(workspace, dir), "bash", "-c", `ulimit -f 65536 || exit; exec bash -c "$1"`, "pwnmesh-run-graph", spec.Command)
 	commandErr := process.Run(child, dir, runDir, f, "env", args...)
 	if err := errors.Join(f.Sync(), f.Close()); err != nil {
 		return workergraph.Output{}, errors.Join(commandErr, err)
@@ -442,7 +450,7 @@ func executeCommandNode(ctx context.Context, runDir, workspace, dir string, spec
 }
 
 func graphNodeEnvironment(workspace, dir string) []string {
-	return []string{"XLOOM_WORKSPACE=" + workspace, "XLOOM_NODE_DIR=" + dir, "XLOOM_DEPENDENCIES=" + filepath.Join(dir, "dependencies.json")}
+	return []string{"PWNMESH_WORKSPACE=" + workspace, "PWNMESH_NODE_DIR=" + dir, "PWNMESH_DEPENDENCIES=" + filepath.Join(dir, "dependencies.json")}
 }
 
 func commandNewFile(path string, raw []byte) error {
@@ -465,11 +473,45 @@ type commandPreview struct {
 	Complete bool
 }
 
+// Conditions consume the same retained bytes that are verified, not the lossy
+// preview. Keep only a chunk and its overlapping suffix, and finish hashing even
+// after a match so a changed file cannot authorize a downstream side effect.
+func commandOutputContains(ctx context.Context, dir string, out workergraph.Output, contains string) (bool, error) {
+	var value commandGraphOutput
+	if json.Unmarshal(out.Value, &value) != nil || value.ExitCode != 0 || value.OutputPath != filepath.Join(dir, "stdout.log") || len(out.Artifacts) == 0 {
+		return false, errors.New("invalid condition dependency output")
+	}
+	needle := []byte(contains)
+	matched := len(needle) == 0
+	window := make([]byte, 0, (64<<10)+len(needle))
+	artifact, preview, err := inspectCommandFileChunks(ctx, dir, "stdout.log", 8000, func(chunk []byte) {
+		if matched {
+			return
+		}
+		window = append(window, chunk...)
+		matched = bytes.Contains(window, needle)
+		keep := min(len(window), len(needle)-1)
+		copy(window, window[len(window)-keep:])
+		window = window[:keep]
+	})
+	if err != nil {
+		return false, err
+	}
+	if artifact != out.Artifacts[0] || preview.Text != value.Stdout {
+		return false, errors.New("condition dependency stdout SHA-256 or preview changed")
+	}
+	return matched, nil
+}
+
 func inspectCommandFile(ctx context.Context, dir, name string, previewLimit int) (workergraph.Artifact, commandPreview, error) {
+	return inspectCommandFileChunks(ctx, dir, name, previewLimit, nil)
+}
+
+func inspectCommandFileChunks(ctx context.Context, dir, name string, previewLimit int, consume func([]byte)) (workergraph.Artifact, commandPreview, error) {
 	path := filepath.Join(dir, name)
 	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil || resolved != path {
-		return workergraph.Artifact{}, commandPreview{}, errors.New("command artifact must exist and not use symlinks")
+		return workergraph.Artifact{}, commandPreview{}, fmt.Errorf("command artifact %q must exist and not use symlinks", path)
 	}
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
@@ -497,6 +539,9 @@ func inspectCommandFile(ctx context.Context, dir, name string, previewLimit int)
 			}
 			digest.Write(buffer[:n])
 			preview = append(preview, buffer[:min(n, previewLimit-len(preview))]...)
+			if consume != nil {
+				consume(buffer[:n])
+			}
 		}
 		if readErr == io.EOF {
 			break

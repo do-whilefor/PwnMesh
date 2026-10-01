@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"xloom/internal/agent"
-	"xloom/internal/contract"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/contract"
 )
 
 const maxOutputRepairs = 2

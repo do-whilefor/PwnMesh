@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 // The Server counts every historical attempt and grants one successor

@@ -9,9 +9,9 @@ import (
 	"regexp"
 	"strings"
 
-	"xloom/internal/agent"
-	"xloom/internal/artifactcheck"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board"
 )
 
 const committedDecisionText = `{"accepted":true,"data":{"decided":true}}`

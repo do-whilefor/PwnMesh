@@ -5,7 +5,7 @@ import (
 	"errors"
 	"net/http"
 
-	b "xloom/internal/board"
+	b "pwnmesh/internal/board"
 )
 
 // The curator owns a separate lease from planning. Its operation must never

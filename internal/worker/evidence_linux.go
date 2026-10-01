@@ -17,8 +17,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
-	"xloom/internal/board"
-	"xloom/internal/contract"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/contract"
 )
 
 const maxEvidenceFileBytes = 32 << 20

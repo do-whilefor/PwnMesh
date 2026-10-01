@@ -9,13 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/provider"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/provider"
 )
 
 func modelForJob(j Job) (*provider.Anthropic, error) {
 	effort := j.Budget.ReasoningEffort
 	if effort == "" {
-		effort = os.Getenv("XLOOM_REASONING_EFFORT")
+		effort = config.Getenv("PWNMESH_REASONING_EFFORT")
 	}
 	if effort == "" {
 		effort = provider.DefaultReasoningEffort
@@ -26,8 +27,8 @@ func modelForJob(j Job) (*provider.Anthropic, error) {
 	p := &provider.Anthropic{
 		BaseURL: os.Getenv("ANTHROPIC_BASE_URL"), Token: os.Getenv("ANTHROPIC_AUTH_TOKEN"),
 		Model: os.Getenv("ANTHROPIC_MODEL"), SessionID: j.RunID,
-		MaxTokens:       envInt("XLOOM_MAX_OUTPUT_TOKENS", provider.DefaultMaxTokens),
-		ReasoningEffort: effort, Timeout: time.Duration(envInt("XLOOM_REQUEST_TIMEOUT", 180)) * time.Second,
+		MaxTokens:       envInt("PWNMESH_MAX_OUTPUT_TOKENS", provider.DefaultMaxTokens),
+		ReasoningEffort: effort, Timeout: time.Duration(envInt("PWNMESH_REQUEST_TIMEOUT", 180)) * time.Second,
 	}
 	if p.Model == "" {
 		p.Model = os.Getenv("ANTHROPIC_DEFAULT_FABLE_MODEL")

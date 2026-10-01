@@ -16,8 +16,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
-	"xloom/internal/artifactcheck"
-	"xloom/internal/board"
+	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board"
 )
 
 // Walk from an open workspace descriptor: neither parent nor final symlinks

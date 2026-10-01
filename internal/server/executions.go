@@ -8,11 +8,11 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"pwnmesh/internal/artifactcheck"
+	b "pwnmesh/internal/board"
+	"pwnmesh/internal/contract"
+	"pwnmesh/internal/worker"
 	"strings"
-	"xloom/internal/artifactcheck"
-	b "xloom/internal/board"
-	"xloom/internal/contract"
-	"xloom/internal/worker"
 )
 
 func (s *Server) registerExecutionRoutes(m *http.ServeMux) {
@@ -102,7 +102,7 @@ func (s *Server) registerExecution(t *b.Tx, e b.Execution, r *http.Request) (int
 	if (control && (e.Intent != "" || job.Intent != nil)) || (!control && (job.Intent == nil || job.Intent.ID != e.Intent)) {
 		return 0, nil, b.Err(422, "Invalid execution step")
 	}
-	if r.Header.Get("X-Xloom-Run") != e.Lease || r.Header.Get("X-Xloom-Lease") != e.Kind || r.Header.Get("X-Xloom-Intent") != e.Intent {
+	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Execution registration requires its lease")
 	}
 	if err := t.RegisterExecution(e); err != nil {
@@ -114,7 +114,7 @@ func (s *Server) registerExecution(t *b.Tx, e b.Execution, r *http.Request) (int
 func (s *Server) executionAction(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	op := r.PathValue("execution_op")
 	if op == "retry" {
-		if r.Header.Get("X-Xloom-Run") != "" {
+		if r.Header.Get("X-PwnMesh-Run") != "" {
 			return 0, nil, b.Err(403, "retry authorization is a project-management operation")
 		}
 		if value, exists := q.fields["automatic"]; exists {
@@ -165,7 +165,7 @@ func (s *Server) executionAction(t *b.Tx, q *request, r *http.Request) (int, any
 		}
 		return 200, map[string]string{"previous_run_id": e.ID}, t.ExecutionStatus(e, "retry_requested", e.Result)
 	}
-	if r.Header.Get("X-Xloom-Run") != e.Lease || r.Header.Get("X-Xloom-Lease") != e.Kind || r.Header.Get("X-Xloom-Intent") != e.Intent {
+	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Execution lease mismatch")
 	}
 	if op == "resume" {
@@ -377,7 +377,7 @@ func validateRepairResult(jobRaw, resultRaw json.RawMessage) error {
 	if err != nil {
 		return b.Err(422, "invalid canonical repair receipt")
 	}
-	evidenceDir := path.Join(job.Workspace, ".xloom", "runs", job.RunID, "evidence")
+	evidenceDir := path.Join(job.Workspace, ".pwnmesh", "runs", job.RunID, "evidence")
 	receiptPath := path.Join(evidenceDir, fmt.Sprintf("%x.raw", sha256.Sum256(receipt)))
 	contentPath := path.Join(evidenceDir, check.SHA256+".raw")
 	hasReceipt := false

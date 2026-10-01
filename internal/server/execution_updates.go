@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	b "xloom/internal/board"
-	"xloom/internal/worker"
+	b "pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 // Reads and filters under one transaction: event boundaries and node versions
@@ -26,7 +26,7 @@ func (s *Server) executionUpdates(t *b.Tx, q *request, r *http.Request) (int, an
 	if err != nil {
 		return 0, nil, err
 	}
-	if r.Header.Get("X-Xloom-Run") != e.Lease || r.Header.Get("X-Xloom-Lease") != e.Kind || r.Header.Get("X-Xloom-Intent") != e.Intent {
+	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Updates read requires its execution lease")
 	}
 	if e.Kind == "reason" || e.Intent == "" || !e.Pending() || e.Status == "result_pending" {

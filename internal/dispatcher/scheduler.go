@@ -16,11 +16,11 @@ import (
 	"sync/atomic"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/provider"
-	"xloom/internal/worker"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/provider"
+	"pwnmesh/internal/worker"
 )
 
 type Runner interface {
@@ -630,7 +630,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	var curationCheck board.ExecutionCheck
 	curationReady := false
 	if input.CurationNeeded && !localCurator {
-		check, err := s.executionCheck(ctx, g, "curate", nil, "")
+		check, err := s.candidateCheck(ctx, input, g, "curate", nil)
 		if err != nil {
 			return false, err
 		}
@@ -644,7 +644,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		curationCheck = check
 		curationReady = g.Project.Curator == nil && curating && (input.CurationRequested || check.PreviousRunID != "" || !s.waitForCuration(g, input.Revision, time.Now()))
 	}
-	reasonCheck, err := s.executionCheck(ctx, g, "reason", nil, "")
+	reasonCheck, err := s.candidateCheck(ctx, input, g, "reason", nil)
 	if err != nil {
 		return false, err
 	}

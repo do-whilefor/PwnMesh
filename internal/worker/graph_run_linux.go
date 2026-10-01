@@ -17,10 +17,10 @@ import (
 	"sync"
 
 	"golang.org/x/sys/unix"
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/process"
-	"xloom/internal/workergraph"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/process"
+	"pwnmesh/internal/workergraph"
 )
 
 // Run executes each role with the shared Agent Loop and records Execute

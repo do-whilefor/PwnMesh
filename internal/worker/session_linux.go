@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
 )
 
 const sessionSchemaVersion = 1

@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	b "xloom/internal/board"
-	"xloom/web"
+	b "pwnmesh/internal/board"
+	"pwnmesh/web"
 )
 
 type Server struct{ Store *b.Store }
@@ -292,8 +292,8 @@ func (r *request) orchestrationVersion() int {
 // Headers opt a dispatcher request into the board's transactional lease fence.
 func guard(t *b.Tx, g b.Graph, r *http.Request) error {
 	return t.CheckExecution(g, b.ExecutionFence{
-		Run: r.Header.Get("X-Xloom-Run"), Lease: r.Header.Get("X-Xloom-Lease"),
-		Intent: r.Header.Get("X-Xloom-Intent"),
+		Run: r.Header.Get("X-PwnMesh-Run"), Lease: r.Header.Get("X-PwnMesh-Lease"),
+		Intent: r.Header.Get("X-PwnMesh-Intent"),
 	})
 }
 
@@ -507,7 +507,7 @@ func (s *Server) hint(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	}
 	h := b.Hint{ID: id, Content: content, Creator: creator, CreatedAt: t.Now}
 	g.Hints = append(g.Hints, h)
-	return 201, h, t.SaveUserInput(g, "hint", h.ID, r.Header.Get("X-Xloom-Run"), h, h)
+	return 201, h, t.SaveUserInput(g, "hint", h.ID, r.Header.Get("X-PwnMesh-Run"), h, h)
 }
 func (s *Server) intent(_ *b.Tx, _ *request, _ *http.Request) (int, any, error) {
 	return 0, nil, b.Err(403, "Steps require the primary agent's decision batch")
@@ -644,7 +644,7 @@ func (s *Server) reopen(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 	g.Project.Status = "active"
 	g.Project.Reason = nil
 	result := b.Reopened{Project: g.Project, Fact: f, Intent: i}
-	return 200, result, t.SaveUserInput(g, "reopen", f.ID, r.Header.Get("X-Xloom-Run"), map[string]string{"description": desc, "creator": creator}, result)
+	return 200, result, t.SaveUserInput(g, "reopen", f.ID, r.Header.Get("X-PwnMesh-Run"), map[string]string{"description": desc, "creator": creator}, result)
 }
 
 type plain string

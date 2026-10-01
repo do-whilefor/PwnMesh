@@ -10,8 +10,8 @@ import (
 	"errors"
 	"fmt"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 // This checkpoint lives in the same atomic session file as History. Revision

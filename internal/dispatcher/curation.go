@@ -7,8 +7,8 @@ import (
 	"slices"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 // Coalesce a producer's fact/candidate/final-result burst without waiting

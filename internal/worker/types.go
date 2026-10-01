@@ -4,9 +4,9 @@ package worker
 import (
 	"encoding/json"
 	"errors"
-	"xloom/internal/artifactcheck"
-	"xloom/internal/board"
-	"xloom/internal/config"
+	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
 )
 
 // ErrInterrupted marks a dispatcher shutdown/infrastructure interruption that

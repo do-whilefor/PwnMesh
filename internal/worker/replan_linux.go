@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/contract"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/contract"
 )
 
 const replanMaxCalls = 3

@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Linux tests, vet and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Test, vet and compile
+        run: docker build --target build --progress=plain .
+
+      - name: Set up Node for workbench tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Browser acceptance is opt-in under web/browser; this step needs no browser.
+      - name: Check workbench scripts and Node regressions
+        run: |
+          for script in web/static/*.js; do node --check "$script"; done
+          node --test web/*_test.cjs
+
+      - name: Check live-run analysis and efficiency fixture
+        run: |
+          python3 -m unittest discover -s tests/integration -p 'test_analyze*.py'
+          python3 -m unittest discover -s tests/integration -p test_efficiency_fixture.py

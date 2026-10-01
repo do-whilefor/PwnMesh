@@ -1,6 +1,6 @@
 <div align="center">
 
-# X-Loom
+# PwnMesh
 
 **面向 CTF、授权渗透测试与代码审计的多 Worker AI 协作探索系统**
 
@@ -19,11 +19,11 @@
 
 ## 项目简介
 
-**X-Loom** 是一个以 Go 构建的多 Worker AI 协作探索系统，面向 **CTF 题目研究、明确授权的渗透测试和代码安全审计** 等需要持续分析、多路径探索和工具辅助验证的任务。
+**PwnMesh** 是一个以 Go 构建的多 Worker AI 协作探索系统，面向 **CTF 题目研究、明确授权的渗透测试和代码安全审计** 等需要持续分析、多路径探索和工具辅助验证的任务。
 
-系统由 **Server、Dispatcher、Worker 和 Web 工作台**构成：Server 接收任务并维护共享状态；Dispatcher 按任务阶段与容量配置调度执行；Worker 在 Docker 容器中运行 Agent 与工具，执行具体探索。与将所有工作放在单个对话中的方式不同，X-Loom 将任务规划、执行与状态记录分开，便于管理多个探索方向和查看执行过程。
+系统由 **Server、Dispatcher、Worker 和 Web 工作台**构成：Server 接收任务并维护共享状态；Dispatcher 按任务阶段与容量配置调度执行；Worker 在 Docker 容器中运行 Agent 与工具，执行具体探索。与将所有工作放在单个对话中的方式不同，PwnMesh 将任务规划、执行与状态记录分开，便于管理多个探索方向和查看执行过程。
 
-X-Loom 是用于辅助研究的执行框架，**不是一键自动确认漏洞的扫描器**。模型生成的判断、工具输出与安全结论均需结合授权范围和原始证据人工复核。
+PwnMesh 是用于辅助研究的执行框架，**不是一键自动确认漏洞的扫描器**。模型生成的判断、工具输出与安全结论均需结合授权范围和原始证据人工复核。
 
 重构前版本SHA：a6fde4dd2c4061f997966c1e08436d2cc583f9b0
 
@@ -97,6 +97,8 @@ git clone https://github.com/do-whilefor/X-Loom.git
 cd X-Loom
 ```
 
+项目品牌为 PwnMesh；现有仓库地址和根目录名称仍为 `X-Loom`。
+
 ### 2. 准备配置
 
 ```bash
@@ -116,16 +118,16 @@ ANTHROPIC_DEFAULT_FABLE_MODEL=your_model_name
 
 ```yaml
 container:
-  image: xloom-worker:dev
+  image: pwnmesh-worker:dev
 ```
 
 ### 3. 构建镜像
 
-**先构建主镜像，再构建 Worker 镜像**；后者依赖本地的 `xloom:dev`：
+**先构建主镜像，再构建 Worker 镜像**；后者依赖本地的 `pwnmesh:dev`：
 
 ```bash
-docker build -t xloom:dev .
-docker build -f container/Dockerfile -t xloom-worker:dev .
+docker build -t pwnmesh:dev .
+docker build -f container/Dockerfile -t pwnmesh-worker:dev .
 ```
 Worker 镜像内的工具与知识资料以 [`container/Dockerfile`](./container/Dockerfile) 为准。工具已安装不表示任意目标都可测试，也不保证每项工具、模板和 PoC 在所有环境下都可直接使用。
 
@@ -136,7 +138,7 @@ docker compose up -d --no-build
 docker compose ps
 ```
 
-默认访问地址：**http://127.0.0.1:8000**。如果需要调整宿主机端口，可在 `.env` 中设置 `XLOOM_PORT`，例如 `XLOOM_PORT=8080`。
+默认访问地址：**http://127.0.0.1:8000**。如果需要调整宿主机端口，可在 `.env` 中设置 `PWNMESH_PORT`，例如 `PWNMESH_PORT=8080`。
 
 Compose 启动的是 **Server 和 Dispatcher**；具体 Worker 容器由 Dispatcher 在收到任务后动态创建，并非固定常驻的 Compose 服务。
 
@@ -150,7 +152,22 @@ docker compose logs -f server dispatcher
 docker compose down
 ```
 
-默认使用命名卷 `xloom-data` 保存 Server 数据。`docker compose down` 通常保留该卷；执行带 `-v` 的删除命令前，请确认是否仍需要其中的任务数据。
+默认使用名为 `<Compose项目名>_pwnmesh-data` 的命名卷保存 Server 数据，不同 Compose 项目分别保存。`docker compose down` 通常保留该卷；执行带 `-v` 的删除命令前，请确认是否仍需要其中的任务数据。
+
+### 从旧版本升级
+
+先等待正在执行的任务结束，再停止旧服务，并同步更新 Server、Dispatcher 和 Worker 镜像；不要让新旧版本处理同一批运行中的任务。已有 `.env`、`dispatch.yaml` 不会自动改写，需将镜像名、命名空间和 `XLOOM_*` 配置改为上述 `pwnmesh` / `PWNMESH_*` 名称。程序配置暂时兼容旧 `XLOOM_*` 环境变量，新名称优先；Compose 的端口等设置使用新名称。
+
+历史数据不会自动移动。若要继续使用旧数据卷，先通过 `docker volume ls` 确认其实际名称（通常带 Compose 项目前缀），然后在 `.env` 中设置：
+
+```dotenv
+PWNMESH_DATA_VOLUME=实际的旧数据卷名称
+PWNMESH_DB_PATH=/data/xloom.db
+```
+
+数据库路径应与旧部署一致；直接运行命令行时，可使用 `pwnmesh serve --db-path /原路径/xloom.db`。旧数据库的内部表名和已有 `.xloom` 证据路径保持可读，新 Worker 的运行目录使用 `.pwnmesh`。确认旧卷名称后再启动服务，避免连接到新建的空卷。
+
+复用 Server 数据卷不会自动迁移 Worker 的 `/workspace`。如需继续读取旧任务的原始证据，升级前应等待旧任务完成，并保留或迁移对应 Worker 工作区（包括 `.xloom`），保持证据在 `/workspace` 下的原路径不变。
 
 ## 使用限制与安全提示
 
@@ -165,7 +182,7 @@ docker compose down
 
 ## 授权说明
 
-X-Loom 采用 **[PolyForm Noncommercial License 1.0.0](./LICENSE)**，是一份带有非商业用途限制的源码可用许可证，**不是 OSI 批准的开源许可证**。
+PwnMesh 采用 **[PolyForm Noncommercial License 1.0.0](./LICENSE)**，是一份带有非商业用途限制的源码可用许可证，**不是 OSI 批准的开源许可证**。
 
 在完整许可证允许的范围内，可进行非商业学习、研究、实验、修改和分发。未经权利人另行授权，不得将本项目用于商业产品、商业服务、SaaS、收费安全服务或其他商业用途。是否属于许可证所允许的用途，应以许可证全文及具体使用情形为准。
 
@@ -175,6 +192,6 @@ X-Loom 采用 **[PolyForm Noncommercial License 1.0.0](./LICENSE)**，是一份�
 
 <div align="center">
 
-**X-Loom · For authorized security research only.**
+**PwnMesh · For authorized security research only.**
 
 </div>

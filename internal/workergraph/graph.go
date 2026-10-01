@@ -211,11 +211,27 @@ func compareID(a, b string) int {
 	return 0
 }
 
-func clone[T any](v T) T {
-	raw, _ := json.Marshal(v)
-	var copied T
-	_ = json.Unmarshal(raw, &copied)
-	return copied
+// Callback boundaries need owned slices, not JSON encoding. Copy raw values
+// exactly so isolation neither rewrites input bytes nor hides malformed output.
+func cloneOutput(output Output) Output {
+	output.Value = slices.Clone(output.Value)
+	output.Artifacts = slices.Clone(output.Artifacts)
+	return output
+}
+
+func cloneNodeState(state NodeState) NodeState {
+	state.Output = cloneOutput(state.Output)
+	return state
+}
+
+func cloneInput(input Input) Input {
+	input.Initial = slices.Clone(input.Initial)
+	input.Value = slices.Clone(input.Value)
+	input.Dependencies = slices.Clone(input.Dependencies)
+	for i := range input.Dependencies {
+		input.Dependencies[i] = cloneNodeState(input.Dependencies[i])
+	}
+	return input
 }
 
 // A condition runs before the node's side effects and must be pure. Other
@@ -235,7 +251,7 @@ func invoke[T any](phase string, uncertain bool, callback func() (T, error)) (va
 func nodeInput(node Node, state NodeState, initial json.RawMessage, states map[string]*NodeState) Input {
 	input := Input{NodeID: node.ID, Attempt: state.Attempt, Initial: append(json.RawMessage(nil), initial...), Value: append(json.RawMessage(nil), node.Input...)}
 	for _, dep := range node.DependsOn {
-		input.Dependencies = append(input.Dependencies, clone(*states[dep.ID]))
+		input.Dependencies = append(input.Dependencies, cloneNodeState(*states[dep.ID]))
 	}
 	return input
 }
@@ -377,7 +393,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		}
 		if node.Verify != nil {
 			_, err := invoke("verification", true, func() (struct{}, error) {
-				return struct{}{}, node.Verify(ctx, clone(input), clone(output))
+				return struct{}{}, node.Verify(ctx, cloneInput(input), cloneOutput(output))
 			})
 			return err
 		}
@@ -417,7 +433,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				}
 				started := time.Now()
 				output, reconcileErr := invoke("reconciliation", true, func() (Output, error) {
-					return node.Reconcile(ctx, clone(input), clone(*state))
+					return node.Reconcile(ctx, cloneInput(input), cloneNodeState(*state))
 				})
 				state.ReconcileDurationMS += float64(time.Since(started)) / float64(time.Millisecond)
 				if reconcileErr == nil {
@@ -432,7 +448,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 					}
 					return checkpoint, fmt.Errorf("node %s reconciliation: %w", node.ID, reconcileErr)
 				}
-				state.Output, state.Status, state.Error, state.FinishedAt = clone(output), "succeeded", "", time.Now().UTC()
+				state.Output, state.Status, state.Error, state.FinishedAt = cloneOutput(output), "succeeded", "", time.Now().UTC()
 				if err = persist(); err != nil {
 					return checkpoint, err
 				}
@@ -485,11 +501,11 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 			result := completion{node: node}
 			started := time.Now()
 			output, callErr := invoke("run", true, func() (Output, error) {
-				return node.Run(child, clone(input))
+				return node.Run(child, cloneInput(input))
 			})
 			result.durationMS = float64(time.Since(started)) / float64(time.Millisecond)
 			// Malformed JSON must reach validation, not become empty success.
-			result.output = Output{Value: append(json.RawMessage(nil), output.Value...), Artifacts: append([]Artifact(nil), output.Artifacts...)}
+			result.output = cloneOutput(output)
 			result.err = callErr
 			if result.err == nil && ctx.Err() == nil {
 				started = time.Now()
@@ -569,7 +585,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 					go func(node Node, input Input) {
 						started := time.Now()
 						decision, conditionErr := invoke("condition", false, func() (completion, error) {
-							run, reason, err := node.When(child, clone(input))
+							run, reason, err := node.When(child, cloneInput(input))
 							return completion{run: run, reason: reason}, err
 						})
 						decision.node, decision.input, decision.condition = node, input, true

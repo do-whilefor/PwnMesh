@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func validateSnapshotInput(j Job) error {

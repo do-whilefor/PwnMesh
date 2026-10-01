@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/tools"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/tools"
 )
 
 // ConfigureRuntimeTools is the mode capability boundary; phase restrictions

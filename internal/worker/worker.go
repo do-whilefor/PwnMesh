@@ -10,11 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/process"
 	"strconv"
 	"time"
-	"xloom/internal/agent"
-	"xloom/internal/artifactcheck"
-	"xloom/internal/process"
 )
 
 type Options struct {
@@ -412,13 +413,13 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 		state.RepairPrompt = ""
 	}
 	if o.ContextBytes <= 0 {
-		o.ContextBytes = envInt("XLOOM_CONTEXT_BYTES", DefaultContextBytes)
+		o.ContextBytes = envInt("PWNMESH_CONTEXT_BYTES", DefaultContextBytes)
 	}
 	if o.ContextTokens <= 0 {
-		o.ContextTokens = envInt("XLOOM_CONTEXT_TOKENS", DefaultContextTokens)
+		o.ContextTokens = envInt("PWNMESH_CONTEXT_TOKENS", DefaultContextTokens)
 	}
 	if o.ContextTargetTokens <= 0 {
-		o.ContextTargetTokens = envInt("XLOOM_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
+		o.ContextTargetTokens = envInt("PWNMESH_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
 	}
 	l = &agent.Loop{Provider: o.Provider, Tools: o.Tools, History: state.History, Concluding: state.Concluding, Repairing: state.Repairing, RepairPrompt: state.RepairPrompt, Emit: emit, Checkpoint: state.ContextCheckpoint, SaveState: func(history []agent.Message, _ *agent.ContextCheckpoint) error {
 		return save(history)
@@ -718,7 +719,7 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 	if j.Kind == "reason" {
 		if state.Replan != nil && state.Replan.Status == "running" {
 			state.Replan.Status, state.Replan.Fallback = "interrupted", "decide"
-		} else if !resuming && (o.ReplanShadow || os.Getenv("XLOOM_REPLAN_SHADOW") == "1") {
+		} else if !resuming && (o.ReplanShadow || config.Getenv("PWNMESH_REPLAN_SHADOW") == "1") {
 			state.Replan = &ReplanObservation{Mode: "shadow", Status: "skipped", Fallback: "decide"}
 			if j.Decision != nil {
 				state.Replan.StateVersion, state.Replan.Generation = j.Decision.StateVersion, j.Decision.Generation
@@ -831,7 +832,7 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 }
 
 func envInt(key string, fallback int) int {
-	n, err := strconv.Atoi(os.Getenv(key))
+	n, err := strconv.Atoi(config.Getenv(key))
 	if err != nil || n <= 0 {
 		return fallback
 	}

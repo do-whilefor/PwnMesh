@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	b "xloom/internal/board"
-	"xloom/internal/worker"
+	b "pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 // Apply continuation boundaries before sending the current FGS over HTTP.

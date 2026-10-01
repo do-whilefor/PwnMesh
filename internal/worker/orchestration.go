@@ -2,7 +2,7 @@ package worker
 
 import (
 	"errors"
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func controlJob(j Job) bool { return j.Kind == "reason" || j.Kind == "curate" }

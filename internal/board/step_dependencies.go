@@ -2,8 +2,8 @@ package board
 
 import (
 	"encoding/json"
+	"pwnmesh/internal/artifactcheck"
 	"slices"
-	"xloom/internal/artifactcheck"
 )
 
 // DependencyResult freezes the accepted upstream result used by one run.

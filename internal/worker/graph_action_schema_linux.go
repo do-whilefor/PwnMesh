@@ -1,11 +1,12 @@
 package worker
 
 import (
-	"xloom/internal/artifactcheck"
-	"xloom/internal/board"
+	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board"
 )
 
 const evidenceSelectionDescription = "For new evidence, select a UTF-8 file at most 32 MiB and a nonempty excerpt at most 8192 bytes. Omit both line bounds for the whole file, or supply start_line and end_line together (1-based, inclusive)."
+const factScopeDescription = "For a fact, preserve any task-specified scope value exactly; put additional explanation in description."
 
 // Describe every input field available in this mode, including the transition
 // discriminator. Conditional requirements and operation semantics remain with
@@ -31,7 +32,7 @@ func graphActionPayloadSchema(kind string) map[string]any {
 		properties["priority"] = map[string]any{"type": "integer", "minimum": 0, "maximum": 1000000}
 		properties["kind"] = map[string]any{"type": "string", "enum": []string{"supersedes", "refutes", "narrows"}}
 	} else {
-		properties["scope"] = text
+		properties["scope"] = map[string]any{"type": "string", "description": factScopeDescription}
 		properties["observed_at"] = map[string]any{"type": "string", "format": "date-time"}
 		properties["claim"] = text
 		properties["status"] = map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}}

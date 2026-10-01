@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 const System = "Work toward the assigned task using available tools. Distinguish confirmed facts from guesses. Follow the task's result contract."
@@ -155,7 +155,7 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Set("Authorization", "Bearer "+p.Token)
 		req.Header.Set("x-api-key", p.Token)
-		req.Header.Set("User-Agent", "xloom/0.1")
+		req.Header.Set("User-Agent", "pwnmesh/0.1")
 		req.Header.Set("x-opencode-session", p.sessionID)
 		res, err = client.Do(req)
 		if err != nil {
@@ -306,6 +306,11 @@ func mergeUsage(dst **agent.Usage, src *agent.Usage) {
 func consumeSSE(ctx context.Context, reader io.Reader, emit agent.Emit) (agent.Message, error) {
 	m := agent.Message{Role: "assistant", Content: []agent.Block{}}
 	parts := map[int]*strings.Builder{}
+	type blockText struct {
+		text, thinking, signature strings.Builder
+	}
+	// Pointers keep live builders from being copied when the slice grows.
+	var textParts []*blockText
 	started := false
 	stopped := false
 	scan := bufio.NewScanner(reader)
@@ -359,6 +364,11 @@ func consumeSSE(ctx context.Context, reader io.Reader, emit agent.Emit) (agent.M
 				m.Content = append(m.Content, agent.Block{})
 			}
 			m.Content[e.Index] = e.Block
+			text := &blockText{}
+			text.text.WriteString(e.Block.Text)
+			text.thinking.WriteString(e.Block.Thinking)
+			text.signature.WriteString(e.Block.Signature)
+			textParts = append(textParts, text)
 			if e.Block.Type == "tool_use" {
 				parts[e.Index] = &strings.Builder{}
 			}
@@ -372,7 +382,10 @@ func consumeSSE(ctx context.Context, reader io.Reader, emit agent.Emit) (agent.M
 				if b.Type != "text" {
 					return errors.New("text delta for a non-text block")
 				}
-				b.Text += e.Delta.Text
+				textParts[e.Index].text.WriteString(e.Delta.Text)
+				// String is a zero-copy view. Publish every fragment so early
+				// error returns retain the same partial response as completion.
+				b.Text = textParts[e.Index].text.String()
 				if emit != nil {
 					emit(agent.Event{Type: "text_delta", Text: e.Delta.Text})
 				}
@@ -385,9 +398,11 @@ func consumeSSE(ctx context.Context, reader io.Reader, emit agent.Emit) (agent.M
 					emit(agent.Event{Type: "tool_delta", ToolID: b.ID, ToolName: b.Name, Text: e.Delta.Partial})
 				}
 			case "thinking_delta":
-				b.Thinking += e.Delta.Thinking
+				textParts[e.Index].thinking.WriteString(e.Delta.Thinking)
+				b.Thinking = textParts[e.Index].thinking.String()
 			case "signature_delta":
-				b.Signature += e.Delta.Signature
+				textParts[e.Index].signature.WriteString(e.Delta.Signature)
+				b.Signature = textParts[e.Index].signature.String()
 			}
 		case "message_delta":
 			mergeUsage(&m.Usage, e.Usage)
