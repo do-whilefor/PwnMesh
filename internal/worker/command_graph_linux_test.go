@@ -78,6 +78,11 @@ func commandNodeValue(t *testing.T, checkpoint workergraph.Checkpoint, id string
 
 func TestCommandGraphJSONArtifactIsIndependentOfCombinedLog(t *testing.T) {
 	description := commandGraphTool(Job{}, Options{}).Description
+	for _, required := range []string{"PWNMESH_DEPENDENCIES names a JSON array", `deps={d["id"]:d for d in json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))}`} {
+		if !strings.Contains(description, required) {
+			t.Fatalf("missing dependency container type or name lookup guidance %q", required)
+		}
+	}
 	for _, required := range []string{"stdout/stderr", "declare a separate JSON artifact instead of parsing combined logs", `json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))`, "artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there"} {
 		if !strings.Contains(description, required) {
 			t.Fatalf("missing combined-log guidance %q", required)
