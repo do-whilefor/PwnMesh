@@ -43,6 +43,8 @@ type commandGraphNode struct {
 	DependsOn []workergraph.Dependency `json:"depends_on,omitempty"`
 	Resources []string                 `json:"resources"`
 	Artifacts []string                 `json:"artifacts,omitempty"`
+	Inputs    []commandGraphInput      `json:"inputs,omitempty"`
+	ReuseFrom *commandGraphReuse       `json:"reuse_from,omitempty"`
 	Optional  bool                     `json:"optional,omitempty"`
 	When      *commandGraphWhen        `json:"when,omitempty"`
 }
@@ -54,9 +56,10 @@ type commandGraphWhen struct {
 }
 
 type commandGraphOutput struct {
-	Stdout     string `json:"stdout"`
-	OutputPath string `json:"output_path"`
-	ExitCode   int    `json:"exit_code"`
+	Stdout     string               `json:"stdout"`
+	OutputPath string               `json:"output_path"`
+	ExitCode   int                  `json:"exit_code"`
+	ReusedFrom *commandReuseReceipt `json:"reused_from,omitempty"`
 }
 
 type commandGraphEvidence struct {
@@ -73,12 +76,11 @@ type commandGraphEvidence struct {
 func commandGraphTool(j Job, o Options) agent.Tool {
 	tool := agent.Tool{Definition: agent.Definition{
 		Name:        "run_graph",
-		Description: "Coordinate a command/agent graph across model turns. Choose roles, count and dependencies from the task and results. To extend, reuse the key with the full cumulative nodes list; retain every prior node unchanged. Completed nodes are reverified and reused; parallelism may change. succeeded covers submitted tasks, not Step completion. kind=command (default) uses bash; kind=agent runs an independent original Agent Loop with task text and local file/bash tools. Delegate reasoning to Agents and deterministic work to commands. Children cannot delegate, publish blackboard records or finish the Step. Supply sufficient context and synthesize their results; agreement within one Run is not independent review. Bounds: 1..64 cumulative nodes, parallelism 1..16 (default min(node count,16)), command timeout <=120s, Agent <=600s, all within the parent deadline. Nodes have private directories in the shared container, not security sandboxes. PWNMESH_WORKSPACE and PWNMESH_NODE_DIR are absolute directories; PWNMESH_DEPENDENCIES is the FILE PATH of dependencies.json (an array, empty for no dependencies). output.value.stdout previews 8000 bytes of stdout/stderr; output.value.output_path locates the full SHA-256-bound stdout.log. Declare required output files in artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there. Retained files must fit 64 MiB; commands also enforce that write limit. Required dependencies must succeed; optional dependencies allow failed/skipped inputs. Optional failures permit follow-up tasks; required failures remain terminal. when checks dependency status (default succeeded) and optional full SHA-256-bound stdout.log contains text; failed/skipped routes require optional dependencies. Agent stdout.log is its account, not raw proof. Declare resources for shared mutable files/objects and order nodes sharing keys by dependencies; resources:[] asserts independent effects. Reuse verifies prior successful outputs before dispatch; unresolved interruptions block new work and are never replayed. Inspect uncertain effects before using a new key. Results include ordered node statuses, errors and timings.",
-		Schema:      json.RawMessage(`{"type":"object","properties":{"key":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"parallelism":{"type":"integer","minimum":1,"maximum":16},"nodes":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"kind":{"type":"string","enum":["command","agent"]},"command":{"type":"string","minLength":1,"maxLength":32768},"task":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":600},"depends_on":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string"},"optional":{"type":"boolean"}},"required":["id"],"additionalProperties":false}},"resources":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}},"artifacts":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":256}},"optional":{"type":"boolean"},"when":{"type":"object","properties":{"node":{"type":"string"},"status":{"type":"string","enum":["succeeded","failed","skipped"]},"contains":{"type":"string","minLength":1,"maxLength":256}},"required":["node"],"additionalProperties":false}},"required":["id","resources"],"additionalProperties":false}}},"required":["key","nodes"],"additionalProperties":false}`),
+		Description: "Run a command/agent DAG. To extend, reuse the key with the full cumulative nodes list; retain every prior node unchanged. Completed nodes are reverified, not rerun. succeeded covers submitted nodes, not Step completion. kind=command (default) runs bash; kind=agent runs an independent Agent Loop with task text and file/bash tools. Children cannot delegate, publish blackboard records or finish the Step. Supply their context and synthesize results; same-Run Agents are not independent review. Nodes share a container but have private directories, not security sandboxes. PWNMESH_WORKSPACE and PWNMESH_NODE_DIR are absolute directories. Read dependencies with json.load(open(os.environ[\"PWNMESH_DEPENDENCIES\"])); each dependency has id, status and output.files[name]={path,sha256}. Use files by name: declare a separate JSON artifact instead of parsing combined logs. Declare artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there. Consumer inputs:[{node,artifact}] requires a declared file from a direct required dependency; missing declarations fail before any node runs, changed bytes fail before consumption. output.value.stdout previews 8000 bytes of stdout/stderr; output.value.output_path locates the full stdout.log. Agent logs are accounts, not raw evidence. Required failure remains terminal for its key. After a resolved failure, use a NEW key with kind=reuse,reuse_from:{key,node},resources:[] to import a successful node from this parent Run without executing it again. Do not override its task, command, dependencies or artifacts. All source definitions and files are verified before new work; missing definitions, changed files, unresolved operations and reuse chains are rejected, never silently rerun. Declare shared mutable resources and order nodes sharing them; resources:[] asserts independent effects. Required dependencies must succeed; optional dependencies allow failed/skipped results. when checks dependency status and optional full verified stdout contains text; failed/skipped routes need optional dependencies. Bounds: 1..64 nodes, parallelism 1..16 (default min(node count,16)), command timeout <=120s, Agent <=600s, files <=64 MiB, within parent deadline. verified_evidence contains only verified command logs; preview_complete=true supplies exact UTF-8 content and line bounds for finish_step. Assess meaning directly; reread only changed, additional or truncated evidence. observed_at is verification time, not acceptance.",
+		Schema:      json.RawMessage(`{"type":"object","properties":{"key":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"parallelism":{"type":"integer","minimum":1,"maximum":16},"nodes":{"type":"array","minItems":1,"maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"kind":{"type":"string","enum":["command","agent","reuse"]},"command":{"type":"string","minLength":1,"maxLength":32768},"task":{"type":"string","minLength":1,"maxLength":32768},"timeout":{"type":"integer","minimum":1,"maximum":600},"depends_on":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"id":{"type":"string"},"optional":{"type":"boolean"}},"required":["id"],"additionalProperties":false}},"resources":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":128}},"artifacts":{"type":"array","maxItems":16,"items":{"type":"string","minLength":1,"maxLength":256},"description":"Declared output files relative to PWNMESH_NODE_DIR; [] means logs only."},"optional":{"type":"boolean"},"when":{"type":"object","properties":{"node":{"type":"string"},"status":{"type":"string","enum":["succeeded","failed","skipped"]},"contains":{"type":"string","minLength":1,"maxLength":256}},"required":["node"],"additionalProperties":false},"inputs":{"type":"array","maxItems":64,"items":{"type":"object","properties":{"node":{"type":"string"},"artifact":{"type":"string"}},"required":["node","artifact"],"additionalProperties":false},"description":"Required named files from direct required dependencies; validated before graph execution and before consumption."},"reuse_from":{"type":"object","properties":{"key":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},"node":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"}},"required":["key","node"],"additionalProperties":false}},"required":["id","resources"],"additionalProperties":false}}},"required":["key","nodes"],"additionalProperties":false}`),
 	}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 		return runCommandGraph(ctx, j, o, raw)
 	}}
-	tool.Description += ` Read dependencies with json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); each entry has id, status, output.value and output.artifacts (path/sha256). For machine-readable results, declare a separate JSON artifact instead of parsing combined logs. verified_evidence contains only successful command logs, never Agent accounts; preview_complete=true includes exact UTF-8 content and line bounds usable in finish_step or a final fact. Assess meaning directly; reread only additional/truncated evidence, not merely to recertify unchanged files. observed_at is verification time, not Step acceptance.`
 	return tool
 }
 
@@ -98,14 +100,24 @@ func validateCommandGraph(spec *commandGraphSpec) error {
 		if n.Kind == "" {
 			n.Kind = "command"
 		}
-		if (n.Kind != "command" && n.Kind != "agent") || (n.Kind == "command" && (strings.TrimSpace(n.Command) == "" || n.Task != "")) || (n.Kind == "agent" && (strings.TrimSpace(n.Task) == "" || n.Command != "")) {
-			return errors.New("node requires either command or agent task matching its kind")
+		if (n.Kind != "command" && n.Kind != "agent" && n.Kind != "reuse") || (n.Kind == "command" && (strings.TrimSpace(n.Command) == "" || n.Task != "")) || (n.Kind == "agent" && (strings.TrimSpace(n.Task) == "" || n.Command != "")) {
+			return errors.New("node requires command, agent task, or reuse_from matching its kind")
 		}
 		if !commandGraphID.MatchString(n.ID) || len(n.Command) > 32768 || len(n.Task) > 32768 || len(n.DependsOn) > 64 || n.Resources == nil || len(n.Resources) > 16 || len(n.Artifacts) > 16 {
 			return errors.New("invalid command graph node")
 		}
 		if _, exists := byID[n.ID]; exists {
 			return errors.New("duplicate command graph node")
+		}
+		if n.Kind == "reuse" {
+			if n.ReuseFrom == nil || !commandGraphID.MatchString(n.ReuseFrom.Key) || !commandGraphID.MatchString(n.ReuseFrom.Node) || n.ReuseFrom.Key == spec.Key || n.Command != "" || n.Task != "" || n.Timeout != 0 || len(n.DependsOn) != 0 || len(n.Resources) != 0 || len(n.Artifacts) != 0 || len(n.Inputs) != 0 || n.When != nil {
+				return errors.New("reuse requires a different graph key and node; command, task, dependencies, resources, artifacts, inputs, timeout and when cannot be overridden")
+			}
+			byID[n.ID] = *n
+			continue
+		}
+		if n.ReuseFrom != nil {
+			return errors.New("reuse_from requires kind=reuse")
 		}
 		limit := 120
 		if n.Kind == "agent" {
@@ -218,6 +230,11 @@ func commandGraphDirectory(root string, elements ...string) (string, error) {
 }
 
 func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage) (string, error) {
+	if !o.graphDeadline.IsZero() {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, o.graphDeadline)
+		defer cancel()
+	}
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -232,6 +249,21 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 	}
 	identity, err := identityFor(j, o.RunDir)
 	if err != nil {
+		return "", err
+	}
+	reuses, releaseSources, err := prepareCommandReuses(ctx, j, o, spec)
+	if err != nil {
+		return "", err
+	}
+	defer releaseSources()
+	inputSpec := spec
+	inputSpec.Nodes = slices.Clone(spec.Nodes)
+	for i := range inputSpec.Nodes {
+		if reused := reuses[inputSpec.Nodes[i].ID]; reused != nil {
+			inputSpec.Nodes[i].Artifacts = reused.SourceSpec.Artifacts
+		}
+	}
+	if err := validateCommandInputs(&inputSpec); err != nil {
 		return "", err
 	}
 	dir, err := commandGraphDirectory(o.RunDir, "graph-tools", spec.Key)
@@ -254,10 +286,20 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 	for _, specNode := range spec.Nodes {
 		nodeSpec := specNode
 		nodeDir := filepath.Join(dir, "nodes", nodeSpec.ID)
-		nodeInput, _ := json.Marshal(nodeSpec)
-		node := workergraph.Node{ID: nodeSpec.ID, Kind: "function", Input: nodeInput, DependsOn: nodeSpec.DependsOn, Optional: nodeSpec.Optional}
-		if nodeSpec.Kind == "agent" {
-			node.Kind = "agent"
+		node := commandNodeDefinition(nodeSpec)
+		if reused := reuses[nodeSpec.ID]; reused != nil {
+			node.Kind = reused.SourceNode.Kind
+			node.Run = func(ctx context.Context, _ workergraph.Input) (workergraph.Output, error) {
+				if err := ctx.Err(); err != nil {
+					return workergraph.Output{}, err
+				}
+				return reused.Output(), nil
+			}
+			node.Verify = func(ctx context.Context, _ workergraph.Input, out workergraph.Output) error {
+				return reused.Verify(ctx, out)
+			}
+			definition.Nodes = append(definition.Nodes, node)
+			continue
 		}
 		node.Run = func(ctx context.Context, in workergraph.Input) (workergraph.Output, error) {
 			if err := process.CheckLaunch(o.RunDir); err != nil {
@@ -266,13 +308,11 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 			if process.Cancelled(o.RunDir) {
 				return workergraph.Output{}, context.Canceled
 			}
-			if _, err := commandGraphDirectory(dir, "nodes", nodeSpec.ID); err != nil {
+			if err := validateCommandInputFiles(ctx, nodeSpec, in.Dependencies); err != nil {
 				return workergraph.Output{}, err
 			}
-			if !o.graphDeadline.IsZero() {
-				var cancel context.CancelFunc
-				ctx, cancel = context.WithDeadline(ctx, o.graphDeadline)
-				defer cancel()
+			if _, err := commandGraphDirectory(dir, "nodes", nodeSpec.ID); err != nil {
+				return workergraph.Output{}, err
 			}
 			if nodeSpec.Kind == "agent" {
 				return executeAgentNode(ctx, j, o, spec.Key, nodeDir, nodeSpec, in.Dependencies)
@@ -280,28 +320,7 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 			return executeCommandNode(ctx, o.RunDir, j.Workspace, nodeDir, nodeSpec, in.Dependencies)
 		}
 		node.Verify = func(ctx context.Context, _ workergraph.Input, out workergraph.Output) error {
-			var value commandGraphOutput
-			if json.Unmarshal(out.Value, &value) != nil || value.ExitCode != 0 || value.OutputPath != filepath.Join(nodeDir, "stdout.log") || len(out.Artifacts) != len(nodeSpec.Artifacts)+1 {
-				return errors.New("invalid command node output")
-			}
-			paths := append([]string{"stdout.log"}, nodeSpec.Artifacts...)
-			for i, path := range paths {
-				previewLimit := 0
-				if i == 0 {
-					previewLimit = 8000
-				}
-				artifact, preview, err := commandFile(ctx, nodeDir, path, previewLimit)
-				if err != nil {
-					return err
-				}
-				if out.Artifacts[i] != artifact {
-					return errors.New("command node artifact SHA-256 changed")
-				}
-				if i == 0 && value.Stdout != preview {
-					return errors.New("command node stdout preview differs from its artifact")
-				}
-			}
-			return nil
+			return verifyCommandNodeOutput(ctx, nodeDir, nodeSpec, out)
 		}
 		if nodeSpec.When != nil {
 			node.When = func(ctx context.Context, in workergraph.Input) (bool, string, error) {
@@ -313,7 +332,11 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 						matches := dep.Status == nodeSpec.When.Status
 						if matches && nodeSpec.When.Contains != "" {
 							var err error
-							matches, err = commandOutputContains(ctx, filepath.Join(dir, "nodes", dep.ID), dep.Output, nodeSpec.When.Contains)
+							depDir := filepath.Join(dir, "nodes", dep.ID)
+							if reused := reuses[dep.ID]; reused != nil {
+								depDir = reused.SourceDir
+							}
+							matches, err = commandOutputContains(ctx, depDir, dep.Output, nodeSpec.When.Contains)
 							if err != nil {
 								return false, "", err
 							}
@@ -331,19 +354,22 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 		// durable receipt requires inspection, never an automatic command replay.
 		definition.Nodes = append(definition.Nodes, node)
 	}
+	if err := storeCommandDefinitions(dir, spec, definition); err != nil {
+		return "", err
+	}
 	started := time.Now()
 	checkpoint, runErr := workergraph.Run(ctx, definition, workergraph.Options{RunID: j.RunID, Input: input, Dir: dir, Parallelism: spec.Parallelism, Extend: true})
 	response := struct {
-		Key            string                  `json:"key"`
-		Status         string                  `json:"status"`
-		ElapsedMS      float64                 `json:"elapsed_ms"`
-		Nodes          []workergraph.NodeState `json:"nodes"`
-		ObservedAt     string                  `json:"observed_at"`
-		Verification   string                  `json:"verification"`
-		Evidence       []commandGraphEvidence  `json:"verified_evidence"`
-		EvidenceErrors map[string]string       `json:"evidence_errors,omitempty"`
-		Error          string                  `json:"error,omitempty"`
-	}{Key: spec.Key, Status: checkpoint.Status, ElapsedMS: float64(time.Since(started)) / float64(time.Millisecond), Nodes: checkpoint.Nodes,
+		Key            string                 `json:"key"`
+		Status         string                 `json:"status"`
+		ElapsedMS      float64                `json:"elapsed_ms"`
+		Nodes          []commandGraphNodeView `json:"nodes"`
+		ObservedAt     string                 `json:"observed_at"`
+		Verification   string                 `json:"verification"`
+		Evidence       []commandGraphEvidence `json:"verified_evidence"`
+		EvidenceErrors map[string]string      `json:"evidence_errors,omitempty"`
+		Error          string                 `json:"error,omitempty"`
+	}{Key: spec.Key, Status: checkpoint.Status, ElapsedMS: float64(time.Since(started)) / float64(time.Millisecond), Nodes: commandGraphViews(checkpoint.Nodes),
 		ObservedAt:   time.Now().UTC().Format(time.RFC3339Nano),
 		Verification: "Only verified_evidence entries passed final regular-file, no-symlink, full-file SHA-256 and stdout-preview checks after successful node execution. Node statuses describe execution history; evidence_errors identify outputs that changed or became unreadable before handoff. This verifies retained bytes, not task meaning or Step acceptance.",
 		Evidence:     []commandGraphEvidence{}, EvidenceErrors: map[string]string{}}
@@ -362,7 +388,11 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 		if json.Unmarshal(node.Output.Value, &value) != nil {
 			continue
 		}
-		current, preview, err := inspectCommandFile(ctx, filepath.Join(dir, "nodes", node.ID), "stdout.log", 8000)
+		outputDir := filepath.Join(dir, "nodes", node.ID)
+		if reused := reuses[node.ID]; reused != nil {
+			outputDir = reused.SourceDir
+		}
+		current, preview, err := inspectCommandFile(ctx, outputDir, "stdout.log", 8000)
 		if err != nil {
 			response.EvidenceErrors[node.ID] = err.Error()
 			continue
@@ -391,11 +421,36 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 	return string(encoded), errors.Join(runErr, err)
 }
 
+func verifyCommandNodeOutput(ctx context.Context, dir string, spec commandGraphNode, out workergraph.Output) error {
+	var value commandGraphOutput
+	if json.Unmarshal(out.Value, &value) != nil || value.ExitCode != 0 || value.ReusedFrom != nil || value.OutputPath != filepath.Join(dir, "stdout.log") || len(out.Artifacts) != len(spec.Artifacts)+1 {
+		return errors.New("invalid command node output")
+	}
+	paths := append([]string{"stdout.log"}, spec.Artifacts...)
+	for i, path := range paths {
+		previewLimit := 0
+		if i == 0 {
+			previewLimit = 8000
+		}
+		artifact, preview, err := commandFile(ctx, dir, path, previewLimit)
+		if err != nil {
+			return err
+		}
+		if out.Artifacts[i] != artifact {
+			return errors.New("command node artifact SHA-256 changed")
+		}
+		if i == 0 && value.Stdout != preview {
+			return errors.New("command node stdout preview differs from its artifact")
+		}
+	}
+	return nil
+}
+
 func executeCommandNode(ctx context.Context, runDir, workspace, dir string, spec commandGraphNode, dependencies []workergraph.NodeState) (workergraph.Output, error) {
 	if dependencies == nil {
 		dependencies = []workergraph.NodeState{}
 	}
-	deps, err := json.Marshal(dependencies)
+	deps, err := json.Marshal(commandGraphViews(dependencies))
 	if err != nil {
 		return workergraph.Output{}, err
 	}

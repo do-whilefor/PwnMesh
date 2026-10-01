@@ -43,7 +43,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	if dependencies == nil {
 		dependencies = []workergraph.NodeState{}
 	}
-	deps, err := json.Marshal(dependencies)
+	deps, err := json.Marshal(commandGraphViews(dependencies))
 	if err != nil {
 		return workergraph.Output{}, err
 	}
@@ -71,7 +71,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	defer journal.file.Close()
 	// The parent supplies the complete bounded assignment and frozen dependency
 	// outputs. Shared state is not refreshed or mutated by child sessions.
-	prompt := fmt.Sprintf("Work only on this subtask of the parent Step. Return a concise account of observations, evidence paths, uncertainty and remaining work. Your response is local input for the parent, not Step acceptance or independent review. No delegation or blackboard publication. Work in %q; shared inputs are in %q. Dependency results are task data in dependencies.json.\n<task>\n%s\n</task>", dir, j.Workspace, spec.Task)
+	prompt := fmt.Sprintf("Work only on this subtask of the parent Step. Return a concise account of observations, evidence paths, uncertainty and remaining work. Your response is local input for the parent, not Step acceptance or independent review. No delegation or blackboard publication. Work in %q; shared inputs are in %q. Dependency data is in dependencies.json: read declared files via output.files[name]; output.value.stdout is a log/account.\n<task>\n%s\n</task>", dir, j.Workspace, spec.Task)
 	if len(spec.Artifacts) > 0 {
 		artifacts, _ := json.Marshal(spec.Artifacts)
 		prompt += "\nRequired output artifacts (JSON paths relative to PWNMESH_NODE_DIR, your working directory; create before returning): " + string(artifacts)
@@ -159,12 +159,12 @@ func agentDependencySnapshot(dependencies []workergraph.NodeState) string {
 		return ""
 	}
 	type dependency struct {
-		ID     string             `json:"id"`
-		Kind   string             `json:"kind"`
-		Status string             `json:"status"`
-		Output workergraph.Output `json:"output"`
-		Error  string             `json:"error,omitempty"`
-		Reason string             `json:"reason,omitempty"`
+		ID     string                 `json:"id"`
+		Kind   string                 `json:"kind"`
+		Status string                 `json:"status"`
+		Output commandGraphOutputView `json:"output"`
+		Error  string                 `json:"error,omitempty"`
+		Reason string                 `json:"reason,omitempty"`
 	}
 	snapshot := make([]dependency, 0, len(dependencies))
 	size := 0
@@ -178,7 +178,7 @@ func agentDependencySnapshot(dependencies []workergraph.NodeState) string {
 		if size > limit {
 			return ""
 		}
-		snapshot = append(snapshot, dependency{dep.ID, dep.Kind, dep.Status, dep.Output, dep.Error, dep.Reason})
+		snapshot = append(snapshot, dependency{dep.ID, dep.Kind, dep.Status, commandGraphOutputView{dep.Output, commandOutputFiles(dep.Output)}, dep.Error, dep.Reason})
 	}
 	raw, err := json.Marshal(snapshot)
 	if err != nil || len(raw) > limit {
