@@ -143,6 +143,10 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 	if client == nil {
 		client = http.DefaultClient
 	}
+	// Redirects can forward x-api-key and the complete conversation to another
+	// endpoint. Require the configured final URL and leave shared clients intact.
+	requestClient := *client
+	requestClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	var res *http.Response
 	// Retries only precede consumption of a response; never replay tool actions.
 	for attempt := 0; ; attempt++ {
@@ -157,7 +161,7 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 		req.Header.Set("x-api-key", p.Token)
 		req.Header.Set("User-Agent", "pwnmesh/0.1")
 		req.Header.Set("x-opencode-session", p.sessionID)
-		res, err = client.Do(req)
+		res, err = requestClient.Do(req)
 		if err != nil {
 			if attempt >= 2 || ctx.Err() != nil || !retryableTransport(err) {
 				kind := agent.ErrorProvider
