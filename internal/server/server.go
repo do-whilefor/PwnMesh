@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"math/big"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -85,6 +86,10 @@ func New(store *b.Store) http.Handler {
 	s.registerUIRoutes(m)
 	s.registerRoundRoutes(m)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !allowBrowserMutation(r) {
+			writeError(w, r, b.Err(http.StatusForbidden, "Cross-origin mutations are not allowed"))
+			return
+		}
 		_, pattern := m.Handler(r)
 		if pattern == "" {
 			// Match Cairn's trailing-slash redirects and JSON routing errors.
@@ -116,6 +121,27 @@ func New(store *b.Store) http.Handler {
 		m.ServeHTTP(w, r)
 	})
 }
+
+// The local control API accepts ordinary API clients without browser headers.
+// Browsers must originate mutations from this server, including simple POSTs
+// with text/plain bodies, which otherwise bypass CORS preflight protection.
+func allowBrowserMutation(r *http.Request) bool {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead || r.Method == http.MethodOptions {
+		return true
+	}
+	if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+		return false
+	}
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	u, err := url.Parse(origin)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") &&
+		u.User == nil && u.Path == "" && u.RawQuery == "" && u.Fragment == "" &&
+		strings.EqualFold(u.Host, r.Host)
+}
+
 func (s *Server) wrap(fn action) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		in := &request{fields: map[string]any{}}
