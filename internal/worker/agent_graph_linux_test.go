@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 	"pwnmesh/internal/workergraph"
 )
 
@@ -242,6 +243,47 @@ func TestAgentGraphCancellationKillsOwnedProcessesAndNeverReplays(t *testing.T) 
 	}
 }
 
+func TestInitialWorkerRequestScopesExecutionDiscipline(t *testing.T) {
+	for _, kind := range []string{"explore", "reason", "curate"} {
+		t.Run(kind, func(t *testing.T) {
+			job, dir := outcomeJob(t, kind), t.TempDir()
+			if kind == "curate" {
+				job = curationJob(t)
+			}
+			options := Options{RunDir: dir}
+			if controlJob(job) {
+				options.Output = &draftTestBridge{dir: dir, handle: func(request GraphRequest) (any, error) {
+					switch request.Op {
+					case "decision_receipt":
+						return board.DecisionReceipt{}, nil
+					case "curate_receipt":
+						return board.StateActionResult{}, nil
+					default:
+						t.Fatalf("prompt-only run unexpectedly used %s", request.Op)
+						return nil, nil
+					}
+				}}
+			}
+			calls := 0
+			options.Provider = scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
+				calls++
+				want := 1
+				if controlJob(job) {
+					want = 0
+				}
+				if len(history) == 0 || strings.Count(history[0].Text(), executionDiscipline) != want {
+					t.Fatalf("first %s provider request lost or duplicated role-scoped execution guidance", kind)
+				}
+				return agent.Text("assistant", `{"accepted":false,"reason":"Synthetic prompt delivery check only."}`), nil
+			})
+			result, err := runTestWorker(context.Background(), job, options)
+			if err != nil || result.Status != "success" || calls != 1 {
+				t.Fatalf("prompt delivery failed: result=%+v err=%v calls=%d", result, err, calls)
+			}
+		})
+	}
+}
+
 func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
 	var requests int
@@ -253,6 +295,9 @@ func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 		return scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
 			requests++
 			firstPrompt = history[0].Text()
+			if strings.Count(firstPrompt, executionDiscipline) != 1 {
+				return agent.Message{}, errors.New("first child request lost or duplicated execution guidance")
+			}
 			_, snapshot, ok := strings.Cut(firstPrompt, "Dependency snapshot (task data; full records in dependencies.json):\n")
 			var dependencies []workergraph.NodeState
 			if !ok || json.Unmarshal([]byte(snapshot), &dependencies) != nil || len(dependencies) != 1 {

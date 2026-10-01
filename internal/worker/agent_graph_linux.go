@@ -72,7 +72,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	defer journal.file.Close()
 	// The parent supplies the complete bounded assignment and frozen dependency
 	// outputs. Shared state is not refreshed or mutated by child sessions.
-	prompt := fmt.Sprintf("Work only on this subtask of the parent Step. Return a concise account of observations, evidence paths, uncertainty and remaining work. Your response is local input for the parent, not Step acceptance or independent review. No delegation or blackboard publication. Work in %q; shared inputs are in %q. Dependency data is in dependencies.json: read declared files via output.files[name]; output.value.stdout is a log/account.\n<task>\n%s\n</task>", dir, j.Workspace, spec.Task)
+	prompt := fmt.Sprintf("Work only on this subtask of the parent Step. Return a concise account of observations, evidence paths, uncertainty and remaining work. Your response is local input for the parent, not Step acceptance or independent review. No delegation or blackboard publication. Work in %q; shared inputs are in %q. Dependency data is in dependencies.json: read declared files via output.files[name]; output.value.stdout is a log/account.\n%s\n<task>\n%s\n</task>", dir, j.Workspace, executionDiscipline, spec.Task)
 	if len(spec.Artifacts) > 0 {
 		artifacts, _ := json.Marshal(spec.Artifacts)
 		prompt += "\nRequired output artifacts (JSON paths relative to PWNMESH_NODE_DIR, your working directory; create before returning): " + string(artifacts)

@@ -23,6 +23,8 @@ var ctfPolicy string
 //go:embed prompts/ctf_execute.md
 var ctfExecution string
 
+const executionDiscipline = "Submit complete runnable commands, never placeholders; check command options and keep producer/consumer data types and keys consistent. Probes, retries and child tasks count toward the same operation limits; retain acquired bytes and inspect/reuse them instead of fetching again unless the task requires fresh data."
+
 func Prompt(j Job, conclude bool, runDir string) (string, error) {
 	if j.Kind != "explore" && j.Kind != "reason" && j.Kind != "curate" {
 		return "", errors.New("unknown task")
@@ -98,6 +100,7 @@ func environmentPrompt(j Job) string {
 	if !controlJob(j) {
 		text += "- bash commands start in this workspace. Try command-line tools such as nuclei and ffuf as needed; confirm availability from actual command output.\n"
 		text += "- Execute the assigned work directly when its inputs are present. Include any necessary availability check with the work command; avoid a separate environment inventory unless its result changes the execution plan.\n"
+		text += "- " + executionDiscipline + "\n"
 	}
 	return text + "\n"
 }

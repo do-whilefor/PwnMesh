@@ -73,7 +73,7 @@ func TestPhaseInstructionsDoNotRepeatEnvironment(t *testing.T) {
 					t.Fatal(err)
 				}
 				combined := initial + conclusion + repair
-				for _, shared := range []string{"Environment:", "Kali Linux container", strconv.Quote(job.Workspace)} {
+				for _, shared := range []string{"Environment:", "Kali Linux container", strconv.Quote(job.Workspace), executionDiscipline} {
 					if strings.Count(combined, shared) != 1 {
 						t.Errorf("concluding=%t lost or repeated initial environment field %q", concluding, shared)
 					}
