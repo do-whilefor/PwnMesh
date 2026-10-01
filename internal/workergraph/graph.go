@@ -211,6 +211,35 @@ func compareID(a, b string) int {
 	return 0
 }
 
+// Prefer ready work that unlocks the longest remaining dependency chain. IDs
+// only break ties, so an unrelated leaf cannot consume every parallel slot
+// merely because its name sorts first. This is a bounded unit-cost heuristic,
+// not an estimate of callback duration. Keep nodes in topological order for
+// recovery and definition binding; scheduling gets its own ordered copy.
+func schedulingOrder(nodes []Node, states map[string]*NodeState) []Node {
+	depth := make(map[string]int, len(nodes))
+	for i := len(nodes) - 1; i >= 0; i-- {
+		node := nodes[i]
+		if status := states[node.ID].Status; status != "pending" && status != "running" {
+			continue
+		}
+		depth[node.ID] = max(depth[node.ID], 1)
+		for _, dep := range node.DependsOn {
+			if status := states[dep.ID].Status; status == "pending" || status == "running" {
+				depth[dep.ID] = max(depth[dep.ID], depth[node.ID]+1)
+			}
+		}
+	}
+	ordered := slices.Clone(nodes)
+	slices.SortFunc(ordered, func(a, b Node) int {
+		if depth[a.ID] != depth[b.ID] {
+			return depth[b.ID] - depth[a.ID]
+		}
+		return compareID(a.ID, b.ID)
+	})
+	return ordered
+}
+
 // Callback boundaries need owned slices, not JSON encoding. Copy raw values
 // exactly so isolation neither rewrites input bytes nor hides malformed output.
 func cloneOutput(output Output) Output {
@@ -544,7 +573,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		}
 		progress := false
 		if !aborted {
-			for _, node := range nodes {
+			for _, node := range schedulingOrder(nodes, states) {
 				state := states[node.ID]
 				if state.Status != "pending" || conditioning[node.ID] {
 					continue
