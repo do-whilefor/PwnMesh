@@ -158,5 +158,5 @@ PwnMesh 采用 **[PolyForm Noncommercial License 1.0.0](./LICENSE)**，允许在
 <div align="center">
 
 **PwnMesh · For authorized security research only.**
-
+> 重构前版本SHA：a6fde4dd2c4061f997966c1e08436d2cc583f9b0
 </div>
