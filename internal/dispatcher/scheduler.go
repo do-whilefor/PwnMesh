@@ -915,13 +915,17 @@ func (s *Scheduler) renewLease(ctx context.Context, t *task) error {
 
 func (s *Scheduler) heartbeat(ctx context.Context, t *task, cancel context.CancelCauseFunc) {
 	interval := time.Duration(s.Config.Runtime.Interval) * time.Second
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
-	last := time.Now()
 	timeout := t.LeaseTimeout
 	if timeout <= interval {
 		timeout = 2 * interval
 	}
+	// A valid configured interval may consume most of the lease. Renew early
+	// enough to leave another interval for the request and one for shutdown;
+	// otherwise the first renewal can start with an already expired deadline.
+	interval = min(interval, timeout/3)
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	last := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
