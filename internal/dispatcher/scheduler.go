@@ -700,8 +700,8 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	for _, step := range state.Steps {
 		stepState[step.ID] = step
 	}
-	var newest *board.Intent
-	var newestCheck board.ExecutionCheck
+	var next *board.Intent
+	var nextCheck board.ExecutionCheck
 	for n := range g.Intents {
 		i := &g.Intents[n]
 		if i.To != nil || i.ConcludedAt != nil || i.Worker != nil || stepState[i.ID].Status == "abandoned" || invalidStepSupport(stepState[i.ID]) {
@@ -720,12 +720,15 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 				local = true
 			}
 		}
-		if !local && (newest == nil || stepState[i.ID].Priority > stepState[newest.ID].Priority || (stepState[i.ID].Priority == stepState[newest.ID].Priority && i.CreatedAt > newest.CreatedAt)) {
-			newest, newestCheck = i, check
+		// Explicit priority wins; equal-priority work drains oldest first so
+		// newly appended Steps cannot continually overtake the ready queue.
+		// Scheduling pages preserve creation/row order for equal timestamps.
+		if !local && (next == nil || stepState[i.ID].Priority > stepState[next.ID].Priority || (stepState[i.ID].Priority == stepState[next.ID].Priority && i.CreatedAt < next.CreatedAt)) {
+			next, nextCheck = i, check
 		}
 	}
-	if newest != nil && s.executionCapacity(id) {
-		if ok, err := s.launch(ctx, g, "explore", newest, "", newestCheck); ok || err != nil {
+	if next != nil && s.executionCapacity(id) {
+		if ok, err := s.launch(ctx, g, "explore", next, "", nextCheck); ok || err != nil {
 			return ok, err
 		}
 	}
