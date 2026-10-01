@@ -71,6 +71,11 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 			"type": "array", "items": text, "uniqueItems": true,
 			"description": "Optional step add prerequisites: existing Step IDs or earlier Step $aliases, never Fact IDs. Use from for evidence inputs.",
 		}
+		properties["write_paths"] = map[string]any{
+			"type": "array", "maxItems": 16,
+			"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 4096},
+			"description": "Optional immutable step add output files or directories under /workspace. Declare shared writes; overlapping scopes run sequentially. repair.path is included automatically.",
+		}
 		properties["sources"] = map[string]any{"type": "array", "items": text, "description": "Goal achievement support. For curation_request, provide 1-32 unique published, effective observation Fact IDs; never origin, goal or draft aliases. The server validates current support."}
 		properties["reason"] = map[string]any{"type": "string", "description": "Explain the action. For curation_request, state the concrete evidence conflict or merge requiring Curate; its payload uses only sources and reason."}
 		base["additionalProperties"] = false

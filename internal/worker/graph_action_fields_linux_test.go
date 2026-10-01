@@ -19,7 +19,7 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 		kind   string
 		fields string
 	}{
-		{"reason", "action condition depends_on description dispute_id from goal_id id latest_run_id parent_id priority reason repair sources"},
+		{"reason", "action condition depends_on description dispute_id from goal_id id latest_run_id parent_id priority reason repair sources write_paths"},
 		{"explore", "claim description evidence observed_at reason scope sources status supersedes"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
@@ -46,7 +46,7 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 				fields = append(fields, name)
 				want := "string"
 				switch name {
-				case "from", "sources", "evidence", "depends_on":
+				case "from", "sources", "evidence", "depends_on", "write_paths":
 					want = "array"
 				case "priority":
 					want = "integer"
@@ -83,6 +83,7 @@ func TestGraphActionSchemaPreservesOperationPayloads(t *testing.T) {
 		{"reason", "goal", `{"action":"achieve","id":"g001","reason":"Verified","sources":["fact001"]}`},
 		{"reason", "goal", `{"action":"withdraw","id":"g001","reason":"No longer needed"}`},
 		{"reason", "step", `{"action":"add","from":["origin"],"description":"Inspect","goal_id":"g001","priority":1000000}`},
+		{"reason", "step", `{"action":"add","from":["origin"],"description":"Write report","write_paths":["/workspace/report.json"],"depends_on":["i001"]}`},
 		{"reason", "step", `{"action":"abandon","id":"i001","reason":"Covered"}`},
 		{"reason", "step", `{"action":"priority","id":"i001","reason":"First","priority":0}`},
 		{"reason", "curation_request", `{"sources":["fact002","fact001"],"reason":"Resolve conflicting observations"}`},
