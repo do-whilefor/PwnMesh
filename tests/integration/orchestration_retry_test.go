@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +54,8 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 	retryReady, authorize := make(chan string, 1), make(chan struct{})
 	var mu sync.Mutex
 	turns, stages := map[string]int{}, map[string]string{}
+	plannerSteps := map[string][]board.Step{}
+	assessments := map[string]board.RootAssessment{}
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -89,29 +92,70 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 			}
 			reply.action("curate", "curate", map[string]any{"groups": []any{}})
 		case "reason":
+			closure := job.Decision != nil && job.Decision.ClosureProtocol == 1
+			stageStep := func(key string, payload map[string]any) {
+				input := map[string]any{"op": "step", "idempotency_key": key, "payload": payload}
+				if closure {
+					input["gap_id"] = "business_retry"
+				}
+				reply.call("graph_action", input)
+			}
 			switch stages[run] {
 			case "":
 				stages[run] = "read_steps"
 				reply.call("read_graph", map[string]any{"section": "steps", "limit": 20})
-			case "read_steps":
+			case "read_steps", "assessed_steps":
 				text, err := lastResult()
 				if err != nil {
 					fail(err)
 					return
 				}
-				var page struct {
-					Items []board.Step `json:"items"`
+				if stages[run] == "read_steps" {
+					var page struct {
+						Items []board.Step `json:"items"`
+					}
+					if err := json.Unmarshal([]byte(text), &page); err != nil {
+						fail(err)
+						return
+					}
+					plannerSteps[run] = page.Items
+					if closure {
+						assessment := board.RootAssessment{
+							Status: "missing", From: []string{},
+							Description: "The requested Step has not completed through an authorized successful attempt.",
+							Gaps:        []board.RequirementGap{{ID: "business_retry", InputIDs: []string{"goal"}, Description: "Complete the same Step, explicitly authorizing a fresh attempt if the fixture prerequisite was unavailable."}},
+						}
+						switch {
+						case len(page.Items) == 0, len(page.Items) == 1 && page.Items[0].Status == "failed":
+						case len(page.Items) == 1 && page.Items[0].Status == "completed" && page.Items[0].Result != nil:
+							assessment = board.RootAssessment{Status: "satisfied", From: []string{*page.Items[0].Result}, Description: "The authorized successor completed with new evidence; the original failed attempt remains auditable."}
+						default:
+							fail(fmt.Errorf("unexpected Steps in root assessment: %+v", page.Items))
+							return
+						}
+						assessments[run] = assessment
+						stages[run] = "assessed_steps"
+						reply.call("assess_root", assessment)
+						return
+					}
+				} else {
+					// Observe the assessment in a separate model request before
+					// staging any new work or project completion.
+					var receipt struct {
+						Assessment board.RootAssessment `json:"assessment"`
+					}
+					if json.Unmarshal([]byte(text), &receipt) != nil || !reflect.DeepEqual(receipt.Assessment, assessments[run]) {
+						fail(fmt.Errorf("missing original-requirement assessment: %s", text))
+						return
+					}
 				}
-				if err := json.Unmarshal([]byte(text), &page); err != nil {
-					fail(err)
-					return
-				}
+				steps := plannerSteps[run]
 				switch {
-				case len(page.Items) == 0:
+				case len(steps) == 0:
 					stages[run] = "step_staged"
-					reply.action("step", "fixture-step", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write the observed fixture status. If unavailable report incomplete; a new business attempt requires explicit main-Agent authorization."})
-				case len(page.Items) == 1 && page.Items[0].Status == "failed":
-					step := page.Items[0]
+					stageStep("fixture-step", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write the observed fixture status. If unavailable report incomplete; a new business attempt requires explicit main-Agent authorization."})
+				case len(steps) == 1 && steps[0].Status == "failed":
+					step := steps[0]
 					if !board.ValidExecutionID(step.LatestRunID) {
 						fail(errors.New("read_graph omitted latest_run_id of failed Step"))
 						return
@@ -123,12 +167,12 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 						return
 					}
 					stages[run] = "retry_staged"
-					reply.action("step", "retry-once", map[string]any{"action": "retry", "id": step.ID, "latest_run_id": step.LatestRunID, "reason": "Authorize exactly one fresh attempt after the fixture prerequisite changed."})
-				case len(page.Items) == 1 && page.Items[0].Status == "completed" && page.Items[0].Result != nil:
+					stageStep("retry-once", map[string]any{"action": "retry", "id": step.ID, "latest_run_id": step.LatestRunID, "reason": "Authorize exactly one fresh attempt after the fixture prerequisite changed."})
+				case len(steps) == 1 && steps[0].Status == "completed" && steps[0].Result != nil:
 					stages[run] = "complete_staged"
-					reply.action("complete", "finish", map[string]any{"from": []string{*page.Items[0].Result}, "description": "The authorized successor completed with new evidence; the original failed attempt remains auditable."})
+					reply.action("complete", "finish", map[string]any{"from": []string{*steps[0].Result}, "description": "The authorized successor completed with new evidence; the original failed attempt remains auditable."})
 				default:
-					fail(fmt.Errorf("unexpected Steps in scripted planner: %+v", page.Items))
+					fail(fmt.Errorf("unexpected Steps in scripted planner: %+v", steps))
 				}
 			case "step_staged", "retry_staged", "complete_staged":
 				text, err := lastResult()

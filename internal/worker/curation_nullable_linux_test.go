@@ -49,7 +49,7 @@ func TestCuratorNormalizesOnlyOptionalDisputeNullsThroughLoop(t *testing.T) {
 		if calls > 1 {
 			t.Fatal("optional nulls forced a corrective model turn")
 		}
-		return draftModelCall("curate", "graph_action", `{"op":"curate","idempotency_key":"batch","payload":{"groups":[{"candidate_ids":["candidate_a"],"status":"verified","reason":"Original evidence","dispute_id":null,"review_fact_ids":null,"resolution":null},{"candidate_ids":["candidate_b"],"status":"candidate","reason":"Review remains uncertain","dispute_id":"d1","review_fact_ids":["f1"],"resolution":"uncertain"}]}}`), nil
+		return draftModelCall("curate", "graph_action", `{"op":"curate","payload":{"groups":[{"candidate_ids":["candidate_a"],"status":"verified","reason":"Original evidence","dispute_id":null,"review_fact_ids":null,"resolution":null},{"candidate_ids":["candidate_b"],"status":"candidate","reason":"Review remains uncertain","dispute_id":"d1","review_fact_ids":["f1"],"resolution":"uncertain"}]}}`), nil
 	})})
 	if err != nil || result.Status != "success" || commits != 1 || calls != 1 {
 		t.Fatalf("nullable curation did not complete in one call: %+v, %v, calls=%d commits=%d", result, err, calls, commits)
@@ -67,7 +67,7 @@ func TestCuratorNullableSchemaRejectsOtherMalformedFields(t *testing.T) {
 			schema = tool.Schema
 		}
 	}
-	base := `{"op":"curate","idempotency_key":"batch","payload":{"groups":[{"candidate_ids":["a"],"status":"candidate","reason":"r"FIELDS}]}}`
+	base := `{"op":"curate","payload":{"groups":[{"candidate_ids":["a"],"status":"candidate","reason":"r"FIELDS}]}}`
 	for _, fields := range []string{
 		`,"question":null`, `,"unexpected":null`, `,"dispute_id":7`,
 		`,"review_fact_ids":{}`, `,"review_fact_ids":[null]`, `,"review_fact_ids":["a",false]`,
@@ -83,7 +83,7 @@ func TestCuratorNullableSchemaRejectsOtherMalformedFields(t *testing.T) {
 		`{"groups":[{"candidate_ids":["a"],"status":"candidate","reason":null}]}`,
 		`{"groups":[],"through_revision":null}`, `{"groups":[],"relations":null}`,
 	} {
-		raw := json.RawMessage(`{"op":"curate","idempotency_key":"batch","payload":` + payload + `}`)
+		raw := json.RawMessage(`{"op":"curate","payload":` + payload + `}`)
 		if err := agent.ValidateArguments(schema, raw); err == nil {
 			t.Fatalf("required or unrelated null passed curator schema: %s", payload)
 		}

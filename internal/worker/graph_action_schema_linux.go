@@ -65,7 +65,7 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 			"description": "Only goal (add/achieve/withdraw) and step (add/abandon/priority/retry) use action. Complete uses from and description without action; the root goal is completed only by complete. step retry requires only id, latest_run_id and reason and authorizes one new execution after failure.",
 		}
 		properties["latest_run_id"] = map[string]any{"type": "string", "description": "Required for step retry; copy the target Step's latest_run_id to bind the observed failed attempt."}
-		properties["dispute_id"] = text
+		properties["dispute_id"] = map[string]any{"type": "string", "description": "Assign an independent review Step with a new execution. Include both sides' raw sources and a specific question in description."}
 		properties["repair"] = artifactcheck.Schema()
 		properties["depends_on"] = map[string]any{
 			"type": "array", "items": text, "uniqueItems": true,
@@ -74,7 +74,7 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 		properties["write_paths"] = map[string]any{
 			"type": "array", "maxItems": 16,
 			"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 4096},
-			"description": "Optional immutable step add output files or directories under /workspace. Declare shared writes; overlapping scopes run sequentially. repair.path is included automatically.",
+			"description": "Optional immutable step add output files or directories under /workspace, outside /workspace/.pwnmesh. Declare shared writes; overlapping scopes run sequentially. repair.path is included automatically.",
 		}
 		properties["sources"] = map[string]any{"type": "array", "items": text, "description": "Goal achievement support. For curation_request, provide 1-32 unique published, effective observation Fact IDs; never origin, goal or draft aliases. The server validates current support."}
 		properties["reason"] = map[string]any{"type": "string", "description": "Explain the action. For curation_request, state the concrete evidence conflict or merge requiring Curate; its payload uses only sources and reason."}
@@ -84,11 +84,10 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 	if kind != "curate" {
 		delete(properties, "replace_support")
 		properties["status"] = map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}, "description": "Optional producer judgment; omitted means a tentative candidate, never a shared conclusion."}
-		properties["supersedes"] = map[string]any{"type": "string", "description": "Optional active Candidate ID from this run with the same claim and scope. Appends revised evidence, reasoning or judgment while retaining the earlier note."}
+		properties["supersedes"] = map[string]any{"type": "string", "description": "Optional active Candidate ID from this run with the same claim and scope. Supply current support; earlier evidence, reasoning and judgment remain in history."}
 		return base
 	}
 	return map[string]any{"type": "object", "properties": map[string]any{
-		"through_revision": map[string]any{"type": "integer", "minimum": 0},
 		"relations": map[string]any{"type": "array", "maxItems": board.MaxCurationRelations, "items": map[string]any{
 			"type": "object", "properties": map[string]any{
 				"kind":   map[string]any{"type": "string", "enum": []string{"supersedes", "refutes", "narrows"}},

@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -211,6 +212,12 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 	modelErrors := make(chan error, 16)
 	var mu sync.Mutex
 	turns, completing := map[string]int{}, map[string]bool{}
+	type reasonPlan struct {
+		op, key    string
+		payload    map[string]any
+		assessment board.RootAssessment
+	}
+	plans := map[string]reasonPlan{}
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -250,7 +257,28 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 		}
 		switch job.Kind {
 		case "reason":
-			switch turn {
+			closure := job.Decision != nil && job.Decision.ClosureProtocol == 1
+			if closure && turn == 3 {
+				plan := plans[run]
+				var result struct {
+					Assessment board.RootAssessment `json:"assessment"`
+				}
+				if err := json.Unmarshal([]byte(previous), &result); err != nil || !reflect.DeepEqual(result.Assessment, plan.assessment) {
+					fail(errors.New("main Agent did not read its root assessment before planning"))
+					return
+				}
+				input := map[string]any{"op": plan.op, "idempotency_key": plan.key, "payload": plan.payload}
+				if plan.assessment.Status == "missing" {
+					input["gap_id"] = plan.assessment.Gaps[0].ID
+				}
+				reply.call("graph_action", input)
+				return
+			}
+			phase := turn
+			if closure && turn > 3 {
+				phase--
+			}
+			switch phase {
 			case 1:
 				reply.call("read_graph", map[string]any{"section": "steps", "limit": 20})
 			case 2:
@@ -261,8 +289,12 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 					fail(err)
 					return
 				}
+				var plan reasonPlan
 				if len(page.Items) == 0 {
-					reply.action("step", "producer", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write and retain the local fixture evidence."})
+					plan = reasonPlan{
+						op: "step", key: "producer", payload: map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write and retain the local fixture evidence."},
+						assessment: board.RootAssessment{Status: "missing", From: []string{}, Description: "The required local fixture evidence has not been produced.", Gaps: []board.RequirementGap{{ID: "evidence", InputIDs: []string{"goal"}, Description: "Write and retain the fixture evidence required by the original goal."}}},
+					}
 				} else if len(page.Items) == 1 && page.Items[0].Status == "completed" && page.Items[0].Result != nil {
 					var state board.State
 					if err := store.Do(r.Context(), func(tx *board.Tx) error {
@@ -276,13 +308,26 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 					if state.Curation.ThroughRevision == 0 {
 						// Ordinary observations no longer schedule Curate automatically.
 						// Explicitly authorize the curator whose transport will fail.
-						reply.action("curation_request", "review-evidence", map[string]any{"sources": []string{*page.Items[0].Result}, "reason": "Review the retained fixture evidence before completing the curation recovery workload."})
-						return
+						plan = reasonPlan{
+							op: "curation_request", key: "review-evidence", payload: map[string]any{"sources": []string{*page.Items[0].Result}, "reason": "Review the retained fixture evidence before completing the curation recovery workload."},
+							assessment: board.RootAssessment{Status: "missing", From: []string{*page.Items[0].Result}, Description: "The evidence is retained, but the original goal also requires curation.", Gaps: []board.RequirementGap{{ID: "curation", InputIDs: []string{"goal"}, Description: "Curate the retained evidence as required by the original goal."}}},
+						}
+					} else {
+						completing[run] = true
+						plan = reasonPlan{
+							op: "complete", key: "finish", payload: map[string]any{"from": []string{*page.Items[0].Result}, "description": "The local evidence is retained and curated."},
+							assessment: board.RootAssessment{Status: "satisfied", From: []string{*page.Items[0].Result}, Description: "The required local evidence is retained and its curation has committed; no business work remains."},
+						}
 					}
-					completing[run] = true
-					reply.action("complete", "finish", map[string]any{"from": []string{*page.Items[0].Result}, "description": "The local evidence is retained and curated."})
 				} else {
 					fail(fmt.Errorf("unexpected business Steps: %+v", page.Items))
+					return
+				}
+				if closure {
+					plans[run] = plan
+					reply.call("assess_root", plan.assessment)
+				} else {
+					reply.action(plan.op, plan.key, plan.payload)
 				}
 			case 3:
 				var draft struct{ Draft bool }

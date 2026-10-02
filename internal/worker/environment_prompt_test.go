@@ -48,6 +48,9 @@ func TestInitialPromptDescribesActualWorkspaceAndDeclaredEnvironment(t *testing.
 							t.Errorf("%s environment gives incorrect execution guidance for %s: %s", kind, tool, intro)
 						}
 					}
+					if kind == "explore" && strings.Count(intro, "tool availability") != 1 {
+						t.Fatal("execution environment lost or repeated its tool availability guidance")
+					}
 				})
 			}
 		}

@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -187,6 +188,130 @@ func TestAgentReportsAreNotDirectEvidenceReceipts(t *testing.T) {
 	}
 	if err != nil || json.Unmarshal([]byte(result), &receipt) != nil || len(receipt.Evidence) != 1 || receipt.Evidence[0].NodeID != "observation" {
 		t.Fatalf("Agent prose was offered as direct raw evidence: %s %v", result, err)
+	}
+}
+
+func TestAgentGraphInheritsOnlyBoundParentConstraints(t *testing.T) {
+	for _, snapshot := range []bool{false, true} {
+		t.Run(fmt.Sprintf("snapshot=%v", snapshot), func(t *testing.T) {
+			j, state := snapshotRuntimeFixture(t, "explore")
+			state.Graph.Facts[0].Description = "At most one HTTP request across all workers; never retry /private."
+			state.Graph.Hints = []board.Hint{{ID: "h-limit", Content: "Use only the supplied account; do not submit guesses.", Creator: "user"}}
+			state.Steps[0].Description = "Inspect the retained response only; acquisition has already consumed the request allowance."
+			state.Steps[0].WritePaths = []string{"/workspace/report.json"}
+			state.Steps[0].DependsOn = []string{"upstream"}
+			state.Steps = append(state.Steps, board.Step{ID: "unrelated", GoalID: "goal", Description: "Unrelated planning noise", Status: "open"})
+			state.FactRecords[0].Description = "Unrelated observation noise"
+			var err error
+			if snapshot {
+				j.InputView, err = board.ContextView(state, j.Intent.ID, board.DefaultContextViewBytes)
+			} else {
+				j.InputSnapshot, j.InputView = nil, nil
+				j.Graph, j.State = state.Graph, &state
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The bound view, rather than a later copy of the intent, supplies
+			// its full task constraints in both supported input formats.
+			j.Intent.Description = "Later intent copy must not replace bound constraints"
+			requests := 0
+			o := Options{RunDir: t.TempDir(), graphProvider: func(string) (agent.Provider, error) {
+				return scenarioProvider(func(_ context.Context, history []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+					requests++
+					prompt := history[0].Text()
+					_, body, ok := strings.Cut(prompt, "<parent_constraints>\n")
+					body, _, closed := strings.Cut(body, "\n</parent_constraints>")
+					var inherited struct {
+						UserInputs []board.Fact `json:"user_inputs"`
+						Hints      []board.Hint `json:"hints"`
+						Step       board.Step   `json:"step"`
+					}
+					if !ok || !closed || json.Unmarshal([]byte(body), &inherited) != nil {
+						return agent.Message{}, errors.New("child has no structured parent constraints")
+					}
+					if !reflect.DeepEqual(inherited.UserInputs, state.Graph.Facts) || !reflect.DeepEqual(inherited.Hints, state.Graph.Hints) || inherited.Step.Description != state.Steps[0].Description || !reflect.DeepEqual(inherited.Step.WritePaths, state.Steps[0].WritePaths) || !reflect.DeepEqual(inherited.Step.DependsOn, state.Steps[0].DependsOn) {
+						return agent.Message{}, fmt.Errorf("child lost original limits or Step contract: %+v", inherited)
+					}
+					for _, noise := range []string{"Unrelated planning noise", "Unrelated observation noise", "Later intent copy", `"fact_records"`, `"status"`} {
+						if strings.Contains(prompt, noise) {
+							return agent.Message{}, fmt.Errorf("child received unrelated context: %s", noise)
+						}
+					}
+					for _, def := range defs {
+						if def.Name == "graph_action" || def.Name == "run_graph" || def.Name == "finish_step" || def.Name == "read_graph" {
+							return agent.Message{}, fmt.Errorf("child gained parent capability %s", def.Name)
+						}
+					}
+					return agent.Text("assistant", "Assessed retained evidence within the inherited limits."), nil
+				}), nil
+			}}
+			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Explain the retained result", Timeout: 10, Resources: []string{}}
+			if _, err := executeAgentNode(context.Background(), j, o, "bounded", t.TempDir(), spec, nil); err != nil || requests != 1 {
+				t.Fatalf("inherited constraints failed: %v requests=%d", err, requests)
+			}
+		})
+	}
+}
+
+func TestAgentGraphRejectsMissingBoundStepBeforeModelRequest(t *testing.T) {
+	j, _ := snapshotRuntimeFixture(t, "explore")
+	var view map[string]json.RawMessage
+	if err := json.Unmarshal(j.InputView, &view); err != nil {
+		t.Fatal(err)
+	}
+	view["steps"] = json.RawMessage(`[]`)
+	j.InputView, _ = json.Marshal(view)
+	o := Options{RunDir: t.TempDir(), graphProvider: func(string) (agent.Provider, error) {
+		t.Fatal("incomplete immutable input started a model request")
+		return nil, nil
+	}}
+	spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Inspect", Timeout: 10, Resources: []string{}}
+	if _, err := executeAgentNode(context.Background(), j, o, "missing", t.TempDir(), spec, nil); err == nil || !strings.Contains(err.Error(), "immutable input") {
+		t.Fatalf("missing bound Step silently used mutable intent text: %v", err)
+	}
+}
+
+func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
+	for _, tc := range []struct {
+		scenario   string
+		submission bool
+	}{{"", false}, {"pentest", true}, {"ctf", false}, {"ctf", true}} {
+		t.Run(fmt.Sprintf("%s/submission=%v", tc.scenario, tc.submission), func(t *testing.T) {
+			t.Setenv("TSEC_SERVER_HOST", "")
+			t.Setenv("TSEC_AGENT_TOKEN", "")
+			if tc.submission {
+				t.Setenv("TSEC_SERVER_HOST", "contest.invalid")
+				t.Setenv("TSEC_AGENT_TOKEN", "fixture-token")
+			}
+			j := scenarioJob(t, tc.scenario, "explore")
+			requests := 0
+			o := Options{RunDir: t.TempDir(), graphProvider: func(string) (agent.Provider, error) {
+				return scenarioProvider(func(_ context.Context, history []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+					requests++
+					prompt := history[0].Text()
+					ctf := tc.scenario == "ctf" && tc.submission
+					if strings.Contains(prompt, pentestPolicy) != (tc.scenario == "pentest") || strings.Contains(prompt, ctfPolicy) != ctf || strings.Count(prompt, executionDiscipline) != 1 {
+						return agent.Message{}, errors.New("child scenario policy or execution limits were lost or duplicated")
+					}
+					tools := map[string]bool{}
+					for _, def := range defs {
+						tools[def.Name] = true
+						if strings.Contains(def.Description, ctfExecution) != (ctf && def.Name == "bash") {
+							return agent.Message{}, errors.New("CTF submission instructions escaped their configured bash capability")
+						}
+					}
+					if tools["cvss31"] != (tc.scenario == "pentest") || tools["graph_action"] || tools["run_graph"] || tools["finish_step"] || tools["read_graph"] {
+						return agent.Message{}, fmt.Errorf("wrong child tool boundary: %v", tools)
+					}
+					return agent.Text("assistant", "Scenario constraints reviewed."), nil
+				}), nil
+			}}
+			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Assess fixture", Timeout: 10, Resources: []string{}}
+			if _, err := executeAgentNode(context.Background(), j, o, "scenario", t.TempDir(), spec, nil); err != nil || requests != 1 {
+				t.Fatalf("child scenario delivery failed: %v requests=%d", err, requests)
+			}
+		})
 	}
 }
 
@@ -461,7 +586,7 @@ func TestAgentGraphPassesDeclaredArtifactPathsToChild(t *testing.T) {
 		return scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
 			requests++
 			if requests == 1 {
-				_, raw, ok := strings.Cut(history[0].Text(), "Required output artifacts (JSON paths relative to PWNMESH_NODE_DIR, your working directory; create before returning): ")
+				_, raw, ok := strings.Cut(history[0].Text(), "Required output artifacts (JSON array of paths relative to PWNMESH_NODE_DIR, your working directory; create before returning): ")
 				var paths []string
 				if !ok || json.Unmarshal([]byte(raw), &paths) != nil || len(paths) != 1 || paths[0] != artifactName {
 					return agent.Message{}, errors.New("child did not receive the declared artifact contract as JSON")

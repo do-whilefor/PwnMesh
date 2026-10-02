@@ -31,7 +31,11 @@ func (r scriptedModelReply) call(name string, input any) {
 }
 
 func (r scriptedModelReply) action(op, key string, payload any) {
-	r.call("graph_action", map[string]any{"op": op, "idempotency_key": key, "payload": payload})
+	input := map[string]any{"op": op, "payload": payload}
+	if op != "curate" {
+		input["idempotency_key"] = key
+	}
+	r.call("graph_action", input)
 }
 
 func scriptedJob(ctx context.Context, store *board.Store, project, run string) (worker.Job, error) {

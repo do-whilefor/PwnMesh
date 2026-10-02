@@ -90,7 +90,7 @@ func TestCuratorSnapshotReadsRetainedPagesAndBindsCommit(t *testing.T) {
 	if json.Unmarshal([]byte(content), &candidate) != nil || candidate.Reason != frozen.Candidates[0].Reason {
 		t.Fatal("snapshot changed original bytes")
 	}
-	if _, err := o.Tools[1].Execute(context.Background(), json.RawMessage(`{"op":"curate","idempotency_key":"batch","payload":{"groups":[]}}`)); err != nil {
+	if _, err := o.Tools[1].Execute(context.Background(), json.RawMessage(`{"op":"curate","payload":{"groups":[]}}`)); err != nil {
 		t.Fatal(err)
 	}
 	if reads < 3 || writes != 1 || *o.GraphVersion != j.InputSnapshot.StateVersion {
@@ -164,7 +164,7 @@ func TestCuratorReadsImmutableSnapshotLocallyAndKeepsCommitCAS(t *testing.T) {
 	if rpcs != 0 || *o.GraphVersion != version {
 		t.Fatalf("reads used RPC or replaced immutable input: %d %s", rpcs, *o.GraphVersion)
 	}
-	if _, err := o.Tools[1].Execute(context.Background(), json.RawMessage(`{"op":"curate","idempotency_key":"batch","payload":{"groups":[]}}`)); err == nil || !strings.Contains(err.Error(), "state_changed") || rpcs != 1 {
+	if _, err := o.Tools[1].Execute(context.Background(), json.RawMessage(`{"op":"curate","payload":{"groups":[]}}`)); err == nil || !strings.Contains(err.Error(), "state_changed") || rpcs != 1 {
 		t.Fatalf("local reads bypassed authoritative commit CAS: RPCs=%d err=%v", rpcs, err)
 	}
 }
@@ -202,15 +202,16 @@ func TestCuratorPromptAndCandidateReadsShareGroupingAndConfidenceHints(t *testin
 	if candidate.GroupKey == "" || candidate.GroupKey != initial.Candidates[0].GroupKey || candidate.SupportValid == nil || !*candidate.SupportValid || candidate.Status != "candidate" {
 		t.Fatalf("prompt/read grouping diverged or candidate confidence was promoted: %+v", candidate)
 	}
-	for _, rule := range []string{"equal group_key", "not a graph ID", "same-status producer candidate with support_valid=true", "Use resolution and review_fact_ids only for an existing dispute"} {
-		if !strings.Contains(o.Tools[1].Description, rule) {
+	contract := o.Tools[1].Description + "\n" + string(o.Tools[1].Schema)
+	for _, rule := range []string{"equal candidate group_key", "not a graph ID", "same-status producer candidate with support_valid=true", "Independent review evidence for an existing dispute only"} {
+		if !strings.Contains(contract, rule) {
 			t.Fatalf("curator contract does not explain %q", rule)
 		}
 	}
 	if !strings.Contains(string(o.Tools[1].Schema), "read-only grouping hint") || !strings.Contains(string(o.Tools[1].Schema), "omit group_key") {
 		t.Fatal("curation group fields do not distinguish input hints from writable fields")
 	}
-	if err := agent.ValidateArguments(o.Tools[1].Schema, json.RawMessage(`{"op":"curate","idempotency_key":"group","payload":{"groups":[{"candidate_ids":["candidate_a"],"status":"candidate","reason":"Uncertain","group_key":"read-only"}]}}`)); err == nil || !strings.Contains(err.Error(), "group_key") {
+	if err := agent.ValidateArguments(o.Tools[1].Schema, json.RawMessage(`{"op":"curate","payload":{"groups":[{"candidate_ids":["candidate_a"],"status":"candidate","reason":"Uncertain","group_key":"read-only"}]}}`)); err == nil || !strings.Contains(err.Error(), "group_key") {
 		t.Fatalf("read-only group hint was accepted as a write: %v", err)
 	}
 	after, _ := json.Marshal(j)

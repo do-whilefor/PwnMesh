@@ -22,7 +22,7 @@ import (
 	"pwnmesh/internal/agent"
 )
 
-const System = "Work toward the assigned task using available tools. Distinguish confirmed facts from guesses. Follow the task's result contract."
+const System = "Work toward the assigned task using available tools. Distinguish confirmed facts from guesses. Follow the current request's output contract."
 const DefaultBaseURL = "https://opencode.ai/zen/go"
 const DefaultModel = "deepseek-v4.1-flash"
 const DefaultReasoningEffort = "max"

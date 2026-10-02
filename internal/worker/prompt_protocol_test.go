@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -37,6 +38,9 @@ func TestPromptExamplesMatchRegisteredResultProtocol(t *testing.T) {
 				if !seen["completed"] || !seen["incomplete"] || !seen["continue"] {
 					t.Fatalf("execution prompt lacks the correct terminal and continuation options: %v", seen)
 				}
+				if !strings.Contains(body, "prefer finish_step when available") || !strings.Contains(body, "Final JSON remains valid and is required when tools are disabled") {
+					t.Fatal("execution prompt lost its preferred handoff or tool-free result path")
+				}
 			} else if len(seen) != 1 || !seen[""] {
 				t.Fatalf("planning prompt changed protocol: %v", seen)
 			}
@@ -70,6 +74,43 @@ func TestExploreKeepsRootCoverageAndAssignedDeliverableBoundary(t *testing.T) {
 			t.Fatalf("v%d lost root coverage or the Step's output boundary: %q", version, required)
 		}
 	}
+	_, afterGraph, found := strings.Cut(prompt, "</task_graph>")
+	if !found || strings.Contains(afterGraph, job.Intent.Description) || !strings.Contains(afterGraph, "Current Step: "+job.Intent.ID) {
+		t.Fatal("current Step must stay identifiable without repeating its supplied assignment")
+	}
+}
+
+func TestIntentContextOmitsOnlyAnAlreadySuppliedFullAssignment(t *testing.T) {
+	intent := &board.Intent{ID: "assigned", Description: "Check \"quoted\" inputs.\nPreserve every condition."}
+	full := map[string]any{"id": intent.ID, "description": intent.Description}
+	for _, tc := range []struct {
+		name     string
+		step     map[string]any
+		wantFull bool
+	}{
+		{"matching full Step", full, false},
+		{"missing Step", nil, true},
+		{"another Step", map[string]any{"id": "other", "description": intent.Description}, true},
+		{"shortened assignment", map[string]any{"id": intent.ID, "description": "Check inputs."}, true},
+		{"omitted record", map[string]any{"id": intent.ID, "description": intent.Description, "record_omitted": true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view, err := json.Marshal(map[string]any{"steps": []any{tc.step}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := intentContext(Job{Intent: intent}, view)
+			if !strings.Contains(got, intent.ID) || strings.Contains(got, intent.Description) != tc.wantFull {
+				t.Fatalf("assignment was duplicated or lost: %q", got)
+			}
+		})
+	}
+	if got := intentContext(Job{Intent: intent}, nil); !strings.Contains(got, intent.Description) {
+		t.Fatalf("unavailable view lost the assignment: %q", got)
+	}
+	if got := intentContext(Job{}, nil); got != "" {
+		t.Fatalf("unassigned role gained a Step: %q", got)
+	}
 }
 
 func TestPlannerKeepsSingleWriterAndEvidenceReview(t *testing.T) {
@@ -78,7 +119,7 @@ func TestPlannerKeepsSingleWriterAndEvidenceReview(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, required := range []string{"Give each shared deliverable one writer", "after the relevant exploration Steps finish",
+	for _, required := range []string{"Give each shared deliverable one writer", "merge private parallel outputs in one dependent Step", "after the relevant exploration Steps finish",
 		"unless the user requests it earlier", "Preserve the user's root conditions and required coverage",
 		"Combine independent evidence review, report generation and artifact validation when they fit one Step",
 		"Reuse existing reports with targeted corrections",

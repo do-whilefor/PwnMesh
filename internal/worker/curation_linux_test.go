@@ -82,7 +82,7 @@ func TestCuratorCommitsFromOriginalLoopAndStopsWithoutFinalModelTurn(t *testing.
 		if !strings.Contains(history[0].Text(), "candidate_a") || !strings.Contains(history[0].Text(), "fact_a") {
 			t.Fatal("curator did not receive original candidates and sources")
 		}
-		return draftModelCall("curate", "graph_action", `{"op":"curate","idempotency_key":"batch","payload":{"relations":[{"kind":"supersedes","source":"fact_a","target":"fact_old","reason":"Corrected observation"}],"groups":[{"candidate_ids":["candidate_a"],"status":"verified","reason":"Read the original source"}]}}`), nil
+		return draftModelCall("curate", "graph_action", `{"op":"curate","payload":{"relations":[{"kind":"supersedes","source":"fact_a","target":"fact_old","reason":"Corrected observation"}],"groups":[{"candidate_ids":["candidate_a"],"status":"verified","reason":"Read the original source"}]}}`), nil
 	})})
 	if err != nil || r.Status != "success" || r.Text != committedCurationText || calls != 1 || commits != 1 || r.Metrics == nil || r.Metrics.ModelCalls != 1 || !r.Metrics.Committed || r.Metrics.Outcome != "curation_committed" {
 		t.Fatalf("curation did not end at durable receipt: %+v err=%v calls=%d commits=%d", r, err, calls, commits)
@@ -110,7 +110,7 @@ func TestCuratorRecoversLostCommittedReceiptWithoutRepeatingModelOrMutation(t *t
 	first, err := runTestWorker(context.Background(), j, Options{RunDir: dir, Output: bridge, Now: func() time.Time { return start }, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		calls++
 		if calls == 1 {
-			return draftModelCall("curate", "graph_action", `{"op":"curate","idempotency_key":"batch","payload":{"groups":[]}}`), nil
+			return draftModelCall("curate", "graph_action", `{"op":"curate","payload":{"groups":[]}}`), nil
 		}
 		return agent.Message{}, &agent.ModelError{Kind: agent.ErrorTransport, Err: errors.New("interrupted")}
 	})})
@@ -162,7 +162,7 @@ func TestCuratorStaleInputEndsWithoutRefreshingOrRepairing(t *testing.T) {
 	}}
 	r, err := runTestWorker(context.Background(), j, Options{RunDir: dir, Output: bridge, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		calls++
-		return draftModelCall("curate", "graph_action", `{"op":"curate","idempotency_key":"batch","payload":{"groups":[]}}`), nil
+		return draftModelCall("curate", "graph_action", `{"op":"curate","payload":{"groups":[]}}`), nil
 	})})
 	if err != nil || r.Status != "failed" || r.FailureKind != "state_changed" || r.Retryable || calls != 1 || writes != 1 {
 		t.Fatalf("stale curation reused original input: %+v err=%v calls=%d writes=%d", r, err, calls, writes)
@@ -207,7 +207,11 @@ func TestOrchestrationRuntimePermissionsAndCandidateEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			tool := snapshotRuntimeTool(t, options, "graph_action")
-			input, _ := json.Marshal(map[string]any{"op": tc.op, "idempotency_key": "key", "payload": payload})
+			fields := map[string]any{"op": tc.op, "payload": payload}
+			if tc.kind != "curate" {
+				fields["idempotency_key"] = "key"
+			}
+			input, _ := json.Marshal(fields)
 			if err := agent.ValidateArguments(tool.Schema, input); (err == nil) != tc.allowed {
 				t.Fatalf("schema permission differs: allowed=%v err=%v", tc.allowed, err)
 			}
@@ -215,8 +219,8 @@ func TestOrchestrationRuntimePermissionsAndCandidateEvidence(t *testing.T) {
 				if _, err := tool.Execute(context.Background(), input); err == nil {
 					t.Fatal("forbidden action reached execution")
 				}
-			} else if tc.op == "curation_request" && (!strings.Contains(tool.Description, "concrete evidence conflict or merge") || !strings.Contains(tool.Description, "ordinary observations need no request")) {
-				t.Fatal("planner does not know when curation is warranted")
+			} else if tc.op == "curation_request" && !strings.Contains(string(tool.Schema), "concrete evidence conflict or merge") {
+				t.Fatal("curation request schema omits its decision criterion")
 			}
 		})
 	}
@@ -244,15 +248,29 @@ func TestCuratorSchemaAndPayloadBoundary(t *testing.T) {
 		t.Fatal(err)
 	}
 	action := o.Tools[1]
+	var schema struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+	}
+	if err := json.Unmarshal(action.Schema, &schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := schema.Properties["idempotency_key"]; exists {
+		t.Fatal("curator schema exposes a runtime-owned idempotency key")
+	}
+	if strings.Contains(string(schema.Properties["payload"]), "through_revision") {
+		t.Fatal("curator schema exposes its immutable runtime-owned revision")
+	}
 	for _, raw := range []string{
-		`{"op":"curate","idempotency_key":"key","payload":{"relations":[]}}`,
-		`{"op":"curate","idempotency_key":"key","payload":{"groups":[],"relations":{}}}`,
-		`{"op":"curate","idempotency_key":"key","payload":{"groups":[],"relations":[{"kind":"delete","source":"a","target":"b","reason":"r"}]}}`,
-		`{"op":"curate","idempotency_key":"key","payload":{"groups":[],"relations":[{"kind":"supersedes","source":"a","target":"b"}]}}`,
-		`{"op":"curate","idempotency_key":"key","payload":{"groups":[],"relations":[{"kind":"supersedes","source":"a","target":["b"],"reason":"r"}]}}`,
-		`{"op":"curate","idempotency_key":"key","payload":{"groups":[],"relations":[{"kind":"supersedes","source":"a","target":"b","reason":"r","run_id":"forged"}]}}`,
-		`{"op":"curate","idempotency_key":"key","payload":{"groups":[{"candidate_ids":"a","status":"verified","reason":"r"}]}}`,
-		`{"op":"curate","idempotency_key":"key","payload":{"groups":[{"candidate_ids":["a"],"status":"verified","reason":"r","resolution":"closed"}]}}`,
+		`{"op":"curate","idempotency_key":"model-key","payload":{"groups":[]}}`,
+		`{"op":"curate","payload":{"through_revision":7,"groups":[]}}`,
+		`{"op":"curate","payload":{"relations":[]}}`,
+		`{"op":"curate","payload":{"groups":[],"relations":{}}}`,
+		`{"op":"curate","payload":{"groups":[],"relations":[{"kind":"delete","source":"a","target":"b","reason":"r"}]}}`,
+		`{"op":"curate","payload":{"groups":[],"relations":[{"kind":"supersedes","source":"a","target":"b"}]}}`,
+		`{"op":"curate","payload":{"groups":[],"relations":[{"kind":"supersedes","source":"a","target":["b"],"reason":"r"}]}}`,
+		`{"op":"curate","payload":{"groups":[],"relations":[{"kind":"supersedes","source":"a","target":"b","reason":"r","run_id":"forged"}]}}`,
+		`{"op":"curate","payload":{"groups":[{"candidate_ids":"a","status":"verified","reason":"r"}]}}`,
+		`{"op":"curate","payload":{"groups":[{"candidate_ids":["a"],"status":"verified","reason":"r","resolution":"closed"}]}}`,
 		`{"op":"step","idempotency_key":"key","payload":{}}`,
 	} {
 		if err := agent.ValidateArguments(action.Schema, json.RawMessage(raw)); err == nil {
@@ -260,7 +278,7 @@ func TestCuratorSchemaAndPayloadBoundary(t *testing.T) {
 		}
 	}
 	for _, kind := range []string{"supersedes", "refutes", "narrows"} {
-		raw := json.RawMessage(`{"op":"curate","idempotency_key":"key","payload":{"groups":[],"relations":[{"kind":"` + kind + `","source":"a","target":"b","reason":"Original evidence establishes the relation"}]}}`)
+		raw := json.RawMessage(`{"op":"curate","payload":{"groups":[],"relations":[{"kind":"` + kind + `","source":"a","target":"b","reason":"Original evidence establishes the relation"}]}}`)
 		if err := agent.ValidateArguments(action.Schema, raw); err != nil {
 			t.Fatalf("valid atomic relation rejected: %v", err)
 		}
@@ -268,7 +286,7 @@ func TestCuratorSchemaAndPayloadBoundary(t *testing.T) {
 	if strings.Contains(action.Description, "completed.data.fact_id") || !strings.Contains(action.Description, "atomically") || !strings.Contains(action.Description, "independent review") {
 		t.Fatal("curation protocol does not describe its atomic role boundary")
 	}
-	if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"curate","idempotency_key":"key","payload":{"through_revision":8,"groups":[]}}`)); err == nil || !strings.Contains(err.Error(), "immutable") {
+	if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"curate","payload":{"through_revision":8,"groups":[]}}`)); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("model replaced its input boundary: %v", err)
 	}
 	if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"step","idempotency_key":"key","payload":{}}`)); err == nil {

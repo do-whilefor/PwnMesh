@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -50,9 +51,11 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 	turns := map[string]int{}
 	decisionRuns := map[string]bool{}
 	decisionStages := map[string]string{}
+	decisionPlans := map[string]string{}
+	rootAssessments := map[string]board.RootAssessment{}
 	var executionRun, factID string
 	var runtimeContainer string
-	var observedMidTask, completionReviewed bool
+	var observedMidTask, completionReviewed, rootAssessmentReviewed bool
 	var modelErrors []string
 	// Visually similar Unicode remains byte-distinct; the retained file also
 	// preserves CRLF and an integer beyond JavaScript's exact number range.
@@ -83,7 +86,8 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 			names = append(names, tool.Name)
 		}
 		sort.Strings(names)
-		decide := strings.Join(names, ",") == "graph_action,read_evidence,read_graph,read_snapshot"
+		assessRoot := strings.Join(names, ",") == "assess_root,graph_action,read_evidence,read_graph,read_snapshot"
+		decide := assessRoot || strings.Join(names, ",") == "graph_action,read_evidence,read_graph,read_snapshot"
 		if !decide && strings.Join(names, ",") != "bash,edit,find,finish_step,graph_action,grep,ls,read,read_evidence,read_graph,read_snapshot,run_graph,write" {
 			fail(fmt.Errorf("unexpected tool capabilities: %v", names))
 			return
@@ -117,20 +121,63 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 		}
 		if decide {
 			decisionRuns[run] = true
-			switch decisionStages[run] {
-			case "":
-				if len(state.Steps) == 0 {
+			stagePlan := func() {
+				switch decisionPlans[run] {
+				case "step":
 					decisionStages[run] = "step_staged"
-					reply.action("step", "plan-one", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write synthetic evidence, submit a Fact and Candidate, then finish."})
-				} else if len(state.Candidates) > 0 && state.Steps[0].Status == "completed" {
+					payload := map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write synthetic evidence, submit a Fact and Candidate, then finish."}
+					if assessRoot {
+						reply.call("graph_action", map[string]any{"op": "step", "idempotency_key": "plan-one", "gap_id": "synthetic-evidence", "payload": payload})
+					} else {
+						reply.action("step", "plan-one", payload)
+					}
+				case "complete":
 					decisionStages[run] = "completion_staged"
 					reply.action("complete", "finish", map[string]any{"from": []string{factID}, "description": "Verified synthetic evidence and Candidate are retained."})
-				} else {
-					// Facts may trigger another Decide while Execute is still
-					// running. Commit an empty batch; final JSON cannot publish it.
+				default:
+					// Facts may trigger Decide while Execute is still running.
+					// Keep its current work with a checked empty batch.
 					decisionStages[run] = "committing"
 					reply.action("commit", "commit", map[string]any{})
 				}
+			}
+			switch decisionStages[run] {
+			case "":
+				if len(state.Steps) == 0 {
+					decisionPlans[run] = "step"
+				} else if len(state.Candidates) > 0 && state.Steps[0].Status == "completed" {
+					decisionPlans[run] = "complete"
+				} else {
+					decisionPlans[run] = "commit"
+				}
+				if assessRoot {
+					assessment := board.RootAssessment{Status: "missing", From: []string{}, Description: "The required evidence, Candidate and accepted Step result are not all available.", Gaps: []board.RequirementGap{{ID: "synthetic-evidence", InputIDs: []string{"goal"}, Description: "Publish verified synthetic evidence and its Candidate, then finish the assigned Step."}}}
+					if decisionPlans[run] == "complete" {
+						assessment = board.RootAssessment{Status: "satisfied", From: []string{factID}, Description: "The verified synthetic evidence and Candidate are retained and the assigned Step has completed."}
+					}
+					rootAssessments[run] = assessment
+					decisionStages[run] = "root_assessed"
+					reply.call("assess_root", assessment)
+					return
+				}
+				stagePlan()
+				return
+			case "root_assessed":
+				text, err := lastResult()
+				if err != nil {
+					fail(err)
+					return
+				}
+				var receipt struct {
+					Assessment board.RootAssessment `json:"assessment"`
+					Next       string               `json:"next"`
+				}
+				if err := json.Unmarshal([]byte(text), &receipt); err != nil || !assessRoot || !reflect.DeepEqual(receipt.Assessment, rootAssessments[run]) || receipt.Next == "" {
+					fail(fmt.Errorf("invalid root assessment receipt: %s", text))
+					return
+				}
+				rootAssessmentReviewed = true
+				stagePlan()
 				return
 			case "step_staged", "completion_staged":
 				text, err := lastResult()
@@ -309,8 +356,8 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if len(modelErrors) > 0 || !observedMidTask || !completionReviewed || executionRun == "" || len(decisionRuns) < 2 || len(state.Candidates) != 1 || state.Candidates[0].Status != "verified" {
-				t.Fatalf("incomplete acceptance: errors=%v midway=%t reviewed=%t decide=%d candidates=%+v", modelErrors, observedMidTask, completionReviewed, len(decisionRuns), state.Candidates)
+			if len(modelErrors) > 0 || !observedMidTask || !completionReviewed || len(rootAssessments) > 0 && !rootAssessmentReviewed || executionRun == "" || len(decisionRuns) < 2 || len(state.Candidates) != 1 || state.Candidates[0].Status != "verified" {
+				t.Fatalf("incomplete acceptance: errors=%v midway=%t reviewed=%t root_reviewed=%t decide=%d candidates=%+v", modelErrors, observedMidTask, completionReviewed, rootAssessmentReviewed, len(decisionRuns), state.Candidates)
 			}
 			runs, err := testExecutions(ctx, store, c.Container.Namespace)
 			if err != nil {
