@@ -171,10 +171,15 @@ func TestDecisionCanWithdrawAuxiliaryPlanAndCompleteAtomically(t *testing.T) {
 	result := f.completeStep(observed, "Requested fixture rejects unauthenticated access")
 	f.kind, f.run, f.lease = "reason", "setup-planner", "planner@setup-planner"
 	prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
-	setup := f.decision("commit", f.batch(
+	setupBatch := f.batch(
 		batchAction("goal", "auxiliary", `{"action":"add","condition":"Optional supporting investigation"}`),
 		batchAction("step", "auxiliary-step", `{"action":"add","goal_id":"$auxiliary","from":["origin"],"description":"Optional additional check"}`),
-	), http.StatusOK)
+	)
+	setupBatch.Assessment = &board.RootAssessment{Status: "missing", Description: "An additional condition may affect the original fixture result", Gaps: []board.RequirementGap{{ID: "condition", InputIDs: []string{"goal"}, Description: "Resolve whether the additional condition changes the requested observation"}}}
+	for n := range setupBatch.Actions {
+		setupBatch.Actions[n].GapID = "condition"
+	}
+	setup := f.decision("commit", setupBatch, http.StatusOK)
 	goal, step := setup.Results[0], setup.Results[1]
 	f.run = "completion-planner"
 	f.request("POST", f.base()+"/intents/"+step.ID+"/heartbeat", map[string]string{"worker": "existing-executor"}, false, http.StatusOK, nil)

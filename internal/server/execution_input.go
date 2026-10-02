@@ -155,6 +155,9 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 		if err != nil {
 			return 0, nil, err
 		}
+		if state.Graph.Project.OrchestrationVersion == 1 && b.HasCompletionEvidence(state) {
+			j.Decision.ClosureProtocol = 1
+		}
 		j.DecisionRepeated = check.Repeated
 		j.DecisionTriggers = preparedDecisionTriggers(state, check.LatestDecision, j.DecisionTrigger)
 	} else if e.Kind == "curate" {

@@ -401,7 +401,11 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 			return finish(Result{Type: "result", Status: "success", Text: committedDecisionText})
 		}
 		if state.DecisionConflict != "" {
-			return finish(Result{Type: "result", Status: "failed", FailureKind: "state_changed", Error: state.DecisionConflict})
+			// Older sessions persisted a terminal planner conflict. The receipt
+			// above is authoritative; absent a commit, discard its private draft
+			// and reread current evidence under the original deadline.
+			o.decision.invalidate()
+			state.DecisionConflict = ""
 		}
 		if resuming {
 			o.decision.invalidate()
@@ -818,10 +822,9 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 			r.FailureKind = "recovery_exhausted"
 		}
 	}
-	if state.DecisionConflict != "" && ((o.decision != nil && !o.decision.committed) || (o.curation != nil && !o.curation.committed)) {
-		// A rejected transaction has no uncertain writes to recover. Let the
-		// scheduler coalesce changed input into a new run with its own budget,
-		// instead of spending this run's remainder on repeated model refreshes.
+	if state.DecisionConflict != "" && o.curation != nil && !o.curation.committed {
+		// Curate owns an immutable boundary and cannot refresh its evidence in
+		// place. Batch planners instead discard and rebuild their private draft.
 		r.Status, r.FailureKind, r.Error, r.Retryable = "failed", "state_changed", state.DecisionConflict, false
 		r.FailureCause = ""
 	}

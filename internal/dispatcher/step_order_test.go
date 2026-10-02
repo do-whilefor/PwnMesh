@@ -23,8 +23,7 @@ func (r *stepOrderRunner) Run(ctx context.Context, backend config.Worker, job wo
 		return r.batchProtocolRunner.Run(ctx, backend, job)
 	}
 	payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": "Newly authorized fixture", "priority": r.newPriority})
-	_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion,
-		Actions: []board.DecisionAction{{Op: "step", Payload: payload}}}})
+	_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, []board.DecisionAction{{Op: "step", Payload: payload}})})
 	return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 }
 

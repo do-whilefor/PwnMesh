@@ -170,7 +170,7 @@ func (f *updateRequestFixture) decide(op string, payload any) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	batch := board.DecisionBatch{ExpectedVersion: run.Job.Decision.StateVersion, Actions: []board.DecisionAction{{Op: op, Payload: raw}}}
+	batch := fixtureDecisionBatch(run.Job, []board.DecisionAction{{Op: op, Payload: raw}})
 	f.do("POST", projectPath(f.project.ID)+"/state/decisions/commit", batch, nil, &run.Lease)
 }
 

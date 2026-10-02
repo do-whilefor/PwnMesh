@@ -82,6 +82,7 @@ func TestCompletionReviewIsInvalidatedWithDraft(t *testing.T) {
 				d.invalidate()
 				d.observeRead("overview")
 				d.observeRead("facts")
+				d.beforeRequest(loop)
 				if _, err := d.action(ctx, complete, "v2"); err != nil {
 					t.Fatal(err)
 				}

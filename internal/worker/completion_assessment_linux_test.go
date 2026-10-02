@@ -328,6 +328,7 @@ func TestCompletionAssessmentRecoveryDiscardsFastAuthority(t *testing.T) {
 	d.invalidate() // The real Worker does this before replaying a recovered session.
 	d.observeRead("overview")
 	d.observeRead("facts")
+	d.beforeRequest(loop)
 	if _, err := d.action(context.Background(), draftTestAction("complete", "finish", `{"from":["f001"],"description":"Proof"}`), "v1"); err != nil {
 		t.Fatal(err)
 	}

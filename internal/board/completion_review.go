@@ -28,33 +28,36 @@ type CompletionReview struct {
 
 const completionReviewReadMore = "Read omitted facts, candidates and disputes using read_graph with these IDs before accepting completion; read missing candidate or curation-request source facts and evidence by ID. Candidate notes are revisable interpretations, not proof. Assess unresolved uncertainty against the original requirements even when it does not mechanically block completion; omission is not acceptance."
 
-// CompletionAssessment supplies observations before the model proposes a
-// completion. Passing the mechanical gates does not establish that the user's
-// requirements are satisfied. Preview and commit still validate the live state.
+// HasCompletionEvidence selects the root-assessment protocol independently of
+// transport budgets. A bounded-view fallback must never remove the protocol.
+func HasCompletionEvidence(state State) bool {
+	for _, fact := range state.FactRecords {
+		if completionObservation(fact) {
+			return true
+		}
+	}
+	return false
+}
+
+func completionObservation(fact FactRecord) bool {
+	return fact.ID != "origin" && fact.ID != "goal" && !fact.Legacy && !fact.SupportInvalid && fact.Status == "valid" && len(fact.Evidence) > 0
+}
+
+// CompletionAssessment supplies root-goal evidence independently of queued
+// work. Planner-created work must not suppress assessment of the user's goal.
+// Preview and commit still enforce every live completion gate.
 func (t *Tx) CompletionAssessment(state State) (*CompletionReview, error) {
 	if state.Graph.Project.OrchestrationVersion != 1 || state.Graph.Project.Status != "active" {
 		return nil, nil
 	}
-	for _, step := range state.Steps {
-		if step.Status == "open" || step.Status == "running" || step.Status == "needs_review" || step.Status == "blocked" {
-			return nil, nil
-		}
-	}
 	ids := []string{}
 	for _, fact := range state.FactRecords {
-		if fact.ID != "origin" && fact.ID != "goal" && !fact.Legacy && !fact.SupportInvalid && fact.Status == "valid" && len(fact.Evidence) > 0 {
+		if completionObservation(fact) {
 			ids = append(ids, fact.ID)
 		}
 	}
 	if len(ids) == 0 {
 		return nil, nil
-	}
-	if err := t.ValidateStateCompletion(state.Graph.Project.ID, ids); err != nil {
-		var api *APIError
-		if errors.As(err, &api) {
-			return nil, nil // Ordinary planning handles the unresolved condition.
-		}
-		return nil, err
 	}
 	payload, _ := json.Marshal(struct {
 		From        []string `json:"from"`

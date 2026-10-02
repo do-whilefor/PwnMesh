@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
 	"pwnmesh/internal/tools"
 )
 
@@ -178,9 +179,6 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 		}
 		if o.decision != nil && graphStateConflict(err) {
 			o.decision.invalidate()
-			if o.decisionConflict != nil && (r.Op == "decision_preview" || r.Op == "decision_commit") {
-				*o.decisionConflict = err.Error()
-			}
 		}
 		if r.Op == "decision_preview" {
 			return raw, err
@@ -193,13 +191,13 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 		}
 		raw, err = track(raw, err)
 		if err == nil && r.Op == "read_graph" && !r.evidenceLookup && o.decision != nil {
-			o.decision.observeRead(r.Section)
+			o.decision.observeRead(r.Section, raw)
 		}
 		return raw, err
 	}
 	o.graphRequest = request
 	if batchDecision(j) {
-		o.decision = &decisionDraft{orchestration: orchestrationJob(j), request: request}
+		o.decision = &decisionDraft{orchestration: orchestrationJob(j), closureProtocol: j.Decision.ClosureProtocol == 1, request: request}
 	}
 	if j.Kind == "curate" {
 		o.curation = &curationCommit{job: j, request: request}
@@ -236,7 +234,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	}
 	if o.decision != nil {
 		allowed = append(allowed, "complete", "preview", "commit", "reset")
-		description += " Actions are private drafts until commit. Keys for draft actions are letters/digits/underscore/hyphen, start with a letter, at most 64 characters. New goal/step returns $key for later id/goal_id/parent_id references. Ordinary plan actions and commit can share one response; preview is optional. complete payload contains only {from:[fact IDs],description:proof}, with no action, and must be last; first explicitly abandon unnecessary active Steps and withdraw only auxiliary subgoals. Completion requires preview and review of completion_review in a subsequent model turn before commit, except when the supplied completion_assessment meets its reuse conditions. commit publishes the entire batch and ends this run; an empty batch requires a valid open or running Step. reset discards the draft and disables completion_assessment reuse; recovery also disables reuse. preview/commit/reset omit payload or use {}; other actions require payload. A state_changed conflict at preview/commit ends this attempt for replanning from fresh input. InvalidSources mark premises requiring review before further execution, never silently assume they remain effective."
+		description += " Actions are private drafts until commit. Keys for draft actions are letters/digits/underscore/hyphen, start with a letter, at most 64 characters. New goal/step returns $key for later id/goal_id/parent_id references. Ordinary plan actions and commit can share one response; preview is optional. complete payload contains only {from:[fact IDs],description:proof}, with no action, and must be last; first explicitly abandon unnecessary active Steps and withdraw only auxiliary subgoals. Completion requires preview and review of completion_review in a subsequent model turn before commit, except when the supplied completion_assessment meets its reuse conditions. commit publishes the entire batch and ends this run; an empty batch requires a valid open or running Step. reset discards the draft and disables completion_assessment reuse; recovery also disables reuse. preview/commit/reset omit payload or use {}; other actions require payload. A state_changed conflict discards the private draft; read the current overview and affected graph section, then rebuild under the original deadline. InvalidSources mark premises requiring review before further execution, never silently assume they remain effective."
 	} else if !controlJob(j) && j.ResultContractVersion >= 2 {
 		description += " Reuse a published evidence Fact in completed.data.fact_id to finish this Step."
 	}
@@ -246,7 +244,12 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	if o.decision != nil {
 		required = required[:2] // Only payload-free draft controls may omit payload.
 	}
-	schema, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{"op": map[string]any{"type": "string", "enum": allowed}, "idempotency_key": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "payload": payload}, "required": required, "additionalProperties": false})
+	properties := map[string]any{"op": map[string]any{"type": "string", "enum": allowed}, "idempotency_key": map[string]any{"type": "string", "minLength": 1, "maxLength": 128}, "payload": payload}
+	if o.decision != nil && o.decision.closureProtocol {
+		properties["gap_id"] = map[string]any{"type": "string", "description": "Required for goal add, step add/retry and curation_request: reference a missing requirement gap from assess_root."}
+		description += " First call assess_root and read its result in a subsequent model request. New work requires top-level gap_id; satisfied permits explicit closure and complete, never additional work. reset discards the root assessment too."
+	}
+	schema, _ := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
 	action := agent.Tool{Definition: agent.Definition{Name: "graph_action", Description: description, Schema: schema}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {
 		if o.decisionConflict != nil && *o.decisionConflict != "" {
 			return "", errors.New(*o.decisionConflict)
@@ -265,8 +268,14 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 			return o.curation.action(ctx, a)
 		}
 		if o.decision != nil {
+			var metadata struct {
+				GapID string `json:"gap_id"`
+			}
+			if err := json.Unmarshal(raw, &metadata); err != nil {
+				return "", err
+			}
 			started, before := time.Now(), len(o.decision.actions)
-			raw, err := o.decision.action(ctx, a, *o.GraphVersion)
+			raw, err := o.decision.action(ctx, a, *o.GraphVersion, metadata.GapID)
 			if o.decisionEmit != nil && (a.Op == "goal" || a.Op == "step" || a.Op == "curation_request" || a.Op == "complete") {
 				o.decisionEmit((decisionOperation{Op: "draft", ElapsedMS: time.Since(started).Milliseconds(), Failed: err != nil, Actions: max(0, len(o.decision.actions)-before)}).event())
 			}
@@ -277,6 +286,9 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	}}
 	if controlJob(j) {
 		o.Tools = []agent.Tool{read, action}
+		if o.decision != nil && o.decision.closureProtocol {
+			o.Tools = append(o.Tools, rootAssessmentTool(o.decision, o.GraphVersion))
+		}
 	} else {
 		if o.Tools == nil {
 			set := tools.Set{Dir: j.Workspace, RunDir: o.RunDir}
@@ -295,7 +307,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	if j.Kind != "curate" && j.Graph.Project.Scenario == "pentest" {
 		o.Tools = append(o.Tools, cvssTool())
 	}
-	if j.Graph.Project.Scenario == "ctf" {
+	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(config.Getenv) {
 		for n := range o.Tools {
 			if o.Tools[n].Name == "bash" {
 				o.Tools[n].Description += "\n" + ctfExecution

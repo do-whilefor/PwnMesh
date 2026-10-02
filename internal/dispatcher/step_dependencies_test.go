@@ -37,7 +37,7 @@ func (r *dependencyRunner) Run(ctx context.Context, _ config.Worker, j worker.Jo
 				{Op: "step", Ref: "consume", Payload: json.RawMessage(`{"action":"add","from":["origin"],"description":"Consume checked data","priority":100,"depends_on":["$produce"]}`)},
 			}
 		}
-		_, err := r.graph(ctx, j, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: j.Decision.StateVersion, Actions: actions}})
+		_, err := r.graph(ctx, j, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(j, actions)})
 		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 	}
 	if j.Kind != "explore" || j.Intent == nil {

@@ -116,7 +116,7 @@ func rawEvidenceTool(j Job, o *Options, request func(context.Context, GraphReque
 		}
 		encoded, err := json.Marshal(result)
 		if err == nil && o.decision != nil {
-			o.decision.observeRead("evidence")
+			o.decision.observeRead("evidence", string(encoded))
 		}
 		return string(encoded), err
 	}}

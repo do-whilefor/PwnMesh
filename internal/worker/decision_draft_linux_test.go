@@ -487,6 +487,10 @@ func TestDecisionDraftConflictRequiresFreshEvidenceRead(t *testing.T) {
 	if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["corrected"]}`)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := draftToolAction(t, action, "step", "old", oldPlan); err == nil {
+		t.Fatal("unseen tool results allowed a preplanned action to reuse the refreshed version")
+	}
+	opts.decision.beforeRequest(&agent.Loop{})
 	if _, err := draftToolAction(t, action, "step", "new", `{"action":"add","from":["corrected"],"description":"Inspect the corrected boundary"}`); err != nil {
 		t.Fatal(err)
 	}

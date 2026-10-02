@@ -69,10 +69,11 @@ func assertFreshDecisionReplacement(t *testing.T, scheduler *Scheduler, runner *
 	}
 }
 
-func TestDecisionHeartbeatCancelsStalledRunWithoutSchedulerTick(t *testing.T) {
+func TestDecisionHeartbeatRetainsSessionOnNewFactsButHonorsStopWithoutSchedulerTick(t *testing.T) {
 	fixture, _, store, graph := automaticRetryFixture(t, 0, "")
 	started := make(chan worker.Job, 1)
 	stopped := make(chan error, 1)
+	renewed := make(chan struct{}, 1)
 	runner := &staleDecisionRunner{first: func(ctx context.Context, job worker.Job) (worker.Result, error) {
 		started <- job
 		// Represent a model request which cannot return until it is cancelled.
@@ -81,35 +82,75 @@ func TestDecisionHeartbeatCancelsStalledRunWithoutSchedulerTick(t *testing.T) {
 		return worker.Result{}, ctx.Err()
 	}}
 	scheduler := New(fixture.Config, runner)
+	scheduler.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(request *http.Request) (*http.Response, error) {
+		response, err := http.DefaultTransport.RoundTrip(request)
+		if err == nil && request.URL.Path == projectPath(graph.Project.ID)+"/reason/heartbeat" && response.StatusCode == http.StatusOK {
+			var body map[string]string
+			copy, _ := request.GetBody()
+			_ = json.NewDecoder(copy).Decode(&body)
+			_ = copy.Close()
+			if body["expected_version"] == "" {
+				select {
+				case renewed <- struct{}{}:
+				default:
+				}
+			}
+		}
+		return response, err
+	})}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer func() { cancel(); scheduler.wg.Wait() }()
 	if err := scheduler.Step(ctx); err != nil {
 		t.Fatal(err)
 	}
+	var originalJob worker.Job
 	select {
-	case job := <-started:
-		if job.Kind != "reason" || scheduler.Config.Runtime.MaxWorkers != 1 || len(scheduler.running) != 1 {
+	case originalJob = <-started:
+		if originalJob.Kind != "reason" || scheduler.Config.Runtime.MaxWorkers != 1 || len(scheduler.running) != 1 {
 			t.Fatal("fixture did not occupy the only Worker with Decide")
 		}
 	case <-ctx.Done():
 		t.Fatal("Decide did not start")
 	}
-	if err := scheduler.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/hints", map[string]string{"content": "Concurrent Execute published a new observation", "creator": "fixture"}, nil, nil); err != nil {
+	if err := store.Do(ctx, func(tx *board.Tx) error {
+		current, err := tx.Load(graph.Project.ID)
+		if err != nil {
+			return err
+		}
+		current.Facts = append(current.Facts, board.Fact{ID: "new-observation", Description: "Concurrent Execute published another observation"})
+		return tx.Save(current)
+	}); err != nil {
 		t.Fatal(err)
 	}
-	// Do not call Step: cancellation must still happen when all slots are full
-	// and the scheduler cannot load another scheduling page.
+	// The planner retains its old read view until it refreshes. A heartbeat is
+	// lease liveness, not authority to commit that old view.
+	select {
+	case <-renewed:
+	case cause := <-stopped:
+		t.Fatalf("ordinary producer output killed a refreshable planner: %v", cause)
+	case <-ctx.Done():
+		t.Fatal("periodic heartbeat did not renew the live planner")
+	}
+	if _, err := runner.graph(ctx, originalJob, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: originalJob.Decision.StateVersion, Actions: []board.DecisionAction{}}}); !decisionStateChanged(err) {
+		t.Fatalf("lease renewal authorized a stale decision: %v", err)
+	}
+	if err := scheduler.Client.Do(ctx, "PUT", projectPath(graph.Project.ID)+"/status", map[string]string{"status": "stopped"}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	// Do not call Step: stop fencing must still cancel a blocked model request.
 	select {
 	case cause := <-stopped:
-		if !decisionStateChanged(cause) {
-			t.Fatalf("stalled request lost its stale-input cancellation cause: %v", cause)
+		if cause == nil || decisionStateChanged(cause) {
+			t.Fatalf("project stop lost its lease cancellation cause: %v", cause)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("changed input did not cancel the stalled Decide within five heartbeat intervals")
+		t.Fatal("stopped project did not cancel the planner within five heartbeat intervals")
 	}
 	scheduler.wg.Wait()
-	original := staleDecisionFailure(t, store)
-	assertFreshDecisionReplacement(t, scheduler, runner, store, original)
+	runs := testExecutions(t, store)
+	if len(runs) != 1 || runs[0].Status == "succeeded" {
+		t.Fatalf("new fact restarted the planner or a stopped run committed: runs=%d", len(runs))
+	}
 }
 
 func TestDecisionRetryChecksVersionBeforeStartingAnotherRunner(t *testing.T) {
@@ -235,16 +276,19 @@ func TestDecisionCommittedReceiptWinsStaleCancellation(t *testing.T) {
 	}
 }
 
-func TestDecisionHeartbeatCancelsBlockedHealthBeforeRunnerStarts(t *testing.T) {
+func TestDecisionPreflightRejectsChangedInputAfterHealthBeforeRunnerStarts(t *testing.T) {
 	scheduler, runner, store, graph := automaticRetryFixture(t, 0, "")
 	scheduler.Config.Runtime.HealthMode = "startup_and_task"
 	started := make(chan struct{})
-	stopped := make(chan error, 1)
+	release := make(chan struct{})
 	scheduler.CheckHealth = func(ctx context.Context, _ config.Worker) error {
 		close(started)
-		<-ctx.Done()
-		stopped <- context.Cause(ctx)
-		return ctx.Err()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			return nil
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer func() { cancel(); scheduler.wg.Wait() }()
@@ -259,14 +303,7 @@ func TestDecisionHeartbeatCancelsBlockedHealthBeforeRunnerStarts(t *testing.T) {
 	if err := scheduler.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/hints", map[string]string{"content": "Input changed during readiness probe", "creator": "fixture"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case cause := <-stopped:
-		if !decisionStateChanged(cause) {
-			t.Fatalf("readiness probe lost invalidation cause: %v", cause)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("stale input did not interrupt the readiness probe")
-	}
+	close(release)
 	scheduler.wg.Wait()
 	staleDecisionFailure(t, store)
 	if len(runner.seen) != 0 {
@@ -297,8 +334,11 @@ func TestDecisionLeaseVersionCheckPreservesLegacyHeartbeat(t *testing.T) {
 		}
 	}
 	run.Job.Decision = &board.DecisionContext{Version: 2, StateVersion: version}
-	if err := scheduler.renewLease(ctx, run); !decisionStateChanged(err) {
-		t.Fatalf("bound version 2 heartbeat did not reject changed input: %v", err)
+	if err := scheduler.renewLease(ctx, run); err != nil {
+		t.Fatalf("refreshable version 2 heartbeat rejected new shared input: %v", err)
+	}
+	if err := scheduler.renewLeaseWithVersion(ctx, run, true); !decisionStateChanged(err) {
+		t.Fatalf("version 2 startup/recovery preflight did not reject changed input: %v", err)
 	}
 }
 

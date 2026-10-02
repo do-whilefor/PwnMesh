@@ -19,6 +19,7 @@ type DecisionContext struct {
 	Generation           int64             `json:"generation"`
 	BaselineBytes        int               `json:"baseline_bytes"`
 	CompletionAssessment *CompletionReview `json:"completion_assessment,omitempty"`
+	ClosureProtocol      int               `json:"closure_protocol,omitempty"`
 }
 
 type decisionChanges map[string][]string

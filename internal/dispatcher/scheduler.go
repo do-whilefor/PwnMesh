@@ -894,8 +894,16 @@ func (s *Scheduler) leasePath(t *task) string {
 	return base + "/intents/" + t.Lease.Intent
 }
 func (s *Scheduler) renewLease(ctx context.Context, t *task) error {
+	return s.renewLeaseWithVersion(ctx, t, t.Job.Kind != "reason" || t.Job.Decision == nil || t.Job.Decision.Version != 2)
+}
+
+// A running batch planner can refresh its stable read view after a conflict.
+// Its initial whole-graph hash must not kill that session when producers publish
+// new facts. Startup/recovery still reject obsolete inputs before model work;
+// periodic renewal retains the project, generation and execution lease fences.
+func (s *Scheduler) renewLeaseWithVersion(ctx context.Context, t *task, checkInput bool) error {
 	body := map[string]string{"worker": t.Lease.Run}
-	if version := immutableInputVersion(t); version != "" {
+	if version := immutableInputVersion(t); checkInput && version != "" {
 		body["expected_version"] = version
 	}
 	return s.Client.Do(ctx, "POST", s.leasePath(t)+"/heartbeat", body, nil, &t.Lease)

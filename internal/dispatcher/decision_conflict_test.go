@@ -62,9 +62,7 @@ func (r *conflictDecisionRunner) Run(ctx context.Context, backend config.Worker,
 		}
 	}
 	if first {
-		_, err := r.graph(ctx, job, worker.GraphRequest{Op: r.conflictOp, Batch: &board.DecisionBatch{
-			ExpectedVersion: job.Decision.StateVersion, Actions: []board.DecisionAction{},
-		}})
+		_, err := r.graph(ctx, job, worker.GraphRequest{Op: r.conflictOp, Batch: fixtureDecisionBatch(job, nil)})
 		var protocol *ProtocolError
 		if !errors.As(err, &protocol) || protocol.Status != http.StatusConflict || !strings.Contains(err.Error(), "state_changed:") {
 			return worker.Result{}, fmt.Errorf("outdated decision did not receive a definitive conflict: %v", err)

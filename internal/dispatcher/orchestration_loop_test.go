@@ -121,7 +121,7 @@ func (r *orchestrationLoopRunner) plan(ctx context.Context, job worker.Job) (wor
 			}
 		}
 	}
-	batch := &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: actions}
+	batch := fixtureDecisionBatch(job, actions)
 	if _, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_preview", Batch: batch}); err != nil {
 		return worker.Result{}, err
 	}

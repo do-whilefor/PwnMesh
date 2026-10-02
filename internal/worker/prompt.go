@@ -62,8 +62,17 @@ func Prompt(j Job, conclude bool, runDir string) (string, error) {
 		context += "Plan from the supplied changes and evidence. Do not reread supplied evidence merely because other items were omitted.\n"
 		if j.Decision != nil && j.Decision.Version == 2 {
 			context += "Graph reads use a stable decision view; overview refreshes it, while detail pages retain it. Writes check current state. A refreshed version alone does not validate earlier conclusions.\n"
+			if j.Decision.ClosureProtocol == 1 {
+				context += "First assess_root against original user requirements, even with active Steps. Read its result in the next model request before planning; any new work must reference a missing requirement gap.\n"
+			}
 			if j.Decision.CompletionAssessment != nil {
-				context += "completion_assessment is version-bound evidence, not acceptance. Compare user_inputs and hints with fact_records and unresolved notes/disputes; from is not a proposed proof. Keep planning if requirements are unmet. Otherwise stage complete with supporting IDs and proof. Commit in this response only with empty omitted_fact_ids, no omitted notes/disputes or their evidence, unchanged state/evidence, and no other draft actions, reset or recovery; runtime still previews. If reuse is unavailable or rejected, call preview and review completion_review in a subsequent model turn before commit.\n"
+				context += "completion_assessment is version-bound evidence, not acceptance. Compare user_inputs and hints with fact_records and unresolved notes/disputes; from is not a proposed proof. "
+				if j.Decision.ClosureProtocol == 1 {
+					context += "After the root assessment has been observed in a subsequent model request, plan only its missing gaps or explicitly close unnecessary work and stage complete with supporting IDs and proof. Commit without a further review turn only with "
+				} else {
+					context += "Keep planning if requirements are unmet. Otherwise stage complete with supporting IDs and proof. Commit in this response only with "
+				}
+				context += "empty omitted_fact_ids, no omitted notes/disputes or their evidence, unchanged state/evidence, and no other draft actions, reset or recovery; runtime still previews. If reuse is unavailable or rejected, call preview and review completion_review in a subsequent model turn before commit.\n"
 			}
 		}
 	} else if j.InputSnapshot != nil {
@@ -129,7 +138,9 @@ func scenarioPrompt(j Job) string {
 	case "pentest":
 		return "\n" + pentestPolicy
 	case "ctf":
-		return "\n" + ctfPolicy
+		if tsecSubmissionAvailable(config.Getenv) {
+			return "\n" + ctfPolicy
+		}
 	}
 	return ""
 }

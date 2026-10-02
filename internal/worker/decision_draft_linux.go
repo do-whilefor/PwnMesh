@@ -27,18 +27,25 @@ type decisionDraft struct {
 	uncertain          bool
 	reread             bool
 	overviewRead       bool
+	detailRead         bool
+	refreshData        []string
 	reviewData         string
 	reviewReady        bool
 	assessment         *board.CompletionReview
 	assessmentReady    bool
 	assessmentDisabled bool
+	closureProtocol    bool
+	rootAssessment     *board.RootAssessment
+	rootReady          bool
 	request            func(context.Context, GraphRequest) (string, error)
 }
 
 func (d *decisionDraft) invalidate() {
+	d.clearRootAssessment()
 	d.keys, d.actions, d.version = nil, nil, ""
 	d.reviewData, d.reviewReady = "", false
-	d.reread, d.overviewRead = true, false
+	d.reread, d.overviewRead, d.detailRead = true, false, false
+	d.refreshData = nil
 	d.assessmentReady, d.assessmentDisabled = false, true
 }
 
@@ -47,6 +54,17 @@ func (d *decisionDraft) invalidate() {
 // The private draft and review are deliberately discarded together on resume.
 func (d *decisionDraft) beforeRequest(loop *agent.Loop) {
 	loop.ContextData = nil
+	// Fresh tool results only become evidence seen by the model in the next
+	// request. A preplanned tool group cannot refresh a hash and immediately
+	// publish conclusions generated before those results were available.
+	if d.reread && d.overviewRead && d.detailRead {
+		// BeforeRequest runs before compaction. Pin the exact refreshed pages
+		// for this request so a summary cannot replace unread corrections.
+		// The normal context budget fails closed if they do not fit.
+		loop.ContextData = append(loop.ContextData, d.refreshData...)
+		d.refreshData = nil
+		d.reread = false
+	}
 	d.assessmentReady = false
 	if d.assessment != nil && !d.assessmentDisabled {
 		raw, err := json.Marshal(d.assessment)
@@ -61,20 +79,25 @@ func (d *decisionDraft) beforeRequest(loop *agent.Loop) {
 		loop.ContextData = append(loop.ContextData, d.reviewData)
 		d.reviewReady = true
 	}
+	d.observeRootAssessment(loop)
 }
 
 func (d *decisionDraft) completes() bool {
 	return len(d.actions) > 0 && d.actions[len(d.actions)-1].Op == "complete"
 }
 
-func (d *decisionDraft) observeRead(section string) {
+func (d *decisionDraft) observeRead(section string, raw ...string) {
 	if !d.reread {
 		return
 	}
 	if section == "" || section == "overview" {
 		d.overviewRead = true
+		d.detailRead = false
 	} else if d.overviewRead {
-		d.reread = false
+		d.detailRead = true
+	}
+	if d.overviewRead && len(raw) > 0 {
+		d.refreshData = append(d.refreshData, "<decision_refresh>\n"+raw[0]+"\n</decision_refresh>")
 	}
 }
 
@@ -102,7 +125,7 @@ func (d *decisionDraft) recover(ctx context.Context) (string, error) {
 
 var draftRef = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
 
-func (d *decisionDraft) action(ctx context.Context, a board.StateAction, currentVersion string) (string, error) {
+func (d *decisionDraft) action(ctx context.Context, a board.StateAction, currentVersion string, gapIDs ...string) (string, error) {
 	if d.committed {
 		return "", errors.New("decision already committed; no further actions are allowed")
 	}
@@ -116,6 +139,9 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 	if d.reread && a.Op != "reset" {
 		return "", errors.New("read the current overview and affected graph section after state_changed or recovery before rebuilding the draft")
 	}
+	if d.closureProtocol && a.Op != "reset" && (d.rootAssessment == nil || !d.rootReady) {
+		return "", errors.New("assess_root must evaluate the original requirements before planning; read its result in a subsequent model request")
+	}
 	if a.Op == "reset" || a.Op == "preview" || a.Op == "commit" {
 		var payload map[string]json.RawMessage
 		if len(a.Payload) != 0 && (json.Unmarshal(a.Payload, &payload) != nil || payload == nil || len(payload) != 0) {
@@ -124,11 +150,17 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 	}
 	switch a.Op {
 	case "reset":
+		d.clearRootAssessment()
 		d.keys, d.actions, d.version = nil, nil, ""
 		d.reviewData, d.reviewReady = "", false
 		d.assessmentReady, d.assessmentDisabled = false, true
 		return `{"draft":true,"reset":true}`, nil
 	case "preview", "commit":
+		if d.closureProtocol {
+			if err := board.ValidateClosureActions(d.rootAssessment, d.actions); err != nil {
+				return "", err
+			}
+		}
 		if a.Op == "commit" && d.completes() && !d.reviewReady {
 			if !d.canAssessCompletion() {
 				return "", errors.New("completion requires preview and a subsequent model request to review its evidence before commit; draft unchanged")
@@ -157,7 +189,7 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 		if d.version == "" {
 			d.version = currentVersion
 		}
-		batch := board.DecisionBatch{ExpectedVersion: d.version, Actions: append([]board.DecisionAction{}, d.actions...)}
+		batch := board.DecisionBatch{ExpectedVersion: d.version, Actions: append([]board.DecisionAction{}, d.actions...), Assessment: d.rootAssessment}
 		if a.Op == "commit" {
 			d.uncertain = true
 		}
@@ -270,6 +302,12 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 	}
 	canonical, _ := json.Marshal(payload)
 	item := board.DecisionAction{Op: a.Op, Payload: canonical}
+	if len(gapIDs) > 0 {
+		item.GapID = gapIDs[0]
+	}
+	if err := d.checkRootAction(item, payload); err != nil {
+		return "", err
+	}
 	if (a.Op == "goal" || a.Op == "step") && payload["action"] == "add" {
 		item.Ref = a.IdempotencyKey
 	}

@@ -367,7 +367,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			// Container startup and same-run recovery must not issue a request
 			// against an input already superseded while the run was queued.
 			if immutableInputVersion(t) != "" {
-				err = s.renewLease(ctx, t)
+				err = s.renewLeaseWithVersion(ctx, t, true)
 			}
 			if err == nil {
 				result, err = s.Runner.Run(ctx, t.Worker, t.Job)

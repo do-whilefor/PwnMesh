@@ -37,6 +37,30 @@ func fixturePlanInput(job worker.Job) (steps, open int, facts []board.FactRecord
 	return len(job.Graph.Intents), job.Graph.OpenCount(), facts
 }
 
+// Scripted model fixtures explicitly supply the same root judgment required
+// from the production model. This helper never changes the server's policy.
+func fixtureDecisionBatch(job worker.Job, actions []board.DecisionAction) *board.DecisionBatch {
+	batch := &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: append([]board.DecisionAction{}, actions...)}
+	if job.Decision.ClosureProtocol != 1 {
+		return batch
+	}
+	batch.Assessment = &board.RootAssessment{Status: "missing", Description: "The scripted fixture still has an original condition to check", Gaps: []board.RequirementGap{{ID: "fixture", InputIDs: []string{"goal"}, Description: "Obtain or reconcile the outstanding fixture observation"}}}
+	for n, action := range batch.Actions {
+		var payload struct {
+			Action string   `json:"action"`
+			From   []string `json:"from"`
+		}
+		_ = json.Unmarshal(action.Payload, &payload)
+		if action.Op == "complete" {
+			batch.Assessment = &board.RootAssessment{Status: "satisfied", From: payload.From, Description: "The recorded fixture observations satisfy its original goal"}
+		}
+		if action.Op == "curation_request" || action.Op == "goal" && payload.Action == "add" || action.Op == "step" && (payload.Action == "add" || payload.Action == "retry") {
+			batch.Actions[n].GapID = "fixture"
+		}
+	}
+	return batch
+}
+
 // Authorize fixture work through the same committed primary-agent batch that
 // production uses. Tests inject the proposed plan, never a weaker write route.
 func authorizeFixtureSteps(t *testing.T, scheduler *Scheduler, project string, payloads ...map[string]any) []board.Intent {
@@ -58,15 +82,16 @@ func authorizeFixtureSteps(t *testing.T, scheduler *Scheduler, project string, p
 	if err := scheduler.register(ctx, run); err != nil {
 		t.Fatal(err)
 	}
-	batch := board.DecisionBatch{ExpectedVersion: run.Job.Decision.StateVersion, Actions: []board.DecisionAction{}}
+	actions := []board.DecisionAction{}
 	for n, payload := range payloads {
 		payload["action"] = "add"
 		raw, err := json.Marshal(payload)
 		if err != nil {
 			t.Fatal(err)
 		}
-		batch.Actions = append(batch.Actions, board.DecisionAction{Op: "step", Ref: fmt.Sprintf("step%d", n), Payload: raw})
+		actions = append(actions, board.DecisionAction{Op: "step", Ref: fmt.Sprintf("step%d", n), Payload: raw})
 	}
+	batch := fixtureDecisionBatch(run.Job, actions)
 	var receipt board.DecisionReceipt
 	if err := scheduler.Client.Do(ctx, "POST", projectPath(project)+"/state/decisions/commit", batch, &receipt, &lease); err != nil {
 		t.Fatal(err)

@@ -91,6 +91,8 @@ func TestPlannerKeepsSingleWriterAndEvidenceReview(t *testing.T) {
 }
 
 func TestPhaseInstructionsDoNotCopyTaskInputOrScenario(t *testing.T) {
+	t.Setenv("TSEC_SERVER_HOST", "contest.invalid")
+	t.Setenv("TSEC_AGENT_TOKEN", "fixture-token")
 	const version = 2
 	const kind = "explore"
 	for _, scenario := range []string{"pentest", "ctf"} {

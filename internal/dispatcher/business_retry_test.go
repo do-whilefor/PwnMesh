@@ -47,7 +47,7 @@ func (r *businessRetryRunner) Run(ctx context.Context, _ config.Worker, j worker
 			payload, _ := json.Marshal(map[string]any{"action": "retry", "id": steps[0].ID, "latest_run_id": steps[0].LatestRunID, "reason": "Authorize one new attempt after the fixture's transient failure"})
 			actions = append(actions, board.DecisionAction{Op: "step", Payload: payload})
 		}
-		batch := &board.DecisionBatch{ExpectedVersion: j.Decision.StateVersion, Actions: actions}
+		batch := fixtureDecisionBatch(j, actions)
 		if _, err := r.graph(ctx, j, worker.GraphRequest{Op: "decision_preview", Batch: batch}); err != nil {
 			return worker.Result{}, err
 		}

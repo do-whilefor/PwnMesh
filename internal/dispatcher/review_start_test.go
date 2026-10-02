@@ -121,7 +121,7 @@ func TestReviewStartupReplacesInvalidatedPlannerWithoutBlockingWorker(t *testing
 						return worker.Result{}, ctx.Err()
 					}
 				}
-				_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: []board.DecisionAction{}}})
+				_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, nil)})
 				if attempt == 1 {
 					if !decisionStateChanged(err) {
 						return worker.Result{}, fmt.Errorf("review startup did not reject the old CAS: %v", err)

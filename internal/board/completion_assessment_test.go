@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestCompletionAssessmentWaitsForMechanicalCompletionWithoutAcceptingCoverage(t *testing.T) {
+func TestCompletionAssessmentDoesNotWaitForPlannerWorkOrAcceptCoverage(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	assess := func(want bool) *CompletionReview {
 		t.Helper()
@@ -27,12 +27,12 @@ func TestCompletionAssessmentWaitsForMechanicalCompletionWithoutAcceptingCoverag
 	assess(false) // No observations.
 	producer := f.worker("producer", "")
 	fact := f.fact(producer, "no HTTP response was obtained")
-	assess(false) // Running work is still active.
+	assess(true) // Running work must not suppress root assessment.
 	f.finish(producer, fact)
 	assess(true) // Plain observations need no separate curation turn.
 	curator, input := f.curator("curator")
 	f.curate(curator, input)
-	assess(false) // A committed curator still holds its lease.
+	assess(true) // A curator lease blocks commit, not root assessment.
 	f.finish(curator, "")
 	review := assess(true)
 	if review.Acceptance != "not_checked" || review.Description != "" || review.StateVersion != DecisionStateVersion(f.state()) || !reflect.DeepEqual(review.From, []string{fact}) || len(review.FactRecords) != 1 || !strings.Contains(review.FactRecords[0].Description, "no HTTP response") {
@@ -42,7 +42,7 @@ func TestCompletionAssessmentWaitsForMechanicalCompletionWithoutAcceptingCoverag
 		t.Fatal("assessment replaced original requirements with planner goals")
 	}
 	f.action(f.planner, "goal", "missing-coverage", map[string]any{"action": "add", "condition": "Inspect another required endpoint"}, "")
-	assess(false)
+	assess(true) // Planner-created goals cannot suppress root assessment.
 }
 
 func TestCompletionAssessmentDoesNotBypassDisputes(t *testing.T) {
@@ -58,9 +58,10 @@ func TestCompletionAssessmentDoesNotBypassDisputes(t *testing.T) {
 	state := f.state()
 	f.do(func(tx *Tx) error {
 		review, err := tx.CompletionAssessment(state)
-		if review != nil {
-			t.Fatal("unresolved conflict received a completion assessment")
+		if review == nil || len(review.Disputes) == 0 || review.Acceptance != "not_checked" {
+			t.Fatal("root assessment lost the unresolved conflict")
 		}
+		requireAPIStatus(t, tx.ValidateStateCompletion("p", []string{fa}), 409)
 		return err
 	})
 }

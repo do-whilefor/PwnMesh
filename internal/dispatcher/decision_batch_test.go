@@ -75,7 +75,7 @@ func (r *batchProtocolRunner) Run(ctx context.Context, _ config.Worker, job work
 			payload, _ := json.Marshal(map[string]any{"from": sources, "description": "Each requested fixture now has a supported observation"})
 			actions = append(actions, board.DecisionAction{Op: "complete", Payload: payload})
 		}
-		batch := &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: actions}
+		batch := fixtureDecisionBatch(job, actions)
 		preview, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_preview", Batch: batch})
 		if err != nil {
 			return worker.Result{}, err

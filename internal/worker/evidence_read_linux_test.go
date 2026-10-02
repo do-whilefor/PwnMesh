@@ -369,7 +369,12 @@ func TestFailedReadEvidenceDoesNotSatisfyDecisionRecoveryReread(t *testing.T) {
 	if err := os.WriteFile(ref.Path, []byte(original), 0400); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.Execute(context.Background(), input); err != nil || options.decision.reread {
-		t.Fatalf("successful raw observation did not satisfy recovery: %v", err)
+	if _, err := tool.Execute(context.Background(), input); err != nil || !options.decision.reread {
+		t.Fatalf("successful raw read bypassed the next model request: %v", err)
+	}
+	loop := &agent.Loop{}
+	options.decision.beforeRequest(loop)
+	if options.decision.reread || len(loop.ContextData) != 1 || !strings.Contains(loop.ContextData[0], "original retained context") {
+		t.Fatal("successful raw observation was not retained for the model before recovery")
 	}
 }

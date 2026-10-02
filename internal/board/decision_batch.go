@@ -15,11 +15,13 @@ import (
 type DecisionAction struct {
 	Op      string          `json:"op"`
 	Ref     string          `json:"ref,omitempty"`
+	GapID   string          `json:"gap_id,omitempty"`
 	Payload json.RawMessage `json:"payload"`
 }
 type DecisionBatch struct {
 	ExpectedVersion string           `json:"expected_version"`
 	Actions         []DecisionAction `json:"actions"`
+	Assessment      *RootAssessment  `json:"assessment,omitempty"`
 }
 type DecisionReceipt struct {
 	Committed        bool                `json:"committed"`
@@ -234,6 +236,12 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 		return out, err
 	}
 	canonical, _ := json.Marshal(actions)
+	if batch.Assessment != nil {
+		canonical, _ = json.Marshal(struct {
+			Actions    []DecisionAction `json:"actions"`
+			Assessment *RootAssessment  `json:"assessment"`
+		}{actions, batch.Assessment})
+	}
 	prior, request, err := t.savedDecision(project, fence.Run)
 	if err != nil {
 		return out, err
@@ -262,6 +270,35 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	}
 	if err = t.CheckDecisionStateVersion(state, fence, batch.ExpectedVersion); err != nil {
 		return out, err
+	}
+	var policy struct {
+		Decision *DecisionContext `json:"decision"`
+	}
+	if err = json.Unmarshal(e.Job, &policy); err != nil {
+		return out, err
+	}
+	if policy.Decision != nil && policy.Decision.ClosureProtocol != 0 || batch.Assessment != nil {
+		if policy.Decision != nil && policy.Decision.ClosureProtocol != 0 && policy.Decision.ClosureProtocol != 1 {
+			return out, Err(422, "unsupported closure protocol")
+		}
+		inputs, _ := state.UserInputFacts()
+		if err = ValidateRootAssessment(batch.Assessment, inputs, state.Graph.Hints); err != nil {
+			return out, err
+		}
+		if len(batch.Assessment.From) != 0 {
+			if err = state.ValidateFactSources(batch.Assessment.From, true); err != nil {
+				return out, err
+			}
+		}
+		if err = ValidateClosureActions(batch.Assessment, actions); err != nil {
+			return out, err
+		}
+	} else {
+		for _, action := range actions {
+			if action.GapID != "" {
+				return out, Err(422, "gap_id requires a root assessment")
+			}
+		}
 	}
 	if t.inDecisionBatch {
 		return out, Err(409, "nested decision batch is not allowed")

@@ -229,6 +229,7 @@ func (f *executionProtocolFixture) completeProject(fact string) board.Intent {
 	prepareSnapshot(f.t, &planner, snapshotTemplate(&planner, "reason"))
 	payload, _ := json.Marshal(map[string]any{"from": []string{fact}, "description": "Required fixture checked"})
 	batch := planner.batch(board.DecisionAction{Op: "complete", Payload: payload})
+	batch.Assessment = &board.RootAssessment{Status: "satisfied", From: []string{fact}, Description: "The retained response satisfies the original fixture requirement"}
 	planner.decision("preview", batch, http.StatusOK)
 	planner.decision("commit", batch, http.StatusOK)
 	for _, intent := range planner.state().Graph.Intents {
@@ -245,9 +246,20 @@ func (f *executionProtocolFixture) planAction(op, key string, payload any) board
 	f.kind, f.intent = "reason", ""
 	f.run = fmt.Sprintf("fixture-plan-%d", f.state().Revision)
 	f.lease = "planner@" + f.run
-	prepareSnapshot(f.t, f, snapshotTemplate(f, "reason"))
+	_, job := prepareSnapshot(f.t, f, snapshotTemplate(f, "reason"))
 	raw, _ := json.Marshal(payload)
-	result := f.decision("commit", f.batch(board.DecisionAction{Op: op, Payload: raw}), http.StatusOK)
+	batch := f.batch(board.DecisionAction{Op: op, Payload: raw})
+	if job.Decision.ClosureProtocol == 1 {
+		batch.Assessment = &board.RootAssessment{Status: "missing", Description: "The original fixture still requires a scoped follow-up", Gaps: []board.RequirementGap{{ID: "fixture", InputIDs: []string{"goal"}, Description: "Check the outstanding fixture condition"}}}
+		var fields struct {
+			Action string `json:"action"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if op == "curation_request" || op == "step" && (fields.Action == "add" || fields.Action == "retry") || op == "goal" && fields.Action == "add" {
+			batch.Actions[0].GapID = "fixture"
+		}
+	}
+	result := f.decision("commit", batch, http.StatusOK)
 	return result.Results[0]
 }
 

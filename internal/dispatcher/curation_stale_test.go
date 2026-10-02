@@ -322,7 +322,7 @@ func pendingCurationFixture(t *testing.T) (*Scheduler, *staleCuratorRunner, *boa
 			payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": description})
 			actions = append(actions, board.DecisionAction{Op: "step", Payload: payload})
 		}
-		_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: actions}})
+		_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
 		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 	}
 	planner := prepareCurationTestTask(t, s, graph, "reason", "seed-plan", nil)
@@ -386,7 +386,7 @@ func TestTerminalCuratorAllowsMainAgentWithoutRetryingUnchangedInput(t *testing.
 				if completionErr != nil {
 					return worker.Result{}, fmt.Errorf("optional agreement merging blocked supported completion: %w", completionErr)
 				}
-				_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: []board.DecisionAction{}}})
+				_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, nil)})
 				return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 			}
 			retryTicks(t, s, 3)

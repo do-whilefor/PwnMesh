@@ -55,7 +55,7 @@ func (r *pipelineGateRunner) Run(ctx context.Context, _ config.Worker, job worke
 				payload, _ := json.Marshal(map[string]any{"sources": sources, "reason": "Reconcile the retained observation before continuing the authorized pipeline"})
 				actions = append(actions, board.DecisionAction{Op: "curation_request", Payload: payload})
 			}
-			_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: actions}})
+			_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
 			return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 		}
 		actions := []board.DecisionAction{
@@ -66,7 +66,7 @@ func (r *pipelineGateRunner) Run(ctx context.Context, _ config.Worker, job worke
 		if r.extra {
 			actions = append(actions, board.DecisionAction{Op: "step", Payload: json.RawMessage(`{"action":"add","from":["origin"],"description":"independent","priority":10}`)})
 		}
-		_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: actions}})
+		_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
 		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 	case "curate":
 		r.curateStarted <- job

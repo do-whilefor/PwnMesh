@@ -43,8 +43,9 @@ func DecisionJobVersion(raw json.RawMessage) (string, error) {
 		State         *State         `json:"state"`
 		InputSnapshot *InputSnapshot `json:"input_snapshot"`
 		Decision      *struct {
-			Version      int    `json:"version"`
-			StateVersion string `json:"state_version"`
+			Version         int    `json:"version"`
+			StateVersion    string `json:"state_version"`
+			ClosureProtocol int    `json:"closure_protocol,omitempty"`
 		} `json:"decision"`
 	}
 	if err := json.Unmarshal(raw, &job); err != nil {
@@ -52,6 +53,9 @@ func DecisionJobVersion(raw json.RawMessage) (string, error) {
 	}
 	if job.Decision == nil {
 		return "", nil
+	}
+	if job.Decision.ClosureProtocol != 0 && (job.Decision.ClosureProtocol != 1 || job.Decision.Version != 2) {
+		return "", Err(422, "unsupported closure protocol")
 	}
 	if ref := job.InputSnapshot; ref != nil {
 		if job.State != nil || job.Kind != "reason" || (job.Decision.Version != 1 && job.Decision.Version != 2) || len(ref.ID) != 64 || len(ref.StateVersion) != 64 || ref.ProjectID != job.Graph.Project.ID || ref.Generation != job.Graph.Project.Generation || job.Decision.StateVersion != ref.StateVersion {

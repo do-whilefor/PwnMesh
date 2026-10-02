@@ -275,6 +275,7 @@ func TestDecisionMetricsRuntimeOperationsAndLostCommit(t *testing.T) {
 	call("read_graph", `{"section":"facts"}`, true)
 	call("read_graph", `{"section":"overview"}`, false)
 	call("read_graph", `{"section":"facts"}`, false)
+	o.decision.beforeRequest(&agent.Loop{})
 	call("graph_action", stage, false)
 	call("graph_action", `{"op":"commit","idempotency_key":"commit","payload":{}}`, true)
 	if m.Committed || m.StateChanged != 1 || m.CommitCalls != 1 || m.CommitFailures != 1 {
