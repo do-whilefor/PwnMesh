@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestFinalFileEvidenceRemainsReadableAcrossGraphPages(t *testing.T) {

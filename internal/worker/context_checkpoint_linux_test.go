@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 func TestCompactedSessionKeepsReplayViewInJournal(t *testing.T) {

@@ -64,7 +64,7 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 					}
 					h := Hint{ID: "h001", Content: "Inspect response", Creator: "user", CreatedAt: tx.Now}
 					g.Hints = append(g.Hints, h)
-					if err := tx.SaveLegacyMutation(g, "hint", h.ID, "", h, h); err != nil {
+					if err := tx.SaveUserInput(g, "hint", h.ID, "", h, h); err != nil {
 						return err
 					}
 				case "conclusion":

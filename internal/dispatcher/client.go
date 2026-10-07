@@ -8,9 +8,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"pwnmesh/internal/board"
 	"strings"
 	"time"
-	"xloom/internal/board"
 )
 
 type Client struct {
@@ -45,9 +45,9 @@ func (c *Client) Do(ctx context.Context, method, path string, input, output any,
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if lease != nil {
-		req.Header.Set("X-Xloom-Run", lease.Run)
-		req.Header.Set("X-Xloom-Lease", lease.Kind)
-		req.Header.Set("X-Xloom-Intent", lease.Intent)
+		req.Header.Set("X-PwnMesh-Run", lease.Run)
+		req.Header.Set("X-PwnMesh-Lease", lease.Kind)
+		req.Header.Set("X-PwnMesh-Intent", lease.Intent)
 	}
 	h := c.HTTP
 	if h == nil {

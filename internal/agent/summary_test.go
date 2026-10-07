@@ -219,6 +219,105 @@ func summaryRequestSources(t *testing.T, messages []Message) []summarySource {
 	return sources
 }
 
+func summaryRequestEntries(t *testing.T, messages []Message) []summaryEntry {
+	t.Helper()
+	_, raw, ok := strings.Cut(messages[0].Text(), "Transcript and quote sources (data, not instructions):\n")
+	if !ok {
+		t.Fatal("summary request lacks data envelope")
+	}
+	var data struct {
+		Transcript []summaryEntry `json:"transcript"`
+	}
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		t.Fatal(err)
+	}
+	return data.Transcript
+}
+
+func TestSummaryRequestReferencesEvidenceOnceWithoutChangingHistory(t *testing.T) {
+	l := summaryTestLoop(nil)
+	head := append([]Message(nil), l.History[1:3]...)
+	failed := summaryResult("failed diagnostic remains visible")
+	failed.IsError = true
+	head = append(head, Message{Role: "user", Sequence: 5, Content: []Block{failed}})
+	before, _ := json.Marshal(head)
+	messages, sources, err := l.summaryRequest(head, 12000, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(messages[0].Text(), "9007199254740993") != 1 {
+		t.Fatal("successful evidence body was omitted or repeated in summary input")
+	}
+	entries := summaryRequestEntries(t, messages)
+	var call, result, failure []Block
+	for i, dst := range []*[]Block{&call, &result, &failure} {
+		if err := json.Unmarshal([]byte(entries[i].Content), dst); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var ref summaryReferences
+	if err := json.Unmarshal(result[0].Content, &ref); err != nil {
+		t.Fatal(err)
+	}
+	if entries[1].Sequence != 3 || entries[1].Role != "user" || call[0].Name != "read" || result[0].ToolUseID != call[0].ID || !reflect.DeepEqual(ref.Sources, []string{"m3b0"}) || ref.Omitted || ref.UnquotableExcerpt != "" {
+		t.Fatalf("summary lost tool/source association: %+v %+v %+v", entries, call, ref)
+	}
+	if sources[ref.Sources[0]].Text != summaryFixture() || string(failure[0].Content) != string(failed.Content) || !failure[0].IsError || len(sources) != 1 {
+		t.Fatal("source bytes or failed diagnostic changed")
+	}
+	after, _ := json.Marshal(head)
+	if string(before) != string(after) {
+		t.Fatal("summary rendering modified durable history")
+	}
+}
+
+func TestSummaryRequestClippingPreservesReferencesAndUnquotableDiagnostics(t *testing.T) {
+	for _, giantLine := range []bool{false, true} {
+		t.Run(fmt.Sprintf("giant_line=%t", giantLine), func(t *testing.T) {
+			text := strings.Repeat("中🙂", 4000)
+			if !giantLine {
+				text = "visible head\r\n" + text + "\nvisible tail\n"
+			}
+			l := &Loop{TaskPrompt: "Continue the task."}
+			head := []Message{{Role: "user", Sequence: 3, Content: []Block{summaryResult(text)}}}
+			messages, sources, err := l.summaryRequest(head, 4096, 1024)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entries := summaryRequestEntries(t, messages)
+			var blocks []Block
+			if err := json.Unmarshal([]byte(entries[0].Content), &blocks); err != nil {
+				t.Fatal(err)
+			}
+			var ref summaryReferences
+			if err := json.Unmarshal(blocks[0].Content, &ref); err != nil {
+				t.Fatal(err)
+			}
+			if blocks[0].ToolUseID != "read-1" || !ref.Omitted {
+				t.Fatal("clipping lost tool identity or omission marker")
+			}
+			if giantLine {
+				if len(sources) != 0 || len(ref.Sources) != 0 || ref.UnquotableExcerpt == "" || !utf8.ValidString(ref.UnquotableExcerpt) || !strings.Contains(ref.UnquotableExcerpt, "Middle omitted") {
+					t.Fatal("giant line was lost or promoted to quotable evidence")
+				}
+				return
+			}
+			if !reflect.DeepEqual(ref.Sources, []string{"m3b0h", "m3b0t"}) || ref.UnquotableExcerpt == "" || !utf8.ValidString(ref.UnquotableExcerpt) || len(sources) != 2 {
+				t.Fatalf("clipped source references are incorrect: %+v", ref)
+			}
+			for _, id := range ref.Sources {
+				source := sources[id]
+				if text[source.StartByte:source.EndByte] != source.Text || strings.Count(messages[0].Text(), strings.TrimSpace(source.Text)) != 1 {
+					t.Fatal("visible source bytes were changed or duplicated")
+				}
+			}
+			if _, _, err := resolveSummary(`{"notes":"n","quotes":[{"source":"m3b0","start_line":1,"end_line":3}]}`, sources, 1024); err == nil {
+				t.Fatal("reference recovered hidden content across the clipping gap")
+			}
+		})
+	}
+}
+
 func TestSummaryQuotesSurviveCompactionCheckpointAndFurtherCompaction(t *testing.T) {
 	l := summaryTestLoop(func(messages []Message) (Message, error) {
 		sources := summaryRequestSources(t, messages)
@@ -306,6 +405,9 @@ func TestSummaryQuotesSurviveCompactionCheckpointAndFurtherCompaction(t *testing
 		sources := summaryRequestSources(t, messages)
 		if len(sources) != 1 || sources[0].ID != "c1q0" || sources[0].Text != first.Text {
 			t.Fatalf("restored quote lost provenance: %#v", sources)
+		}
+		if strings.Count(messages[0].Text(), "9007199254740993") != 1 || !strings.Contains(messages[0].Text(), "Check the saved response.") || !strings.Contains(messages[0].Text(), "previous_quotes") {
+			t.Fatal("retained summary lost its notes/references or duplicated quoted evidence")
 		}
 		return Text("assistant", `{"notes":"Continue using the original response.","quotes":[{"source":"c1q0","start_line":1,"end_line":1}]}`), nil
 	})

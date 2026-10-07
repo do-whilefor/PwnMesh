@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestDecisionBatchMakesProgressAfterFiniteConcurrentObservations(t *testing.T) {

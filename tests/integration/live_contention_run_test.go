@@ -5,13 +5,13 @@ package integration
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/dispatcher"
-	"xloom/internal/docker"
-	"xloom/internal/server"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/dispatcher"
+	"pwnmesh/internal/docker"
+	"pwnmesh/internal/server"
+	"pwnmesh/internal/worker"
 )
 
 type liveRunObservation struct {
@@ -54,6 +54,8 @@ func (r *liveObservedRunner) Run(ctx context.Context, backend config.Worker, job
 	}
 	if job.InputSnapshot != nil {
 		observation.InputRevision, observation.InputVersion = job.InputSnapshot.Revision, job.InputSnapshot.StateVersion
+	} else if job.State != nil {
+		observation.InputRevision, observation.InputVersion = job.State.Revision, board.DecisionStateVersion(*job.State)
 	}
 	r.mu.Lock()
 	index := len(r.runs)
@@ -81,13 +83,100 @@ func saveLiveJSON(path string, data any) error {
 	return os.WriteFile(path, append(raw, '\n'), 0600)
 }
 
+// Fingerprints describe controlled inputs, not secrets or per-run identities.
+// The same harness must be used on both source revisions in a timing study.
+func liveFingerprint(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		panic(err) // All callers supply JSON-compatible harness metadata.
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(raw))
+}
+
+func liveWorkloadFingerprint(title, origin, goal, scope string, version int, parallelAcceptance ...bool) string {
+	inputs := map[string]any{
+		"title": title, "origin": origin, "goal": goal, "validation_scope": scope,
+		"orchestration_version": version, "bootstrap_enabled": false,
+	}
+	if len(parallelAcceptance) > 0 && parallelAcceptance[0] {
+		inputs["require_parallel_workers"] = true
+	}
+	return liveFingerprint(inputs)
+}
+
+func liveExecutionFingerprint(c config.Config, projectTimeoutSeconds ...int) string {
+	timeout := 1800
+	if len(projectTimeoutSeconds) > 0 {
+		timeout = projectTimeoutSeconds[0]
+	}
+	workers := make([]map[string]any, 0, len(c.Workers))
+	for _, w := range c.Workers {
+		env := map[string]string{}
+		for _, key := range []string{"PWNMESH_REASONING_EFFORT", "PWNMESH_REQUEST_TIMEOUT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_TOKENS", "PWNMESH_CONTEXT_TARGET_TOKENS", "PWNMESH_CONTEXT_BYTES"} {
+			env[key] = w.Env[key]
+		}
+		workers = append(workers, map[string]any{"type": w.Type, "task_types": w.TaskTypes, "max_running": w.MaxRunning, "priority": w.Priority, "env": env})
+	}
+	network := c.Container.Network
+	if strings.HasPrefix(network, "container:") {
+		network = "container:<controller>"
+	}
+	return liveFingerprint(map[string]any{
+		"runtime": c.Runtime, "tasks": c.Tasks, "workers": workers,
+		"network": network, "cap_add": c.Container.CapAdd, "completed_action": c.Container.CompletedAction,
+		"project_timeout_seconds": timeout, "observation_interval_seconds": 2,
+	})
+}
+
+func TestLiveComparisonFingerprintsBindInputsWithoutRunSecrets(t *testing.T) {
+	want := liveWorkloadFingerprint("title", "origin", "goal", "scope", 1)
+	for _, changed := range []string{
+		liveWorkloadFingerprint("other", "origin", "goal", "scope", 1),
+		liveWorkloadFingerprint("title", "other", "goal", "scope", 1),
+		liveWorkloadFingerprint("title", "origin", "other", "scope", 1),
+		liveWorkloadFingerprint("title", "origin", "goal", "other", 1),
+		liveWorkloadFingerprint("title", "origin", "goal", "scope", 0),
+		liveWorkloadFingerprint("title", "origin", "goal", "scope", 1, true),
+	} {
+		if changed == want {
+			t.Fatal("different workload shared a fingerprint")
+		}
+	}
+	if liveWorkloadFingerprint("title", "origin", "goal", "scope", 1, false) != want {
+		t.Fatal("disabled optional acceptance changed the baseline workload fingerprint")
+	}
+	c := config.Config{Runtime: config.Runtime{MaxWorkers: 4}, Container: config.Container{Network: "container:first", Image: "before"}, Workers: []config.Worker{{Type: "go", MaxRunning: 4, Env: map[string]string{"ANTHROPIC_AUTH_TOKEN": "first-secret", "ANTHROPIC_BASE_URL": "http://first-proxy", "PWNMESH_REQUEST_TIMEOUT": "180"}}}}
+	want = liveExecutionFingerprint(c)
+	c.Container.Network, c.Container.Image, c.Container.Namespace = "container:second", "after", "second"
+	c.Server = "http://second-server"
+	c.Workers[0].Env["ANTHROPIC_AUTH_TOKEN"] = "second-secret"
+	c.Workers[0].Env["ANTHROPIC_BASE_URL"] = "http://second-proxy"
+	if liveExecutionFingerprint(c) != want {
+		t.Fatal("credentials or ephemeral identity changed execution fingerprint")
+	}
+	c.Workers[0].Env["PWNMESH_REQUEST_TIMEOUT"] = "60"
+	if liveExecutionFingerprint(c) == want {
+		t.Fatal("request timeout was not bound")
+	}
+	c.Workers[0].Env["PWNMESH_REQUEST_TIMEOUT"] = "180"
+	c.Runtime.MaxWorkers++
+	if liveExecutionFingerprint(c) == want {
+		t.Fatal("concurrency was not bound")
+	}
+	c.Runtime.MaxWorkers--
+	c.Tasks.Curate.Timeout = 30
+	if liveExecutionFingerprint(c) == want {
+		t.Fatal("curation timeout was not bound")
+	}
+}
+
 // This test runs the production Server, Scheduler, Docker bridge and Worker.
 // The optional proxy only observes upstream bytes; every model response is real.
 // Direct mode preserves the configured hostname for provider-specific behavior.
 // Local fixture data is the only task content sent to the model service.
 func TestLiveContentionProject(t *testing.T) {
-	if os.Getenv("XLOOM_LIVE_CONTENTION_TEST") != "1" {
-		t.Skip("opt in with model configuration, XLOOM_DOCKER_TEST_IMAGE and XLOOM_LIVE_OUTPUT")
+	if os.Getenv("PWNMESH_LIVE_CONTENTION_TEST") != "1" {
+		t.Skip("opt in with model configuration, PWNMESH_DOCKER_TEST_IMAGE and PWNMESH_LIVE_OUTPUT")
 	}
 	origin, goal := liveContentionTask()
 	runObservedProject(t, "Live concurrent transaction audit", origin, goal, "business_acceptance", validateLiveContention)
@@ -95,9 +184,9 @@ func TestLiveContentionProject(t *testing.T) {
 
 // Reuse the production lifecycle and evidence collection for independently
 // validated workloads. Workload validators must not trust project completion.
-func runObservedProject(t *testing.T, title, origin, goal, validationScope string, validate func(board.State, map[string][]byte) []string) {
+func runObservedProject(t *testing.T, title, origin, goal, validationScope string, validate func(board.State, map[string][]byte) []string, orchestrationVersion ...int) {
 	t.Helper()
-	image, output := os.Getenv("XLOOM_DOCKER_TEST_IMAGE"), os.Getenv("XLOOM_LIVE_OUTPUT")
+	image, output := os.Getenv("PWNMESH_DOCKER_TEST_IMAGE"), os.Getenv("PWNMESH_LIVE_OUTPUT")
 	base, token, model := os.Getenv("ANTHROPIC_BASE_URL"), os.Getenv("ANTHROPIC_AUTH_TOKEN"), os.Getenv("ANTHROPIC_DEFAULT_FABLE_MODEL")
 	if selected := os.Getenv("ANTHROPIC_MODEL"); selected != "" {
 		model = selected
@@ -105,16 +194,41 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 	if image == "" || output == "" || base == "" || token == "" || model == "" {
 		t.Fatal("live test requires explicit image, output and model configuration")
 	}
+	knobs, err := liveRuntimeOptions(os.Getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(output, 0700); err != nil {
 		t.Fatal(err)
+	}
+	mode := 1
+	if len(orchestrationVersion) > 0 {
+		mode = orchestrationVersion[0]
+	}
+	webAddress := os.Getenv("PWNMESH_LIVE_WEB_ADDR")
+	var webGate *liveWebCreationGate
+	var webWait time.Duration
+	if webAddress != "" {
+		webWait, err = liveWebWaitDuration(os.Getenv("PWNMESH_LIVE_WEB_WAIT_SECONDS"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		webGate = newLiveWebCreationGate(liveWebTask{Title: title, Origin: origin, Goal: goal, Scenario: "pentest", OrchestrationVersion: mode})
+		if err = saveLiveJSON(filepath.Join(output, "web-task.json"), webGate.want); err != nil {
+			t.Fatal(err)
+		}
 	}
 	publicUpstream, err := url.Parse(base)
 	if err != nil || publicUpstream == nil || (publicUpstream.Scheme != "http" && publicUpstream.Scheme != "https") || publicUpstream.Host == "" || publicUpstream.User != nil {
 		t.Fatal("invalid live model upstream")
 	}
-	workerBase, workerToken, observationMode := base, token, "direct"
+	observationMode, observationReason, err := liveModelObservationMode(base, os.Getenv("PWNMESH_LIVE_DIRECT_MODEL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerBase, workerToken := base, token
 	observations := &liveProxyRecorder{}
-	if os.Getenv("XLOOM_LIVE_DIRECT_MODEL") != "1" {
+	if observationMode == "proxy" {
 		proxy, recorder, err := newLiveModelProxy(base, token)
 		if err != nil {
 			t.Fatal("invalid live proxy configuration")
@@ -122,6 +236,8 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 		defer proxy.Close()
 		workerBase, workerToken, observationMode = proxy.URL, "local-observation-proxy", "proxy"
 		observations = recorder
+	} else {
+		t.Logf("model observation mode=direct reason=%s; provider URL preserved, proxy HTTP observations unavailable", observationReason)
 	}
 	store, err := board.Open(filepath.Join(output, "project.db"))
 	if err != nil {
@@ -129,18 +245,25 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 	}
 	defer store.Close()
 	apiMetrics := &auditAPIRecorder{}
-	api := httptest.NewServer(apiMetrics.wrap(server.New(store)))
+	handler := apiMetrics.wrap(server.New(store))
+	if webGate != nil {
+		handler = webGate.wrap(handler)
+	}
+	api, err := newLiveObservedAPI(handler, webAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer api.Close()
-	namespace := fmt.Sprintf("xloom-live-contention-%d", time.Now().UnixNano())
+	namespace := fmt.Sprintf("pwnmesh-live-contention-%d", time.Now().UnixNano())
 	c := config.Config{
 		Server:    api.URL,
-		Runtime:   config.Runtime{Interval: 1, MaxWorkers: 4, MaxProjects: 1, MaxProjectWorkers: 4, HealthMode: "disabled", HealthTimeout: 30},
-		Tasks:     config.Tasks{Reason: config.Task{Timeout: 300, MaxIntents: 3}, Explore: config.Task{Timeout: 0, ConcludeTimeout: 60}},
+		Runtime:   config.Runtime{Interval: 1, MaxWorkers: knobs.MaxWorkers, MaxProjects: 1, MaxProjectWorkers: knobs.MaxWorkers, HealthMode: "disabled", HealthTimeout: 30},
+		Tasks:     config.Tasks{Reason: config.Task{Timeout: 300, MaxIntents: 3, ReasoningEffort: knobs.ReasonEffort}, Curate: config.Task{Timeout: 300, ReasoningEffort: knobs.CurateEffort}, Explore: config.Task{Timeout: 0, ConcludeTimeout: 60, ReasoningEffort: knobs.ExploreEffort}},
 		Container: config.Container{Image: image, Network: testContainerNetwork(t), Namespace: namespace, CompletedAction: "stop"},
-		Workers: []config.Worker{{Name: "live", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 4, Env: map[string]string{
+		Workers: []config.Worker{{Name: "live", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: knobs.MaxWorkers, Env: map[string]string{
 			"ANTHROPIC_BASE_URL": workerBase, "ANTHROPIC_AUTH_TOKEN": workerToken, "ANTHROPIC_MODEL": model,
-			"XLOOM_REASONING_EFFORT": "max", "XLOOM_REQUEST_TIMEOUT": "180", "XLOOM_MAX_OUTPUT_TOKENS": "384000",
-			"XLOOM_CONTEXT_TOKENS": "920000", "XLOOM_CONTEXT_TARGET_TOKENS": "250000", "XLOOM_CONTEXT_BYTES": "8388608",
+			"PWNMESH_REASONING_EFFORT": "max", "PWNMESH_REQUEST_TIMEOUT": "180", "PWNMESH_MAX_OUTPUT_TOKENS": "384000",
+			"PWNMESH_CONTEXT_TOKENS": "920000", "PWNMESH_CONTEXT_TARGET_TOKENS": "250000", "PWNMESH_CONTEXT_BYTES": "8388608",
 		}}},
 	}
 	if err = c.Validate(); err != nil {
@@ -151,21 +274,80 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 	client := &dispatcher.Client{Base: api.URL}
 	var graph board.Graph
 	started := time.Now().UTC()
-	if err = client.Do(context.Background(), "POST", "/projects", map[string]any{"title": title, "origin": origin, "goal": goal, "bootstrap_enabled": false}, &graph, nil); err != nil {
-		t.Fatal(err)
+	var webCreation liveWebCreation
+	if webGate == nil {
+		if err = client.Do(context.Background(), "POST", "/projects", map[string]any{"title": title, "origin": origin, "goal": goal, "bootstrap_enabled": false, "orchestration_version": mode}, &graph, nil); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		var projects []board.Summary
+		if err = client.Do(context.Background(), "GET", "/projects", nil, &projects, nil); err != nil || len(projects) != 0 {
+			t.Fatal("Web acceptance requires an empty project store", err)
+		}
+		ready := map[string]any{"state": "waiting_for_web_creation", "api_url": api.URL, "listen_address": webAddress, "task_file": "web-task.json", "ready_at": webGate.snapshot().ReadyAt, "wait_seconds": webWait.Seconds(), "project_timeout_seconds": knobs.ProjectTimeoutSeconds, "creation_source": "external_http_only_no_harness_create", "timing_basis": "project starts at the observed POST /projects request; earlier browser preparation is excluded"}
+		if err = saveLiveJSON(filepath.Join(output, "web-ready.json"), ready); err != nil {
+			t.Fatal(err)
+		}
+		t.Logf("Web ready at %s; create the exact web-task.json project within %s", api.URL, webWait)
+		waitCtx, waitCancel := context.WithTimeout(context.Background(), webWait)
+		webCreation, err = webGate.wait(waitCtx)
+		waitCancel()
+		if saveErr := saveLiveJSON(filepath.Join(output, "web-creation.json"), webCreation); saveErr != nil {
+			t.Fatal(saveErr)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		graph, started = webCreation.Graph, webCreation.RequestStarted
+		if err = client.Do(context.Background(), "GET", "/projects", nil, &projects, nil); err != nil || len(projects) != 1 || projects[0].ID != graph.Project.ID {
+			t.Fatal("expected exactly the observed original Web project", err)
+		}
+		var current board.Graph
+		if err = client.Do(context.Background(), "GET", "/projects/"+graph.Project.ID, nil, &current, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err = matchLiveWebProject(current, webGate.want); err != nil {
+			t.Fatal(err)
+		}
+		if err = webGate.activate(); err != nil {
+			t.Fatal(err)
+		}
 	}
 	pid := graph.Project.ID
 	container := namespace + "-dispatch-" + pid
 	publicUpstream.User, publicUpstream.RawQuery, publicUpstream.Fragment = nil, "", ""
-	manifest := map[string]any{"project_id": pid, "started": started, "model": model, "upstream": publicUpstream.String(), "reasoning_effort": "max", "request_timeout_seconds": 180, "decision_timeout_seconds": 300, "max_workers": 4, "source_commit": os.Getenv("XLOOM_SOURCE_COMMIT"), "image": image, "namespace": namespace, "healthcheck": "disabled", "cost_status": "unknown_no_verified_account_pricing", "scope": "synthetic local files; real model, scheduler and Docker workers"}
+	manifest := map[string]any{"project_id": pid, "started": started, "model": model, "upstream": publicUpstream.String(), "reasoning_effort": "max", "reasoning_effort_by_role": knobs.effectiveEfforts(), "request_timeout_seconds": 180, "decision_timeout_seconds": 300, "max_workers": c.Runtime.MaxWorkers, "max_project_workers": c.Runtime.MaxProjectWorkers, "worker_max_running": c.Workers[0].MaxRunning, "require_parallel_workers": knobs.RequireParallelWorkers, "source_commit": os.Getenv("PWNMESH_SOURCE_COMMIT"), "image": image, "namespace": namespace, "healthcheck": "disabled", "cost_status": "unknown_no_verified_account_pricing", "scope": "synthetic local files; real model, scheduler and Docker workers"}
 	manifest["http_observation_mode"] = observationMode
+	manifest["http_observation_reason"] = observationReason
+	manifest["orchestration_version"] = mode
 	manifest["workload_title"], manifest["validation_scope"] = title, validationScope
+	manifest["comparison_protocol_version"] = 1
+	manifest["workload_sha256"] = knobs.workloadFingerprint(title, origin, goal, validationScope, mode)
+	manifest["parallel_worker_count"] = knobs.ParallelWorkerCount
+	if webGate != nil {
+		manifest["creation_source"] = webCreation.Source
+		manifest["browser_preparation_seconds_excluded"] = started.Sub(webCreation.ReadyAt).Seconds()
+		manifest["web_ready_at"], manifest["web_creation_response_at"] = webCreation.ReadyAt, webCreation.ResponseAt
+		manifest["scenario"] = webGate.want.Scenario
+		// The existing API-created workload omitted scenario. Bind the new
+		// Web scenario explicitly without changing historical fingerprints.
+		manifest["workload_sha256"] = liveFingerprint(map[string]any{"base_workload_sha256": manifest["workload_sha256"], "scenario": webGate.want.Scenario, "creation_source": webCreation.Source})
+	}
+	manifest["project_timeout_seconds"] = knobs.ProjectTimeoutSeconds
+	manifest["keep_container"] = knobs.KeepContainer
+	manifest["container_name"] = container
+	manifest["execution_knobs_sha256"] = liveExecutionFingerprint(c, knobs.ProjectTimeoutSeconds)
 	if err = saveLiveJSON(filepath.Join(output, "manifest.json"), manifest); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithDeadline(context.Background(), started.Add(time.Duration(knobs.ProjectTimeoutSeconds)*time.Second))
 	done := make(chan struct{})
 	var schedulerErr error
+	manifest["dispatcher_started"] = time.Now().UTC()
+	if err = saveLiveJSON(filepath.Join(output, "manifest.json"), manifest); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
 	go func() { schedulerErr = dispatcher.New(c, runner).Run(ctx); close(done) }()
 	completed := false
 	defer func() {
@@ -182,6 +364,7 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 		}
 		collectCtx, collectCancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer collectCancel()
+		collectionStarted := time.Now()
 		var state board.State
 		if err := client.Do(collectCtx, "GET", "/projects/"+pid+"/state", nil, &state, nil); err != nil {
 			t.Error(err)
@@ -211,7 +394,23 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 		if archiveErr != nil {
 			t.Error(archiveErr)
 		}
+		if files != nil {
+			if err := retainCurationSnapshots(collectCtx, store, pid, files, output); err != nil {
+				t.Error(err)
+			}
+		}
 		failures := validate(state, files)
+		if knobs.RequireParallelWorkers {
+			parallel, parallelFailures := validateLiveParallelWorkers(state, files, knobs.ParallelWorkerCount)
+			failures = append(failures, parallelFailures...)
+			if err := saveLiveJSON(filepath.Join(output, "parallel-validation.json"), parallel); err != nil {
+				t.Error(err)
+			}
+		}
+		manifest["validation_finished"] = time.Now().UTC()
+		manifest["collection_and_validation_seconds"] = time.Since(collectionStarted).Seconds()
+		manifest["time_to_acceptance_seconds"] = time.Since(started).Seconds()
+		manifest["acceptance_passed"] = completed && len(failures) == 0
 		if err := saveLiveJSON(filepath.Join(output, "validation.json"), map[string]any{"validation_scope": validationScope, "project_completed": completed, "failures": failures, "passed": completed && len(failures) == 0}); err != nil {
 			t.Error(err)
 		}
@@ -220,9 +419,17 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cleanupCancel()
-		if err := runner.Cleanup(cleanupCtx, pid, "deleted"); err != nil {
+		cleanupStarted := time.Now()
+		cleanupState := "deleted"
+		if knobs.KeepContainer {
+			// Stop execution but retain the exact Linux workspace for inspection.
+			cleanupState = "stopped"
+		}
+		if err := runner.Cleanup(cleanupCtx, pid, cleanupState); err != nil {
 			t.Error(err)
 		}
+		manifest["cleanup_seconds"] = time.Since(cleanupStarted).Seconds()
+		_ = saveLiveJSON(filepath.Join(output, "manifest.json"), manifest)
 	}()
 	tick := time.NewTicker(2 * time.Second)
 	defer tick.Stop()
@@ -233,7 +440,7 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 		case <-done:
 			t.Fatalf("scheduler stopped before project completion: %v", schedulerErr)
 		case <-ctx.Done():
-			t.Fatal("live project exceeded its 30 minute acceptance limit")
+			t.Fatalf("live project exceeded its %d second acceptance limit", knobs.ProjectTimeoutSeconds)
 		case <-tick.C:
 			var state board.State
 			if err = client.Do(ctx, "GET", "/projects/"+pid+"/state", nil, &state, nil); err != nil {

@@ -13,22 +13,19 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 const continueOutput = `{"accepted":true,"outcome":"continue","reason":"More work remains"}`
 const incompleteOutput = `{"accepted":true,"outcome":"incomplete","reason":"Only 19 of 30 chunks have been verified"}`
 
 func completedOutput(kind string) string {
-	if kind == "bootstrap" {
-		return `{"accepted":true,"outcome":"completed","data":{"fact":{"description":"All 30 chunks verified"},"complete":{"description":"Goal reached"}}}`
-	}
-	return `{"accepted":true,"outcome":"completed","data":{"description":"All 30 chunks verified"}}`
+	return `{"accepted":true,"outcome":"completed","data":{"fact":{"description":"All 30 chunks verified","scope":"local fixture","observed_at":"2026-09-30T08:00:00Z","evidence":[{"path":"output-proof.txt"}]}}}`
 }
 
 func outcomeJob(t *testing.T, kind string) Job {
 	j := scenarioJob(t, "", kind)
-	j.ResultContractVersion = 1
+	j.ResultContractVersion = 2
 	return j
 }
 
@@ -60,7 +57,7 @@ func progressCall(id int) agent.Message {
 }
 
 func TestExecutionContinuesInSameRunUntilExplicitCompletion(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
+	for _, kind := range []string{"explore"} {
 		t.Run(kind, func(t *testing.T) {
 			j, runDir := outcomeJob(t, kind), t.TempDir()
 			j.Budget.Timeout = 60
@@ -83,7 +80,7 @@ func TestExecutionContinuesInSameRunUntilExplicitCompletion(t *testing.T) {
 					return agent.Message{}, nil
 				}
 			})
-			r, err := Run(context.Background(), j, Options{Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}, RunDir: runDir, Now: func() time.Time { return start }})
+			r, err := runTestWorker(context.Background(), j, Options{Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}, RunDir: runDir, Now: func() time.Time { return start }})
 			if err != nil || r.Status != "success" || r.Conclude || turns != 3 || toolCalls != 1 {
 				t.Fatalf("result=%+v err=%v turns=%d tool calls=%d", r, err, turns, toolCalls)
 			}
@@ -96,14 +93,14 @@ func TestExecutionContinuesInSameRunUntilExplicitCompletion(t *testing.T) {
 }
 
 func TestIncompleteNeverBecomesWorkerSuccess(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
+	for _, kind := range []string{"explore"} {
 		for _, conclude := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/conclude=%t", kind, conclude), func(t *testing.T) {
 				stop := make(chan struct{})
 				if conclude {
 					close(stop)
 				}
-				r, err := Run(context.Background(), outcomeJob(t, kind), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+				r, err := runTestWorker(context.Background(), outcomeJob(t, kind), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 					return agent.Text("assistant", incompleteOutput), nil
 				})})
 				if err != nil || r.Status != "failed" || r.FailureKind != "incomplete" || r.Retryable || r.Text != incompleteOutput || r.Conclude != conclude || !strings.Contains(r.Error, "19 of 30") {
@@ -141,7 +138,7 @@ func TestFormatRepairCanReturnToExecutionWithoutRefreshingBudget(t *testing.T) {
 			return agent.Message{}, nil
 		}
 	})
-	r, err := Run(context.Background(), j, Options{Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}, RunDir: runDir, Now: func() time.Time { return start }})
+	r, err := runTestWorker(context.Background(), j, Options{Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}, RunDir: runDir, Now: func() time.Time { return start }})
 	s := outcomeSession(t, runDir)
 	if err != nil || r.Status != "success" || r.Conclude || s.RepairCount != 1 || s.Repairing || s.RepairPending || s.RepairPrompt != "" || toolCalls != 1 || !s.ExecutionDeadline.Equal(start.Add(time.Minute)) {
 		t.Fatalf("result=%+v err=%v repair=%d/%t calls=%d", r, err, s.RepairCount, s.Repairing, toolCalls)
@@ -169,7 +166,7 @@ func TestContinuationLimitRequiresSuccessfulToolProgress(t *testing.T) {
 				}
 				return agent.Text("assistant", continueOutput), nil
 			})
-			r, err := Run(context.Background(), outcomeJob(t, "explore"), Options{RunDir: t.TempDir(), Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, toolFailure)}})
+			r, err := runTestWorker(context.Background(), outcomeJob(t, "explore"), Options{RunDir: t.TempDir(), Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, toolFailure)}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -224,7 +221,7 @@ func TestResumeRevalidatesControlAndIncompleteResults(t *testing.T) {
 					j, runDir := outcomeJob(t, "explore"), t.TempDir()
 					seedOutcomeSession(t, j, runDir, text, consumed, savedResult)
 					turns := 0
-					r, err := Run(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+					r, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
 						turns++
 						if len(defs) == 0 || turns > 1 {
 							t.Fatal("resumed continuation did not enter execution exactly once")
@@ -250,7 +247,7 @@ func TestResumeRevalidatesControlAndIncompleteResults(t *testing.T) {
 func TestSoftStopWinsOverContinueAndDisablesTools(t *testing.T) {
 	stop := make(chan struct{})
 	turns := 0
-	r, err := Run(context.Background(), outcomeJob(t, "explore"), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+	r, err := runTestWorker(context.Background(), outcomeJob(t, "explore"), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		turns++
 		if turns == 1 {
 			close(stop)
@@ -270,7 +267,7 @@ func TestRecoveredContinuationCannotResetItsAllowance(t *testing.T) {
 	j, runDir := outcomeJob(t, "explore"), t.TempDir()
 	seedOutcomeSession(t, j, runDir, continueOutput, maxContinuations, false)
 	turns := 0
-	r, err := Run(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+	r, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		turns++
 		if turns > 1 {
 			t.Fatal("restart renewed the continuation allowance")
@@ -289,7 +286,7 @@ func TestExpiredOriginalDeadlineCannotResumeExecution(t *testing.T) {
 	original := outcomeSession(t, runDir).ExecutionDeadline
 	now := original.Add(time.Second)
 	turns := 0
-	r, err := Run(context.Background(), j, Options{RunDir: runDir, Now: func() time.Time { return now }, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+	r, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Now: func() time.Time { return now }, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		turns++
 		if turns > 1 || len(defs) != 0 {
 			t.Fatal("expired continuation regained execution tools")
@@ -305,7 +302,7 @@ func TestExpiredOriginalDeadlineCannotResumeExecution(t *testing.T) {
 func TestRepairToolCallsStayDisabledUntilContinue(t *testing.T) {
 	j, runDir := outcomeJob(t, "explore"), t.TempDir()
 	turns, toolCalls := 0, 0
-	r, err := Run(context.Background(), j, Options{RunDir: runDir, Tools: []agent.Tool{progressTool(&toolCalls, false)}, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+	r, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Tools: []agent.Tool{progressTool(&toolCalls, false)}, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		turns++
 		switch turns {
 		case 1:
@@ -338,7 +335,7 @@ func TestRepairToolCallsStayDisabledUntilContinue(t *testing.T) {
 func TestRecoveryAfterRepairExitRetainsSpentRepairAttempts(t *testing.T) {
 	j, runDir := outcomeJob(t, "explore"), t.TempDir()
 	turns := 0
-	first, err := Run(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+	first, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		turns++
 		switch turns {
 		case 1:
@@ -374,7 +371,7 @@ func TestRecoveryAfterRepairExitRetainsSpentRepairAttempts(t *testing.T) {
 		t.Fatal(err)
 	}
 	turns = 0
-	last, err := Run(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+	last, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		turns++
 		if turns > 2 {
 			t.Fatal("recovery refunded consumed repairs")
@@ -397,27 +394,11 @@ func TestRecoveryAfterRepairExitRetainsSpentRepairAttempts(t *testing.T) {
 	}
 }
 
-func TestMockHonorsVersionedResultContract(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
-		j := outcomeJob(t, kind)
-		j.WorkerType = "mock"
-		r, err := Run(context.Background(), j, Options{RunDir: t.TempDir()})
-		if err != nil || r.Status != "success" || !strings.Contains(r.Text, `"outcome":"completed"`) {
-			t.Fatalf("versioned mock result=%+v err=%v", r, err)
-		}
-		t.Setenv("XLOOM_MOCK_"+strings.ToUpper(kind), `{"accepted":true,"data":{"description":"Continuing..."}}`)
-		r, err = Run(context.Background(), j, Options{RunDir: t.TempDir()})
-		if err != nil || r.Status != "failed" || r.FailureKind != "result_contract" {
-			t.Fatalf("mock bypassed contract: %+v err=%v", r, err)
-		}
-	}
-}
-
-func TestBootstrapConclusionCannotTurnPartialEvidenceIntoSuccess(t *testing.T) {
+func TestConclusionCannotTurnPartialEvidenceIntoSuccess(t *testing.T) {
 	stop := make(chan struct{})
 	close(stop)
 	turns := 0
-	r, err := Run(context.Background(), outcomeJob(t, "bootstrap"), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+	r, err := runTestWorker(context.Background(), outcomeJob(t, "explore"), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		turns++
 		if len(defs) != 0 || turns > 2 {
 			t.Fatal("partial result escaped the bounded conclusion")

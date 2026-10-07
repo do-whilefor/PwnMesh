@@ -57,12 +57,42 @@ func BuildDecisionContextFromCursor(current State, cursor *DecisionCursor, event
 		if event.Revision != cursor.Revision+int64(i)+1 {
 			return fallback("event_gap")
 		}
+		if event.ID == "" {
+			return fallback("event_without_identity")
+		}
 		section := ""
 		switch event.Op {
 		case "fact", "reopen":
 			section = "fact_records"
 		case "finding":
 			section = "findings"
+		case "candidate":
+			section = "candidates"
+			for _, candidate := range current.Candidates {
+				if candidate.ID == event.ID && candidate.Supersedes != "" {
+					changed[section] = append(changed[section], candidate.Supersedes)
+				}
+			}
+		case "dispute":
+			section = "disputes"
+		case "curation_request":
+			if request := current.PendingCurationRequest(); request != nil {
+				changed["fact_records"] = append(changed["fact_records"], request.Sources...)
+			}
+			section = "curation"
+		case "curate":
+			// A curation batch may alter several conclusions and their source
+			// validity. Use its current projection, never a stale event body.
+			for _, finding := range current.Findings {
+				changed["findings"] = append(changed["findings"], finding.ID)
+			}
+			for _, dispute := range current.Disputes {
+				changed["disputes"] = append(changed["disputes"], dispute.ID)
+			}
+			for _, relation := range current.FactRelations {
+				changed["fact_records"] = append(changed["fact_records"], relation.Source, relation.Target)
+			}
+			continue
 		case "goal":
 			section = "goals"
 		case "step", "step_completed", "execution_failed", "complete":
@@ -75,9 +105,6 @@ func BuildDecisionContextFromCursor(current State, cursor *DecisionCursor, event
 			section = "fact_records"
 		default:
 			return fallback("unknown_event")
-		}
-		if event.ID == "" {
-			return fallback("event_without_identity")
 		}
 		changed[section] = append(changed[section], event.ID)
 	}

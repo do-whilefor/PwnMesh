@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
@@ -30,7 +30,7 @@ func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`INSERT INTO xloom_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, unrelated.Project.ID, "old", "xloom", "old", "reason", "", "old@old", raw, "old-input", "succeeded", tx.Now, tx.Now)
+		_, err = tx.Exec(`INSERT INTO xloom_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, unrelated.Project.ID, "old", "pwnmesh", "old", "reason", "", "old@old", raw, "old-input", "succeeded", tx.Now, tx.Now)
 		return err
 	})
 	if err != nil {
@@ -38,17 +38,17 @@ func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
 	}
 	var retainedBytes int64
 	if err = store.Do(context.Background(), func(tx *board.Tx) error {
-		return tx.QueryRow("SELECT SUM(LENGTH(job)+COALESCE(LENGTH(result),0)) FROM xloom_executions WHERE namespace=?", "xloom").Scan(&retainedBytes)
+		return tx.QueryRow("SELECT SUM(LENGTH(job)+COALESCE(LENGTH(result),0)) FROM xloom_executions WHERE namespace=?", "pwnmesh").Scan(&retainedBytes)
 	}); err != nil || retainedBytes <= 32<<20 {
 		t.Fatalf("fixture did not retain more than 32 MiB: bytes=%d err=%v", retainedBytes, err)
 	}
 	var protocol *ProtocolError
-	err = s.Client.Do(context.Background(), "GET", "/executions?namespace=xloom", nil, nil, nil)
+	err = s.Client.Do(context.Background(), "GET", "/executions?namespace=pwnmesh", nil, nil, nil)
 	if !errors.As(err, &protocol) || protocol.Status != http.StatusNotFound {
 		t.Fatalf("whole-history endpoint was not retired: %v", err)
 	}
 	var pending board.ExecutionPage
-	if err = s.Client.Do(context.Background(), "GET", "/executions/pending?namespace=xloom&after=0&limit=100", nil, &pending, nil); err != nil || len(pending.Items) != 0 || pending.NextCursor != 0 {
+	if err = s.Client.Do(context.Background(), "GET", "/executions/pending?namespace=pwnmesh&after=0&limit=100", nil, &pending, nil); err != nil || len(pending.Items) != 0 || pending.NextCursor != 0 {
 		t.Fatalf("pending page fetched unrelated terminal history: %+v err=%v", pending, err)
 	}
 	state := finishBatchFixture(t, s, graph.Project.ID)
@@ -64,7 +64,7 @@ func TestPendingExecutionPagesDoNotFetchUnselectedJobs(t *testing.T) {
 	var requests atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.URL.Path != "/executions/pending" || r.URL.Query().Get("namespace") != "xloom" || r.URL.Query().Get("limit") != "100" {
+		if r.URL.Path != "/executions/pending" || r.URL.Query().Get("namespace") != "pwnmesh" || r.URL.Query().Get("limit") != "100" {
 			t.Errorf("unexpected request: %s", r.URL)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -110,7 +110,7 @@ func TestPendingExecutionPagesRejectNonAdvancingCursor(t *testing.T) {
 func TestRecoveryCancelsInactiveExecutionFromMetadata(t *testing.T) {
 	var cancelled atomic.Bool
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "POST" || r.URL.Path != "/projects/stopped/executions/r/status" || r.Header.Get("X-Xloom-Run") != "backend@r" {
+		if r.Method != "POST" || r.URL.Path != "/projects/stopped/executions/r/status" || r.Header.Get("X-PwnMesh-Run") != "backend@r" {
 			t.Errorf("inactive recovery downloaded a Job or lost its lease: %s %s", r.Method, r.URL)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
@@ -125,7 +125,7 @@ func TestRecoveryCancelsInactiveExecutionFromMetadata(t *testing.T) {
 	}))
 	defer api.Close()
 	s := New(config.Config{Server: api.URL}, &batchProtocolRunner{})
-	s.pendingExecutions = []board.ExecutionSummary{{ProjectID: "stopped", ID: "r", Namespace: "xloom", Kind: "reason", Lease: "backend@r", Status: "result_pending"}}
+	s.pendingExecutions = []board.ExecutionSummary{{ProjectID: "stopped", ID: "r", Namespace: "pwnmesh", Kind: "reason", Lease: "backend@r", Status: "result_pending"}}
 	if err := s.recoverExecutions(context.Background(), map[string]string{"stopped": "stopped"}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,11 +166,47 @@ func TestRecoveryFetchesOnlyTheSelectedImmutableJob(t *testing.T) {
 	}
 }
 
+func TestRecoveryLeavesRetiredJobsUnreadied(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		orchestration int
+		protocol      int
+		graphRPC      bool
+	}{{"legacy_project", 0, 2, true}, {"legacy_result", 1, 1, true}, {"no_graph_bridge", 1, 2, false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := worker.Job{RunID: "retained", Kind: "reason", WorkerType: "go", Graph: board.Graph{Project: board.Project{ID: "p", OrchestrationVersion: tc.orchestration}}, GraphRPC: tc.graphRPC, ResultContractVersion: tc.protocol}
+			raw, err := json.Marshal(job)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reads atomic.Int32
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != "GET" || r.URL.Path != "/projects/p/executions/retained" {
+					t.Errorf("historical job was mutated or resumed: %s %s", r.Method, r.URL)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				reads.Add(1)
+				_ = json.NewEncoder(w).Encode(board.Execution{ProjectID: "p", ID: "retained", Kind: "reason", Status: "result_pending", Job: raw})
+			}))
+			defer api.Close()
+			s := New(config.Config{Server: api.URL, Runtime: config.Runtime{MaxWorkers: 1, MaxProjects: 1, MaxProjectWorkers: 1}, Workers: []config.Worker{{Name: "go", Type: "go", TaskTypes: []string{"reason"}, MaxRunning: 1}}}, &protocolRunner{})
+			s.pendingExecutions = []board.ExecutionSummary{{ProjectID: "p", ID: "retained", Backend: "go", Kind: "reason", Status: "result_pending"}}
+			if err := s.recoverExecutions(context.Background(), map[string]string{"p": "active"}); err != nil {
+				t.Fatal(err)
+			}
+			if reads.Load() != 1 || len(s.running) != 0 || len(s.admitted) != 0 {
+				t.Fatal("retained job reached execution or occupied capacity")
+			}
+		})
+	}
+}
+
 func TestGraphHandlerRejectsMismatchedRegisteredIdentity(t *testing.T) {
 	var requests atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		if r.URL.Path != "/projects/p/executions/r/identity" || r.URL.Query().Get("namespace") != "xloom" {
+		if r.URL.Path != "/projects/p/executions/r/identity" || r.URL.Query().Get("namespace") != "pwnmesh" {
 			t.Errorf("unexpected graph identity request: %s", r.URL)
 		}
 		_ = json.NewEncoder(w).Encode(board.ExecutionSummary{ProjectID: "p", ID: "r", Namespace: "other", Kind: "reason", Lease: "backend@r"})
@@ -188,7 +224,7 @@ func TestGraphHandlerRejectsIdentityFromAnotherGeneration(t *testing.T) {
 	var requests atomic.Int32
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		_ = json.NewEncoder(w).Encode(board.ExecutionSummary{ProjectID: "p", ID: "r", Namespace: "xloom", Kind: "reason", Generation: 2, Lease: "backend@r"})
+		_ = json.NewEncoder(w).Encode(board.ExecutionSummary{ProjectID: "p", ID: "r", Namespace: "pwnmesh", Kind: "reason", Generation: 2, Lease: "backend@r"})
 	}))
 	defer api.Close()
 	runner := &batchProtocolRunner{}
@@ -214,17 +250,15 @@ func TestLiveGraphReadPagesBeforeDispatcherResponseLimit(t *testing.T) {
 	if err := s.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/reason/claim", map[string]string{"worker": lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	job := worker.Job{RunID: "large-graph", Kind: "reason", Graph: graph, GraphRPC: true, Workspace: "/workspace"}
-	raw, err := json.Marshal(job)
-	if err != nil {
+	run := &task{Job: worker.Job{RunID: "large-graph", Kind: "reason", WorkerType: "go", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: s.Config.Task("reason")}, Worker: s.Config.Workers[0], Lease: lease}
+	if err := s.register(ctx, run); err != nil {
 		t.Fatal(err)
 	}
-	execution := board.Execution{ProjectID: graph.Project.ID, ID: job.RunID, Namespace: "xloom", Backend: "retry-fixture", Kind: "reason", Lease: lease.Run, Job: raw, RetryKey: "reason:large-graph"}
-	registerLegacyExecution(t, store, execution)
+	job := run.Job
 	// Existing executions must still read small graph/evidence pages after the
 	// live FGS grows beyond the whole-response limit. The immutable Job is small.
 	evidence := board.EvidenceRef{RunID: "source", Path: "retained/large.txt", Excerpt: strings.Repeat("x", 33<<20)}
-	err = store.Do(ctx, func(tx *board.Tx) error {
+	err := store.Do(ctx, func(tx *board.Tx) error {
 		g, err := tx.Load(graph.Project.ID)
 		if err != nil {
 			return err
@@ -246,6 +280,10 @@ func TestLiveGraphReadPagesBeforeDispatcherResponseLimit(t *testing.T) {
 	var whole board.State
 	if err = s.Client.Do(ctx, "GET", projectPath(graph.Project.ID)+"/state", nil, &whole, &lease); err == nil || !strings.Contains(err.Error(), "exceeds 33554432-byte limit") {
 		t.Fatalf("current-state fixture did not reach the response limit: %v", err)
+	}
+	// A current planner refreshes its pinned read view before following details.
+	if _, err := runner.handler(ctx, job, worker.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_graph", Section: "overview"}); err != nil {
+		t.Fatal(err)
 	}
 	read := worker.GraphRequest{RequestID: "00000000000000000000000000000001", Op: "read_graph", Section: "evidence", IDs: []string{"large"}, Limit: 1}
 	result, err := runner.handler(ctx, job, read)
@@ -403,7 +441,7 @@ func TestCompletedDecisionReturnsObservationBeforeCancellation(t *testing.T) {
 	close(runner.finish)
 	s.wg.Wait()
 	var execution board.Execution
-	if err := s.Client.Do(ctx, "GET", projectPath(graph.Project.ID)+"/executions/"+job.RunID+"?namespace=xloom", nil, &execution, nil); err != nil {
+	if err := s.Client.Do(ctx, "GET", projectPath(graph.Project.ID)+"/executions/"+job.RunID+"?namespace=pwnmesh", nil, &execution, nil); err != nil {
 		t.Fatal(err)
 	}
 	var result worker.Result

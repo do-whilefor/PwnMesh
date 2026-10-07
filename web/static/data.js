@@ -1,7 +1,7 @@
 (function (root, factory) {
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomData = api;
+  else root.PwnMeshData = api;
 }(typeof window === 'object' ? window : globalThis, function () {
   'use strict';
 
@@ -47,6 +47,7 @@
     }
     if (!SCENARIOS.some(scenario => scenario.id === input.scenario)) throw new Error('请选择一个项目场景。');
     payload.scenario = input.scenario;
+    payload.orchestration_version = 1;
     return payload;
   }
 

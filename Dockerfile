@@ -11,12 +11,12 @@ FROM source AS test
 RUN --network=none go test -race -count=1 ./... && go vet ./...
 
 FROM test AS build
-RUN --network=none CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/xloom ./cmd/xloom
+RUN --network=none CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/pwnmesh ./cmd/pwnmesh
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl bash ripgrep \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/xloom /usr/local/bin/xloom
+COPY --from=build /out/pwnmesh /usr/local/bin/pwnmesh
 WORKDIR /workspace
-ENTRYPOINT ["/usr/local/bin/xloom"]
-CMD ["serve", "--host", "0.0.0.0", "--db-path", "/data/xloom.db"]
+ENTRYPOINT ["/usr/local/bin/pwnmesh"]
+CMD ["serve", "--host", "0.0.0.0", "--db-path", "/data/pwnmesh.db"]

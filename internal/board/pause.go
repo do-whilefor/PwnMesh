@@ -48,7 +48,7 @@ func (t *Tx) continuePausedExecutions(g Graph) error {
 		if !e.Pending() && e.Status != "cancelled" {
 			continue
 		}
-		if e.Kind != "reason" {
+		if !controlKind(e.Kind) {
 			available := false
 			for _, intent := range g.Intents {
 				if intent.ID == e.Intent && intent.To == nil && intent.ConcludedAt == nil && !abandoned[intent.ID] {

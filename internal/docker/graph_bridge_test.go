@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 func TestGraphBridgeDeliversOversizedSuccessfulActionAsAcknowledgement(t *testing.T) {
@@ -50,16 +50,21 @@ func TestGraphBridgeDeliversOversizedSuccessfulActionAsAcknowledgement(t *testin
 	defer engine.Close()
 	client := &Client{http: &http.Client{Transport: graphBridgeTestTransport{base: http.DefaultTransport, endpoint: engine.URL}}}
 	version := strings.Repeat("b", 64)
+	handlerCalls := 0
 	client.SetGraphHandler(func(context.Context, worker.Job, worker.GraphRequest) (any, error) {
-		return board.StateActionResult{Op: "finding", ID: "finding_many", Revision: 42, StateVersion: version, Result: json.RawMessage(`{"evidence":"` + strings.Repeat("x", worker.MaxGraphRPCBytes) + `"}`)}, nil
+		handlerCalls++
+		return board.StateActionResult{Op: "candidate", ID: "candidate_many", Revision: 42, StateVersion: version, Result: json.RawMessage(`{"evidence":"` + strings.Repeat("x", worker.MaxGraphRPCBytes) + `"}`)}, nil
 	})
-	request := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: "finding", IdempotencyKey: "merged", Payload: json.RawMessage(`{}`)}}
-	if err := client.graphBridge(context.Background(), "fixture", "/workspace/.xloom/runs/run", worker.Job{Kind: "explore", GraphRPC: true})(request); err != nil {
+	request := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: "candidate", IdempotencyKey: "observed", Payload: json.RawMessage(`{}`)}}
+	if err := client.graphBridge(context.Background(), "fixture", "/workspace/.pwnmesh/runs/run", worker.Job{Kind: "explore", GraphRPC: true})(request); err != nil {
 		t.Fatal(err)
 	}
 	var response worker.GraphResponse
 	if err := json.Unmarshal(published, &response); err != nil {
 		t.Fatal(err)
+	}
+	if handlerCalls != 1 || response.Error != "" {
+		t.Fatalf("successful action did not reach its handler: calls=%d response=%s", handlerCalls, published)
 	}
 	var receipt struct {
 		board.StateActionResult
@@ -68,7 +73,7 @@ func TestGraphBridgeDeliversOversizedSuccessfulActionAsAcknowledgement(t *testin
 	if err := json.Unmarshal(response.Result, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if len(published) > worker.MaxGraphRPCBytes || response.Error != "" || response.RequestID != request.RequestID || !receipt.ResultOmitted || receipt.ID != "finding_many" || receipt.StateVersion != version || receipt.Revision != 42 {
+	if len(published) > worker.MaxGraphRPCBytes || response.RequestID != request.RequestID || !receipt.ResultOmitted || receipt.Op != "candidate" || receipt.ID != "candidate_many" || receipt.StateVersion != version || receipt.Revision != 42 {
 		t.Fatalf("successful mutation lost its acknowledgement: %s", published)
 	}
 }

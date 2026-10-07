@@ -36,7 +36,7 @@ func TestRepositoryDispatchConfigurations(t *testing.T) {
 				if w.Env["ANTHROPIC_MODEL"] != env["ANTHROPIC_DEFAULT_FABLE_MODEL"] {
 					t.Errorf("worker %s lost the configured model alias", w.Name)
 				}
-				if w.Env["XLOOM_MAX_OUTPUT_TOKENS"] != "384000" || w.Env["XLOOM_REASONING_EFFORT"] != "max" {
+				if w.Env["PWNMESH_MAX_OUTPUT_TOKENS"] != "384000" || w.Env["PWNMESH_REASONING_EFFORT"] != "max" {
 					t.Errorf("worker %s lost the configured model output budget", w.Name)
 				}
 			}

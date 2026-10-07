@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 func TestGraphStateConflictRequiresDefinitiveMarker(t *testing.T) {
@@ -100,7 +100,7 @@ func TestDecisionValidationMentioningStateChangedAllowsDraftRepair(t *testing.T)
 				}
 				return message, nil
 			})
-			result, err := Run(context.Background(), job, Options{Provider: provider, RunDir: runDir, Output: bridge})
+			result, err := runTestWorker(context.Background(), job, Options{Provider: provider, RunDir: runDir, Output: bridge})
 			wantReceipts := 1
 			if operation == "commit" {
 				wantReceipts++ // Reconcile the failed commit before resetting its draft.
@@ -157,7 +157,7 @@ func TestUnknownCommitMentioningStateChangedRecoversReceipt(t *testing.T) {
 			return agent.Message{}, nil
 		}
 	})
-	result, err := Run(context.Background(), job, Options{Provider: provider, RunDir: runDir, Output: bridge})
+	result, err := runTestWorker(context.Background(), job, Options{Provider: provider, RunDir: runDir, Output: bridge})
 	if err != nil || result.Status != "success" || result.Text != committedDecisionText || result.StateVersion != finalVersion || calls != 2 || commits != 1 || receipts != 2 {
 		t.Fatalf("unknown commit was misclassified or repeated: %+v err=%v calls=%d commits=%d receipts=%d", result, err, calls, commits, receipts)
 	}

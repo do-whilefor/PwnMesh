@@ -2,7 +2,7 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomLayout = api;
+  else root.PwnMeshLayout = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
   const NODE_WIDTH = 164, NODE_HEIGHT = 90;

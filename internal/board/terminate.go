@@ -65,6 +65,7 @@ func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
 		return Graph{}, err
 	}
 	g.Project.Status, g.Project.Reason, g.Project.TerminatedAt = "terminated", nil, t.Now
+	g.Project.Curator = nil
 	for index := range g.Intents {
 		if g.Intents[index].ConcludedAt == nil {
 			g.Intents[index].Worker = nil

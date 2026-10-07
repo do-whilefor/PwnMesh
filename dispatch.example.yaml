@@ -1,40 +1,42 @@
 server: http://server:8000
 runtime:
   interval: 2
-  # Limits count all active tasks, including reason, bootstrap and conclude.
+  # Limits count all active reason, curate and explore tasks.
   max_workers: 16
   max_running_projects: 4
   max_project_workers: 4
   healthcheck_timeout: 30
   worker_healthcheck: startup_only
 tasks:
-  # For historical bootstrap projects, also enable bootstrap in task_types
-  # and restore its budget: bootstrap: {timeout: 0, conclude_timeout: 60}.
+  # Each role may set reasoning_effort: low | high | max; omitted inherits
+  # PWNMESH_REASONING_EFFORT. The chosen override is kept in its immutable Job.
   reason:
     # Maximum reasoning can span several model requests and graph reads.
     timeout: 300
     max_intents: 3
+  curate:
+    timeout: 300
   explore:
     timeout: 0
     conclude_timeout: 60
 container:
-  image: xloom-worker:dev
+  image: pwnmesh-worker:dev
   network_mode: bridge
   completed_action: stop
-  namespace: xloom
+  namespace: pwnmesh
 common_env:
   ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL}
   ANTHROPIC_DEFAULT_FABLE_MODEL: ${ANTHROPIC_DEFAULT_FABLE_MODEL}
   ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN}
-  XLOOM_REASONING_EFFORT: max
-  XLOOM_MAX_OUTPUT_TOKENS: '384000'
-  XLOOM_CONTEXT_TOKENS: '920000'
-  XLOOM_CONTEXT_TARGET_TOKENS: '250000'
-  XLOOM_CONTEXT_BYTES: '8388608'
+  PWNMESH_REASONING_EFFORT: max
+  PWNMESH_MAX_OUTPUT_TOKENS: '384000'
+  PWNMESH_CONTEXT_TOKENS: '920000'
+  PWNMESH_CONTEXT_TARGET_TOKENS: '250000'
+  PWNMESH_CONTEXT_BYTES: '8388608'
 workers:
   - name: general
     type: go
-    task_types: [reason, explore]
+    task_types: [reason, curate, explore]
     # Per-backend limit shared across all projects; still bounded by runtime limits.
     max_running: 16
     priority: 0

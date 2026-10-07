@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func evidenceFixtureFact(run string) map[string]any {
@@ -111,7 +111,7 @@ func TestEvidenceCompletionCannotReuseOtherStepOrCorrectedObservation(t *testing
 				corrective := evidenceFixtureFact(f.run)
 				corrective["description"] = "The observed response came from a stale fixture"
 				source := f.action("fact", "correction-observation", corrective)
-				f.action("fact_relation", "correction", map[string]any{"kind": "refutes", "source": source.ID, "target": original.ID, "reason": "Response was not from the selected target"})
+				f.curateRelations(map[string]any{"kind": "refutes", "source": source.ID, "target": original.ID, "reason": "Response was not from the selected target"})
 			}
 			before := f.state()
 			raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]string{"fact_id": original.ID}})

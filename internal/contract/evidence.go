@@ -7,7 +7,7 @@ import (
 
 // Version two binds a completed exploration to one evidence-backed result.
 // The runtime freezes file selections; the board verifies their provenance.
-func parseEvidenceResult(raw json.RawMessage, kind string, conclude bool) (Result, error) {
+func parseEvidenceResult(raw json.RawMessage) (Result, error) {
 	data, err := object(raw)
 	if err != nil {
 		return Result{}, errors.New("completed data must be an object")
@@ -18,22 +18,7 @@ func parseEvidenceResult(raw json.RawMessage, kind string, conclude bool) (Resul
 	if byID == byFact {
 		return Result{}, errors.New("completed requires exactly one of fact_id or fact")
 	}
-	want := 1
-	if kind == "bootstrap" {
-		want++
-		complete, err := object(data["complete"])
-		if err != nil || len(complete) != 1 {
-			return Result{}, errors.New("bootstrap completed requires complete.description")
-		}
-		why, err := text(complete["description"])
-		if err != nil {
-			return Result{}, errors.New("bootstrap completion reason must be nonempty")
-		}
-		if !conclude {
-			r.Kind, r.Complete.Description = "complete", why
-		}
-	}
-	if len(data) != want {
+	if len(data) != 1 {
 		return Result{}, errors.New("unexpected completed result field")
 	}
 	if byID {

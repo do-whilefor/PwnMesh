@@ -1,6 +1,6 @@
 package worker
 
-import "xloom/internal/contract"
+import "pwnmesh/internal/contract"
 
 // ReplanObservation is an experiment receipt, never an executable decision.
 // Metrics on the enclosing result include this work as well as normal Decide.

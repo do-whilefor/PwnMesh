@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {XLoomGraph} = require('./static/graph.js');
+const {PwnMeshGraph} = require('./static/graph.js');
 
 // Minimal deterministic DOM/event clock: browser geometry and rendering are
 // covered by browser/canvas_browser_test.cjs; this exercises lifecycle and update contracts.
@@ -35,7 +35,7 @@ function harness(options = {}) {
   window.setTimeout = fn => { timers.set(++serial, fn); return serial; }; window.clearTimeout = id => timers.delete(id);
   window.CustomEvent = class { constructor(type, config) { this.type = type; Object.assign(this, config); } };
   window.ResizeObserver = class { observe() {} disconnect() { this.disconnected = true; } };
-  const host = new Element(document), graph = new XLoomGraph(host, options);
+  const host = new Element(document), graph = new PwnMeshGraph(host, options);
   return {graph, host, document, window, frames, timers, flush(time = 16) { const pending = [...frames]; frames.clear(); for (const [, fn] of pending) fn(time); }};
 }
 function state(id = 'A', generation = 1) {

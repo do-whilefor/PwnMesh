@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 // Exercise the production selector before following its discovery entry point.

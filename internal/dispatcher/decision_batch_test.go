@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/server"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/server"
+	"pwnmesh/internal/worker"
 )
 
 // Use the production graph bridge and HTTP boundary with a scripted runner.
@@ -75,7 +75,7 @@ func (r *batchProtocolRunner) Run(ctx context.Context, _ config.Worker, job work
 			payload, _ := json.Marshal(map[string]any{"from": sources, "description": "Each requested fixture now has a supported observation"})
 			actions = append(actions, board.DecisionAction{Op: "complete", Payload: payload})
 		}
-		batch := &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: actions}
+		batch := fixtureDecisionBatch(job, actions)
 		preview, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_preview", Batch: batch})
 		if err != nil {
 			return worker.Result{}, err
@@ -152,7 +152,7 @@ type batchFaultTransport struct {
 }
 
 func (f *batchFaultTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	lease := request.Header.Get("X-Xloom-Run")
+	lease := request.Header.Get("X-PwnMesh-Run")
 	f.mu.Lock()
 	if f.committed[lease] && request.Method == "POST" && (strings.HasSuffix(request.URL.Path, "/status") || strings.HasSuffix(request.URL.Path, "/apply")) {
 		f.lateWrites++
@@ -198,7 +198,7 @@ func batchSchedulerFixture(t *testing.T, directions int) (*Scheduler, *batchProt
 	transport := &batchFaultTransport{base: http.DefaultTransport, committed: map[string]bool{}}
 	scheduler.Client.HTTP = &http.Client{Transport: transport, Timeout: 5 * time.Second}
 	var graph board.Graph
-	if err = scheduler.Client.Do(context.Background(), "POST", "/projects", map[string]any{"title": "Batch fixture", "origin": "Synthetic target fixtures", "goal": "Check every requested fixture", "bootstrap_enabled": true}, &graph, nil); err != nil {
+	if err = scheduler.Client.Do(context.Background(), "POST", "/projects", map[string]any{"title": "Batch fixture", "origin": "Synthetic target fixtures", "goal": "Check every requested fixture"}, &graph, nil); err != nil {
 		t.Fatal(err)
 	}
 	return scheduler, runner, transport, graph, store

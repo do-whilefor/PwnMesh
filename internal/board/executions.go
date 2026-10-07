@@ -67,6 +67,7 @@ func (t *Tx) Execution(project, id string) (Execution, error) {
 func (t *Tx) RegisterExecution(e Execution) error {
 	var snapshotJob struct {
 		InputSnapshot *InputSnapshot `json:"input_snapshot"`
+		Graph         Graph          `json:"graph"`
 	}
 	if err := json.Unmarshal(e.Job, &snapshotJob); err != nil {
 		return Err(422, "invalid execution job")
@@ -99,13 +100,40 @@ func (t *Tx) RegisterExecution(e Execution) error {
 	if metadata.Generation != g.Project.Generation {
 		return Err(409, "Execution input belongs to a previous project round")
 	}
+	if g.Project.OrchestrationVersion == 1 {
+		var policy struct {
+			Graph                 Graph  `json:"graph"`
+			Kind                  string `json:"kind"`
+			GraphRPC              bool   `json:"graph_rpc"`
+			ResultContractVersion int    `json:"result_contract_version"`
+			WorkerType            string `json:"worker_type"`
+			Decision              *struct {
+				Version int `json:"version"`
+			} `json:"decision"`
+		}
+		if json.Unmarshal(e.Job, &policy) != nil || policy.Graph.Project.OrchestrationVersion != 1 || policy.Kind != e.Kind || !policy.GraphRPC || policy.ResultContractVersion != 2 || policy.WorkerType == "mock" || !slices.Contains([]string{"reason", "curate", "explore"}, e.Kind) || (e.Kind == "reason" && (policy.Decision == nil || policy.Decision.Version != 2)) {
+			return Err(422, "orchestration version 1 requires graph RPC, evidence result version 2 and registered role protocols")
+		}
+	}
+	if e.Kind == "curate" {
+		if len(e.Job) > MaxCurationInputBytes {
+			return Err(422, "curation job exceeds 256 KiB; use a bounded snapshot input")
+		}
+		version, _, err := CurationJobBoundary(e.Job)
+		if err != nil {
+			return err
+		}
+		if e.Intent != "" || snapshotJob.Graph.Project.ID != e.ProjectID || g.Project.OrchestrationVersion != 1 || e.RetryKey != "curate:"+version {
+			return Err(422, "invalid registered curation input")
+		}
+	}
 	if err = t.CheckExecution(g, e.Fence()); err != nil {
 		return err
 	}
 	if e.ID == "" || e.Lease != e.Backend+"@"+e.ID || e.RetryKey == "" || e.Namespace == "" {
 		return Err(422, "invalid execution identity")
 	}
-	if e.Kind != "reason" {
+	if !controlKind(e.Kind) {
 		if e.RetryKey != e.Kind+":"+e.Intent {
 			return Err(422, "Execute retry key must be bound to its step")
 		}
@@ -121,8 +149,14 @@ func (t *Tx) RegisterExecution(e Execution) error {
 	if !errors.As(err, &ae) || ae.Status != 404 {
 		return err
 	}
-	if e.Kind != "reason" {
+	if !controlKind(e.Kind) {
 		if err = t.StepReady(e.ProjectID, e.Intent); err != nil {
+			return err
+		}
+		if err = t.CheckExecutionDependencies(e); err != nil {
+			return err
+		}
+		if err = t.validateReviewExecution(e); err != nil {
 			return err
 		}
 	}
@@ -140,6 +174,9 @@ func (t *Tx) RegisterExecution(e Execution) error {
 		}
 		if previous.Status != "retry_requested" || previous.Namespace != e.Namespace || previous.Kind != e.Kind || previous.Intent != e.Intent {
 			return Err(409, "previous_run_id does not identify an available retry for this task")
+		}
+		if e.Kind == "curate" && (previous.RetryKey != e.RetryKey || previous.Generation != metadata.Generation || previous.StateVersion != metadata.StateVersion) {
+			return Err(409, "state_changed: curation retry grant belongs to a different input")
 		}
 		grant = &previous
 	}
@@ -161,6 +198,9 @@ func (t *Tx) RegisterExecution(e Execution) error {
 	args := []any{e.ProjectID, e.ID, e.Namespace, e.Backend, e.Kind, e.Intent, e.Lease, []byte(e.Job), e.RetryKey, t.Now, t.Now}
 	args = append(args, executionMetadataValues(metadata)...)
 	_, err = t.Exec(`INSERT INTO xloom_executions(`+executionColumns+`,`+executionMetadataColumns+`,metadata_version) VALUES(?,?,?,?,?,?,?,?,?,'prepared',NULL,0,?,?,?,?,?,?,?,?,?,?,1)`, args...)
+	if err == nil && !controlKind(e.Kind) {
+		err = t.reviewExecutionTransition(e, "prepared")
+	}
 	return err
 }
 func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage) error {
@@ -200,8 +240,16 @@ func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage)
 	if status == "succeeded" && current.Status != "result_pending" {
 		return Err(409, "only a pending result can be applied successfully")
 	}
-	if status == "running" && current.Status != "running" && current.Kind != "reason" {
+	if status == "running" && current.Status != "running" && !controlKind(current.Kind) {
 		if err = t.StepReady(current.ProjectID, current.Intent); err != nil {
+			return err
+		}
+		if err = t.CheckExecutionDependencies(current); err != nil {
+			return err
+		}
+	}
+	if status == "succeeded" && !controlKind(current.Kind) {
+		if err = t.CheckExecutionDependencies(current); err != nil {
 			return err
 		}
 	}
@@ -209,8 +257,11 @@ func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage)
 	if err == nil && slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status) {
 		_, err = t.Exec("INSERT OR IGNORE INTO xloom_revoked_runs(project_id,worker) VALUES(?,?)", e.ProjectID, current.Lease)
 	}
-	if err == nil && current.Kind != "reason" && slices.Contains([]string{"failed", "rejected", "cancelled"}, status) {
+	if err == nil && !controlKind(current.Kind) && slices.Contains([]string{"failed", "rejected", "cancelled"}, status) {
 		err = t.recordExecutionFailure(current, status, failure)
+		if err == nil {
+			err = t.reviewExecutionTransition(current, status)
+		}
 	}
 	return err
 }
@@ -243,7 +294,19 @@ func (t *Tx) ResumeExecution(e Execution) error {
 	if revoked {
 		return Err(409, "Execution was revoked")
 	}
-	if e.Kind == "reason" {
+	if e.Kind == "curate" {
+		if g.Project.OrchestrationVersion != 1 {
+			return Err(409, "curation protocol is no longer available")
+		}
+		if g.Project.Curator != nil && g.Project.Curator.Worker != e.Lease {
+			return Err(409, "Another execution owns curation")
+		}
+		if g.Project.Curator == nil {
+			g.Project.Curator = &Reason{Worker: e.Lease, Trigger: "recovery", StartedAt: e.CreatedAt, Heartbeat: t.Now}
+		} else {
+			g.Project.Curator.Heartbeat = t.Now
+		}
+	} else if e.Kind == "reason" {
 		if g.Project.Reason != nil && g.Project.Reason.Worker != e.Lease {
 			return Err(409, "Another execution owns the decision")
 		}
@@ -254,6 +317,9 @@ func (t *Tx) ResumeExecution(e Execution) error {
 		}
 	} else {
 		if err = t.StepAvailable(e.ProjectID, e.Intent); err != nil {
+			return err
+		}
+		if err = t.CheckExecutionDependencies(e); err != nil {
 			return err
 		}
 		if e.Status != "result_pending" {

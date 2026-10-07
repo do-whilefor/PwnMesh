@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 func newSnapshotHTTPFixture(t *testing.T) (*executionProtocolFixture, *board.Store) {
@@ -163,7 +163,8 @@ func TestPrepareSnapshotRejectsClientSuppliedInputAndCrossRoundTemplates(t *test
 	for name, value := range map[string]any{
 		"state": f.state(), "input_snapshot": map[string]any{"id": strings.Repeat("f", 64)},
 		"input_view": map[string]string{"claimed": "client-view"}, "preparation_key": "forged",
-		"graph": map[string]any{"project": f.state().Graph.Project, "facts": []board.Fact{{ID: "forged", Description: "client fact"}}},
+		"dependency_results": []map[string]string{{"step_id": "forged-step", "fact_id": "forged-fact", "run_id": "forged-run"}},
+		"graph":              map[string]any{"project": f.state().Graph.Project, "facts": []board.Fact{{ID: "forged", Description: "client fact"}}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var fields map[string]any

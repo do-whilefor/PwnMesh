@@ -6,8 +6,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"xloom/internal/agent"
-	"xloom/internal/cvss"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/cvss"
 )
 
 // Scoring is pure computation; it neither verifies a finding nor writes to

@@ -56,7 +56,7 @@ class Element {
   closest() { return null; }
 }
 
-function harness(handler, selected = 'A', markup = html) {
+function harness(handler, selected = 'A', markup = html, stored = {}) {
   const elements = new Map(markupValues(markup, 'id').map(id => [id, new Element()]));
   const tabs = ['board','system','result'].map(name => { const element = elements.get('tab-' + name); element.dataset.tab = name; return element; });
   const dialogs = ['create','hint','confirm'].map(name => elements.get(name + '-dialog'));
@@ -81,11 +81,12 @@ function harness(handler, selected = 'A', markup = html) {
     getEdgeDetails() { return null; }
     destroy() {}
   }
-  const window = {XLoomAPI:{Client:FakeClient,RequestScope},XLoomGraph:FakeGraph,XLoomData:{...data,buildLogs(state,events,runs) { projections.push({state,events,runs}); return data.buildLogs(state,events,runs); }},addEventListener() {}};
-  const context = {window,document,location:{search:'?project=' + selected},localStorage:{getItem(){},setItem(){},removeItem(){}},URLSearchParams,AbortController,innerWidth:1400,innerHeight:900,
+  const window = {PwnMeshAPI:{Client:FakeClient,RequestScope},PwnMeshGraph:FakeGraph,PwnMeshData:{...data,buildLogs(state,events,runs) { projections.push({state,events,runs}); return data.buildLogs(state,events,runs); }},addEventListener() {}};
+  const storage = new Map(Object.entries(stored));
+  const context = {window,document,location:{search:'?project=' + selected},localStorage:{getItem:key => storage.get(key),setItem:(key,value) => storage.set(key,value),removeItem:key => storage.delete(key)},URLSearchParams,AbortController,innerWidth:1400,innerHeight:900,
     setTimeout(fn,ms) { timers.set(++timerID,{fn,ms}); return timerID; }, clearTimeout(id) { timers.delete(id); }, FormData:class { get() { return 'ctf'; } }, console};
   vm.runInNewContext(app,context,{filename:'app.js'});
-  return {elements,calls,projections,displayed,timers,graph,fireTimer:async ms => { const entry = [...timers].find(([,value]) => value.ms === ms); assert.ok(entry, 'scheduled timer ' + ms); timers.delete(entry[0]); await entry[1].fn(); await settle(); },
+  return {elements,calls,projections,displayed,timers,graph,storage,fireTimer:async ms => { const entry = [...timers].find(([,value]) => value.ms === ms); assert.ok(entry, 'scheduled timer ' + ms); timers.delete(entry[0]); await entry[1].fn(); await settle(); },
     async select(id) { const row = elements.get('project-list').children.find(item => item.dataset?.projectId === id); assert.ok(row, 'project row ' + id); const pending = row.children[0].click(); await settle(); return pending; }};
 }
 
@@ -100,6 +101,32 @@ function standard(url, states, extra = () => undefined) {
   if (suffix === '/identity') return {id:state.graph.project.id,generation:state.graph.project.generation};
   throw new Error('unhandled ' + url);
 }
+
+test('embedded browser modules and visible identity use PwnMesh', () => {
+  assert.match(html, /<title>PwnMesh · 任务工作台<\/title>/);
+  assert.match(html, /<span>PwnMesh<small>/);
+  const mark = fs.readFileSync(path.join(__dirname, 'static/mark.svg'), 'utf8');
+  assert.deepEqual(markupValues(mark, 'aria-label', 'svg'), ['PwnMesh']);
+  const context = vm.createContext({});
+  context.window = context;
+  for (const source of markupValues(html, 'src', 'script')) {
+    if (source.endsWith('/app.js')) continue;
+    vm.runInContext(fs.readFileSync(path.join(__dirname, source), 'utf8'), context, {filename:source});
+  }
+  for (const name of ['API','Data','GraphData','Canvas','Layout','Routing','GraphView']) {
+    assert.equal(typeof context['PwnMesh' + name], 'object', 'browser module ' + name);
+  }
+  assert.equal(typeof context.PwnMeshGraph, 'function');
+  assert.throws(() => new context.PwnMeshGraph(null), /PwnMeshGraph requires a host element/);
+});
+
+test('selected project is restored and persisted in the PwnMesh storage namespace', async () => {
+  const h = harness(url => standard(url, {A:snapshot('A'), B:snapshot('B')}), '', html, {'pwnmesh.selected-project':'B'});
+  await settle();
+  assert.equal(h.elements.get('project-title').textContent, 'B');
+  await h.select('A');
+  assert.equal(h.storage.get('pwnmesh.selected-project'), 'A');
+});
 
 test('workbench and graph icons resolve to embedded symbols', () => {
   const graphSource = fs.readFileSync(path.join(__dirname, 'static/graph.js'), 'utf8');

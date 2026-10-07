@@ -2,7 +2,6 @@ package dispatcher
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http/httptest"
 	"path/filepath"
@@ -10,17 +9,16 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/server"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/server"
+	"pwnmesh/internal/worker"
 )
 
 // The scripted planner supplies the intended directions, not model quality.
 // Execute waits at a barrier so the real scheduler's limits can be checked.
 type coldStartRunner struct {
-	client         *Client
-	directions     int
+	batchProtocolRunner
 	executeStarted chan worker.Job
 	release        chan struct{}
 	mu             sync.Mutex
@@ -31,59 +29,15 @@ func (r *coldStartRunner) Run(ctx context.Context, backend config.Worker, job wo
 	r.mu.Lock()
 	r.kinds = append(r.kinds, job.Kind)
 	r.mu.Unlock()
-	data := map[string]any{}
-	switch job.Kind {
-	case "reason":
-		steps, open, facts := fixturePlanInput(job)
-		if steps == 0 {
-			directions := []any{}
-			for i := 0; i < r.directions; i++ {
-				directions = append(directions, map[string]any{"from": []string{"origin"}, "description": fmt.Sprintf("Check independent fixture %d", i)})
-			}
-			data["intents"] = directions
-		} else if open == 0 {
-			sources := []string{}
-			for _, fact := range facts {
-				if fact.ID != "origin" && fact.ID != "goal" {
-					sources = append(sources, fact.ID)
-				}
-			}
-			data["complete"] = map[string]any{"from": sources, "description": "All requested synthetic checks are supported"}
-		}
-	case "explore":
+	if job.Kind == "explore" {
 		r.executeStarted <- job
 		select {
 		case <-r.release:
 		case <-ctx.Done():
 			return worker.Result{}, ctx.Err()
 		}
-		data["description"] = "Fixture rejected unauthenticated access during the requested check"
-		if job.ResultContractVersion >= 2 {
-			lease := Lease{Run: backend.Name + "@" + job.RunID, Kind: job.Kind, Intent: job.Intent.ID}
-			payload := map[string]any{
-				"description": data["description"], "scope": job.Intent.Description,
-				"observed_at": time.Now().UTC().Format(time.RFC3339),
-				"evidence":    []board.EvidenceRef{{RunID: job.RunID, Path: "observations.txt", Excerpt: "HTTP 401"}},
-			}
-			var receipt board.StateActionResult
-			if err := r.client.Do(ctx, "POST", projectPath(job.Graph.Project.ID)+"/state/actions", map[string]any{"op": "fact", "idempotency_key": job.RunID + ":observation", "payload": payload}, &receipt, &lease); err != nil {
-				return worker.Result{}, err
-			}
-			data = map[string]any{"fact_id": receipt.ID}
-		}
-	default:
-		return worker.Result{}, fmt.Errorf("unexpected task kind %s", job.Kind)
 	}
-	response := map[string]any{"accepted": true, "data": data}
-	if job.Kind == "explore" {
-		response["outcome"] = "completed"
-	}
-	raw, err := json.Marshal(response)
-	result := worker.Result{Status: "success", Type: "result", Text: string(raw)}
-	if job.Decision != nil {
-		result.StateVersion = job.Decision.StateVersion
-	}
-	return result, err
+	return r.batchProtocolRunner.Run(ctx, backend, job)
 }
 func (*coldStartRunner) Cleanup(context.Context, string, string) error { return nil }
 func (*coldStartRunner) Projects(context.Context) ([]string, error)    { return nil, nil }
@@ -98,23 +52,22 @@ func TestNewProjectsStartWithDecideAndRespectExecuteLimits(t *testing.T) {
 			defer store.Close()
 			httpServer := httptest.NewServer(server.New(store))
 			defer httpServer.Close()
-			runner := &coldStartRunner{directions: directions, executeStarted: make(chan worker.Job, 8), release: make(chan struct{})}
+			runner := &coldStartRunner{batchProtocolRunner: batchProtocolRunner{directions: directions}, executeStarted: make(chan worker.Job, 8), release: make(chan struct{})}
 			cfg := config.Config{
 				Server:    httpServer.URL,
-				Runtime:   config.Runtime{Interval: 1, MaxWorkers: 2, MaxProjects: 1, MaxProjectWorkers: 2, HealthTimeout: 5, HealthMode: "disabled"},
+				Runtime:   config.Runtime{Interval: 1, MaxWorkers: 3, MaxProjects: 1, MaxProjectWorkers: 3, HealthTimeout: 5, HealthMode: "disabled"},
 				Tasks:     config.Tasks{Reason: config.Task{MaxIntents: 3}, Explore: config.Task{ConcludeTimeout: 60}},
 				Container: config.Container{Image: "fixture", Network: "bridge", CompletedAction: "stop"},
-				Workers:   []config.Worker{{Name: "fixture", Type: "mock", TaskTypes: []string{"reason", "explore"}, MaxRunning: 2}},
+				Workers:   []config.Worker{{Name: "fixture", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 3, Env: map[string]string{"ANTHROPIC_BASE_URL": "http://unused.invalid", "ANTHROPIC_AUTH_TOKEN": "fixture", "ANTHROPIC_MODEL": "fixture"}}},
 			}
 			if err = cfg.Validate(); err != nil {
 				t.Fatal(err)
 			}
 			scheduler := New(cfg, runner)
-			runner.client = scheduler.Client
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer func() { cancel(); scheduler.wg.Wait() }()
 			var graph board.Graph
-			if err = scheduler.Client.Do(ctx, "POST", "/projects", map[string]any{"title": "Cold start", "origin": "Synthetic inputs", "goal": "Check all requested fixtures", "bootstrap_enabled": true}, &graph, nil); err != nil {
+			if err = scheduler.Client.Do(ctx, "POST", "/projects", map[string]any{"title": "Cold start", "origin": "Synthetic inputs", "goal": "Check all requested fixtures"}, &graph, nil); err != nil {
 				t.Fatal(err)
 			}
 			if graph.Project.Bootstrap {

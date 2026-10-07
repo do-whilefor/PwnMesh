@@ -22,7 +22,7 @@ func TestEvidenceResultRequiresOneSupportedAnchor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			output := `{"accepted":true,"outcome":"completed","data":` + tc.data + `}`
 			for _, conclude := range []bool{false, true} {
-				got, err := ParseWithPolicy(output, "explore", conclude, 1, 3, Policy{Version: 2})
+				got, err := ParseWithPolicy(output, "explore", conclude, 1, 3, Policy{Version: 2, GraphRPC: true})
 				if (err == nil) != tc.valid {
 					t.Fatalf("result=%+v error=%v", got, err)
 				}
@@ -31,24 +31,5 @@ func TestEvidenceResultRequiresOneSupportedAnchor(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestEvidenceBootstrapRetainsProjectCompletionBoundary(t *testing.T) {
-	output := `{"accepted":true,"outcome":"completed","data":{"fact_id":"f001","complete":{"description":"All requirements verified"}}}`
-	for _, conclude := range []bool{false, true} {
-		got, err := ParseWithPolicy(output, "bootstrap", conclude, 1, 3, Policy{Version: 2})
-		if err != nil || got.FactID != "f001" || (got.Kind == "complete") == conclude {
-			t.Fatalf("result=%+v error=%v", got, err)
-		}
-	}
-	for _, output := range []string{
-		`{"accepted":true,"outcome":"continue","reason":"remaining check"}`,
-		`{"accepted":true,"outcome":"incomplete","reason":"missing evidence"}`,
-	} {
-		got, err := ParseWithPolicy(output, "explore", false, 1, 3, Policy{Version: 2})
-		if err != nil || got.FactID != "" || len(got.FactPayload) != 0 {
-			t.Fatalf("noncompletion acquired facts: %+v %v", got, err)
-		}
 	}
 }

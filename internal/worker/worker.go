@@ -10,13 +10,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/process"
 	"strconv"
-	"strings"
 	"time"
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/process"
-	"xloom/internal/provider"
 )
 
 type Options struct {
@@ -32,9 +31,13 @@ type Options struct {
 	GraphVersion        *string
 	ReplanShadow        bool
 	decision            *decisionDraft
+	curation            *curationCommit
+	stepFinish          *stepFinish
 	decisionEmit        agent.Emit
 	decisionConflict    *string
 	graphRequest        func(context.Context, GraphRequest) (string, error)
+	graphDeadline       time.Time
+	graphProvider       func(string) (agent.Provider, error)
 }
 
 func Execute(ctx context.Context, jobPath string, output io.Writer) error {
@@ -50,9 +53,25 @@ func Execute(ctx context.Context, jobPath string, output io.Writer) error {
 	return err
 }
 
-// Run persists tool calls before executing their side effects. A task budget
+func validateWorkerProtocol(j Job) error {
+	if j.Graph.Project.OrchestrationVersion != 1 || j.ResultContractVersion != 2 || !j.GraphRPC {
+		return errors.New("worker requires orchestration version 1 with graph RPC and result protocol 2")
+	}
+	if j.WorkerType != "" && j.WorkerType != "go" {
+		return errors.New("worker requires the go backend")
+	}
+	if j.Kind != "reason" && j.Kind != "curate" && j.Kind != "explore" {
+		return errors.New("invalid job kind")
+	}
+	if j.Kind == "reason" && (j.Decision == nil || j.Decision.Version != 2) {
+		return errors.New("reason requires decision protocol 2")
+	}
+	return nil
+}
+
+// runSession persists tool calls before executing their side effects. A task budget
 // requests conclusion only at a settled turn; cancellation never restarts it.
-func Run(parent context.Context, j Job, o Options) (Result, error) {
+func runSession(parent context.Context, j Job, o Options) (Result, error) {
 	if err := parent.Err(); err != nil {
 		return Result{}, err
 	}
@@ -62,16 +81,29 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 	if j.PreviousRunID == j.RunID || j.Graph.Project.ID == "" {
 		return Result{}, errors.New("job requires a project and a distinct previous_run_id")
 	}
-	if j.Kind != "bootstrap" && j.Kind != "reason" && j.Kind != "explore" {
-		return Result{}, errors.New("invalid job kind")
+	if err := validateWorkerProtocol(j); err != nil {
+		return Result{}, err
 	}
-	if j.Kind != "reason" && j.Intent == nil {
+	if j.Repair != nil {
+		if j.Kind != "explore" {
+			return Result{}, errors.New("repair requires an orchestration execute job with evidence protocol 2")
+		}
+		if err := artifactcheck.Validate(*j.Repair); err != nil {
+			return Result{}, err
+		}
+	}
+	if j.Kind == "curate" {
+		if err := validateCuratorInput(j); err != nil {
+			return Result{}, err
+		}
+	}
+	if !controlJob(j) && j.Intent == nil {
 		return Result{}, errors.New("job requires an intent")
 	}
 	if j.Budget.Timeout < 0 || j.Budget.ConcludeTimeout < 0 {
 		return Result{}, errors.New("task budgets must not be negative")
 	}
-	if j.Kind != "reason" && j.Budget.ConcludeTimeout <= 0 {
+	if !controlJob(j) && j.Budget.ConcludeTimeout <= 0 {
 		return Result{}, errors.New("conclude timeout must be positive")
 	}
 	if o.RunDir == "" || j.Workspace == "" {
@@ -145,6 +177,9 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 	if j.Kind == "reason" && j.Decision != nil {
 		state.GraphVersion = j.Decision.StateVersion
 	}
+	if j.Kind == "curate" {
+		state.GraphVersion = j.curationVersion()
+	}
 	if j.Budget.Timeout > 0 {
 		state.ExecutionDeadline = state.StartedAt.Add(time.Duration(j.Budget.Timeout) * time.Second)
 	}
@@ -176,10 +211,6 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 	enc := json.NewEncoder(o.Output)
 	var logErr error
 	emit := func(e agent.Event) {
-		if e.Type == "tool_end" && e.Error == "" {
-			// The next settled tool-result save makes this progress durable.
-			state.ContinuationCount = 0
-		}
 		if state.Repairing && e.Type == "message_end" && e.Message != nil && e.Message.Role == "assistant" {
 			state.RepairPending = false
 		}
@@ -198,6 +229,14 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		}
 		before := state
 		state.History = history
+		progress, err := state.ToolProgress.settle(history)
+		if err != nil {
+			state = before
+			return err
+		}
+		if progress {
+			state.ContinuationCount = 0
+		}
 		if l != nil {
 			state.TaskPrompt = l.TaskPrompt
 			state.ConclusionPrompt = l.ConclusionPrompt
@@ -218,6 +257,14 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 			return Result{}, context.Canceled
 		}
 		r = checkedResult(j, r)
+		if j.Repair != nil && r.Status == "success" {
+			prepared, checkErr := finishRepair(ctx, j, o.RunDir, r, state.RepairCheck, o.Now())
+			if checkErr != nil {
+				r.Status, r.FailureKind, r.Error = "failed", "repair_acceptance", checkErr.Error()
+			} else {
+				r = prepared
+			}
+		}
 		if r.Status == "success" {
 			prepared, err := prepareFinalEvidence(ctx, j, o.RunDir, r, state.ConclusionEvidence)
 			if err != nil {
@@ -230,9 +277,12 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 			r.FailureKind = "execution"
 		}
 		r.StateVersion = state.GraphVersion
-		if j.Kind == "reason" {
+		if controlJob(j) {
 			metrics := journal.metrics.finish(j, r, state.StartedAt, o.Now())
 			metrics.Replan = state.Replan
+			if o.curation != nil && o.curation.committed {
+				metrics.Committed, metrics.Outcome = true, "curation_committed"
+			}
 			r.Metrics = &metrics
 		}
 		if err := journal.append(r); err != nil {
@@ -244,12 +294,39 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		}
 		return r, enc.Encode(r)
 	}
+	if j.Repair != nil {
+		check, _, checkErr := inspectRepair(ctx, j)
+		if checkErr != nil {
+			return finish(Result{Type: "result", Status: "failed", FailureKind: "repair_check", Error: checkErr.Error()})
+		}
+		// A resumed successful result can only reuse its exact inspected bytes.
+		if state.Result != nil && state.Result.Status == "success" && state.Result.RepairCheck != nil && state.Result.RepairCheck.SHA256 != check.SHA256 {
+			return finish(Result{Type: "result", Status: "failed", FailureKind: "repair_stale", Error: "repair target changed after acceptance; main Agent must reassess", RepairCheck: &check})
+		}
+		if state.RepairCheck == nil {
+			state.RepairCheck = &check
+		}
+		if check.Outcome == "stale" {
+			return finish(Result{Type: "result", Status: "failed", FailureKind: "repair_stale", Error: "repair target SHA-256 changed and required checks still fail; main Agent must reassess", RepairCheck: &check})
+		}
+		if check.Satisfied && (state.Result == nil || state.Result.Retryable) {
+			// Preserve the first execution decision across infrastructure recovery.
+			// A prior model/tool run that fixed the target is never relabeled no-op.
+			r, err := finishRepair(ctx, j, o.RunDir, Result{}, state.RepairCheck, o.Now())
+			if err != nil {
+				return finish(Result{Type: "result", Status: "failed", FailureKind: "repair_acceptance", Error: err.Error()})
+			}
+			return finish(r)
+		}
+	}
 	infrastructureResume := false
+	resumeFailureCause := ""
 	if state.Result != nil {
 		last, ok := lastAssistant(state.History)
 		parsed, parseErr := parseOutput(j, state.Result.Conclude, state.Result.Text)
 		if state.Result.Retryable {
 			infrastructureResume = true
+			resumeFailureCause = infrastructureCauseKind(state.Result.FailureKind)
 			state.Result = nil
 		} else if state.Result.Status == "success" && (parseErr != nil || parsed.Outcome == "continue" || (ok && truncated(last))) {
 			if !ok {
@@ -264,7 +341,7 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 	}
 	if resuming {
 		if state.RecoveryCount >= maxRunRecoveries {
-			return finish(Result{Type: "result", Status: "failed", Conclude: state.Concluding, FailureKind: "recovery_exhausted", Error: "same-run infrastructure recovery exhausted after 2 attempts"})
+			return finish(Result{Type: "result", Status: "failed", Conclude: state.Concluding, FailureKind: "recovery_exhausted", FailureCause: resumeFailureCause, Error: "same-run infrastructure recovery exhausted after 2 attempts"})
 		}
 		state.RecoveryCount++
 		if state.ContextCheckpoint == nil && (journal.lastSequence > 0 || journal.lastCompaction > 0) {
@@ -282,26 +359,41 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 	if err := save(state.History); err != nil {
 		return Result{}, err
 	}
-	if j.WorkerType == "mock" {
-		return finish(mock(j, o.RunDir))
-	}
 	if o.Provider == nil {
-		p := &provider.Anthropic{BaseURL: os.Getenv("ANTHROPIC_BASE_URL"), Token: os.Getenv("ANTHROPIC_AUTH_TOKEN"), Model: os.Getenv("ANTHROPIC_MODEL"), MaxTokens: envInt("XLOOM_MAX_OUTPUT_TOKENS", provider.DefaultMaxTokens), ReasoningEffort: os.Getenv("XLOOM_REASONING_EFFORT"), Timeout: time.Duration(envInt("XLOOM_REQUEST_TIMEOUT", 180)) * time.Second}
-		p.SessionID = j.RunID
-		if p.Model == "" {
-			p.Model = os.Getenv("ANTHROPIC_DEFAULT_FABLE_MODEL")
-		}
-		if strings.TrimSpace(p.Token) == "" {
-			return Result{}, errors.New("ANTHROPIC_AUTH_TOKEN is required")
+		p, err := modelForJob(j)
+		if err != nil {
+			return Result{}, err
 		}
 		o.Provider = p
 	}
 	o.GraphVersion = &state.GraphVersion
+	o.graphDeadline = state.ExecutionDeadline
 	o.decisionConflict = &state.DecisionConflict
 	if err := ConfigureRuntimeTools(j, &o); err != nil {
 		return Result{}, err
 	}
+	if o.stepFinish != nil {
+		if err := o.stepFinish.recover(ctx); err != nil {
+			return Result{}, err
+		}
+		if text, done := o.stepFinish.result(); done {
+			return finish(Result{Type: "result", Status: "success", Text: text})
+		}
+	}
+	if o.curation != nil {
+		if _, err := o.curation.recover(ctx); err != nil {
+			return Result{}, err
+		}
+		if o.curation.committed {
+			return finish(Result{Type: "result", Status: "success", Text: committedCurationText})
+		}
+		state.Repairing, state.RepairPending = false, false
+		state.RepairPrompt = ""
+	}
 	if o.decision != nil {
+		if orchestrationJob(j) && j.Decision != nil {
+			o.decision.assessment = j.Decision.CompletionAssessment
+		}
 		if _, err := o.decision.recover(ctx); err != nil {
 			return Result{}, err
 		}
@@ -309,7 +401,11 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 			return finish(Result{Type: "result", Status: "success", Text: committedDecisionText})
 		}
 		if state.DecisionConflict != "" {
-			return finish(Result{Type: "result", Status: "failed", FailureKind: "state_changed", Error: state.DecisionConflict})
+			// Older sessions persisted a terminal planner conflict. The receipt
+			// above is authoritative; absent a commit, discard its private draft
+			// and reread current evidence under the original deadline.
+			o.decision.invalidate()
+			state.DecisionConflict = ""
 		}
 		if resuming {
 			o.decision.invalidate()
@@ -321,19 +417,26 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		state.RepairPrompt = ""
 	}
 	if o.ContextBytes <= 0 {
-		o.ContextBytes = envInt("XLOOM_CONTEXT_BYTES", DefaultContextBytes)
+		o.ContextBytes = envInt("PWNMESH_CONTEXT_BYTES", DefaultContextBytes)
 	}
 	if o.ContextTokens <= 0 {
-		o.ContextTokens = envInt("XLOOM_CONTEXT_TOKENS", DefaultContextTokens)
+		o.ContextTokens = envInt("PWNMESH_CONTEXT_TOKENS", DefaultContextTokens)
 	}
 	if o.ContextTargetTokens <= 0 {
-		o.ContextTargetTokens = envInt("XLOOM_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
+		o.ContextTargetTokens = envInt("PWNMESH_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
 	}
 	l = &agent.Loop{Provider: o.Provider, Tools: o.Tools, History: state.History, Concluding: state.Concluding, Repairing: state.Repairing, RepairPrompt: state.RepairPrompt, Emit: emit, Checkpoint: state.ContextCheckpoint, SaveState: func(history []agent.Message, _ *agent.ContextCheckpoint) error {
 		return save(history)
 	}, ContextBytes: o.ContextBytes, ContextTokens: o.ContextTokens, ContextTargetTokens: o.ContextTargetTokens, ObserveRequests: true, TaskPrompt: state.TaskPrompt, ConclusionPrompt: state.ConclusionPrompt, ContextData: state.ExecuteUpdates.contextData()}
 	if o.decision != nil {
 		l.StopResult = o.decision.result
+	}
+	if o.curation != nil {
+		l.StopResult = o.curation.result
+	}
+	if o.stepFinish != nil {
+		l.StopResult = o.stepFinish.result
+		l.StopResultTools = []string{"finish_step"}
 	}
 	var endCancel context.CancelFunc = func() {}
 	defer func() { endCancel() }()
@@ -414,7 +517,7 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 			prompt = l.ConclusionPrompt
 		}
 	}
-	if j.Kind == "reason" && (j.Budget.Timeout > 0 || !state.ReasonDeadline.IsZero()) {
+	if controlJob(j) && (j.Budget.Timeout > 0 || !state.ReasonDeadline.IsZero()) {
 		if state.ReasonDeadline.IsZero() {
 			state.ReasonDeadline = state.ExecutionDeadline
 		}
@@ -425,7 +528,7 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		phaseCtx = reasonCtx
 	}
 	shouldConclude := func() bool {
-		if j.Kind == "reason" || l.Concluding {
+		if controlJob(j) || l.Concluding {
 			return false
 		}
 		select {
@@ -436,6 +539,11 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		return !state.ExecutionDeadline.IsZero() && !o.Now().Before(state.ExecutionDeadline)
 	}
 	l.BeforeRequest = func(turnCtx context.Context, loop *agent.Loop) (context.Context, error) {
+		if !loop.Concluding && !loop.Repairing && !shouldConclude() {
+			if err := state.ToolProgress.problem(); err != nil {
+				return nil, err
+			}
+		}
 		if state.DecisionConflict != "" {
 			return nil, errors.New(state.DecisionConflict)
 		}
@@ -524,7 +632,10 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 			return "", err
 		}
 		if o.decision != nil {
-			return "This Decide has no committed receipt. Continue planning in this same run with read_graph and graph_action, then commit the complete draft (including an empty plan). Final JSON cannot publish a plan. For truncated tool calls, reissue complete arguments. Tools remain available and the original deadline still applies. If the task must be declined, return accepted:false with its reason.", nil
+			return "This Decide has no committed receipt. Continue planning with read_graph and graph_action, then commit the draft; an empty plan requires a valid open or running Step. Final JSON cannot publish a plan. For truncated tool calls, reissue complete arguments. The original deadline still applies. If unable to proceed, return accepted:false with a reason.", nil
+		}
+		if o.curation != nil {
+			return "This curation has no committed receipt. Read the supplied evidence and submit graph_action curate. Final JSON cannot commit curation. The original input boundary and deadline still apply. If unable to proceed, return accepted:false with a reason.", nil
 		}
 		return "Continue the unfinished work in this same execution. Tools are enabled. The original task deadline still applies. Use completed only when the assigned task is finished; otherwise continue working or report incomplete with the remaining work and blocker.", nil
 	}
@@ -536,7 +647,19 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 			return nil, "", errors.New(state.DecisionConflict)
 		}
 		hasCalls := hasToolCalls(m)
-		if o.decision != nil {
+		if hasCalls && !l.Concluding && !l.Repairing && !truncated(m) && !shouldConclude() {
+			if err := state.ToolProgress.problem(); err != nil {
+				return nil, "", err
+			}
+			if state.ToolProgress.needsCorrection() {
+				state.ToolProgress.Warned = true
+				if err := save(l.History); err != nil {
+					return nil, "", err
+				}
+				return turnCtx, "Recent tools have repeated unchanged observations or kept failing. Reassess the blocker and change the approach; do not repeat the same unsuccessful call or unchanged read without a reason to expect new information. If unable to proceed, Reason and Curate return accepted:false with a reason; execution tasks report incomplete with the blocker. The original task and budgets still apply.", nil
+			}
+		}
+		if o.decision != nil || o.curation != nil {
 			if !truncated(m) {
 				if hasCalls {
 					return turnCtx, "", nil
@@ -550,7 +673,7 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		}
 		problem := outputProblem(j, l.Concluding, m)
 		needsResult := !hasCalls || truncated(m) || l.Concluding || l.Repairing
-		if !l.Concluding && j.Kind != "reason" && (shouldConclude() || (j.ResultContractVersion == 0 && needsResult && problem != nil)) {
+		if !l.Concluding && !controlJob(j) && shouldConclude() {
 			next, err := startConclusion()
 			if err != nil {
 				return nil, "", err
@@ -600,7 +723,7 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 	if j.Kind == "reason" {
 		if state.Replan != nil && state.Replan.Status == "running" {
 			state.Replan.Status, state.Replan.Fallback = "interrupted", "decide"
-		} else if !resuming && (o.ReplanShadow || os.Getenv("XLOOM_REPLAN_SHADOW") == "1") {
+		} else if !resuming && (o.ReplanShadow || config.Getenv("PWNMESH_REPLAN_SHADOW") == "1") {
 			state.Replan = &ReplanObservation{Mode: "shadow", Status: "skipped", Fallback: "decide"}
 			if j.Decision != nil {
 				state.Replan.StateVersion, state.Replan.Generation = j.Decision.StateVersion, j.Decision.Generation
@@ -668,7 +791,7 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		if err := l.RepairHistory(); err != nil {
 			return Result{}, err
 		}
-		if err := l.AppendInstruction("The uncommitted decision draft was discarded on recovery. Read the current overview and affected facts, restage the whole plan and commit. Old $aliases and draft receipts are no longer valid."); err != nil {
+		if err := l.AppendInstruction("The uncommitted decision draft was discarded on recovery. Read the current overview and affected facts, then restage the whole plan. Old $aliases, draft receipts and completion_assessment reuse are invalid. Completion now requires preview and review of completion_review in a subsequent model turn before commit; ordinary plans can commit directly."); err != nil {
 			return Result{}, err
 		}
 	}
@@ -677,7 +800,7 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		return Result{}, err
 	}
 	r := Result{Type: "result", Status: "success", Text: text, Conclude: l.Concluding}
-	if runErr == nil && !(o.decision != nil && o.decision.committed) {
+	if runErr == nil && !(o.decision != nil && o.decision.committed) && !(o.curation != nil && o.curation.committed) && !(o.stepFinish != nil && o.stepFinish.text != "") {
 		if last, ok := lastAssistant(l.History); ok {
 			if problem := outputProblem(j, l.Concluding, last); problem != nil {
 				runErr = problem
@@ -690,16 +813,20 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 		r.Status = "failed"
 		r.Error = runErr.Error()
 		r.FailureKind, r.Retryable = classifyFailure(runErr, phaseCtx)
+		if r.FailureKind == "budget_exhausted" {
+			r.FailureCause = infrastructureFailureCause(runErr)
+		}
 		if r.Retryable && state.RecoveryCount >= maxRunRecoveries {
 			r.Retryable = false
+			r.FailureCause = infrastructureCauseKind(r.FailureKind)
 			r.FailureKind = "recovery_exhausted"
 		}
 	}
-	if state.DecisionConflict != "" && o.decision != nil && !o.decision.committed {
-		// A rejected transaction has no uncertain writes to recover. Let the
-		// scheduler coalesce changed input into a new run with its own budget,
-		// instead of spending this run's remainder on repeated model refreshes.
+	if state.DecisionConflict != "" && o.curation != nil && !o.curation.committed {
+		// Curate owns an immutable boundary and cannot refresh its evidence in
+		// place. Batch planners instead discard and rebuild their private draft.
 		r.Status, r.FailureKind, r.Error, r.Retryable = "failed", "state_changed", state.DecisionConflict, false
+		r.FailureCause = ""
 	}
 	if logErr != nil {
 		return r, logErr
@@ -708,59 +835,9 @@ func Run(parent context.Context, j Job, o Options) (Result, error) {
 }
 
 func envInt(key string, fallback int) int {
-	n, err := strconv.Atoi(os.Getenv(key))
+	n, err := strconv.Atoi(config.Getenv(key))
 	if err != nil || n <= 0 {
 		return fallback
 	}
 	return n
-}
-func mock(j Job, runDir string) Result {
-	if configured := os.Getenv("XLOOM_MOCK_" + strings.ToUpper(j.Kind)); configured != "" {
-		return Result{Type: "result", Status: "success", Text: configured}
-	}
-	data := map[string]any{}
-	switch j.Kind {
-	case "bootstrap":
-		data["fact"] = map[string]string{"description": "Mock confirmed result"}
-		data["complete"] = map[string]string{"description": "Mock goal reached"}
-	case "explore":
-		data["description"] = "Mock exploration confirmed"
-	case "reason":
-		facts := j.Graph.Facts
-		if j.InputSnapshot != nil && j.Decision != nil {
-			var view struct {
-				Facts []board.Fact `json:"fact_records"`
-			}
-			_ = json.Unmarshal(j.Decision.View, &view)
-			facts = []board.Fact{{ID: "origin"}, {ID: "goal"}}
-			for _, fact := range view.Facts {
-				if fact.ID != "origin" && fact.ID != "goal" {
-					facts = append(facts, fact)
-				}
-			}
-		}
-		if len(facts) > 2 {
-			data["complete"] = map[string]any{"from": []string{facts[len(facts)-1].ID}, "description": "Mock goal reached"}
-		} else {
-			data["intents"] = []any{map[string]any{"from": []string{"origin"}, "description": "Mock exploration"}}
-		}
-	}
-	response := map[string]any{"accepted": true, "data": data}
-	if j.ResultContractVersion >= 1 && j.Kind != "reason" {
-		response["outcome"] = "completed"
-	}
-	if j.ResultContractVersion >= 2 && j.Kind != "reason" {
-		name := filepath.Join(runDir, "output-mock.txt")
-		if err := retainEvidenceFile(context.Background(), name, []byte("Synthetic Mock fixture observation: assigned check completed.\n")); err != nil {
-			return Result{Type: "result", Status: "failed", FailureKind: "fixture", Error: err.Error()}
-		}
-		delete(data, "description")
-		info, err := os.Stat(name)
-		if err != nil {
-			return Result{Type: "result", Status: "failed", FailureKind: "fixture", Error: err.Error()}
-		}
-		data["fact"] = map[string]any{"description": "Synthetic Mock fixture check completed", "scope": "local synthetic fixture", "observed_at": info.ModTime().UTC().Format(time.RFC3339), "evidence": []map[string]string{{"path": name}}}
-	}
-	raw, _ := json.Marshal(response)
-	return Result{Type: "result", Status: "success", Text: string(raw)}
 }

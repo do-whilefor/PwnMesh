@@ -48,6 +48,12 @@ func (t *Tx) CheckExecution(g Graph, fence ExecutionFence) error {
 	if revoked {
 		return Err(409, "Execution was revoked")
 	}
+	if fence.Lease == "curate" {
+		if g.Project.OrchestrationVersion != 1 || fence.Intent != "" || g.Project.Curator == nil || g.Project.Curator.Worker != fence.Run {
+			return Err(409, "Curation execution no longer owns its lease")
+		}
+		return nil
+	}
 	if fence.Lease == "reason" {
 		if g.Project.Reason == nil || g.Project.Reason.Worker != fence.Run {
 			return Err(409, "Reason execution no longer owns its lease")
@@ -85,6 +91,7 @@ func (t *Tx) SetStatus(g *Graph, status string) error {
 			return err
 		}
 		g.Project.Reason = nil
+		g.Project.Curator = nil
 		for n := range g.Intents {
 			if g.Intents[n].ConcludedAt == nil {
 				g.Intents[n].Worker = nil

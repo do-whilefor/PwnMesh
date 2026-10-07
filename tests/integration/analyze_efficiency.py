@@ -5,7 +5,9 @@ import argparse
 from collections import Counter, defaultdict
 import hashlib
 import json
+import math
 from pathlib import Path
+from statistics import median
 from urllib.parse import urlsplit
 
 import analyze_live_contention as base
@@ -164,7 +166,7 @@ def tool_analysis(runs, output):
     groups, fingerprints = defaultdict(list), []
     missing_inputs, repeated, repeated_successful = 0, 0, 0
     for run in runs:
-        signatures = tool_signatures(output / "workspace" / ".xloom" / "runs" / run["run_id"] / "events.jsonl")
+        signatures = tool_signatures(base.run_events_path(output, run["run_id"]))
         seen, successful = set(), set()
         for tool in run["tools"]:
             name = tool.get("name") if tool.get("name") in TOOLS else "unknown"
@@ -206,7 +208,7 @@ def execution_analysis(rows, runs, collected):
                  "status": row.get("status"),
                  "failure_kind": (row.get("result") or {}).get("failure_kind")}
                 for row in rows]
-    stale = [row for row in selected if row["kind"] == "reason" and row["status"] == "failed"
+    stale = [row for row in selected if row["kind"] in {"reason", "curate"} and row["status"] == "failed"
              and row["failure_kind"] == "state_changed"]
     stale_ids = {row["run_id"] for row in stale}
     matched = [run for run in runs if run["run_id"] in stale_ids]
@@ -218,7 +220,7 @@ def execution_analysis(rows, runs, collected):
             "state_changed_decision_model_duration_ms": sum(call.get("duration_ms") or 0 for call in calls) if collected else None,
             "state_changed_decision_usage": base.usage_totals(calls) if collected else None,
             "state_changed_decisions_without_run_evidence": len(stale_ids - {run["run_id"] for run in matched}) if collected else None,
-            "basis": "executions.json terminal reason results with status=failed and failure_kind=state_changed; separate from observed tool conflicts. Matched run model calls/usage are subsets of existing totals, never additional cost. Cancellation does not prove all prior work was useless."}
+            "basis": "executions.json terminal reason/curate results with status=failed and failure_kind=state_changed; separate from observed tool conflicts. Matched run model calls/usage are subsets of existing totals, never additional cost. Cancellation does not prove all prior work was useless."}
 
 
 def apply_time_scope(report, manifest, output):
@@ -310,7 +312,7 @@ def render(report):
     lines = [base_text, "## 输入组成与黑板 API", "",
              execution_text + " 此处独立于工具返回的 state_changed 计数；对应调用和 usage 已包含在总量中，不可再相加，也不证明这些 run 的全部工作无用。",
              "HTTP 失败响应中未返回的 usage 仍为未知；代理固定数值字段中的 0 不能证明 HTTP 402 等失败尝试免费。",
-             f"验证范围：`{report['validation_scope']}`。结构或报告交付检查不证明漏洞覆盖完整、发现语义正确或任务质量达标。耗时也包含靶场/环境排查与模型决策成本，不能全部归因于 X-Loom 本体。",
+             f"验证范围：`{report['validation_scope']}`。结构或报告交付检查不证明漏洞覆盖完整、发现语义正确或任务质量达标。耗时也包含靶场/环境排查与模型决策成本，不能全部归因于 PwnMesh 本体。",
              "输入组成全部按序列化 UTF-8 JSON 字节统计，不是 token；消息块、messages 和 body 为嵌套口径，不能相加。历史重传可能命中缓存，不能直接算作浪费。",
              f"有组成数据的 HTTP 请求：{comp['measured_requests']} / {comp['requests']}；相同 run 历史消息重传占 messages：{ratio:.1%}。" if ratio is not None else "请求输入组成或历史重传比例未知。",
              "", "| 输入部分 | 累计字节 |", "| --- | ---: |"]
@@ -325,10 +327,149 @@ def render(report):
     return "\n".join(lines)
 
 
+COMPARISON_KEYS = ("comparison_protocol_version", "workload_sha256", "execution_knobs_sha256", "validation_contract_sha256",
+                   "model", "upstream", "reasoning_effort", "orchestration_version",
+                   "http_observation_mode", "validation_scope")
+
+
+def comparison_run(directory):
+    """Read original receipts only; a later reviewed PASS cannot replace a FAIL."""
+    directory = Path(directory).resolve()
+    manifest = base.read_json(directory / "manifest.json", {})
+    validation = base.read_json(directory / "validation.json", {})
+    # Hash frozen validator source independently of the original timing and
+    # acceptance receipts. A scope name alone cannot identify its semantics.
+    contract = base.read_json(directory / "comparison-contract.json", {})
+    controlled = {key: manifest.get(key) for key in COMPARISON_KEYS}
+    controlled["validation_contract_sha256"] = contract.get("validation_contract_sha256")
+    errors = []
+    for key in COMPARISON_KEYS:
+        value = controlled[key]
+        if value is None or value == "":
+            errors.append("missing " + key)
+    if type(manifest.get("comparison_protocol_version")) is not int or manifest["comparison_protocol_version"] != 1:
+        errors.append("unsupported comparison_protocol_version")
+    for key in ("workload_sha256", "execution_knobs_sha256", "validation_contract_sha256"):
+        value = controlled[key]
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            errors.append("invalid " + key)
+    for key in ("source_commit", "namespace", "project_id", "started"):
+        if not isinstance(manifest.get(key), str) or not manifest[key]:
+            errors.append("missing " + key)
+    if validation.get("validation_scope") != manifest.get("validation_scope"):
+        errors.append("original validation_scope does not match manifest")
+
+    def timestamp(key):
+        try:
+            return base.stamp(manifest.get(key))
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+    def duration(value):
+        return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 0 else None
+
+    accepted = (validation.get("passed") is True and validation.get("project_completed") is True
+                and validation.get("failures") == [] and manifest.get("acceptance_passed") is True)
+    # Optional host exit metadata can disqualify an otherwise successful receipt.
+    host = base.read_json(directory / "host-run.json", {})
+    if any(key in host and host[key] != 0 for key in ("exit_code", "test_exit_code")):
+        accepted = False
+    elapsed = duration(manifest.get("time_to_acceptance_seconds"))
+    started, completed, finished = (timestamp(key) for key in ("started", "completed_observed", "validation_finished"))
+    timed = (accepted and elapsed is not None and started is not None and completed is not None
+             and finished is not None and started <= completed <= finished
+             and elapsed + 0.001 >= completed - started
+             and abs(elapsed - (finished - started)) <= 0.01)
+    return {"directory": str(directory), "source_commit": manifest.get("source_commit"),
+            "identity": [manifest.get("namespace"), manifest.get("project_id"), manifest.get("started")],
+            "match": controlled,
+            "status": "PASS" if accepted else "FAIL_OR_UNVERIFIED", "acceptance_passed": accepted,
+            "time_to_acceptance_seconds": elapsed if timed else None,
+            "elapsed_to_validation_seconds": elapsed,
+            "timing_status": "measured" if timed else "unavailable" if accepted else "excluded_failed_or_unverified",
+            "failure_count": len(validation["failures"]) if isinstance(validation.get("failures"), list) else None,
+            "metadata_errors": errors}
+
+
+def compare_runs(baseline, candidate):
+    if not baseline or not candidate:
+        raise ValueError("comparison requires both baseline and candidate runs")
+    groups = {"baseline": [comparison_run(path) for path in baseline],
+              "candidate": [comparison_run(path) for path in candidate]}
+    expected = groups["baseline"][0]["match"]
+    errors, identities, directories = [], set(), set()
+    for label, rows in groups.items():
+        sources = {row["source_commit"] for row in rows}
+        if len(sources) != 1:
+            errors.append(label + ": source_commit differs within group")
+        for index, row in enumerate(rows, 1):
+            prefix = f"{label}[{index}]: "
+            errors.extend(prefix + error for error in row["metadata_errors"])
+            errors.extend(prefix + "mismatched " + key for key in COMPARISON_KEYS if row["match"][key] != expected[key])
+            identity = tuple(row["identity"])
+            if row["directory"] in directories or identity in identities:
+                errors.append(prefix + "duplicate run; copied evidence is not another sample")
+            directories.add(row["directory"])
+            identities.add(identity)
+    matched = not errors
+    summaries = {}
+    for label, rows in groups.items():
+        values = [row["time_to_acceptance_seconds"] for row in rows if row["time_to_acceptance_seconds"] is not None] if matched else []
+        summaries[label] = {"attempts": len(rows), "original_passes": sum(row["acceptance_passed"] for row in rows),
+                            "timed_passes": len(values), "median_seconds": median(values) if values else None,
+                            "min_seconds": min(values) if values else None, "max_seconds": max(values) if values else None}
+    sufficient = matched and all(summary["timed_passes"] >= 3 for summary in summaries.values())
+    before, after = (summaries[key]["median_seconds"] for key in ("baseline", "candidate"))
+    reduction = before - after if before is not None and after is not None else None
+    return {"matched": matched, "matching_errors": errors, "controlled_inputs": expected if matched else None,
+            "groups": groups, "summary": summaries, "sample_sufficient": sufficient,
+            "observed_median_reduction_seconds": reduction,
+            "observed_median_reduction_percent": 100 * reduction / before if reduction is not None else None,
+            "basis": "Original acceptance timing only, including evidence export/validation and excluding cleanup. FAIL/unverified runs remain listed and never enter successful timing statistics. Matching inputs do not prove equal environment, provider load, or semantic quality beyond the named validator. Source revisions may differ between groups, never within one group.",
+            "sample_note": "Each group has at least three timed original passes; medians/ranges describe this small sample, not project p95 or proven causality." if sufficient else "样本不足：每组至少需要 3 次有原始验收通过计时的独立运行；当前差异仅为观测，不证明稳定提速。"}
+
+
+def render_comparison(report):
+    lines = ["# PwnMesh 相同样本耗时对照", "",
+             "输入匹配：" + ("通过" if report["matched"] else "拒绝比较；不计算聚合耗时和提升比例"), "",
+             report["sample_note"], "", "| 组 | 次序 | 原始验收 | 验收秒 | 计时状态 |",
+             "| --- | ---: | --- | ---: | --- |"]
+    for label, rows in report["groups"].items():
+        for index, row in enumerate(rows, 1):
+            value = row["time_to_acceptance_seconds"]
+            lines.append(f"| {label} | {index} | {row['status']} | {value:.3f} | {row['timing_status']} |" if value is not None else f"| {label} | {index} | {row['status']} | — | {row['timing_status']} |")
+    lines += ["", "| 组 | 尝试 / 原始通过 / 有效计时 | 中位秒 | 范围秒 |", "| --- | ---: | ---: | --- |"]
+    for label, summary in report["summary"].items():
+        counts = f"{summary['attempts']} / {summary['original_passes']} / {summary['timed_passes']}"
+        if summary["median_seconds"] is None:
+            lines.append(f"| {label} | {counts} | — | — |")
+        else:
+            lines.append(f"| {label} | {counts} | {summary['median_seconds']:.3f} | {summary['min_seconds']:.3f}–{summary['max_seconds']:.3f} |")
+    if report["observed_median_reduction_percent"] is not None:
+        lines += ["", f"观测中位耗时减少 {report['observed_median_reduction_seconds']:.3f} 秒（{report['observed_median_reduction_percent']:.2f}%；负值表示变慢）。"]
+    if report["matching_errors"]:
+        lines += ["", *["- " + error for error in report["matching_errors"]]]
+    lines += ["", report["basis"], "", "各次目录、源码身份及完整匹配字段见 comparison.json。", ""]
+    return "\n".join(lines)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--baseline", action="append", type=Path, help="baseline run directory; repeat for each attempt")
+    parser.add_argument("--candidate", action="append", type=Path, help="candidate run directory; repeat for each attempt")
     args = parser.parse_args()
+    if args.baseline or args.candidate:
+        if not args.baseline or not args.candidate:
+            parser.error("--baseline and --candidate are both required for comparison")
+        report = compare_runs(args.baseline, args.candidate)
+        args.output.mkdir(parents=True, exist_ok=True)
+        (args.output / "comparison.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        (args.output / "comparison.md").write_text(render_comparison(report), encoding="utf-8")
+        print(json.dumps({"report": str(args.output / "comparison.md"), "matched": report["matched"], "sample_sufficient": report["sample_sufficient"]}))
+        if not report["matched"]:
+            raise SystemExit(2)
+        return
     report = analyze(args.output)
     (args.output / "efficiency-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     (args.output / "efficiency-report.md").write_text(render(report), encoding="utf-8")

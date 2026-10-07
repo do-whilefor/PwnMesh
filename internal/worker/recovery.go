@@ -9,8 +9,8 @@ import (
 	"net"
 	"syscall"
 
-	"xloom/internal/agent"
-	"xloom/internal/provider"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/provider"
 )
 
 // Only infrastructure failures may continue the same run. A valid declined
@@ -43,8 +43,31 @@ func classifyFailure(err error, phase context.Context) (string, bool) {
 		return "transport", true
 	}
 	var format *outputFailure
+	var progress *toolProgressFailure
+	if errors.As(err, &progress) {
+		return "tool_no_progress", false
+	}
 	if errors.As(err, &format) {
 		return "result_contract", false
 	}
 	return "execution", false
+}
+
+// Budget exhaustion alone cannot prove an infrastructure failure. Preserve a
+// typed provider cause when the run deadline interrupts a transport operation;
+// never infer retry permission from error text or an untyped phase timeout.
+func infrastructureFailureCause(err error) string {
+	var model *agent.ModelError
+	if errors.As(err, &model) {
+		return infrastructureCauseKind(string(model.Kind))
+	}
+	return ""
+}
+
+func infrastructureCauseKind(kind string) string {
+	switch kind {
+	case "transport", "rate_limit", "unavailable", "request_timeout", "transient_infrastructure":
+		return kind
+	}
+	return ""
 }

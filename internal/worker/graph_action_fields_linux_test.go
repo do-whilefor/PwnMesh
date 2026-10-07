@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
@@ -19,8 +19,8 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 		kind   string
 		fields string
 	}{
-		{"reason", "action condition description from goal_id id kind parent_id priority reason source sources target"},
-		{"explore", "claim description evidence observed_at reason replace_support scope sources status"},
+		{"reason", "action condition depends_on description dispute_id from goal_id id latest_run_id parent_id priority reason repair sources write_paths"},
+		{"explore", "claim description evidence observed_at reason scope sources status supersedes"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			opts := Options{Tools: []agent.Tool{}}
@@ -46,12 +46,12 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 				fields = append(fields, name)
 				want := "string"
 				switch name {
-				case "from", "sources", "evidence":
+				case "from", "sources", "evidence", "depends_on", "write_paths":
 					want = "array"
 				case "priority":
 					want = "integer"
-				case "replace_support":
-					want = "boolean"
+				case "repair":
+					want = "object"
 				}
 				if field.Type != want {
 					t.Errorf("%s type = %q, want %q", name, field.Type, want)
@@ -62,14 +62,16 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 				t.Fatalf("mode fields = %v, want %s", fields, tc.fields)
 			}
 			if tc.kind == "reason" {
-				if !reflect.DeepEqual(props["action"].Enum, []string{"add", "achieve", "withdraw", "abandon", "priority"}) || !strings.Contains(props["action"].Description, "Required for goal") {
+				if !reflect.DeepEqual(props["action"].Enum, []string{"add", "achieve", "withdraw", "abandon", "priority", "retry"}) {
 					t.Fatalf("missing transition discriminator guidance: %+v", props["action"])
 				}
-				if !reflect.DeepEqual(props["kind"].Enum, []string{"supersedes", "refutes", "narrows"}) {
-					t.Fatalf("relation kinds: %+v", props["kind"])
+				for _, guidance := range []string{"Only goal", "and step", "Complete uses from and description without action", "the root goal is completed only by complete"} {
+					if !strings.Contains(props["action"].Description, guidance) {
+						t.Fatalf("missing action boundary %q: %+v", guidance, props["action"])
+					}
 				}
 			} else if !reflect.DeepEqual(props["status"].Enum, []string{"candidate", "verified", "refuted"}) {
-				t.Fatalf("finding statuses: %+v", props["status"])
+				t.Fatalf("candidate statuses: %+v", props["status"])
 			}
 		})
 	}
@@ -81,14 +83,15 @@ func TestGraphActionSchemaPreservesOperationPayloads(t *testing.T) {
 		{"reason", "goal", `{"action":"achieve","id":"g001","reason":"Verified","sources":["fact001"]}`},
 		{"reason", "goal", `{"action":"withdraw","id":"g001","reason":"No longer needed"}`},
 		{"reason", "step", `{"action":"add","from":["origin"],"description":"Inspect","goal_id":"g001","priority":1000000}`},
+		{"reason", "step", `{"action":"add","from":["origin"],"description":"Write report","write_paths":["/workspace/report.json"],"depends_on":["i001"]}`},
 		{"reason", "step", `{"action":"abandon","id":"i001","reason":"Covered"}`},
 		{"reason", "step", `{"action":"priority","id":"i001","reason":"First","priority":0}`},
-		{"reason", "fact_relation", `{"kind":"supersedes","source":"fact002","target":"fact001","reason":"Corrected"}`},
+		{"reason", "curation_request", `{"sources":["fact002","fact001"],"reason":"Resolve conflicting observations"}`},
 		{"reason", "complete", `{"from":["fact002"],"description":"Verified proof"}`},
 		{"explore", "fact", `{"description":"Observed","scope":"fixture","observed_at":"2026-09-25T01:02:03Z","evidence":[{"path":"result.txt","start_line":1,"end_line":3}]}`},
-		{"explore", "finding", `{"claim":"Observed","scope":"fixture","status":"candidate"}`},
-		{"explore", "finding", `{"claim":"Observed","scope":"fixture","status":"verified","sources":["fact001"]}`},
-		{"explore", "finding", `{"claim":"Observed","scope":"fixture","status":"refuted","sources":["fact002"],"reason":"Corrected","replace_support":true,"evidence":[{"path":"retained.txt","run_id":"previous-run","excerpt":"exact text","start_line":0,"end_line":0}]}`},
+		{"explore", "candidate", `{"claim":"Observed","scope":"fixture","status":"candidate"}`},
+		{"explore", "candidate", `{"claim":"Observed","scope":"fixture","status":"verified","sources":["fact001"]}`},
+		{"explore", "candidate", `{"claim":"Observed","scope":"fixture","status":"refuted","sources":["fact002"],"reason":"Corrected","supersedes":"prior-note","evidence":[{"path":"retained.txt","run_id":"previous-run","excerpt":"exact text","start_line":0,"end_line":0}]}`},
 	} {
 		t.Run(tc.kind+"/"+tc.op+"/"+tc.payload, func(t *testing.T) {
 			job := Job{Kind: tc.kind}
@@ -117,10 +120,10 @@ func TestGraphActionSchemaRejectsMalformedScalarFields(t *testing.T) {
 		{"explore", "observed_at", `7`},
 		{"explore", "claim", `[]`},
 		{"explore", "status", `true`},
-		{"explore", "replace_support", `"true"`},
+		{"explore", "supersedes", `true`},
 	} {
 		t.Run(tc.kind+"/"+tc.field, func(t *testing.T) {
-			schema, err := json.Marshal(graphActionPayloadSchema(tc.kind))
+			schema, err := json.Marshal(orchestrationPayloadSchema(tc.kind))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -143,13 +146,13 @@ func TestGraphActionSchemaPreservesFrozenAndHistoricalEvidence(t *testing.T) {
 	var submissions []json.RawMessage
 	opts.Output = &draftTestBridge{dir: opts.RunDir, handle: func(request GraphRequest) (any, error) {
 		submissions = append(submissions, request.Action.Payload)
-		return board.StateActionResult{ID: "finding001"}, nil
+		return board.StateActionResult{ID: "candidate001"}, nil
 	}}
 	if err := ConfigureRuntimeTools(job, &opts); err != nil {
 		t.Fatal(err)
 	}
 	action := opts.Tools[1]
-	raw := json.RawMessage(`{"op":"finding","idempotency_key":"probe","payload":{"claim":"Observed","scope":"fixture","status":"verified","sources":["fact001"],"evidence":[{"path":"result.txt","start_line":2,"end_line":2},{"path":"retained.txt","run_id":"previous-run","excerpt":"exact text","start_line":0,"end_line":0}]}}`)
+	raw := json.RawMessage(`{"op":"candidate","idempotency_key":"probe","payload":{"claim":"Observed","scope":"fixture","status":"verified","sources":["fact001"],"evidence":[{"path":"result.txt","start_line":2,"end_line":2},{"path":"retained.txt","run_id":"previous-run","excerpt":"exact text","start_line":0,"end_line":0}]}}`)
 	for range 2 {
 		if err := agent.ValidateArguments(action.Schema, raw); err != nil {
 			t.Fatal(err)

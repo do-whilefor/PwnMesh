@@ -2,14 +2,17 @@ package dispatcher
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 type wakeupRunner struct {
@@ -58,9 +61,10 @@ func wakeupFixture(t *testing.T, directions int) (*Scheduler, *wakeupRunner, boa
 	fixture, _, _, graph, store := batchSchedulerFixture(t, directions)
 	// A lost wakeup takes a full minute, far beyond each bounded assertion.
 	fixture.Config.Runtime.Interval = 60
-	fixture.Config.Runtime.MaxWorkers = 3
-	fixture.Config.Runtime.MaxProjectWorkers = 3
-	fixture.Config.Workers[0].MaxRunning = 3
+	// Keep three Execute slots plus the reserved control slot.
+	fixture.Config.Runtime.MaxWorkers = 4
+	fixture.Config.Runtime.MaxProjectWorkers = 4
+	fixture.Config.Workers[0].MaxRunning = 4
 	if err := fixture.Client.Do(context.Background(), "PUT", "/settings", board.Settings{IntentTimeout: 180, ReasonTimeout: 180}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -215,4 +219,78 @@ func TestCleanupFailureDoesNotCreateImmediateRetryLoop(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	stop()
+}
+
+type committedPlanRunner struct {
+	batchProtocolRunner
+	committed chan worker.Job
+	started   chan worker.Job
+}
+
+func (r *committedPlanRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+	if job.Kind == "explore" {
+		r.started <- job
+		<-ctx.Done()
+		return worker.Result{}, ctx.Err()
+	}
+	result, err := r.batchProtocolRunner.Run(ctx, backend, job)
+	if err != nil {
+		return result, err
+	}
+	r.committed <- job
+	<-ctx.Done() // Hold final delivery after the authoritative plan commit.
+	return result, ctx.Err()
+}
+
+func TestCommittedPlanWakesExecutionBeforeFinalDelivery(t *testing.T) {
+	fixture, _, _, _ := wakeupFixture(t, 1)
+	runner := &committedPlanRunner{batchProtocolRunner: batchProtocolRunner{directions: 1}, committed: make(chan worker.Job, 2), started: make(chan worker.Job, 2)}
+	scheduler := New(fixture.Config, runner)
+	stop := runWakeupScheduler(t, scheduler)
+	if job := nextWakeupJob(t, runner.committed); job.Kind != "reason" {
+		t.Fatalf("unexpected committed role: %s", job.Kind)
+	}
+	if job := nextWakeupJob(t, runner.started); job.Kind != "explore" {
+		t.Fatalf("committed plan did not launch its authorized Step: %s", job.Kind)
+	}
+	stop()
+}
+
+func TestGraphWakeupRequiresSuccessfulChangedMutation(t *testing.T) {
+	for _, tc := range []struct {
+		name, op, result string
+		status           int
+		wake             bool
+	}{
+		{"fact", "graph_action", `{"op":"fact","revision":2}`, 200, true},
+		{"unchanged", "graph_action", `{"unchanged":true}`, 200, false},
+		{"rejected_fact", "graph_action", `{"detail":"invalid source"}`, 409, false},
+		{"plan_commit", "decision_commit", `{"committed":true,"changed_actions":1}`, 200, true},
+		{"empty_commit", "decision_commit", `{"committed":true}`, 200, false},
+		{"rejected_commit", "decision_commit", `{"detail":"state_changed"}`, 409, false},
+		{"preview", "decision_preview", `{"changed_actions":1}`, 200, false},
+		{"receipt", "decision_receipt", `{"committed":true,"changed_actions":1}`, 200, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" && r.URL.Path == "/projects/p/executions/run/identity" {
+					_ = json.NewEncoder(w).Encode(board.ExecutionSummary{ProjectID: "p", ID: "run", Namespace: "pwnmesh", Kind: "reason", Lease: "backend@run"})
+					return
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.result))
+			}))
+			defer api.Close()
+			runner := &batchProtocolRunner{}
+			scheduler := New(config.Config{Server: api.URL}, runner)
+			job := worker.Job{RunID: "run", Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p"}}}
+			_, err := runner.handler(context.Background(), job, worker.GraphRequest{Op: tc.op})
+			if (err != nil) != (tc.status != 200) {
+				t.Fatalf("unexpected response error: %v", err)
+			}
+			if got := len(scheduler.wakeup) > 0; got != tc.wake {
+				t.Fatalf("wake = %v, want %v", got, tc.wake)
+			}
+		})
+	}
 }

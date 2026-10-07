@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestRoundHistoryHTTPPreservesEvidenceAndFencesOldWorker(t *testing.T) {

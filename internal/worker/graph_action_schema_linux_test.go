@@ -3,12 +3,33 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
+
+func TestCandidateSchemaAllowsTentativeNotesAndExplicitRevisions(t *testing.T) {
+	schema, err := json.Marshal(orchestrationPayloadSchema("explore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, payload := range []string{
+		`{"claim":"The response may depend on the session","scope":"fixture","sources":["f1"],"reason":"One observed response; needs a comparison"}`,
+		`{"claim":"The response may depend on the session","scope":"fixture","status":"refuted","sources":["f2"],"reason":"A fresh comparison contradicts it","supersedes":"c1"}`,
+	} {
+		if err := agent.ValidateArguments(schema, json.RawMessage(payload)); err != nil {
+			t.Fatalf("tentative note/revision is not expressible: %v", err)
+		}
+	}
+	for _, payload := range []string{`{"supersedes":[]}`, `{"supersedes":null}`, `{"status":"certain"}`} {
+		if err := agent.ValidateArguments(schema, json.RawMessage(payload)); err == nil {
+			t.Fatalf("malformed note accepted: %s", payload)
+		}
+	}
+}
 
 func TestGraphActionRejectsMalformedCollectionsBeforeExecution(t *testing.T) {
 	for _, tc := range []struct {
@@ -17,18 +38,21 @@ func TestGraphActionRejectsMalformedCollectionsBeforeExecution(t *testing.T) {
 		{"from object", "reason", "step", `{"action":"add","from":{"item":"origin"},"description":"Inspect"}`, "from"},
 		{"from null", "reason", "step", `{"action":"add","from":null}`, "from"},
 		{"from element", "reason", "step", `{"action":"add","from":[{"item":"origin"}]}`, "from[0]"},
+		{"write paths object", "reason", "step", `{"action":"add","from":["origin"],"description":"Write report","write_paths":{"item":"/workspace/report.json"}}`, "write_paths"},
+		{"write paths null", "reason", "step", `{"action":"add","from":["origin"],"write_paths":null}`, "write_paths"},
+		{"write paths element", "reason", "step", `{"action":"add","from":["origin"],"write_paths":[7]}`, "write_paths[0]"},
 		{"priority string", "reason", "step", `{"action":"add","from":["origin"],"description":"Inspect","priority":"high"}`, "priority"},
 		{"priority fraction", "reason", "step", `{"action":"priority","id":"i001","reason":"First","priority":1.5}`, "priority"},
 		{"priority negative", "reason", "step", `{"action":"priority","id":"i001","reason":"First","priority":-1}`, "priority"},
 		{"priority excessive", "reason", "step", `{"action":"priority","id":"i001","reason":"First","priority":1000001}`, "priority"},
 		{"sources object", "reason", "goal", `{"action":"achieve","sources":{"item":"fact001"}}`, "sources"},
-		{"sources element", "explore", "finding", `{"sources":[7]}`, "sources[0]"},
+		{"sources element", "explore", "candidate", `{"sources":[7]}`, "sources[0]"},
 		{"evidence object", "explore", "fact", `{"evidence":{"path":"result.txt"}}`, "evidence"},
-		{"evidence null", "explore", "finding", `{"evidence":null}`, "evidence"},
+		{"evidence null", "explore", "candidate", `{"evidence":null}`, "evidence"},
 		{"evidence element", "explore", "fact", `{"evidence":["result.txt"]}`, "evidence[0]"},
 		{"evidence path", "explore", "fact", `{"evidence":[{"path":7}]}`, "evidence[0].path"},
-		{"evidence run", "explore", "finding", `{"evidence":[{"run_id":false}]}`, "evidence[0].run_id"},
-		{"evidence excerpt", "explore", "finding", `{"evidence":[{"excerpt":[]}]}`, "evidence[0].excerpt"},
+		{"evidence run", "explore", "candidate", `{"evidence":[{"run_id":false}]}`, "evidence[0].run_id"},
+		{"evidence excerpt", "explore", "candidate", `{"evidence":[{"excerpt":[]}]}`, "evidence[0].excerpt"},
 		{"evidence start", "explore", "fact", `{"evidence":[{"start_line":"1"}]}`, "evidence[0].start_line"},
 		{"evidence end", "explore", "fact", `{"evidence":[{"end_line":1.5}]}`, "evidence[0].end_line"},
 	} {
@@ -131,12 +155,92 @@ func TestGraphActionCollectionSchemaPreservesSupportedPayloads(t *testing.T) {
 		`{"evidence":[{"path":"result.txt"}]}`,
 		`{"evidence":[{"path":"retained.txt","run_id":"previous-run","excerpt":"exact text","start_line":0,"end_line":0}]}`,
 		`{"evidence":[{"path":"result.txt","start_line":1,"end_line":3}]}`,
-		`{"claim":"Observed","scope":"fixture","status":"verified","reason":"Correction","replace_support":true,"sources":["fact001"]}`,
+		`{"claim":"Observed","scope":"fixture","status":"verified","reason":"Correction","supersedes":"prior-note","sources":["fact001"]}`,
 	} {
-		raw := json.RawMessage(`{"op":"finding","idempotency_key":"probe","payload":` + payload + `}`)
+		raw := json.RawMessage(`{"op":"candidate","idempotency_key":"probe","payload":` + payload + `}`)
 		if err := agent.ValidateArguments(action.Schema, raw); err != nil {
 			t.Errorf("supported shape rejected: %s: %v", payload, err)
 		}
+	}
+}
+
+func TestPlanningFieldsDistinguishSourceFactsFromGoals(t *testing.T) {
+	for _, schema := range []map[string]any{graphActionPayloadSchema("reason"), orchestrationPayloadSchema("reason")} {
+		properties := schema["properties"].(map[string]any)
+		from := properties["from"].(map[string]any)["description"].(string)
+		goal := properties["goal_id"].(map[string]any)["description"].(string)
+		if !strings.Contains(from, "Step inputs: published, effective Fact IDs or origin") || !strings.Contains(from, "Complete: published, effective Fact IDs only, never origin") || !strings.Contains(from, "goal is a user constraint, never a source") || !strings.Contains(goal, "Never put this ID in from") {
+			t.Fatalf("planning fields conflate source evidence with assignment: from=%q goal_id=%q", from, goal)
+		}
+	}
+}
+
+func TestEvidenceSelectionSchemasDescribeRuntimeLimits(t *testing.T) {
+	schemas := map[string]map[string]any{}
+	for _, kind := range []string{"explore", "curate"} {
+		schemas["legacy_"+kind] = graphActionPayloadSchema(kind)
+		if kind != "curate" {
+			schemas["orchestration_"+kind] = orchestrationPayloadSchema(kind)
+		}
+	}
+	var finish map[string]any
+	if err := json.Unmarshal((&stepFinish{}).tool().Schema, &finish); err != nil {
+		t.Fatal(err)
+	}
+	schemas["finish_step"] = finish["properties"].(map[string]any)["fact"].(map[string]any)
+	for name, schema := range schemas {
+		t.Run(name, func(t *testing.T) {
+			evidence := schema["properties"].(map[string]any)["evidence"].(map[string]any)
+			description, _ := evidence["items"].(map[string]any)["description"].(string)
+			for _, requirement := range []string{
+				"UTF-8", "nonempty",
+				fmt.Sprintf("at most %d MiB", maxEvidenceFileBytes/(1<<20)),
+				fmt.Sprintf("at most %d bytes", maxEvidenceExcerptBytes),
+				"Omit both line bounds for the whole file",
+				"start_line and end_line together (1-based, inclusive)",
+			} {
+				if !strings.Contains(description, requirement) {
+					t.Errorf("evidence schema omits runtime requirement %q: %q", requirement, description)
+				}
+			}
+		})
+	}
+}
+
+func TestFactScopeSchemasPreserveAssignedValuesAndAllowFreeScopes(t *testing.T) {
+	schemas := map[string]map[string]any{
+		"legacy_explore":        graphActionPayloadSchema("explore"),
+		"legacy_curate":         graphActionPayloadSchema("curate"),
+		"orchestration_explore": orchestrationPayloadSchema("explore"),
+	}
+	var finish map[string]any
+	if err := json.Unmarshal((&stepFinish{}).tool().Schema, &finish); err != nil {
+		t.Fatal(err)
+	}
+	schemas["finish_step"] = finish["properties"].(map[string]any)["fact"].(map[string]any)
+	for name, schema := range schemas {
+		t.Run(name, func(t *testing.T) {
+			scope := schema["properties"].(map[string]any)["scope"].(map[string]any)
+			description, _ := scope["description"].(string)
+			for _, requirement := range []string{"task-specified scope value exactly", "additional explanation in description"} {
+				if !strings.Contains(description, requirement) {
+					t.Errorf("fact scope omits %q: %q", requirement, description)
+				}
+			}
+			rawSchema, err := json.Marshal(schema)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, value := range []string{"free form local observation", "tenant/demo:route α"} {
+				payload, _ := json.Marshal(map[string]any{
+					"description": "Observed result", "scope": value, "observed_at": "2026-10-01T00:00:00Z",
+					"evidence": []map[string]string{{"path": "result.txt"}},
+				})
+				if err := agent.ValidateArguments(rawSchema, payload); err != nil {
+					t.Errorf("scope guidance restricted an otherwise valid free scope %q: %v", value, err)
+				}
+			}
+		})
 	}
 }
 
@@ -169,7 +273,7 @@ func TestGraphActionOptionalPayloadOnlyForDraftControls(t *testing.T) {
 			})
 		}
 	}
-	for _, op := range []string{"goal", "step", "fact_relation", "complete"} {
+	for _, op := range []string{"goal", "step", "curation_request", "complete"} {
 		t.Run(op, func(t *testing.T) {
 			opts, _, action := draftTestTools(t, func(GraphRequest) (any, error) {
 				t.Fatal("missing business payload reached the board")

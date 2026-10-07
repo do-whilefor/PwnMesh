@@ -17,6 +17,9 @@ type RequestObservation struct {
 }
 
 func (l *Loop) generate(ctx context.Context, messages []Message, defs []Definition, summaryTokens int) (Message, error) {
+	// Providers may retain request buffers or reuse response storage. Neither
+	// may become mutable transcript storage shared with this or another Loop.
+	messages, defs = cloneMessages(messages), cloneDefinitions(defs)
 	observation := RequestObservation{Kind: "turn"}
 	if summaryTokens > 0 {
 		observation.Kind = "summary"
@@ -46,5 +49,5 @@ func (l *Loop) generate(ctx context.Context, messages []Message, defs []Definiti
 		completed.DurationMS, completed.Usage, completed.Failed = time.Since(started).Milliseconds(), message.Usage, err != nil
 		l.emit(Event{Type: "model_call_end", Request: &completed})
 	}
-	return message, err
+	return cloneMessage(message), err
 }

@@ -9,6 +9,7 @@ AGENTS.md
 .env.*
 !.env.example
 .cache
+.pwnmesh
 .xloom
 __pycache__
 build

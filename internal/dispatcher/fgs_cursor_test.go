@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/server"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/server"
 )
 
 func TestDecisionPreparationQueriesItsCapturedInputRevision(t *testing.T) {
@@ -96,7 +96,7 @@ func TestNewDecisionDoesNotReadCompletedJobSnapshot(t *testing.T) {
 	runner.mu.Lock()
 	defer runner.mu.Unlock()
 	last := runner.jobs[len(runner.jobs)-1]
-	if last.Kind != "reason" || last.Decision == nil || last.Decision.Mode != "changes" || last.Decision.FromRevision != 0 || last.Decision.ToRevision == 0 {
+	if last.Kind != "reason" || last.Decision == nil || last.Decision.Mode != "completion" || last.Decision.CompletionAssessment == nil || last.Decision.FromRevision != 0 || last.Decision.ToRevision == 0 {
 		t.Fatalf("new run did not use FGS revision cursor: %+v", last.Decision)
 	}
 }

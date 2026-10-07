@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestReasonHeartbeatVersionIgnoresLeaseActivity(t *testing.T) {
@@ -37,7 +37,7 @@ func TestReasonHeartbeatDetectsChangedInputWithoutPublishingState(t *testing.T) 
 			if change == "hint" {
 				f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "New evidence changes the plan"}, false, http.StatusCreated, nil)
 			} else {
-				f.request("POST", f.base()+"/intents/"+intent.ID+"/conclude", map[string]string{"worker": "parallel-executor", "description": "Observed the synthetic result"}, false, http.StatusOK, nil)
+				f.completeStep(intent, "Observed the synthetic result")
 			}
 			before := f.state()
 			response := f.request("POST", f.base()+"/reason/heartbeat", map[string]string{"worker": f.lease, "expected_version": version}, true, http.StatusConflict, nil)

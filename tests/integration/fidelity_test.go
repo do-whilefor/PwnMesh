@@ -14,8 +14,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
-	"xloom/internal/tools"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/tools"
 )
 
 // A controlled model selects source ranges, then copies through the public

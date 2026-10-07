@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
-	b "xloom/internal/board"
+	b "pwnmesh/internal/board"
 )
 
 func (s *Server) registerStateRoutes(m *http.ServeMux) {
@@ -17,10 +17,11 @@ func (s *Server) registerStateRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /projects/{pid}/state/decisions/preview", s.wrap(s.decisionPreview))
 	m.HandleFunc("POST /projects/{pid}/state/decisions/commit", s.wrap(s.decisionCommit))
 	m.HandleFunc("GET /projects/{pid}/state/decisions/receipt", s.wrap(s.decisionReceipt))
+	m.HandleFunc("GET /projects/{pid}/state/curation/receipt", s.wrap(s.curationReceipt))
 }
 
 func decisionFence(r *http.Request) b.ExecutionFence {
-	return b.ExecutionFence{Run: r.Header.Get("X-Xloom-Run"), Lease: r.Header.Get("X-Xloom-Lease"), Intent: r.Header.Get("X-Xloom-Intent")}
+	return b.ExecutionFence{Run: r.Header.Get("X-PwnMesh-Run"), Lease: r.Header.Get("X-PwnMesh-Lease"), Intent: r.Header.Get("X-PwnMesh-Intent")}
 }
 func decodeDecisionBatch(q *request) (b.DecisionBatch, error) {
 	var batch b.DecisionBatch
@@ -63,6 +64,12 @@ func (s *Server) projectState(t *b.Tx, _ *request, r *http.Request) (int, any, e
 	return 200, state, err
 }
 func (s *Server) stateAction(t *b.Tx, q *request, r *http.Request) (int, any, error) {
+	if r.Header.Get("X-PwnMesh-Lease") == "reason" {
+		return 0, nil, b.Err(403, "Main-agent writes require a registered decision batch")
+	}
+	if role := r.Header.Get("X-PwnMesh-Lease"); role != "explore" && role != "curate" {
+		return 0, nil, b.Err(403, "State writes require an Execute or Curate lease")
+	}
 	for key := range q.fields {
 		if key != "op" && key != "idempotency_key" && key != "payload" && key != "expected_version" {
 			return 0, nil, b.Err(422, "unknown state action field: "+key)
@@ -84,7 +91,7 @@ func (s *Server) stateAction(t *b.Tx, q *request, r *http.Request) (int, any, er
 	if err != nil {
 		return 0, nil, err
 	}
-	result, err := t.StateAction(r.PathValue("pid"), b.ExecutionFence{Run: r.Header.Get("X-Xloom-Run"), Lease: r.Header.Get("X-Xloom-Lease"), Intent: r.Header.Get("X-Xloom-Intent")}, b.StateAction{Op: op, IdempotencyKey: key, Payload: raw, ExpectedVersion: expected})
+	result, err := t.StateAction(r.PathValue("pid"), b.ExecutionFence{Run: r.Header.Get("X-PwnMesh-Run"), Lease: r.Header.Get("X-PwnMesh-Lease"), Intent: r.Header.Get("X-PwnMesh-Intent")}, b.StateAction{Op: op, IdempotencyKey: key, Payload: raw, ExpectedVersion: expected})
 	return 200, result, err
 }
 func (s *Server) stateEvents(t *b.Tx, _ *request, r *http.Request) (int, any, error) {

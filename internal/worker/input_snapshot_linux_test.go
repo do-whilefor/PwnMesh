@@ -12,8 +12,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 func snapshotRuntimeFixture(t *testing.T, kind string) (Job, board.State) {
@@ -70,10 +70,10 @@ func snapshotRuntimeTool(t *testing.T, opts Options, name string) agent.Tool {
 	return agent.Tool{}
 }
 
-func TestSnapshotExecutePromptDoesNotWritePartialLegacyGraph(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
+func TestSnapshotExecutePromptUsesReadToolsWithoutGraphExport(t *testing.T) {
+	for _, kind := range []string{"explore"} {
 		t.Run(kind, func(t *testing.T) {
-			job, state := snapshotRuntimeFixture(t, kind)
+			job, _ := snapshotRuntimeFixture(t, kind)
 			dir := t.TempDir()
 			prompt, err := Prompt(job, false, dir)
 			if err != nil {
@@ -87,18 +87,6 @@ func TestSnapshotExecutePromptDoesNotWritePartialLegacyGraph(t *testing.T) {
 			}
 			if _, err = os.Stat(filepath.Join(dir, "graph.yaml")); !os.IsNotExist(err) {
 				t.Fatalf("snapshot prompt wrote a partial graph.yaml: %v", err)
-			}
-			// Compatibility jobs still retain their complete original inline graph.
-			legacy := job
-			legacy.InputSnapshot, legacy.InputView = nil, nil
-			legacy.Graph, legacy.State = state.Graph, &state
-			legacyDir := t.TempDir()
-			if _, err = Prompt(legacy, false, legacyDir); err != nil {
-				t.Fatal(err)
-			}
-			full, err := os.ReadFile(filepath.Join(legacyDir, "graph.yaml"))
-			if err != nil || !strings.Contains(string(full), "Original user input remains intact") {
-				t.Fatalf("legacy inline recovery lost its full graph: %v", err)
 			}
 		})
 	}

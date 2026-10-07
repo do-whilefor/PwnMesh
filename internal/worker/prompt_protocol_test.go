@@ -1,185 +1,190 @@
 package worker
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/contract"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/contract"
 )
 
 // Exercise the examples actually sent to the model against the same contract
 // as the Worker. Phase deltas retain this contract without copying its examples.
 func TestPromptExamplesMatchRegisteredResultProtocol(t *testing.T) {
-	for _, version := range []int{0, 1, 2} {
-		for _, kind := range []string{"bootstrap", "explore", "reason"} {
-			for _, rpc := range []bool{false, true} {
-				t.Run(fmt.Sprintf("v%d/%s/rpc=%t", version, kind, rpc), func(t *testing.T) {
-					j := Job{Kind: kind, ResultContractVersion: version, GraphRPC: rpc, Budget: config.Task{MaxIntents: 3}}
-					body, err := taskTemplate(j, false)
-					if err != nil {
-						t.Fatal(err)
-					}
-					seen := map[string]bool{}
-					for _, line := range strings.Split(body, "\n") {
-						if !strings.Contains(line, `{"accepted"`) {
-							continue
-						}
-						r, err := contract.ParseWithPolicy(line, kind, false, 1, j.Budget.MaxIntents, contract.Policy{Version: version, GraphRPC: rpc})
-						if err != nil {
-							t.Fatalf("model-facing example violates registered protocol: %v\n%s", err, line)
-						}
-						seen[r.Outcome] = true
-					}
-					if version >= 1 && kind != "reason" {
-						if !seen["completed"] || !seen["incomplete"] || !seen["continue"] {
-							t.Fatalf("execution prompt lacks the correct terminal and continuation options: %v", seen)
-						}
-					} else if len(seen) != 1 || !seen[""] {
-						t.Fatalf("legacy/planning prompt changed protocol: %v", seen)
-					}
-					if kind == "reason" && (strings.Contains(body, `"intents":[`) == rpc || strings.Contains(body, `"decided":true`) != rpc) {
-						t.Fatalf("planning prompt advertises the wrong submission path: %s", body)
-					}
-				})
+	const version = 2
+	for _, kind := range []string{"explore", "reason"} {
+		const rpc = true
+		t.Run(fmt.Sprintf("v%d/%s/rpc=%t", version, kind, rpc), func(t *testing.T) {
+			j := Job{Kind: kind, ResultContractVersion: version, GraphRPC: rpc, Budget: config.Task{MaxIntents: 3}}
+			body, err := taskTemplate(j, false)
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
+			seen := map[string]bool{}
+			for _, line := range strings.Split(body, "\n") {
+				if !strings.Contains(line, `{"accepted"`) {
+					continue
+				}
+				r, err := contract.ParseWithPolicy(line, kind, false, 1, j.Budget.MaxIntents, contract.Policy{Version: version, GraphRPC: rpc})
+				if err != nil {
+					t.Fatalf("model-facing example violates registered protocol: %v\n%s", err, line)
+				}
+				seen[r.Outcome] = true
+			}
+			if kind != "reason" {
+				if !seen["completed"] || !seen["incomplete"] || !seen["continue"] {
+					t.Fatalf("execution prompt lacks the correct terminal and continuation options: %v", seen)
+				}
+				if !strings.Contains(body, "prefer finish_step when available") || !strings.Contains(body, "Final JSON remains valid and is required when tools are disabled") {
+					t.Fatal("execution prompt lost its preferred handoff or tool-free result path")
+				}
+			} else if len(seen) != 1 || !seen[""] {
+				t.Fatalf("planning prompt changed protocol: %v", seen)
+			}
+			if kind == "reason" && (strings.Contains(body, `"intents":[`) || !strings.Contains(body, "commit receipt is the result")) {
+				t.Fatalf("planning prompt advertises the wrong submission path: %s", body)
+			}
+		})
 	}
 }
 
 // A project-level output requirement must remain visible for coverage without
 // becoming an instruction for every independent Step to overwrite that output.
 func TestExploreKeepsRootCoverageAndAssignedDeliverableBoundary(t *testing.T) {
-	for _, version := range []int{0, 1, 2} {
-		origin := "Verify the controls and deliver a consolidated final report."
-		job := Job{
-			Kind: "explore", ResultContractVersion: version,
-			Graph:  board.Graph{Facts: []board.Fact{{ID: "origin", Description: origin}}},
-			Intent: &board.Intent{ID: "i001", Description: "Verify the assigned control and publish supporting evidence."},
+	const version = 2
+	origin := "Verify the controls and deliver a consolidated final report."
+	job := Job{
+		Kind: "explore", ResultContractVersion: version,
+		Graph:  board.Graph{Facts: []board.Fact{{ID: "origin", Description: origin}}},
+		Intent: &board.Intent{ID: "i001", Description: "Verify the assigned control and publish supporting evidence."},
+	}
+	job.Graph.Intents = []board.Intent{*job.Intent}
+	prompt, err := Prompt(job, false, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{origin, job.Intent.Description,
+		"Project-wide deliverables in the original request do not expand this Step",
+		"only when the current intent explicitly assigns them",
+		"Render multiple formats of one deliverable from one structured source"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("v%d lost root coverage or the Step's output boundary: %q", version, required)
 		}
-		job.Graph.Intents = []board.Intent{*job.Intent}
-		prompt, err := Prompt(job, false, t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, required := range []string{origin, job.Intent.Description,
-			"Project-wide deliverables in the original request do not expand this Step",
-			"only when the current intent explicitly assigns them",
-			"Render multiple formats of one deliverable from one structured source"} {
-			if !strings.Contains(prompt, required) {
-				t.Fatalf("v%d lost root coverage or the Step's output boundary: %q", version, required)
+	}
+	_, afterGraph, found := strings.Cut(prompt, "</task_graph>")
+	if !found || strings.Contains(afterGraph, job.Intent.Description) || !strings.Contains(afterGraph, "Current Step: "+job.Intent.ID) {
+		t.Fatal("current Step must stay identifiable without repeating its supplied assignment")
+	}
+}
+
+func TestIntentContextOmitsOnlyAnAlreadySuppliedFullAssignment(t *testing.T) {
+	intent := &board.Intent{ID: "assigned", Description: "Check \"quoted\" inputs.\nPreserve every condition."}
+	full := map[string]any{"id": intent.ID, "description": intent.Description}
+	for _, tc := range []struct {
+		name     string
+		step     map[string]any
+		wantFull bool
+	}{
+		{"matching full Step", full, false},
+		{"missing Step", nil, true},
+		{"another Step", map[string]any{"id": "other", "description": intent.Description}, true},
+		{"shortened assignment", map[string]any{"id": intent.ID, "description": "Check inputs."}, true},
+		{"omitted record", map[string]any{"id": intent.ID, "description": intent.Description, "record_omitted": true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			view, err := json.Marshal(map[string]any{"steps": []any{tc.step}})
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
+			got := intentContext(Job{Intent: intent}, view)
+			if !strings.Contains(got, intent.ID) || strings.Contains(got, intent.Description) != tc.wantFull {
+				t.Fatalf("assignment was duplicated or lost: %q", got)
+			}
+		})
+	}
+	if got := intentContext(Job{Intent: intent}, nil); !strings.Contains(got, intent.Description) {
+		t.Fatalf("unavailable view lost the assignment: %q", got)
+	}
+	if got := intentContext(Job{}, nil); got != "" {
+		t.Fatalf("unassigned role gained a Step: %q", got)
 	}
 }
 
 func TestPlannerKeepsSingleWriterAndEvidenceReview(t *testing.T) {
-	for _, rpc := range []bool{false, true} {
-		prompt, err := taskTemplate(Job{Kind: "reason", GraphRPC: rpc, Budget: config.Task{MaxIntents: 3}}, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, required := range []string{"Give each shared deliverable one writer", "after the relevant exploration Steps finish",
-			"unless the user requests it earlier", "Preserve the user's root conditions and required coverage",
-			"Combine independent evidence review, report generation and artifact validation when they fit one Step",
-			"Reuse existing reports with targeted corrections",
-			"Add a separate report review only if the user requests it or a specific concern about content, evidence support or required coverage remains unresolved",
-			"wait for its producing Step's completion"} {
-			if !strings.Contains(prompt, required) {
-				t.Fatalf("rpc=%t lost deliverable ordering or verification: %q", rpc, required)
-			}
+	const rpc = true
+	prompt, err := taskTemplate(Job{Kind: "reason", GraphRPC: rpc, Budget: config.Task{MaxIntents: 3}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"Give each shared deliverable one writer", "merge private parallel outputs in one dependent Step", "after the relevant exploration Steps finish",
+		"unless the user requests it earlier", "Preserve the user's root conditions and required coverage",
+		"Combine independent evidence review, report generation and artifact validation when they fit one Step",
+		"Reuse existing reports with targeted corrections",
+		"Add a separate report review only if the user requests it or a specific concern about content, evidence support or required coverage remains unresolved",
+		"wait for its producing Step's completion"} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("rpc=%t lost deliverable ordering or verification: %q", rpc, required)
 		}
 	}
 }
 
 func TestPhaseInstructionsDoNotCopyTaskInputOrScenario(t *testing.T) {
-	for _, version := range []int{0, 1, 2} {
-		for _, kind := range []string{"bootstrap", "explore"} {
-			for _, scenario := range []string{"pentest", "ctf"} {
-				t.Run(fmt.Sprintf("v%d/%s/%s", version, kind, scenario), func(t *testing.T) {
-					j := Job{Kind: kind, ResultContractVersion: version, Graph: board.Graph{Project: board.Project{Scenario: scenario}}}
-					original, err := Prompt(j, false, t.TempDir())
-					if err != nil {
-						t.Fatal(err)
-					}
-					conclusion, err := Prompt(j, true, t.TempDir())
-					if err != nil {
-						t.Fatal(err)
-					}
-					repair, err := repairInstruction(j, true, 2, &outputFailure{Reason: "invalid_contract", Detail: "fixture"})
-					if err != nil {
-						t.Fatal(err)
-					}
-					combined := original + conclusion + repair
-					if strings.Count(combined, "<task_graph>") != 1 || strings.Count(combined, scenarioPrompt(j)) != 1 {
-						t.Fatal("phase changes duplicated immutable task input or scenario policy")
-					}
-					if !strings.Contains(conclusion, "All tools are disabled") || (version >= 1 && !strings.Contains(conclusion, "do not return continue")) {
-						t.Fatal("conclusion lost its phase restrictions")
-					}
-					if strings.Contains(combined, ctfExecution) || strings.Contains(repair, "<result_contract>") {
-						t.Fatal("phase instructions copied execution guidance or the original contract")
-					}
-					if version == 0 && kind == "bootstrap" {
-						if _, err := contract.ParseWithPolicy(conclusion, kind, true, 1, 3, contract.Policy{}); err != nil {
-							t.Fatalf("legacy bootstrap conclusion changed its result format: %v", err)
-						}
-					}
-				})
+	t.Setenv("TSEC_SERVER_HOST", "contest.invalid")
+	t.Setenv("TSEC_AGENT_TOKEN", "fixture-token")
+	const version = 2
+	const kind = "explore"
+	for _, scenario := range []string{"pentest", "ctf"} {
+		t.Run(fmt.Sprintf("v%d/%s/%s", version, kind, scenario), func(t *testing.T) {
+			j := Job{Kind: kind, ResultContractVersion: version, Graph: board.Graph{Project: board.Project{Scenario: scenario}}}
+			original, err := Prompt(j, false, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
 			}
-		}
-	}
-}
-
-func TestBootstrapConclusionKeepsOriginalProofWithoutCompletingProject(t *testing.T) {
-	for _, version := range []int{1, 2} {
-		body, err := taskTemplate(Job{Kind: "bootstrap", ResultContractVersion: version}, false)
-		if err != nil {
-			t.Fatal(err)
-		}
-		completed := 0
-		for _, line := range strings.Split(body, "\n") {
-			if !strings.Contains(line, `"outcome":"completed"`) {
-				continue
+			conclusion, err := Prompt(j, true, t.TempDir())
+			if err != nil {
+				t.Fatal(err)
 			}
-			result, err := contract.ParseWithPolicy(line, "bootstrap", true, 0, 3, contract.Policy{Version: version})
-			if err != nil || result.Kind != "fact" || result.Outcome != "completed" {
-				t.Fatalf("v%d original proof cannot conclude as evidence only: result=%+v err=%v", version, result, err)
+			repair, err := repairInstruction(j, true, 2, &outputFailure{Reason: "invalid_contract", Detail: "fixture"})
+			if err != nil {
+				t.Fatal(err)
 			}
-			completed++
-		}
-		if completed == 0 {
-			t.Fatalf("v%d bootstrap has no completion proof example", version)
-		}
+			combined := original + conclusion + repair
+			if strings.Count(combined, "<task_graph>") != 1 || strings.Count(combined, scenarioPrompt(j)) != 1 {
+				t.Fatal("phase changes duplicated immutable task input or scenario policy")
+			}
+			if !strings.Contains(conclusion, "All tools are disabled") || !strings.Contains(conclusion, "do not return continue") {
+				t.Fatal("conclusion lost its phase restrictions")
+			}
+			if strings.Contains(combined, ctfExecution) || strings.Contains(repair, "<result_contract>") {
+				t.Fatal("phase instructions copied execution guidance or the original contract")
+			}
+		})
 	}
 }
 
 func TestTerminalWorkerResultRequiresCompletedOutcome(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
-		for _, conclude := range []bool{false, true} {
-			for _, outcome := range []string{"completed", "continue", "incomplete", ""} {
-				t.Run(fmt.Sprintf("%s/conclude=%t/%s", kind, conclude, outcome), func(t *testing.T) {
-					data := `{"description":"Entire assigned task verified"}`
-					if kind == "bootstrap" {
-						data = `{"fact":{"description":"Goal evidence verified"},"complete":{"description":"All goal requirements verified"}}`
-					}
-					output := `{"accepted":true,"data":` + data + `}`
-					if outcome == "completed" {
-						output = `{"accepted":true,"outcome":"completed","data":` + data + `}`
-					} else if outcome != "" {
-						output = `{"accepted":true,"outcome":"` + outcome + `","reason":"Only 19 of 30 chunks verified"}`
-					}
-					r := checkedResult(Job{Kind: kind, ResultContractVersion: 1}, Result{Status: "success", Text: output, Conclude: conclude})
-					if (r.Status == "success") != (outcome == "completed") || r.Text != output || r.Retryable {
-						t.Fatalf("terminal result accepted unfinished work or lost its evidence: %+v", r)
-					}
-					if outcome == "incomplete" && (r.FailureKind != "incomplete" || !strings.Contains(r.Error, "19 of 30")) {
-						t.Fatalf("incomplete result lost the failure reason: %+v", r)
-					}
-				})
-			}
+	const kind = "explore"
+	for _, conclude := range []bool{false, true} {
+		for _, outcome := range []string{"completed", "continue", "incomplete", ""} {
+			t.Run(fmt.Sprintf("%s/conclude=%t/%s", kind, conclude, outcome), func(t *testing.T) {
+				data := `{"fact_id":"verified-step-fact"}`
+				output := `{"accepted":true,"data":` + data + `}`
+				if outcome == "completed" {
+					output = `{"accepted":true,"outcome":"completed","data":` + data + `}`
+				} else if outcome != "" {
+					output = `{"accepted":true,"outcome":"` + outcome + `","reason":"Only 19 of 30 chunks verified"}`
+				}
+				r := checkedResult(Job{Kind: kind, ResultContractVersion: 2, GraphRPC: true}, Result{Status: "success", Text: output, Conclude: conclude})
+				if (r.Status == "success") != (outcome == "completed") || r.Text != output || r.Retryable {
+					t.Fatalf("terminal result accepted unfinished work or lost its evidence: %+v", r)
+				}
+				if outcome == "incomplete" && (r.FailureKind != "incomplete" || !strings.Contains(r.Error, "19 of 30")) {
+					t.Fatalf("incomplete result lost the failure reason: %+v", r)
+				}
+			})
 		}
 	}
 }

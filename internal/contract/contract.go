@@ -1,25 +1,16 @@
-// Package contract preserves Cairn's tolerant output extraction and task results.
+// Package contract validates structured results from the current execution protocol.
 package contract
 
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 )
-
-type Direction struct {
-	From        []string `json:"from"`
-	Description string   `json:"description"`
-}
 
 type Result struct {
 	Kind        string
 	Outcome     string
 	Reason      string
-	Intents     []Direction
-	Complete    Direction
-	Fact        string
 	FactID      string
 	FactPayload json.RawMessage
 }
@@ -57,157 +48,4 @@ func text(raw json.RawMessage) (string, error) {
 		err = errors.New("description is required")
 	}
 	return s, err
-}
-func direction(raw json.RawMessage) (Direction, error) {
-	var d Direction
-	m, err := object(raw)
-	if err != nil {
-		return d, err
-	}
-	if _, ok := m["from"]; !ok {
-		return d, errors.New("direction requires from")
-	}
-	if _, ok := m["description"]; !ok {
-		return d, errors.New("direction requires description")
-	}
-	_ = json.Unmarshal(m["from"], &d.From)
-	_ = json.Unmarshal(m["description"], &d.Description)
-	return d, nil
-}
-
-func isObject(raw json.RawMessage) bool { _, err := object(raw); return err == nil }
-func isArray(raw json.RawMessage) bool {
-	var a []json.RawMessage
-	return json.Unmarshal(raw, &a) == nil && a != nil
-}
-func Parse(output, kind string, conclude bool, openIntents, maxIntents int) (Result, error) {
-	m, err := Extract(output)
-	if err != nil {
-		return Result{}, err
-	}
-	return parseObject(m, kind, conclude, openIntents, maxIntents)
-}
-
-func parseObject(m map[string]json.RawMessage, kind string, conclude bool, openIntents, maxIntents int) (Result, error) {
-	data := m
-	var err error
-	var accepted bool
-	wrapped := false
-	if raw, ok := m["accepted"]; ok && json.Unmarshal(raw, &accepted) == nil && string(raw) != "null" {
-		if !accepted {
-			return Result{Kind: "rejected"}, nil
-		}
-		wrapped = true
-		data, err = object(m["data"])
-		if err != nil {
-			return Result{}, errors.New("data must be an object")
-		}
-	}
-	if !wrapped {
-		valid := false
-		switch kind {
-		case "reason":
-			_, completeErr := direction(data["complete"])
-			_, intentErr := direction(data["intent"])
-			a := completeErr == nil
-			b := isArray(data["intents"])
-			c := intentErr == nil
-			valid = len(data) == 1 && (a || b || c)
-		case "explore":
-			_, ok := data["description"]
-			valid = len(data) == 1 && ok
-		case "bootstrap":
-			f := isObject(data["fact"])
-			_, c := data["complete"]
-			valid = f && ((len(data) == 2 && c && (conclude || isObject(data["complete"]))) || (conclude && len(data) == 1))
-		}
-		if !valid {
-			return Result{}, errors.New("accepted must be true or false")
-		}
-	}
-	switch kind {
-	case "reason":
-		if maxIntents <= 0 {
-			return Result{}, errors.New("max_intents must be positive")
-		}
-		if raw, exists := data["decided"]; exists {
-			if !wrapped || string(raw) != "true" || len(data) != 1 {
-				return Result{}, errors.New("decided requires accepted:true and data containing only decided:true")
-			}
-			// The Server additionally requires this execution's committed graph
-			// decisions. Valid JSON alone does not prove that a decision happened.
-			return Result{Kind: "decided"}, nil
-		}
-		complete := data["complete"]
-		intents := data["intents"]
-		if len(intents) == 0 || string(intents) == "null" {
-			if singular := data["intent"]; isObject(singular) {
-				intents = append(append(json.RawMessage{'['}, singular...), ']')
-			}
-		}
-		if len(complete) > 0 && string(complete) != "null" {
-			if len(intents) > 0 && string(intents) != "null" {
-				return Result{}, errors.New("complete and intents cannot coexist")
-			}
-			d, err := direction(complete)
-			return Result{Kind: "complete", Complete: d}, err
-		}
-		if len(intents) > 0 && string(intents) != "null" {
-			var entries []json.RawMessage
-			if err = json.Unmarshal(intents, &entries); err != nil {
-				return Result{}, err
-			}
-			if len(entries) == 0 && openIntents == 0 {
-				return Result{}, errors.New("intents must not be empty when no intents are open")
-			}
-			out := Result{Kind: "intents"}
-			for _, raw := range entries {
-				d, err := direction(raw)
-				if err != nil {
-					return Result{}, err
-				}
-				out.Intents = append(out.Intents, d)
-			}
-			if len(out.Intents) > maxIntents {
-				out.Intents = out.Intents[:maxIntents]
-			}
-			if len(out.Intents) == 0 {
-				out.Kind = "noop"
-			}
-			return out, nil
-		}
-		if openIntents == 0 {
-			return Result{}, errors.New("intents required when no intents are open")
-		}
-		return Result{Kind: "noop"}, nil
-	case "explore":
-		s, err := text(data["description"])
-		return Result{Kind: "fact", Fact: s}, err
-	case "bootstrap":
-		if conclude {
-			for key := range data {
-				if key != "fact" && key != "complete" {
-					return Result{}, errors.New("unexpected conclude field")
-				}
-			}
-		}
-		fact, err := object(data["fact"])
-		if err != nil {
-			return Result{}, errors.New("fact is required")
-		}
-		desc, err := text(fact["description"])
-		if err != nil {
-			return Result{}, err
-		}
-		if conclude {
-			return Result{Kind: "fact", Fact: desc}, nil
-		}
-		complete, err := object(data["complete"])
-		if err != nil {
-			return Result{}, errors.New("complete is required")
-		}
-		why, err := text(complete["description"])
-		return Result{Kind: "complete", Fact: desc, Complete: Direction{Description: why}}, err
-	}
-	return Result{}, fmt.Errorf("unknown task type %q", kind)
 }

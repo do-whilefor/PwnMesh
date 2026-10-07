@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	b "xloom/internal/board"
+	b "pwnmesh/internal/board"
 )
 
 func executionNamespace(r *http.Request) (string, error) {
@@ -73,10 +73,11 @@ func (s *Server) executionCheck(t *b.Tx, _ *request, r *http.Request) (int, any,
 	}
 	values := r.URL.Query()
 	kind, intent, key := values.Get("kind"), values.Get("intent"), values.Get("retry_key")
-	if kind != "reason" && kind != "bootstrap" && kind != "explore" {
-		return 0, nil, b.Err(422, "kind must be reason, bootstrap or explore")
+	if kind != "reason" && kind != "curate" && kind != "bootstrap" && kind != "explore" {
+		return 0, nil, b.Err(422, "kind must be reason, curate, bootstrap or explore")
 	}
-	if (kind == "reason" && intent != "") || (kind != "reason" && intent == "") || len(intent) > 128 || len(key) > 1024 || len(values.Get("state_version")) > 64 {
+	control := kind == "reason" || kind == "curate"
+	if (control && intent != "") || (!control && intent == "") || len(intent) > 128 || len(key) > 1024 || len(values.Get("state_version")) > 64 {
 		return 0, nil, b.Err(422, "invalid execution query")
 	}
 	check, err := t.CheckExecutions(b.ExecutionCheckQuery{ProjectID: r.PathValue("pid"), Namespace: namespace, Generation: generation, Kind: kind, Intent: intent, RetryKey: key, StateVersion: values.Get("state_version")})

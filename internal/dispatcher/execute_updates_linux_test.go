@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/server"
-	"xloom/internal/worker"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/server"
+	"pwnmesh/internal/worker"
 )
 
 type updateProvider func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error)
@@ -126,11 +126,10 @@ func (f *updateRequestFixture) prepare(kind string, from []string, description s
 	lease := Lease{Run: "fixture@" + id, Kind: kind}
 	var intent *board.Intent
 	base := projectPath(f.project.ID)
-	if kind == "reason" {
-		f.do("POST", base+"/reason/claim", map[string]string{"worker": lease.Run, "trigger": "initial"}, nil, nil)
+	if kind == "reason" || kind == "curate" {
+		f.do("POST", base+"/"+kind+"/claim", map[string]string{"worker": lease.Run, "trigger": "initial"}, nil, nil)
 	} else {
-		var created board.Intent
-		f.do("POST", base+"/intents", map[string]any{"from": from, "description": description, "creator": "fixture"}, &created, nil)
+		created := authorizeFixtureSteps(f.t, f.scheduler, f.project.ID, map[string]any{"from": from, "description": description})[0]
 		lease.Intent = created.ID
 		f.do("POST", base+"/intents/"+created.ID+"/heartbeat", map[string]string{"worker": lease.Run}, &created, nil)
 		intent = &created
@@ -140,7 +139,7 @@ func (f *updateRequestFixture) prepare(kind string, from []string, description s
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	execution := board.Execution{ProjectID: f.project.ID, ID: id, Namespace: "xloom", Backend: "fixture", Kind: kind, Intent: lease.Intent, Lease: lease.Run, Job: raw}
+	execution := board.Execution{ProjectID: f.project.ID, ID: id, Namespace: "pwnmesh", Backend: "fixture", Kind: kind, Intent: lease.Intent, Lease: lease.Run, Job: raw}
 	f.do("POST", base+"/executions/prepare", execution, &execution, &lease)
 	if err = json.Unmarshal(execution.Job, &job); err != nil {
 		f.t.Fatal(err)
@@ -171,7 +170,7 @@ func (f *updateRequestFixture) decide(op string, payload any) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	batch := board.DecisionBatch{ExpectedVersion: run.Job.Decision.StateVersion, Actions: []board.DecisionAction{{Op: op, Payload: raw}}}
+	batch := fixtureDecisionBatch(run.Job, []board.DecisionAction{{Op: op, Payload: raw}})
 	f.do("POST", projectPath(f.project.ID)+"/state/decisions/commit", batch, nil, &run.Lease)
 }
 
@@ -194,7 +193,14 @@ func (f *updateRequestFixture) correct(source string) string {
 	observer := f.prepare("explore", []string{"origin"}, "Independently check unauthenticated access")
 	f.start(observer)
 	correction := f.publish(observer, updateCorrected)
-	f.decide("fact_relation", map[string]string{"kind": "refutes", "source": correction, "target": source, "reason": updateReason})
+	curator := f.prepare("curate", nil, "")
+	f.start(curator)
+	f.do("POST", projectPath(f.project.ID)+"/state/actions", map[string]any{
+		"op": "curate", "idempotency_key": curator.Job.RunID + ":correction", "expected_version": curator.Job.InputSnapshot.StateVersion,
+		"payload": board.CuratePayload{ThroughRevision: curator.Job.InputSnapshot.Revision, Groups: []board.CurateGroup{}, Relations: []board.CurateRelation{{Kind: "refutes", Source: correction, Target: source, Reason: updateReason}}},
+	}, nil, &curator.Lease)
+	f.do("POST", executionPath(curator)+"/status", map[string]any{"status": "result_pending", "result": worker.Result{Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`}}, nil, &curator.Lease)
+	f.do("POST", executionPath(curator)+"/apply", map[string]any{}, nil, &curator.Lease)
 	return correction
 }
 
@@ -559,6 +565,11 @@ func TestExecuteExplicitAbandonCancelsWorkerAndKeepsIndependentObservation(t *te
 	}()
 	f.awaitTool(started, done)
 	f.correct(source)
+	// Exercise the production renewal after correction regardless of how fast
+	// the fixture reaches the next publish relative to the heartbeat ticker.
+	if err := f.scheduler.renewLease(f.ctx, run); err != nil {
+		t.Fatalf("corrected premise revoked a running observation lease: %v", err)
+	}
 	observation := f.publish(run, "Independent response retained a rate-limit header")
 	f.decide("step", map[string]string{"action": "abandon", "id": run.Job.Intent.ID, "reason": "The corrected premise makes further fixture work unnecessary"})
 	// The production heartbeat observes revoked ownership and cancels the

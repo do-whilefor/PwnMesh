@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 type validationProvider func([]agent.Message) (agent.Message, error)

@@ -42,6 +42,17 @@ test('restart conflicts surface once without retrying non-idempotent writes', as
   assert.equal(calls,1);
 });
 
+test('connection failures identify PwnMesh and preserve the original request count', async () => {
+  let calls = 0;
+  const client = new Client(async () => {
+    calls++;
+    throw new TypeError('Failed to fetch');
+  });
+  await assert.rejects(client.request('/projects'), error =>
+    error instanceof APIError && error.status === 0 && error.message === '无法连接 PwnMesh，请检查服务状态');
+  assert.equal(calls,1);
+});
+
 test('selection scopes reject a late old response even when the transport ignored cancellation', async () => {
   const scope = new RequestScope();
   const first = scope.begin();

@@ -7,10 +7,9 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"strings"
 
-	b "xloom/internal/board"
-	"xloom/internal/worker"
+	b "pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 func (s *Server) schedulingInput(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
@@ -28,6 +27,24 @@ func (s *Server) schedulingInput(t *b.Tx, _ *request, r *http.Request) (int, any
 		namespace, err = executionNamespace(r)
 		if err == nil {
 			p.ExecutionChecks, err = t.ScheduleExecutionChecks(p.Project.ID, namespace, p.Intents, p.Steps)
+		}
+		if err == nil && offset == 0 {
+			// Control admission shares the scheduling snapshot. Return it once,
+			// alongside Execute checks, instead of adding a round trip per role.
+			for _, kind := range []string{"reason", "curate"} {
+				key := p.RetryKey
+				if kind == "curate" {
+					if !p.CurationNeeded {
+						continue
+					}
+					key = p.CurationRetryKey
+				}
+				check, checkErr := t.CheckExecutions(b.ExecutionCheckQuery{ProjectID: p.Project.ID, Namespace: namespace, Generation: p.Project.Generation, Kind: kind, RetryKey: key})
+				if checkErr != nil {
+					return 0, nil, checkErr
+				}
+				p.ExecutionChecks[kind+":"] = check
+			}
 		}
 	}
 	return 200, p, err
@@ -50,26 +67,17 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	if err := json.Unmarshal(e.Job, &protocol); err != nil {
 		return 0, nil, b.Err(422, "invalid execution template")
 	}
-	if len(protocol.GraphRPC) != 0 {
-		var enabled bool
-		if strings.TrimSpace(string(protocol.GraphRPC)) == "null" || json.Unmarshal(protocol.GraphRPC, &enabled) != nil {
-			return 0, nil, b.Err(422, "graph_rpc must be a boolean")
-		}
-	}
-	if len(protocol.ResultContractVersion) != 0 {
-		var version int
-		if strings.TrimSpace(string(protocol.ResultContractVersion)) == "null" || json.Unmarshal(protocol.ResultContractVersion, &version) != nil || version < 0 || version > 2 {
-			return 0, nil, b.Err(422, "result_contract_version must be 0, 1 or 2")
-		}
+	if err := validateExecutionProtocol(protocol.GraphRPC, protocol.ResultContractVersion); err != nil {
+		return 0, nil, err
 	}
 	var j worker.Job
-	if json.Unmarshal(e.Job, &j) != nil || j.State != nil || j.InputSnapshot != nil || j.Decision != nil || len(j.InputView) != 0 || j.PreparationKey != "" || j.Graph.Project.ID != e.ProjectID || len(j.Graph.Facts)+len(j.Graph.Intents)+len(j.Graph.Hints) != 0 {
+	if json.Unmarshal(e.Job, &j) != nil || j.Repair != nil || j.State != nil || j.InputSnapshot != nil || j.Decision != nil || len(j.InputView) != 0 || len(j.DependencyResults) != 0 || j.PreparationKey != "" || j.Graph.Project.ID != e.ProjectID || len(j.Graph.Facts)+len(j.Graph.Intents)+len(j.Graph.Hints) != 0 {
 		return 0, nil, b.Err(422, "prepare requires a small job template without graph data")
 	}
-	if j.Kind == "reason" && j.Intent != nil {
-		return 0, nil, b.Err(422, "Decide preparation must not carry an intent")
+	if (j.Kind == "reason" || j.Kind == "curate") && j.Intent != nil {
+		return 0, nil, b.Err(422, "Control preparation must not carry an intent")
 	}
-	if r.Header.Get("X-Xloom-Run") != e.Lease || r.Header.Get("X-Xloom-Lease") != e.Kind || r.Header.Get("X-Xloom-Intent") != e.Intent {
+	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Execution preparation requires its lease")
 	}
 	canonical, err := json.Marshal(e)
@@ -97,6 +105,9 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	if state.Graph.Project.Generation != j.Graph.Project.Generation {
 		return 0, nil, b.Err(409, "state_changed: project round changed before preparation")
 	}
+	if state.Graph.Project.OrchestrationVersion != 1 || (j.Kind != "reason" && j.Kind != "curate" && j.Kind != "explore") {
+		return 0, nil, b.Err(422, "Orchestration version 1 requires a live version 2 reason, curate or explore execution")
+	}
 	if err = state.Graph.RequireActive(); err != nil {
 		return 0, nil, err
 	}
@@ -106,6 +117,8 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	e.RetryKey = e.Kind + ":" + e.Intent
 	if e.Kind == "reason" {
 		e.RetryKey = b.DecisionRetryKey(state.Graph, state.DecisionRevision)
+	} else if e.Kind == "curate" {
+		e.RetryKey = b.CurationRetryKey(state)
 	}
 	check, err := t.CheckExecutions(b.ExecutionCheckQuery{ProjectID: e.ProjectID, Namespace: e.Namespace, Generation: state.Graph.Project.Generation, Kind: e.Kind, Intent: e.Intent, RetryKey: e.RetryKey, StateVersion: b.DecisionStateVersion(state)})
 	if err != nil {
@@ -133,11 +146,25 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 		if err != nil {
 			return 0, nil, b.Err(422, err.Error())
 		}
-		if j.GraphRPC {
-			j.Decision.Version = 2
+		j.Decision.Version = 2
+		assessment, assessmentErr := t.CompletionAssessment(state)
+		if assessmentErr != nil {
+			return 0, nil, assessmentErr
+		}
+		err = b.UseCompletionAssessment(state, j.Decision, assessment)
+		if err != nil {
+			return 0, nil, err
+		}
+		if state.Graph.Project.OrchestrationVersion == 1 && b.HasCompletionEvidence(state) {
+			j.Decision.ClosureProtocol = 1
 		}
 		j.DecisionRepeated = check.Repeated
 		j.DecisionTriggers = preparedDecisionTriggers(state, check.LatestDecision, j.DecisionTrigger)
+	} else if e.Kind == "curate" {
+		j.InputView, err = b.CurationContextView(state, b.DefaultContextViewBytes)
+		if err != nil {
+			return 0, nil, b.Err(422, err.Error())
+		}
 	} else {
 		j.Intent = nil
 		for _, i := range state.Graph.Intents {
@@ -149,6 +176,15 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 		}
 		if j.Intent == nil {
 			return 0, nil, b.Err(404, "Step not found")
+		}
+		for _, current := range state.Steps {
+			if current.ID == e.Intent {
+				j.Repair = current.Repair
+			}
+		}
+		j.DependencyResults, err = t.StepDependencyResults(e.ProjectID, e.Intent)
+		if err != nil {
+			return 0, nil, err
 		}
 		step := ""
 		if e.Kind == "explore" {
@@ -167,6 +203,9 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	e.Job, err = json.Marshal(j)
 	if err != nil {
 		return 0, nil, err
+	}
+	if e.Kind == "curate" && len(e.Job) > b.MaxCurationInputBytes {
+		return 0, nil, b.Err(422, "Curation input exceeds the supported immutable input limit")
 	}
 	return s.registerExecution(t, e, r)
 }
@@ -209,7 +248,7 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 	if err != nil {
 		return 0, nil, err
 	}
-	if r.Header.Get("X-Xloom-Run") != e.Lease || r.Header.Get("X-Xloom-Lease") != e.Kind || r.Header.Get("X-Xloom-Intent") != e.Intent {
+	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Snapshot read requires its execution lease")
 	}
 	current, err := t.Load(e.ProjectID)

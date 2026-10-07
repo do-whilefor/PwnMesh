@@ -12,27 +12,28 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/dispatcher"
-	"xloom/internal/docker"
-	"xloom/internal/server"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/dispatcher"
+	"pwnmesh/internal/docker"
+	"pwnmesh/internal/server"
 )
 
 // Real containers/Worker/HTTP/SQLite with a deterministic local model: no
 // external target or model is contacted. The model deliberately verifies each
 // intermediate graph reply before returning the next call or final contract.
 func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
-	image := os.Getenv("XLOOM_DOCKER_TEST_IMAGE")
+	image := os.Getenv("PWNMESH_DOCKER_TEST_IMAGE")
 	if image == "" {
-		t.Skip("set XLOOM_DOCKER_TEST_IMAGE for real graph bridge acceptance")
+		t.Skip("set PWNMESH_DOCKER_TEST_IMAGE for real graph bridge acceptance")
 	}
 	store, err := board.Open(filepath.Join(t.TempDir(), "graph.db"))
 	if err != nil {
@@ -43,16 +44,18 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 	defer api.Close()
 	client := &dispatcher.Client{Base: api.URL}
 	var project board.Graph
-	if err = client.Do(context.Background(), "POST", "/projects", map[string]any{"title": "Controlled FGS graph bridge", "origin": "Use only a synthetic local evidence file.", "goal": "Submit verified synthetic evidence and its Finding, then finish.", "bootstrap_enabled": false}, &project, nil); err != nil {
+	if err = client.Do(context.Background(), "POST", "/projects", map[string]any{"title": "Controlled FGS graph bridge", "origin": "Use only a synthetic local evidence file.", "goal": "Submit verified synthetic evidence and its candidate note, then finish.", "bootstrap_enabled": false}, &project, nil); err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
 	turns := map[string]int{}
 	decisionRuns := map[string]bool{}
 	decisionStages := map[string]string{}
+	decisionPlans := map[string]string{}
+	rootAssessments := map[string]board.RootAssessment{}
 	var executionRun, factID string
 	var runtimeContainer string
-	var observedMidTask, completionReviewed bool
+	var observedMidTask, completionReviewed, rootAssessmentReviewed bool
 	var modelErrors []string
 	// Visually similar Unicode remains byte-distinct; the retained file also
 	// preserves CRLF and an integer beyond JavaScript's exact number range.
@@ -83,41 +86,19 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 			names = append(names, tool.Name)
 		}
 		sort.Strings(names)
-		decide := strings.Join(names, ",") == "graph_action,read_graph,read_snapshot"
-		if !decide && strings.Join(names, ",") != "bash,edit,find,graph_action,grep,ls,read,read_graph,read_snapshot,write" {
+		assessRoot := strings.Join(names, ",") == "assess_root,graph_action,read_evidence,read_graph,read_snapshot"
+		decide := assessRoot || strings.Join(names, ",") == "graph_action,read_evidence,read_graph,read_snapshot"
+		if !decide && strings.Join(names, ",") != "bash,edit,find,finish_step,graph_action,grep,ls,read,read_evidence,read_graph,read_snapshot,run_graph,write" {
 			fail(fmt.Errorf("unexpected tool capabilities: %v", names))
 			return
 		}
-		respond := func(content []agent.Block, stop string) {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"role": "assistant", "content": content, "stop_reason": stop})
-		}
+		reply := scriptedModelReply{w: w, turn: turns[run]}
 		completed := func(value any) {
 			raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": value})
-			respond([]agent.Block{{Type: "text", Text: string(raw)}}, "end_turn")
-		}
-		call := func(name string, input any) {
-			raw, _ := json.Marshal(input)
-			respond([]agent.Block{{Type: "tool_use", ID: fmt.Sprintf("call-%d", turns[run]), Name: name, Input: raw}}, "tool_use")
+			reply.respond(agent.Block{Type: "text", Text: string(raw)}, "end_turn")
 		}
 		lastResult := func() (string, error) {
-			// Runtime review/update context can follow the last settled tool
-			// response. Bind to its call ID instead of the final message slot.
-			id := fmt.Sprintf("call-%d", turns[run]-1)
-			for n := len(request.Messages) - 1; n >= 0; n-- {
-				for _, block := range request.Messages[n].Content {
-					if block.Type != "tool_result" || block.ToolUseID != id {
-						continue
-					}
-					if block.IsError {
-						return "", fmt.Errorf("previous tool failed: %+v", block)
-					}
-					var text string
-					err := json.Unmarshal(block.Content, &text)
-					return text, err
-				}
-			}
-			return "", fmt.Errorf("missing settled response to %s", id)
+			return scriptedToolResult(request.Messages, fmt.Sprintf("call-%d", turns[run]-1), false)
 		}
 		var state board.State
 		if err := client.Do(r.Context(), "GET", "/projects/"+project.Project.ID+"/state", nil, &state, nil); err != nil {
@@ -129,7 +110,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 				return fmt.Errorf("expected one materialized evidence reference, got %d", len(refs))
 			}
 			ref := refs[0]
-			if evidenceRun == "" || ref.RunID != evidenceRun || ref.Excerpt != proof || ref.StartLine != 1 || ref.EndLine != 1 || !strings.HasPrefix(ref.Path, "/workspace/.xloom/runs/"+evidenceRun+"/evidence/") {
+			if evidenceRun == "" || ref.RunID != evidenceRun || ref.Excerpt != proof || ref.StartLine != 1 || ref.EndLine != 1 || !strings.HasPrefix(ref.Path, "/workspace/.pwnmesh/runs/"+evidenceRun+"/evidence/") {
 				return fmt.Errorf("invalid materialized evidence reference: %+v", ref)
 			}
 			retained, err := dockerExec(r.Context(), runtimeContainer, []string{"cat", "--", ref.Path})
@@ -140,23 +121,63 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 		}
 		if decide {
 			decisionRuns[run] = true
-			action := func(op, key string, payload any) {
-				call("graph_action", map[string]any{"op": op, "idempotency_key": key, "payload": payload})
+			stagePlan := func() {
+				switch decisionPlans[run] {
+				case "step":
+					decisionStages[run] = "step_staged"
+					payload := map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write synthetic evidence, submit a Fact and Candidate, then finish."}
+					if assessRoot {
+						reply.call("graph_action", map[string]any{"op": "step", "idempotency_key": "plan-one", "gap_id": "synthetic-evidence", "payload": payload})
+					} else {
+						reply.action("step", "plan-one", payload)
+					}
+				case "complete":
+					decisionStages[run] = "completion_staged"
+					reply.action("complete", "finish", map[string]any{"from": []string{factID}, "description": "Verified synthetic evidence and Candidate are retained."})
+				default:
+					// Facts may trigger Decide while Execute is still running.
+					// Keep its current work with a checked empty batch.
+					decisionStages[run] = "committing"
+					reply.action("commit", "commit", map[string]any{})
+				}
 			}
 			switch decisionStages[run] {
 			case "":
 				if len(state.Steps) == 0 {
-					decisionStages[run] = "step_staged"
-					action("step", "plan-one", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Write synthetic evidence, submit a Fact and Finding, then finish."})
-				} else if len(state.Findings) > 0 && state.Steps[0].Status == "completed" {
-					decisionStages[run] = "completion_staged"
-					action("complete", "finish", map[string]any{"from": []string{factID}, "description": "Verified synthetic evidence and Finding are retained."})
+					decisionPlans[run] = "step"
+				} else if len(state.Candidates) > 0 && state.Steps[0].Status == "completed" {
+					decisionPlans[run] = "complete"
 				} else {
-					// Facts may trigger another Decide while Execute is still
-					// running. Commit an empty batch; final JSON cannot publish it.
-					decisionStages[run] = "committing"
-					action("commit", "commit", map[string]any{})
+					decisionPlans[run] = "commit"
 				}
+				if assessRoot {
+					assessment := board.RootAssessment{Status: "missing", From: []string{}, Description: "The required evidence, Candidate and accepted Step result are not all available.", Gaps: []board.RequirementGap{{ID: "synthetic-evidence", InputIDs: []string{"goal"}, Description: "Publish verified synthetic evidence and its Candidate, then finish the assigned Step."}}}
+					if decisionPlans[run] == "complete" {
+						assessment = board.RootAssessment{Status: "satisfied", From: []string{factID}, Description: "The verified synthetic evidence and Candidate are retained and the assigned Step has completed."}
+					}
+					rootAssessments[run] = assessment
+					decisionStages[run] = "root_assessed"
+					reply.call("assess_root", assessment)
+					return
+				}
+				stagePlan()
+				return
+			case "root_assessed":
+				text, err := lastResult()
+				if err != nil {
+					fail(err)
+					return
+				}
+				var receipt struct {
+					Assessment board.RootAssessment `json:"assessment"`
+					Next       string               `json:"next"`
+				}
+				if err := json.Unmarshal([]byte(text), &receipt); err != nil || !assessRoot || !reflect.DeepEqual(receipt.Assessment, rootAssessments[run]) || receipt.Next == "" {
+					fail(fmt.Errorf("invalid root assessment receipt: %s", text))
+					return
+				}
+				rootAssessmentReviewed = true
+				stagePlan()
 				return
 			case "step_staged", "completion_staged":
 				text, err := lastResult()
@@ -179,10 +200,10 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 				}
 				if wantOp == "complete" {
 					decisionStages[run] = "completion_preview"
-					action("preview", "preview", map[string]any{})
+					reply.action("preview", "preview", map[string]any{})
 				} else {
 					decisionStages[run] = "committing"
-					action("commit", "commit", map[string]any{})
+					reply.action("commit", "commit", map[string]any{})
 				}
 				return
 			case "completion_preview":
@@ -207,7 +228,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 				}
 				completionReviewed = true
 				decisionStages[run] = "committing"
-				action("commit", "commit", map[string]any{})
+				reply.action("commit", "commit", map[string]any{})
 				return
 			default:
 				// A commit either ends successfully or terminates this stale run.
@@ -217,19 +238,19 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 			}
 		}
 		executionRun = run
-		path := "/workspace/.xloom/runs/" + run + "/output-proof.txt"
+		path := "/workspace/.pwnmesh/runs/" + run + "/output-proof.txt"
 		// The model selects source bytes. Worker fills run identity, retained
 		// path and exact excerpt, including the original trailing newline.
 		evidence := []map[string]any{{"path": path, "start_line": 1, "end_line": 1}}
 		switch turns[run] {
 		case 1:
-			call("write", map[string]any{"path": path, "content": proof})
+			reply.call("write", map[string]any{"path": path, "content": proof})
 		case 2:
 			if _, err := lastResult(); err != nil {
 				fail(err)
 				return
 			}
-			call("graph_action", map[string]any{"op": "fact", "idempotency_key": "fact-one", "payload": map[string]any{"description": "The controlled evidence file contains synthetic-proof-verified.", "scope": "Synthetic local test only", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": evidence}})
+			reply.call("graph_action", map[string]any{"op": "fact", "idempotency_key": "fact-one", "payload": map[string]any{"description": "The controlled evidence file contains synthetic-proof-verified.", "scope": "Synthetic local test only", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": evidence}})
 		case 3:
 			text, err := lastResult()
 			if err != nil {
@@ -255,7 +276,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 					}
 				}
 			}
-			call("graph_action", map[string]any{"op": "finding", "idempotency_key": "finding-one", "payload": map[string]any{"claim": "Synthetic evidence is retained and verified.", "scope": "Synthetic local test only", "status": "verified", "sources": []string{factID}, "evidence": evidence}})
+			reply.call("graph_action", map[string]any{"op": "candidate", "idempotency_key": "candidate-one", "payload": map[string]any{"claim": "Synthetic evidence is retained and verified.", "reason": "The retained file was observed during this Step.", "scope": "Synthetic local test only", "status": "verified", "sources": []string{factID}, "evidence": evidence}})
 		case 4:
 			text, err := lastResult()
 			if err != nil {
@@ -263,11 +284,11 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 				return
 			}
 			var result board.StateActionResult
-			if err = json.Unmarshal([]byte(text), &result); err != nil || result.Op != "finding" || len(state.Findings) != 1 {
-				fail(fmt.Errorf("invalid Finding reply: %s", text))
+			if err = json.Unmarshal([]byte(text), &result); err != nil || result.Op != "candidate" || len(state.Candidates) != 1 {
+				fail(fmt.Errorf("invalid Candidate reply: %s", text))
 				return
 			}
-			if err := checkEvidence(state.Findings[0].Evidence, run); err != nil {
+			if err := checkEvidence(state.Candidates[0].Evidence, run); err != nil {
 				fail(err)
 				return
 			}
@@ -278,7 +299,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 	}))
 	defer model.Close()
 	network := testContainerNetwork(t)
-	c := config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, MaxWorkers: 2, MaxProjects: 1, MaxProjectWorkers: 2, HealthMode: "disabled", HealthTimeout: 10}, Tasks: config.Tasks{Bootstrap: config.Task{Timeout: 30, ConcludeTimeout: 5}, Reason: config.Task{Timeout: 45, MaxIntents: 3}, Explore: config.Task{Timeout: 45, ConcludeTimeout: 5}}, Container: config.Container{Image: image, Network: network, Namespace: fmt.Sprintf("xloom-graph-%d", time.Now().UnixNano()), CompletedAction: "stop"}, Workers: []config.Worker{{Name: "controlled", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 1, Env: map[string]string{"ANTHROPIC_BASE_URL": model.URL, "ANTHROPIC_AUTH_TOKEN": "controlled-test-only", "ANTHROPIC_MODEL": "controlled", "XLOOM_REQUEST_TIMEOUT": "10"}}}}
+	c := config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, MaxWorkers: 2, MaxProjects: 1, MaxProjectWorkers: 2, HealthMode: "disabled", HealthTimeout: 10}, Tasks: config.Tasks{Reason: config.Task{Timeout: 45, MaxIntents: 3}, Explore: config.Task{Timeout: 45, ConcludeTimeout: 5}}, Container: config.Container{Image: image, Network: network, Namespace: fmt.Sprintf("pwnmesh-graph-%d", time.Now().UnixNano()), CompletedAction: "stop"}, Workers: []config.Worker{{Name: "controlled", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 1, Env: map[string]string{"ANTHROPIC_BASE_URL": model.URL, "ANTHROPIC_AUTH_TOKEN": "controlled-test-only", "ANTHROPIC_MODEL": "controlled", "PWNMESH_REQUEST_TIMEOUT": "10"}}}}
 	runtimeContainer = c.Container.Namespace + "-dispatch-" + project.Project.ID
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
@@ -316,6 +337,12 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 			mu.Unlock()
 			t.Fatalf("graph chain timed out; model errors: %v", diagnostics)
 		case <-ticker.C:
+			mu.Lock()
+			diagnostics := append([]string{}, modelErrors...)
+			mu.Unlock()
+			if len(diagnostics) > 0 {
+				t.Fatalf("controlled model assertions failed: %v", diagnostics)
+			}
 			var g board.Graph
 			if err := client.Do(ctx, "GET", "/projects/"+project.Project.ID, nil, &g, nil); err != nil {
 				t.Fatal(err)
@@ -329,8 +356,8 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if len(modelErrors) > 0 || !observedMidTask || !completionReviewed || executionRun == "" || len(decisionRuns) < 2 || len(state.Findings) != 1 || state.Findings[0].Status != "verified" {
-				t.Fatalf("incomplete acceptance: errors=%v midway=%t reviewed=%t decide=%d findings=%+v", modelErrors, observedMidTask, completionReviewed, len(decisionRuns), state.Findings)
+			if len(modelErrors) > 0 || !observedMidTask || !completionReviewed || len(rootAssessments) > 0 && !rootAssessmentReviewed || executionRun == "" || len(decisionRuns) < 2 || len(state.Candidates) != 1 || state.Candidates[0].Status != "verified" {
+				t.Fatalf("incomplete acceptance: errors=%v midway=%t reviewed=%t root_reviewed=%t decide=%d candidates=%+v", modelErrors, observedMidTask, completionReviewed, rootAssessmentReviewed, len(decisionRuns), state.Candidates)
 			}
 			runs, err := testExecutions(ctx, store, c.Container.Namespace)
 			if err != nil {

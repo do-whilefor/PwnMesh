@@ -3,15 +3,12 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
-	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/server"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 // This runner records the immutable job and stops immediately. It never starts
@@ -26,64 +23,57 @@ func (*protocolRunner) Cleanup(context.Context, string, string) error { return n
 func (*protocolRunner) Projects(context.Context) ([]string, error)    { return nil, nil }
 
 func TestNewJobsRegisterTheCurrentResultProtocol(t *testing.T) {
-	for _, backend := range []string{"go", "mock"} {
-		for _, kind := range []string{"reason", "explore", "bootstrap"} {
-			t.Run(backend+"/"+kind, func(t *testing.T) {
-				store, err := board.Open(filepath.Join(t.TempDir(), "protocol.db"))
-				if err != nil {
+	for _, kind := range []string{"reason", "explore"} {
+		t.Run(kind, func(t *testing.T) {
+			scheduler, _, _, graph, store := batchSchedulerFixture(t, 1)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer func() { cancel(); scheduler.wg.Wait() }()
+			var intent *board.Intent
+			if kind == "explore" {
+				// Authorize the Step through the current planner's committed batch.
+				retryTicks(t, scheduler, 1)
+				scheduler.reap()
+				if err := scheduler.Client.Do(ctx, "GET", projectPath(graph.Project.ID), nil, &graph, nil); err != nil {
 					t.Fatal(err)
 				}
-				defer store.Close()
-				httpServer := httptest.NewServer(server.New(store))
-				defer httpServer.Close()
-				runner := &protocolRunner{jobs: make(chan worker.Job, 1)}
-				cfg := config.Config{
-					Server:  httpServer.URL,
-					Runtime: config.Runtime{Interval: 60, MaxWorkers: 1, MaxProjects: 1, HealthMode: "disabled"},
-					Tasks:   config.Tasks{Reason: config.Task{MaxIntents: 3}},
-					Workers: []config.Worker{{Name: "fixture", Type: backend, TaskTypes: []string{kind}, MaxRunning: 1}},
-				}
-				scheduler := New(cfg, runner)
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				var graph board.Graph
-				if err = scheduler.Client.Do(ctx, "POST", "/projects", map[string]any{"title": "Protocol fixture", "origin": "Synthetic input", "goal": "Synthetic goal", "bootstrap_enabled": false}, &graph, nil); err != nil {
-					t.Fatal(err)
-				}
-				var intent *board.Intent
-				if kind != "reason" {
-					intent = &board.Intent{}
-					if err = scheduler.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/intents", map[string]any{"from": []string{"origin"}, "description": "Observe fixture", "creator": "fixture"}, intent, nil); err != nil {
-						t.Fatal(err)
-					}
-					graph.Intents = append(graph.Intents, *intent)
-				}
-				started, err := scheduler.launch(ctx, graph, kind, intent, "initial", board.ExecutionCheck{})
-				if err != nil || !started {
-					t.Fatalf("launch: started=%v, err=%v", started, err)
-				}
-				defer scheduler.wg.Wait()
-				var job worker.Job
-				select {
-				case job = <-runner.jobs:
-				case <-ctx.Done():
-					t.Fatal(ctx.Err())
-				}
-				if job.ResultContractVersion != 2 || job.GraphRPC != (backend != "mock") {
-					t.Fatalf("wrong protocol for %s %s: version=%d graph_rpc=%v", backend, kind, job.ResultContractVersion, job.GraphRPC)
-				}
-				executions := testExecutions(t, store)
-				if len(executions) != 1 {
-					t.Fatalf("registered executions: %d", len(executions))
-				}
-				var persisted worker.Job
-				if err = json.Unmarshal(executions[0].Job, &persisted); err != nil {
-					t.Fatal(err)
-				}
-				if persisted.ResultContractVersion != job.ResultContractVersion || persisted.GraphRPC != job.GraphRPC {
-					t.Fatal("worker protocol differed from immutable registered job")
-				}
-			})
+				intent = &graph.Intents[0]
+			}
+			runner := &protocolRunner{jobs: make(chan worker.Job, 1)}
+			scheduler.Runner = runner
+			started, err := scheduler.launch(ctx, graph, kind, intent, "initial", board.ExecutionCheck{})
+			if err != nil || !started {
+				t.Fatalf("launch: started=%v, err=%v", started, err)
+			}
+			var job worker.Job
+			select {
+			case job = <-runner.jobs:
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			if job.ResultContractVersion != 2 || !job.GraphRPC || job.Graph.Project.OrchestrationVersion != 1 || job.WorkerType != "go" {
+				t.Fatalf("wrong protocol: kind=%s version=%d graph_rpc=%v orchestration=%d backend=%s", kind, job.ResultContractVersion, job.GraphRPC, job.Graph.Project.OrchestrationVersion, job.WorkerType)
+			}
+			executions := testExecutions(t, store)
+			var persisted worker.Job
+			if err = json.Unmarshal(executions[len(executions)-1].Job, &persisted); err != nil {
+				t.Fatal(err)
+			}
+			if digest(persisted) != digest(job) {
+				t.Fatal("worker protocol differed from immutable registered job")
+			}
+		})
+	}
+}
+
+func TestDispatcherDoesNotLaunchRetiredProtocol(t *testing.T) {
+	s := New(config.Config{Workers: []config.Worker{{Name: "go", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 1}}}, &protocolRunner{})
+	for _, tc := range []struct {
+		version int
+		kind    string
+	}{{0, "reason"}, {0, "explore"}, {1, "bootstrap"}} {
+		g := board.Graph{Project: board.Project{ID: "retained", OrchestrationVersion: tc.version}}
+		if started, err := s.launch(context.Background(), g, tc.kind, nil, "initial", board.ExecutionCheck{}); err != nil || started {
+			t.Fatalf("retired input launched: version=%d kind=%s started=%v err=%v", tc.version, tc.kind, started, err)
 		}
 	}
 }

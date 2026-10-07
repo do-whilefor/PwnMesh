@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestLeaseUpdatesWriteOnlyLeaseColumns(t *testing.T) {
@@ -42,7 +42,7 @@ func TestLeaseUpdatesWriteOnlyLeaseColumns(t *testing.T) {
 		}
 	}
 	after := f.state()
-	if after.Revision != before.Revision || after.DecisionRevision != before.DecisionRevision || after.Graph.Project.Reason != nil || len(legacyEvents(f)) != 1 {
+	if after.Revision != before.Revision || after.DecisionRevision != before.DecisionRevision || after.Graph.Project.Reason != nil || len(storedEvents(f)) != 1 {
 		t.Fatal("lease activity changed business state or left a reason claim")
 	}
 }

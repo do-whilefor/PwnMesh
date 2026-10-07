@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
 )
 
 var errUpdateSessionSave = errors.New("injected session save failure")

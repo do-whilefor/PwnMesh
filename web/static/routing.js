@@ -2,7 +2,7 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomRouting = api;
+  else root.PwnMeshRouting = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
 

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 func TestGraphHandlerRoutesUpdatesWithRegisteredIdentity(t *testing.T) {
@@ -22,10 +22,10 @@ func TestGraphHandlerRoutesUpdatesWithRegisteredIdentity(t *testing.T) {
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/projects/project/executions/run/identity":
-			_ = json.NewEncoder(w).Encode(board.ExecutionSummary{ProjectID: "project", Generation: 2, ID: "run", Namespace: "xloom", Kind: "explore", Intent: "step", Lease: "backend@run"})
+			_ = json.NewEncoder(w).Encode(board.ExecutionSummary{ProjectID: "project", Generation: 2, ID: "run", Namespace: "pwnmesh", Kind: "explore", Intent: "step", Lease: "backend@run"})
 		case "/projects/project/executions/run/updates":
 			reads++
-			if r.Method != "POST" || r.Header.Get("X-Xloom-Run") != "backend@run" || r.Header.Get("X-Xloom-Lease") != "explore" || r.Header.Get("X-Xloom-Intent") != "step" {
+			if r.Method != "POST" || r.Header.Get("X-PwnMesh-Run") != "backend@run" || r.Header.Get("X-PwnMesh-Lease") != "explore" || r.Header.Get("X-PwnMesh-Intent") != "step" {
 				t.Error("update route lost registered lease")
 			}
 			var got worker.GraphRequest

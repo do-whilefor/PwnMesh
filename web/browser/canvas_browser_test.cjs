@@ -1,11 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-// Run against the embedded assets in a disposable Linux xloom serve instance.
-// XLOOM_WEB_URL=http://127.0.0.1:18767 node --test web/browser/canvas_browser_test.cjs
+// Run against the embedded assets in a disposable Linux pwnmesh serve instance.
+// PWNMESH_WEB_URL=http://127.0.0.1:18767 node --test web/browser/canvas_browser_test.cjs
 // Browser dependencies stay outside the product's zero-build static bundle.
 test('embedded canvas handles live graph changes and unrestricted pointer movement', {
-  skip: process.env.XLOOM_WEB_URL ? false : 'Set XLOOM_WEB_URL to load the embedded canvas assets', timeout:90000
+  skip: process.env.PWNMESH_WEB_URL ? false : 'Set PWNMESH_WEB_URL to load the embedded canvas assets', timeout:90000
 }, async t => {
   const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
@@ -13,13 +13,13 @@ test('embedded canvas handles live graph changes and unrestricted pointer moveme
   const page = await browser.newPage({viewport:{width:1440,height:960}});
   const errors = [];
   page.on('pageerror',error => errors.push(error.message));
-  await page.goto(process.env.XLOOM_WEB_URL);
-  await page.waitForFunction(() => typeof window.XLoomGraph === 'function');
+  await page.goto(process.env.PWNMESH_WEB_URL);
+  await page.waitForFunction(() => typeof window.PwnMeshGraph === 'function');
   await page.evaluate(() => {
     const host = document.createElement('div'); host.id = 'canvas-probe';
     host.style.cssText = 'position:fixed;inset:0;z-index:10000;background:#faf9f5';
     document.body.append(host);
-    window.probe = new XLoomGraph(host);
+    window.probe = new PwnMeshGraph(host);
     window.probeState = {graph:{project:{id:'browser-graph',generation:0,status:'active'}},
       goals:[{id:'goal',condition:'真实目标',status:'open'}],
       steps:Array.from({length:60},(_,i) => ({id:'s'+i,description:'任务 '+i,goal_id:'goal',from:['origin'],result:'f'+i,status:'completed'})),
@@ -69,8 +69,8 @@ test('embedded canvas handles live graph changes and unrestricted pointer moveme
   assert.equal(await page.locator('#canvas-probe .graph-edge-hit:visible').count(),0);
   await page.locator('#canvas-probe .graph-viewport').focus(); await page.keyboard.press('0');
   const pendingFit = await page.evaluate(() => {
-    const bounds = XLoomCanvas.worldBounds(new Map([['goal:goal',probe.positions.get('goal:goal')]]), {width:XLoomLayout.NODE_WIDTH,height:XLoomLayout.NODE_HEIGHT,baseWidth:0,baseHeight:0,padding:96});
-    const expected = XLoomCanvas.fitTransform(bounds,1440,960);
+    const bounds = PwnMeshCanvas.worldBounds(new Map([['goal:goal',probe.positions.get('goal:goal')]]), {width:PwnMeshLayout.NODE_WIDTH,height:PwnMeshLayout.NODE_HEIGHT,baseWidth:0,baseHeight:0,padding:96});
+    const expected = PwnMeshCanvas.fitTransform(bounds,1440,960);
     return {camera:[probe.scale,probe.tx,probe.ty],expected:[expected.scale,expected.tx,expected.ty]};
   });
   assert.deepEqual(pendingFit.camera,pendingFit.expected,'keyboard fit excludes all hidden cards');

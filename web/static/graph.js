@@ -1,9 +1,9 @@
 (function (root, factory) {
   'use strict';
   const common = typeof module === 'object' && module.exports;
-  const api = factory(root, common ? require('./graph-data.js') : root.XLoomGraphData, common ? require('./canvas.js') : root.XLoomCanvas, common ? require('./layout.js') : root.XLoomLayout, common ? require('./routing.js') : root.XLoomRouting, common ? require('./graph-view.js') : root.XLoomGraphView);
+  const api = factory(root, common ? require('./graph-data.js') : root.PwnMeshGraphData, common ? require('./canvas.js') : root.PwnMeshCanvas, common ? require('./layout.js') : root.PwnMeshLayout, common ? require('./routing.js') : root.PwnMeshRouting, common ? require('./graph-view.js') : root.PwnMeshGraphView);
   if (common) module.exports = api;
-  else root.XLoomGraph = api.XLoomGraph;
+  else root.PwnMeshGraph = api.PwnMeshGraph;
 })(typeof window === 'object' ? window : globalThis, function (root, data, canvas, layout, routing, view) {
   'use strict';
   const {mapState, resolveNodeKey} = data;
@@ -15,12 +15,12 @@
   let nextInstance = 0;
   const clone = value => value == null ? null : JSON.parse(JSON.stringify(value));
 
-  class XLoomGraph {
+  class PwnMeshGraph {
     constructor(host, options = {}) {
-      if (!host?.ownerDocument) throw new TypeError('XLoomGraph requires a host element');
+      if (!host?.ownerDocument) throw new TypeError('PwnMeshGraph requires a host element');
       this.host = host; this.document = host.ownerDocument; this.window = this.document.defaultView || root;
       this.onSelect = options.onSelect || (() => {}); this.onSelectEdge = options.onSelectEdge || (() => {});
-      this.instanceId = 'xloom-graph-' + (++nextInstance);
+      this.instanceId = 'pwnmesh-graph-' + (++nextInstance);
       this.positions = new Map(); this.nodeGeometry = new Map(); this.projectLayouts = new Map();
       this.cards = new Map(); this.edgeElements = new Map(); this.listeners = [];
       this.selected = null; this.selectedEdge = null; this.scale = 1; this.tx = 0; this.ty = 0;
@@ -351,5 +351,5 @@
       this.viewport.remove(); this.empty.remove(); this.warning.remove(); this.live.remove(); this.cards.clear(); this.edgeElements.clear(); this.projectLayouts.clear();
     }
   }
-  return {XLoomGraph, mapState, resolveNodeKey};
+  return {PwnMeshGraph, mapState, resolveNodeKey};
 });

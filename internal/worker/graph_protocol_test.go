@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestExecuteUpdateRPCKeepsRegisteredScopeAndIdentity(t *testing.T) {
@@ -423,23 +423,45 @@ func TestGraphPageContinuesOversizedSingleRecordsLosslessly(t *testing.T) {
 }
 
 func TestGraphOverviewContinuesCompleteUserInputs(t *testing.T) {
-	state := board.State{Graph: board.Graph{Project: board.Project{Title: strings.Repeat("title", MaxGraphRPCBytes)}, Facts: []board.Fact{{ID: "origin", Description: strings.Repeat("input", MaxGraphRPCBytes)}, {ID: "goal", Description: "the exact goal"}}}}
-	value, err := GraphPage(state, GraphRequest{Section: "overview"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := json.Marshal(value)
-	var reference graphRecordReference
-	if err := json.Unmarshal(raw, &reference); err != nil || !reference.RecordOmitted || len(raw) > maxGraphPageBytes {
-		t.Fatal("oversized overview cannot be continued")
-	}
-	got := collectGraphRecord(t, state, GraphRequest{Section: "overview"})
-	var overview struct {
-		Project board.Project `json:"project"`
-		Inputs  []board.Fact  `json:"user_inputs"`
-	}
-	if err := json.Unmarshal(got, &overview); err != nil || !reflect.DeepEqual(overview.Project, state.Graph.Project) || !reflect.DeepEqual(overview.Inputs, state.Graph.Facts) {
-		t.Fatal("overview continuation lost original project constraints")
+	for _, tc := range []struct {
+		name, title, origin, feedback string
+		oversized                     bool
+	}{
+		{"small_feedback", "project", "original input", "Also inspect the reopened condition", false},
+		{"oversized_original", strings.Repeat("title", MaxGraphRPCBytes), strings.Repeat("input", MaxGraphRPCBytes), "Also inspect the reopened condition", true},
+		{"oversized_feedback", "project", "original input", strings.Repeat("Reopened condition λ😀<\\\"\n", 20000), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inputs := []board.Fact{{ID: "origin", Description: tc.origin}, {ID: "goal", Description: "the exact goal"}, {ID: "feedback", Description: tc.feedback}}
+			output := board.Fact{ID: "legacy-output", Description: "An ordinary legacy result is not a user requirement"}
+			state := board.State{
+				Graph: board.Graph{Project: board.Project{Title: tc.title, OrchestrationVersion: 1}, Facts: append(append([]board.Fact{}, inputs...), output)},
+				Steps: []board.Step{
+					{ID: "feedback-step", Description: "external_feedback", Status: "completed", Result: board.Ptr("feedback")},
+					{ID: "legacy-step", Description: "Earlier investigation", Status: "completed", Result: board.Ptr(output.ID)},
+				},
+				FactRecords: []board.FactRecord{{ID: "feedback", Description: tc.feedback, Status: "valid", Legacy: true}, {ID: output.ID, Description: output.Description, Status: "valid", Legacy: true}},
+			}
+			value, err := GraphPage(state, GraphRequest{Section: "overview"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(value)
+			var reference graphRecordReference
+			if err := json.Unmarshal(raw, &reference); err != nil || reference.RecordOmitted != tc.oversized || len(raw) > maxGraphPageBytes {
+				t.Fatal("overview size or continuation marker is incorrect")
+			}
+			if tc.oversized {
+				raw = collectGraphRecord(t, state, GraphRequest{Section: "overview"})
+			}
+			var overview struct {
+				Project board.Project `json:"project"`
+				Inputs  []board.Fact  `json:"user_inputs"`
+			}
+			if err := json.Unmarshal(raw, &overview); err != nil || !reflect.DeepEqual(overview.Project, state.Graph.Project) || !reflect.DeepEqual(overview.Inputs, inputs) {
+				t.Fatal("overview lost exact user requirements or promoted ordinary legacy output")
+			}
+		})
 	}
 }
 

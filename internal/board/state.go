@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"pwnmesh/internal/artifactcheck"
 )
 
 const stateSchema = `
@@ -22,15 +24,33 @@ CREATE TABLE IF NOT EXISTS xloom_state_events(project_id TEXT NOT NULL REFERENCE
 
 // State extends the Cairn graph without changing the legacy JSON representation.
 type State struct {
-	Graph            Graph          `json:"graph"`
-	Goals            []Goal         `json:"goals"`
-	Steps            []Step         `json:"steps"`
-	FactRecords      []FactRecord   `json:"fact_records"`
-	Findings         []Finding      `json:"findings"`
-	FactRelations    []FactRelation `json:"fact_relations"`
-	Revision         int64          `json:"revision"`
-	DecisionRevision int64          `json:"decision_revision"`
+	Graph            Graph            `json:"graph"`
+	Goals            []Goal           `json:"goals"`
+	Steps            []Step           `json:"steps"`
+	FactRecords      []FactRecord     `json:"fact_records"`
+	Findings         []Finding        `json:"findings"`
+	FactRelations    []FactRelation   `json:"fact_relations"`
+	Revision         int64            `json:"revision"`
+	DecisionRevision int64            `json:"decision_revision"`
+	Candidates       []Candidate      `json:"candidates,omitempty"`
+	Disputes         []Dispute        `json:"disputes,omitempty"`
+	Curation         CurationProgress `json:"curation,omitempty"`
 }
+
+// Omit the new zero-value curation view from legacy wire snapshots, preserving
+// persisted decision hashes across an upgrade from the previous protocol.
+func (s State) MarshalJSON() ([]byte, error) {
+	type stateAlias State
+	view := struct {
+		*stateAlias
+		Curation *CurationProgress `json:"curation,omitempty"`
+	}{stateAlias: (*stateAlias)(&s)}
+	if s.Graph.Project.OrchestrationVersion == 1 {
+		view.Curation = &s.Curation
+	}
+	return json.Marshal(view)
+}
+
 type EvidenceRef struct {
 	RunID     string `json:"run_id"`
 	Path      string `json:"path"`
@@ -39,15 +59,16 @@ type EvidenceRef struct {
 	EndLine   int    `json:"end_line,omitempty"`
 }
 type FactRecord struct {
-	ID           string        `json:"id"`
-	Description  string        `json:"description"`
-	Scope        string        `json:"scope"`
-	ObservedAt   string        `json:"observed_at"`
-	Evidence     []EvidenceRef `json:"evidence"`
-	Status       string        `json:"status"`
-	RunID        string        `json:"run_id,omitempty"`
-	SourceStepID string        `json:"source_step_id,omitempty"`
-	Legacy       bool          `json:"legacy"`
+	ID             string        `json:"id"`
+	Description    string        `json:"description"`
+	Scope          string        `json:"scope"`
+	ObservedAt     string        `json:"observed_at"`
+	Evidence       []EvidenceRef `json:"evidence"`
+	Status         string        `json:"status"`
+	RunID          string        `json:"run_id,omitempty"`
+	SourceStepID   string        `json:"source_step_id,omitempty"`
+	Legacy         bool          `json:"legacy"`
+	SupportInvalid bool          `json:"support_invalid,omitempty"`
 }
 type FactRelation struct {
 	Kind      string `json:"kind"`
@@ -68,29 +89,41 @@ type Goal struct {
 	SupportValid bool     `json:"support_valid"`
 }
 type Step struct {
-	ID             string   `json:"id"`
-	From           []string `json:"from"`
-	GoalID         string   `json:"goal_id"`
-	Description    string   `json:"description"`
-	Status         string   `json:"status"`
-	Priority       int      `json:"priority"`
-	Result         *string  `json:"result"`
-	Worker         *string  `json:"worker"`
-	Reason         string   `json:"reason,omitempty"`
-	CreatedAt      string   `json:"created_at"`
-	InvalidSources []string `json:"invalid_sources,omitempty"`
+	Repair         *artifactcheck.Spec `json:"repair,omitempty"`
+	ID             string              `json:"id"`
+	From           []string            `json:"from"`
+	GoalID         string              `json:"goal_id"`
+	Description    string              `json:"description"`
+	Status         string              `json:"status"`
+	Priority       int                 `json:"priority"`
+	Result         *string             `json:"result"`
+	Worker         *string             `json:"worker"`
+	Reason         string              `json:"reason,omitempty"`
+	CreatedAt      string              `json:"created_at"`
+	InvalidSources []string            `json:"invalid_sources,omitempty"`
+	DisputeID      string              `json:"dispute_id,omitempty"`
+	DependsOn      []string            `json:"depends_on,omitempty"`
+	WritePaths     []string            `json:"write_paths,omitempty"`
+	BlockedBy      []string            `json:"blocked_by,omitempty"`
+	SupportValid   bool                `json:"support_valid,omitempty"`
+	// The latest failed or retry-authorized attempt. Ordinary first starts do
+	// not stale plans; consuming an explicit retry grant does change this ID.
+	LatestRunID string `json:"latest_run_id,omitempty"`
 }
 type Finding struct {
-	ID           string        `json:"id"`
-	Claim        string        `json:"claim"`
-	Scope        string        `json:"scope"`
-	Status       string        `json:"status"`
-	Sources      []string      `json:"sources"`
-	Evidence     []EvidenceRef `json:"evidence"`
-	Reason       string        `json:"reason,omitempty"`
-	CreatedAt    string        `json:"created_at"`
-	UpdatedAt    string        `json:"updated_at"`
-	SupportValid bool          `json:"support_valid"`
+	ID              string        `json:"id"`
+	Claim           string        `json:"claim"`
+	Scope           string        `json:"scope"`
+	Status          string        `json:"status"`
+	Sources         []string      `json:"sources"`
+	Evidence        []EvidenceRef `json:"evidence"`
+	Reason          string        `json:"reason,omitempty"`
+	CreatedAt       string        `json:"created_at"`
+	UpdatedAt       string        `json:"updated_at"`
+	SupportValid    bool          `json:"support_valid"`
+	CandidateIDs    []string      `json:"candidate_ids,omitempty"`
+	DisputeID       string        `json:"dispute_id,omitempty"`
+	CuratedRevision int64         `json:"curated_revision,omitempty"`
 }
 type StateAction struct {
 	Op              string          `json:"op"`
@@ -105,6 +138,7 @@ type StateActionResult struct {
 	Result       json.RawMessage `json:"result"`
 	StateVersion string          `json:"state_version,omitempty"`
 	Unchanged    bool            `json:"unchanged,omitempty"`
+	Committed    bool            `json:"committed,omitempty"`
 }
 type StateEvent struct {
 	Revision  int64           `json:"revision"`
@@ -116,25 +150,32 @@ type StateEvent struct {
 	Result    json.RawMessage `json:"result"`
 }
 type stateData struct {
-	Goals         []Goal         `json:"goals"`
-	Steps         []stepMetadata `json:"steps"`
-	Facts         []FactRecord   `json:"facts"`
-	Findings      []Finding      `json:"findings"`
-	FactRelations []FactRelation `json:"fact_relations"`
+	Goals         []Goal           `json:"goals"`
+	Steps         []stepMetadata   `json:"steps"`
+	Facts         []FactRecord     `json:"facts"`
+	Findings      []Finding        `json:"findings"`
+	FactRelations []FactRelation   `json:"fact_relations"`
+	Candidates    []Candidate      `json:"candidates,omitempty"`
+	Disputes      []Dispute        `json:"disputes,omitempty"`
+	Curation      CurationProgress `json:"curation,omitempty"`
 }
 
 // Keep the legacy status key for rollback readers, but persist only the one
 // status not projected from the authoritative Intent and execution records.
 type stepMetadata struct {
-	ID       string `json:"id"`
-	GoalID   string `json:"goal_id"`
-	Priority int    `json:"priority"`
-	Reason   string `json:"reason,omitempty"`
-	Status   string `json:"status,omitempty"`
+	Repair     *artifactcheck.Spec `json:"repair,omitempty"`
+	ID         string              `json:"id"`
+	GoalID     string              `json:"goal_id"`
+	Priority   int                 `json:"priority"`
+	Reason     string              `json:"reason,omitempty"`
+	Status     string              `json:"status,omitempty"`
+	DisputeID  string              `json:"dispute_id,omitempty"`
+	DependsOn  []string            `json:"depends_on,omitempty"`
+	WritePaths []string            `json:"write_paths,omitempty"`
 }
 
 func stepMetadataFrom(step Step) stepMetadata {
-	metadata := stepMetadata{ID: step.ID, GoalID: step.GoalID, Priority: step.Priority, Reason: step.Reason}
+	metadata := stepMetadata{ID: step.ID, GoalID: step.GoalID, Priority: step.Priority, Reason: step.Reason, DisputeID: step.DisputeID, DependsOn: append([]string(nil), step.DependsOn...), WritePaths: append([]string(nil), step.WritePaths...), Repair: step.Repair}
 	if step.Status == "abandoned" {
 		metadata.Status = "abandoned"
 	}
@@ -169,7 +210,15 @@ func (t *Tx) State(project string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	s := State{Graph: g, Goals: []Goal{}, Steps: []Step{}, FactRecords: []FactRecord{}, Findings: d.Findings, FactRelations: d.FactRelations, Revision: revision, DecisionRevision: decision}
+	return t.projectState(g, d, revision, decision)
+}
+
+// projectState builds the same effective evidence and dependency view for
+// persisted reads and a curator's pending atomic batch. Relations never
+// rewrite the original observations stored in d.Facts.
+func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State, error) {
+	project := g.Project.ID
+	s := State{Graph: g, Goals: []Goal{}, Steps: []Step{}, FactRecords: []FactRecord{}, Findings: d.Findings, FactRelations: d.FactRelations, Revision: revision, DecisionRevision: decision, Candidates: d.Candidates, Disputes: d.Disputes, Curation: d.Curation}
 	root := Goal{ID: "goal", Status: "open", Sources: []string{}, CreatedAt: g.Project.CreatedAt}
 	for _, f := range g.Facts {
 		if f.ID == "goal" {
@@ -209,9 +258,10 @@ func (t *Tx) State(project string) (State, error) {
 		s.Findings[n].SupportValid = len(s.Findings[n].Sources) > 0 && s.ValidateFactSources(s.Findings[n].Sources, true) == nil
 	}
 	latest := map[string]Execution{}
+	currentRuns := map[string]bool{}
 	// A graph read needs only the latest runtime state of each existing Step.
 	// Never materialize archived Job/Result bodies to build the current FGS.
-	rows, err := t.Query(`SELECT e.id,e.intent,e.lease,e.status FROM intents i JOIN xloom_executions e ON e.rowid=(
+	rows, err := t.Query(`SELECT e.id,e.intent,e.lease,e.status,e.generation FROM intents i JOIN xloom_executions e ON e.rowid=(
 		SELECT rowid FROM xloom_executions WHERE project_id=i.project_id AND intent=i.id AND kind!='reason' ORDER BY rowid DESC LIMIT 1
 	) WHERE i.project_id=?`, project)
 	if err != nil {
@@ -219,12 +269,14 @@ func (t *Tx) State(project string) (State, error) {
 	}
 	for rows.Next() {
 		var execution Execution
-		err := rows.Scan(&execution.ID, &execution.Intent, &execution.Lease, &execution.Status)
+		var generation int64
+		err := rows.Scan(&execution.ID, &execution.Intent, &execution.Lease, &execution.Status, &generation)
 		if err != nil {
 			rows.Close()
 			return State{}, err
 		}
 		latest[execution.Intent] = execution
+		currentRuns[execution.Intent] = generation == g.Project.Generation
 	}
 	err = rows.Err()
 	rows.Close()
@@ -242,6 +294,10 @@ func (t *Tx) State(project string) (State, error) {
 		for _, metadata := range d.Steps {
 			if metadata.ID == i.ID {
 				step.GoalID, step.Priority, step.Reason = metadata.GoalID, metadata.Priority, metadata.Reason
+				step.DisputeID = metadata.DisputeID
+				step.Repair = metadata.Repair
+				step.DependsOn = append([]string(nil), metadata.DependsOn...)
+				step.WritePaths = append([]string(nil), metadata.WritePaths...)
 				if metadata.Status == "abandoned" {
 					step.Status = "abandoned"
 				}
@@ -266,6 +322,9 @@ func (t *Tx) State(project string) (State, error) {
 				}
 			}
 		}
+		if execution, ok := latest[i.ID]; ok && g.Project.OrchestrationVersion == 1 && slices.Contains([]string{"failed", "rejected", "cancelled", "retry_requested"}, execution.Status) {
+			step.LatestRunID = execution.ID
+		}
 		for _, id := range step.From {
 			if s.ValidateFactSources([]string{id}, false) != nil {
 				step.InvalidSources = append(step.InvalidSources, id)
@@ -275,6 +334,9 @@ func (t *Tx) State(project string) (State, error) {
 			step.Status = "needs_review"
 		}
 		s.Steps = append(s.Steps, step)
+	}
+	if g.Project.OrchestrationVersion == 1 {
+		s.projectStepSupport(latest, currentRuns)
 	}
 	return s, nil
 }
@@ -384,7 +446,7 @@ func (s State) ValidateFactSources(ids []string, requireObservation bool) error 
 				continue
 			}
 			found = true
-			if f.Status != "valid" && !(id == "origin" && !requireObservation) {
+			if f.SupportInvalid || (f.Status != "valid" && !(id == "origin" && !requireObservation)) {
 				return Err(409, "Source fact "+id+" is not effective evidence")
 			}
 		}
@@ -457,7 +519,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if err = s.Graph.RequireActive(); err != nil {
 		return StateActionResult{}, err
 	}
-	if fence.Run == "" || !slices.Contains([]string{"reason", "explore", "bootstrap", "intent"}, fence.Lease) {
+	if fence.Run == "" || !slices.Contains([]string{"reason", "explore", "bootstrap", "intent", "curate"}, fence.Lease) {
 		return StateActionResult{}, Err(403, "state actions require an execution lease")
 	}
 	if err = t.CheckExecution(s.Graph, fence); err != nil {
@@ -466,8 +528,27 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if !required(action.IdempotencyKey, 256) {
 		return StateActionResult{}, Err(422, "idempotency_key is required and must be at most 256 bytes")
 	}
-	if !slices.Contains([]string{"fact", "fact_relation", "finding", "goal", "step"}, action.Op) && !(t.inDecisionBatch && action.Op == "complete") {
+	if !slices.Contains([]string{"fact", "fact_relation", "finding", "goal", "step", "candidate", "curate", "curation_request"}, action.Op) && !(t.inDecisionBatch && action.Op == "complete") {
 		return StateActionResult{}, Err(422, "unknown state action")
+	}
+	if s.Graph.Project.OrchestrationVersion == 1 {
+		allowed := false
+		switch fence.Lease {
+		case "reason":
+			allowed = action.Op == "goal" || action.Op == "step" || action.Op == "complete" || action.Op == "curation_request"
+		case "curate":
+			allowed = action.Op == "curate"
+		case "explore", "bootstrap", "intent":
+			allowed = action.Op == "fact" || action.Op == "candidate"
+		}
+		if !allowed {
+			return StateActionResult{}, Err(403, "operation is not permitted for this orchestration role")
+		}
+		if fence.Lease == "curate" && action.ExpectedVersion == "" {
+			return StateActionResult{}, Err(422, "curation writes require expected_version")
+		}
+	} else if action.Op == "candidate" || action.Op == "curate" || action.Op == "curation_request" || fence.Lease == "curate" {
+		return StateActionResult{}, Err(403, "operation requires orchestration version 1")
 	}
 	if (action.Op == "goal" || action.Op == "step") && fence.Lease != "reason" {
 		return StateActionResult{}, Err(403, "only Decide can modify goals or steps")
@@ -478,7 +559,12 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	// Canonical JSON makes insignificant object ordering/whitespace irrelevant,
 	// but binds each key to its operation, exact values and execution identity.
 	var payload any
-	if err = json.Unmarshal(action.Payload, &payload); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(action.Payload))
+	decoder.UseNumber()
+	if err = decoder.Decode(&payload); err != nil {
+		return StateActionResult{}, Err(422, "invalid action JSON")
+	}
+	if err = decoder.Decode(new(any)); err != io.EOF {
 		return StateActionResult{}, Err(422, "invalid action JSON")
 	}
 	canonical, _ := json.Marshal(struct {
@@ -497,6 +583,15 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return StateActionResult{}, err
+	}
+	if action.Op == "curate" {
+		var committed bool
+		if err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_state_actions WHERE project_id=? AND json_extract(request,'$.Run')=? AND json_extract(request,'$.Op')='curate')`, project, fence.Run).Scan(&committed); err != nil {
+			return StateActionResult{}, err
+		}
+		if committed {
+			return StateActionResult{}, Err(409, "this curator execution already committed a batch")
+		}
 	}
 	// The batch already checked its caller's version under this transaction's
 	// write reservation. Its own successive versions need no Job revalidation.
@@ -519,6 +614,12 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		id, result, changed, err = t.addFactRelation(s, &d, fence, action.Payload)
 	case "finding":
 		id, result, changed, err = t.upsertFinding(s, &d, fence, action.Payload)
+	case "candidate":
+		id, result, err = t.addCandidate(s, &d, fence, action.Payload)
+	case "curate":
+		id, result, err = t.curate(s, &d, fence, action.Payload)
+	case "curation_request":
+		id, result, changed, err = t.requestCuration(s, &d, action.Payload)
 	case "goal":
 		id, result, changed, err = t.changeGoal(s, &d, action.Payload)
 	case "step":
@@ -539,7 +640,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	}
 	if changed {
 		s.Revision++
-		if action.Op == "fact" || action.Op == "finding" || (action.Op == "fact_relation" && fence.Lease != "reason") {
+		if action.Op == "fact" || action.Op == "finding" || action.Op == "candidate" || action.Op == "curate" || (action.Op == "fact_relation" && fence.Lease != "reason") {
 			s.DecisionRevision++
 		}
 		raw, err := json.Marshal(d)
@@ -558,7 +659,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if err != nil {
 		return StateActionResult{}, err
 	}
-	if changed && (action.Op == "goal" || action.Op == "step") {
+	if changed && (action.Op == "goal" || action.Op == "step" || action.Op == "curation_request") {
 		var transition struct {
 			Action string `json:"action"`
 		}
@@ -573,6 +674,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		}
 	}
 	out := StateActionResult{Op: action.Op, ID: id, Revision: s.Revision, Result: resultJSON, StateVersion: DecisionStateVersion(current), Unchanged: !changed}
+	out.Committed = action.Op == "curate"
 	response, _ := json.Marshal(out)
 	if _, err = t.Exec("INSERT INTO xloom_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
 		return StateActionResult{}, err
@@ -647,7 +749,11 @@ func (t *Tx) addFactRelation(s State, d *stateData, fence ExecutionFence, raw js
 		return "", nil, false, Err(403, "user input cannot be rewritten as a fact relation")
 	}
 	for _, relation := range d.FactRelations {
-		if relation.Kind == input.Kind && relation.Source == input.Source && relation.Target == input.Target && relation.Reason == input.Reason {
+		// Curators publish one semantic edge per kind and pair of facts. A
+		// rephrased explanation remains in that batch's request/event history;
+		// it must not duplicate the edge or replace its original provenance.
+		// Legacy fact_relation clients retain their reason-sensitive identity.
+		if relation.Kind == input.Kind && relation.Source == input.Source && relation.Target == input.Target && (s.Graph.Project.OrchestrationVersion == 1 || relation.Reason == input.Reason) {
 			return input.Target, relation, false, nil
 		}
 	}
@@ -850,7 +956,7 @@ func (t *Tx) changeGoal(s State, d *stateData, raw json.RawMessage) (string, any
 			}
 		}
 		for _, step := range s.Steps {
-			if step.GoalID == goal.ID && (step.Status == "open" || step.Status == "running" || step.Status == "needs_review") {
+			if step.GoalID == goal.ID && contextActiveStep(step.Status) {
 				return "", nil, false, Err(409, "goal has an active step; resolve it explicitly first")
 			}
 		}
@@ -870,13 +976,18 @@ func (t *Tx) changeGoal(s State, d *stateData, raw json.RawMessage) (string, any
 
 func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.RawMessage) (string, any, bool, error) {
 	var input struct {
-		Action      string   `json:"action"`
-		ID          string   `json:"id"`
-		GoalID      string   `json:"goal_id"`
-		From        []string `json:"from"`
-		Description string   `json:"description"`
-		Priority    int      `json:"priority"`
-		Reason      string   `json:"reason"`
+		Action      string              `json:"action"`
+		ID          string              `json:"id"`
+		GoalID      string              `json:"goal_id"`
+		From        []string            `json:"from"`
+		Description string              `json:"description"`
+		Priority    int                 `json:"priority"`
+		Reason      string              `json:"reason"`
+		DisputeID   string              `json:"dispute_id"`
+		DependsOn   []string            `json:"depends_on"`
+		WritePaths  []string            `json:"write_paths"`
+		LatestRunID string              `json:"latest_run_id"`
+		Repair      *artifactcheck.Spec `json:"repair"`
 	}
 	if err := decodeAction(raw, &input); err != nil {
 		return "", nil, false, err
@@ -885,10 +996,25 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		return "", nil, false, Err(422, "step priority must be between 0 and 1000000")
 	}
 	if input.Action == "add" {
-		if input.ID != "" || !required(input.Description, 16384) {
+		if input.Repair != nil {
+			if s.Graph.Project.OrchestrationVersion != 1 || input.DisputeID != "" {
+				return "", nil, false, Err(422, "repair requires orchestration version 1 and cannot be an independent dispute review")
+			}
+			if err := artifactcheck.Validate(*input.Repair); err != nil {
+				return "", nil, false, Err(422, err.Error())
+			}
+		}
+		if input.ID != "" || input.LatestRunID != "" || !required(input.Description, 16384) {
 			return "", nil, false, Err(422, "new step requires description and a server-assigned ID")
 		}
 		if err := s.ValidateFactSources(input.From, false); err != nil {
+			return "", nil, false, err
+		}
+		if err := validateStepDependencies(*s, input.DependsOn); err != nil {
+			return "", nil, false, err
+		}
+		writePaths, err := normalizeStepWritePaths(input.WritePaths, input.Repair)
+		if err != nil {
 			return "", nil, false, err
 		}
 		if input.GoalID == "" {
@@ -901,7 +1027,15 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		if !goalOpen {
 			return "", nil, false, Err(409, "step requires an open goal")
 		}
-		if existing, ok := s.MatchingStep(input.GoalID, input.From, input.Description); ok {
+		if input.DisputeID != "" {
+			if err := t.validateReviewStep(*s, d, input.DisputeID); err != nil {
+				return "", nil, false, err
+			}
+		}
+		if existing, ok := s.matchingRepairStep(input.GoalID, input.From, input.Description, input.DependsOn, input.Repair, writePaths); ok {
+			if existing.DisputeID != input.DisputeID {
+				return "", nil, false, Err(409, "matching task has a different dispute binding")
+			}
 			return existing.ID, existing, false, nil
 		}
 		if err := t.CheckNewStepLimit(s.Graph.Project.ID, fence.Run); err != nil {
@@ -911,20 +1045,42 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		if err != nil {
 			return "", nil, false, err
 		}
-		step := Step{ID: id, From: input.From, GoalID: input.GoalID, Description: strings.TrimSpace(input.Description), Status: "open", Priority: input.Priority, CreatedAt: t.Now}
+		step := Step{ID: id, From: input.From, GoalID: input.GoalID, Description: strings.TrimSpace(input.Description), Status: "open", Priority: input.Priority, CreatedAt: t.Now, DisputeID: input.DisputeID, DependsOn: append([]string(nil), input.DependsOn...), WritePaths: writePaths, Repair: input.Repair}
+		if input.DisputeID != "" {
+			for n := range d.Disputes {
+				if d.Disputes[n].ID == input.DisputeID {
+					d.Disputes[n].ReviewStepIDs = append(d.Disputes[n].ReviewStepIDs, id)
+					d.Disputes[n].Status = "pending_review"
+					d.Disputes[n].UpdatedAt = t.Now
+				}
+			}
+		}
 		d.Steps = append(d.Steps, stepMetadataFrom(step))
 		intent := Intent{ID: id, From: input.From, Description: step.Description, Creator: fence.Run, CreatedAt: t.Now}
 		s.Graph.Intents = append(s.Graph.Intents, intent)
 		return id, step, true, t.saveIntent(s.Graph.Project.ID, intent)
 	}
-	if !slices.Contains([]string{"priority", "abandon"}, input.Action) || !required(input.Reason, 8192) || input.GoalID != "" || len(input.From) != 0 || input.Description != "" {
+	if input.Repair != nil {
+		return "", nil, false, Err(422, "repair is an immutable step add contract")
+	}
+	if input.WritePaths != nil {
+		return "", nil, false, Err(422, "write_paths is an immutable step add contract")
+	}
+	if input.Action == "retry" {
+		if !required(input.ID, 256) || !ValidExecutionID(input.LatestRunID) || !required(input.Reason, 8192) || input.GoalID != "" || len(input.From) != 0 || input.Description != "" || input.DisputeID != "" || input.DependsOn != nil || input.Priority != 0 {
+			return "", nil, false, Err(422, "step retry requires only id,latest_run_id and reason; task inputs are immutable")
+		}
+		return t.retryStep(*s, d, input.ID, input.LatestRunID, input.Reason)
+	}
+	if !slices.Contains([]string{"priority", "abandon"}, input.Action) || !required(input.Reason, 8192) || input.GoalID != "" || len(input.From) != 0 || input.Description != "" || input.DisputeID != "" || input.DependsOn != nil || input.LatestRunID != "" {
 		return "", nil, false, Err(422, "step change requires a reason; existing task inputs are immutable")
 	}
 	for _, current := range s.Steps {
 		if current.ID != input.ID {
 			continue
 		}
-		if current.Status == "completed" || current.Status == "abandoned" {
+		canRetireUnsupported := s.Graph.Project.OrchestrationVersion == 1 && input.Action == "abandon" && current.Status == "completed" && !current.SupportValid && !s.externalFeedbackStep(current)
+		if current.Status == "abandoned" || (current.Status == "completed" && !canRetireUnsupported) {
 			return "", nil, false, Err(409, "step is already terminal")
 		}
 		if input.Action == "priority" && current.Status == "running" {
@@ -943,6 +1099,11 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 			for n := range s.Graph.Intents {
 				i := &s.Graph.Intents[n]
 				if i.ID != current.ID {
+					continue
+				}
+				if canRetireUnsupported {
+					// Retire its current authority without changing the prior
+					// success record, accepted Fact or completion timestamp.
 					continue
 				}
 				if i.Worker != nil {
@@ -1011,18 +1172,31 @@ func (t *Tx) StepAvailable(project, id string) error {
 // ValidateStateCompletion adds checks only when extended state is present;
 // legacy clients without FGS metadata retain their original contract.
 func (t *Tx) ValidateStateCompletion(project string, from []string) error {
+	current, loadErr := t.State(project)
+	if loadErr != nil {
+		return loadErr
+	}
+	if current.Graph.Project.OrchestrationVersion == 1 {
+		for _, step := range current.Steps {
+			if step.Status == "blocked" || (step.Status == "completed" && !step.SupportValid && Value(step.Result) != "goal" && !current.externalFeedbackStep(step)) {
+				return Err(409, "Project has a blocked or unsupported Step "+step.ID)
+			}
+		}
+		if err := current.validateCompletionDisputes(from); err != nil {
+			return err
+		}
+		if current.Graph.Project.Curator != nil {
+			return Err(409, "Project has an active curator")
+		}
+	}
 	d, _, _, err := t.stateData(project)
 	if err != nil || (len(d.Facts) == 0 && len(d.Goals) == 0 && len(d.Steps) == 0 && len(d.Findings) == 0 && len(d.FactRelations) == 0) {
 		return err
 	}
-	s, err := t.State(project)
-	if err != nil {
+	if err = current.ValidateFactSources(from, true); err != nil {
 		return err
 	}
-	if err = s.ValidateFactSources(from, true); err != nil {
-		return err
-	}
-	for _, goal := range s.Goals {
+	for _, goal := range current.Goals {
 		if goal.ID != "goal" && (goal.Status == "open" || (goal.Status == "achieved" && !goal.SupportValid)) {
 			return Err(409, "Project has an unresolved child goal")
 		}

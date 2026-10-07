@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -11,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 // Exercise the HTTP application boundary with real SQLite transactions. No
@@ -62,9 +63,9 @@ func (f *executionProtocolFixture) requestWithHandler(handler http.Handler, meth
 	}
 	r := httptest.NewRequest(method, path, bytes.NewReader(raw))
 	if fenced {
-		r.Header.Set("X-Xloom-Run", f.lease)
-		r.Header.Set("X-Xloom-Lease", f.kind)
-		r.Header.Set("X-Xloom-Intent", f.intent)
+		r.Header.Set("X-PwnMesh-Run", f.lease)
+		r.Header.Set("X-PwnMesh-Lease", f.kind)
+		r.Header.Set("X-PwnMesh-Intent", f.intent)
 	}
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, r)
@@ -79,9 +80,9 @@ func (f *executionProtocolFixture) requestWithHandler(handler http.Handler, meth
 	return w.Body.String()
 }
 
-// Legacy jobs remain recoverable after their registration route is retired.
-// Seed them through the internal transaction boundary without exposing an HTTP API.
-func (f *executionProtocolFixture) registerLegacy(body any, want int) string {
+// Seed a current immutable inline job for focused HTTP application tests.
+// Production callers use server-owned snapshot preparation.
+func (f *executionProtocolFixture) registerInline(body any, want int) string {
 	f.t.Helper()
 	server := &Server{Store: f.store}
 	handler := server.wrap(func(tx *board.Tx, q *request, r *http.Request) (int, any, error) {
@@ -139,11 +140,127 @@ func (f *executionProtocolFixture) state() board.State {
 	return state
 }
 
-func (f *executionProtocolFixture) newIntent() board.Intent {
+func (f *executionProtocolFixture) newIntent(descriptions ...string) board.Intent {
 	f.t.Helper()
 	var intent board.Intent
-	f.request("POST", f.base()+"/intents", map[string]any{"from": []string{"origin"}, "description": "Observe the synthetic fixture", "creator": "fixture"}, false, http.StatusCreated, &intent)
+	// Seed unrelated work through the board command. HTTP planning itself is
+	// covered by the decision-batch suite; fixture creation needs no extra run.
+	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+		g, err := tx.Load(f.project)
+		if err != nil {
+			return err
+		}
+		previous := g.Project.Reason
+		lease := "fixture-planner"
+		g.Project.Reason = &board.Reason{Worker: lease, StartedAt: tx.Now, Heartbeat: tx.Now}
+		if err = tx.Save(g); err != nil {
+			return err
+		}
+		key := fmt.Sprintf("fixture-step-%d", len(g.Intents))
+		description := "Observe the synthetic fixture " + key
+		if len(descriptions) > 0 {
+			description = descriptions[0]
+		}
+		payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": description})
+		created, err := tx.StateAction(f.project, board.ExecutionFence{Run: lease, Lease: "reason"}, board.StateAction{Op: "step", IdempotencyKey: key, Payload: payload})
+		if err != nil {
+			return err
+		}
+		g, err = tx.Load(f.project)
+		if err != nil {
+			return err
+		}
+		g.Project.Reason = previous
+		for _, step := range g.Intents {
+			if step.ID == created.ID {
+				intent = step
+			}
+		}
+		return tx.Save(g)
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
 	return intent
+}
+
+func (f *executionProtocolFixture) completeStep(intent board.Intent, description string) board.Conclusion {
+	f.t.Helper()
+	executor := *f
+	executor.kind, executor.intent = "explore", intent.ID
+	executor.run = "fixture-execution-" + intent.ID
+	executor.lease = "planner@" + executor.run
+	executor.request("POST", executor.base()+"/intents/"+intent.ID+"/heartbeat", map[string]string{"worker": executor.lease}, false, http.StatusOK, &intent)
+	job, _ := json.Marshal(map[string]any{"run_id": executor.run, "kind": "explore", "workspace": "/workspace", "graph_rpc": true, "result_contract_version": 2, "graph": board.Graph{Project: f.state().Graph.Project}, "intent": intent})
+	template := board.Execution{ProjectID: f.project, ID: executor.run, Namespace: "protocol-test", Backend: "planner", Kind: "explore", Intent: intent.ID, Lease: executor.lease, Job: job}
+	prepareSnapshot(f.t, &executor, template)
+	fact := evidenceFixtureFact(executor.run)
+	fact["description"] = description
+	raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact": fact}})
+	executor.pending(string(raw))
+	executor.apply(http.StatusOK)
+	state := executor.state()
+	for _, completed := range state.Graph.Intents {
+		if completed.ID == intent.ID {
+			for _, observed := range state.Graph.Facts {
+				if observed.ID == board.Value(completed.To) {
+					return board.Conclusion{Intent: completed, Fact: observed}
+				}
+			}
+		}
+	}
+	f.t.Fatal("fixture Execute did not publish its result")
+	return board.Conclusion{}
+}
+
+func (f *executionProtocolFixture) curateRelations(relations ...map[string]any) {
+	f.t.Helper()
+	curator := *f
+	curator.run = fmt.Sprintf("fixture-curator-%d", f.state().Revision)
+	curator.lease = "planner@" + curator.run
+	_, job := prepareCurator(&curator)
+	curator.action("curate", "curation:"+curator.run, map[string]any{"through_revision": job.InputSnapshot.Revision, "groups": []any{}, "relations": relations})
+}
+
+func (f *executionProtocolFixture) completeProject(fact string) board.Intent {
+	f.t.Helper()
+	planner := *f
+	planner.run, planner.lease, planner.intent = "fixture-completion", "planner@fixture-completion", ""
+	prepareSnapshot(f.t, &planner, snapshotTemplate(&planner, "reason"))
+	payload, _ := json.Marshal(map[string]any{"from": []string{fact}, "description": "Required fixture checked"})
+	batch := planner.batch(board.DecisionAction{Op: "complete", Payload: payload})
+	batch.Assessment = &board.RootAssessment{Status: "satisfied", From: []string{fact}, Description: "The retained response satisfies the original fixture requirement"}
+	planner.decision("preview", batch, http.StatusOK)
+	planner.decision("commit", batch, http.StatusOK)
+	for _, intent := range planner.state().Graph.Intents {
+		if board.Value(intent.To) == "goal" {
+			return intent
+		}
+	}
+	f.t.Fatal("fixture project was not completed")
+	return board.Intent{}
+}
+
+func (f *executionProtocolFixture) planAction(op, key string, payload any) board.StateActionResult {
+	f.t.Helper()
+	f.kind, f.intent = "reason", ""
+	f.run = fmt.Sprintf("fixture-plan-%d", f.state().Revision)
+	f.lease = "planner@" + f.run
+	_, job := prepareSnapshot(f.t, f, snapshotTemplate(f, "reason"))
+	raw, _ := json.Marshal(payload)
+	batch := f.batch(board.DecisionAction{Op: op, Payload: raw})
+	if job.Decision.ClosureProtocol == 1 {
+		batch.Assessment = &board.RootAssessment{Status: "missing", Description: "The original fixture still requires a scoped follow-up", Gaps: []board.RequirementGap{{ID: "fixture", InputIDs: []string{"goal"}, Description: "Check the outstanding fixture condition"}}}
+		var fields struct {
+			Action string `json:"action"`
+		}
+		_ = json.Unmarshal(raw, &fields)
+		if op == "curation_request" || op == "step" && (fields.Action == "add" || fields.Action == "retry") || op == "goal" && fields.Action == "add" {
+			batch.Actions[0].GapID = "fixture"
+		}
+	}
+	result := f.decision("commit", batch, http.StatusOK)
+	return result.Results[0]
 }
 
 // nil preserves the old job format that omitted graph_rpc entirely.
@@ -177,7 +294,7 @@ func (f *executionProtocolFixture) registerWithFields(kind string, graphRPC *boo
 		job["result_contract_version"] = version
 	}
 	if kind == "reason" {
-		job["decision"] = map[string]any{"version": 1, "state_version": board.DecisionStateVersion(state)}
+		job["decision"] = map[string]any{"version": 2, "state_version": board.DecisionStateVersion(state)}
 	}
 	for key, value := range fields {
 		job[key] = value
@@ -191,7 +308,7 @@ func (f *executionProtocolFixture) registerWithFields(kind string, graphRPC *boo
 		key = kind + ":" + f.intent
 	}
 	e := board.Execution{ProjectID: f.project, ID: f.run, Namespace: "protocol-test", Backend: "planner", Kind: kind, Intent: f.intent, Lease: f.lease, Job: raw, RetryKey: key}
-	f.registerLegacy(e, want)
+	f.registerInline(e, want)
 }
 
 func (f *executionProtocolFixture) action(op, key string, payload any) board.StateActionResult {
@@ -216,113 +333,13 @@ func (f *executionProtocolFixture) apply(want int) string {
 	return f.request("POST", f.base()+"/executions/"+f.run+"/apply", map[string]any{"graph_rpc": false, "result_contract_version": 0}, true, want, nil)
 }
 
-func TestLiveDecisionCannotSubmitCompatibilitySteps(t *testing.T) {
-	outputs := map[string]string{
-		"plural":   `{"accepted":true,"data":{"intents":[{"from":["origin"],"description":"Observe the synthetic fixture"}]}}`,
-		"singular": `{"accepted":true,"data":{"intent":{"from":["origin"],"description":"Observe the synthetic fixture"}}}`,
-	}
-	for versionName, version := range map[string]int{"legacy_version": 0, "current_version": 1} {
-		for name, output := range outputs {
-			for _, alreadyCreated := range []bool{false, true} {
-				label := "without_graph_action"
-				if alreadyCreated {
-					label = "after_graph_action"
-				}
-				t.Run(versionName+"/"+name+"/"+label, func(t *testing.T) {
-					f := newExecutionProtocolFixture(t)
-					live := true
-					f.register("reason", &live, version)
-					if alreadyCreated {
-						f.action("step", "one-direction", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Observe the synthetic fixture"})
-					}
-					before := f.state()
-					f.pending(output)
-					f.apply(http.StatusUnprocessableEntity)
-					f.apply(http.StatusUnprocessableEntity)
-					after := f.state()
-					if len(after.Steps) != len(before.Steps) || after.Revision != before.Revision || after.Graph.Project.Status != "active" {
-						t.Fatal("rejected final plan changed the project or created a duplicate step")
-					}
-					var entries []board.Execution
-					entries = f.executionRecords()
-					if len(entries) != 1 || entries[0].Status != "result_pending" {
-						t.Fatalf("rejected apply changed execution receipt: %+v", entries)
-					}
-				})
-			}
-		}
-	}
-}
-
-func TestCompatibilityDecisionCanStillSubmitSteps(t *testing.T) {
-	compat := false
-	for name, flag := range map[string]*bool{"omitted": nil, "false": &compat} {
-		t.Run(name, func(t *testing.T) {
-			f := newExecutionProtocolFixture(t)
-			f.register("reason", flag, 0)
-			f.pending(`{"accepted":true,"data":{"intents":[{"from":["origin"],"description":"Observe the synthetic fixture"}]}}`)
-			f.apply(http.StatusOK)
-			f.apply(http.StatusOK)
-			if steps := f.state().Steps; len(steps) != 1 || steps[0].Description != "Observe the synthetic fixture" {
-				t.Fatalf("compatibility plan was lost or applied twice: %+v", steps)
-			}
-		})
-	}
-}
-
-func TestLiveDecisionRetainsNonCreatingResults(t *testing.T) {
-	for name, output := range map[string]string{
-		"decided":  `{"accepted":true,"data":{"decided":true}}`,
-		"noop":     `{"accepted":true,"data":{}}`,
-		"rejected": `{"accepted":false,"reason":"Cannot establish a useful next action"}`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			f := newExecutionProtocolFixture(t)
-			live := true
-			f.register("reason", &live, 1)
-			f.action("step", "one-direction", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Observe the synthetic fixture"})
-			f.pending(output)
-			body := f.apply(http.StatusOK)
-			f.apply(http.StatusOK)
-			if name == "rejected" && !strings.Contains(body, `"rejected"`) {
-				t.Fatalf("declined decision was not retained: %s", body)
-			}
-			if state := f.state(); len(state.Steps) != 1 || state.Graph.Project.Status != "active" {
-				t.Fatal("final non-creating result changed existing work")
-			}
-		})
-	}
-}
-
-func TestLiveDecisionCanAchieveGoalThenComplete(t *testing.T) {
-	f := newExecutionProtocolFixture(t)
-	observed := f.newIntent()
-	var conclusion board.Conclusion
-	f.request("POST", f.base()+"/intents/"+observed.ID+"/conclude", map[string]string{"worker": "fixture", "description": "Synthetic fixture was verified"}, false, http.StatusOK, &conclusion)
-	live := true
-	f.register("reason", &live, 1)
-	goal := f.action("goal", "child-goal", map[string]any{"action": "add", "parent_id": "goal", "condition": "Verify the synthetic fixture"})
-	f.action("goal", "achieve-child", map[string]any{"action": "achieve", "id": goal.ID, "sources": []string{conclusion.Fact.ID}, "reason": "Confirmed by the fixture observation"})
-	text, err := json.Marshal(map[string]any{"accepted": true, "data": map[string]any{"complete": map[string]any{"from": []string{conclusion.Fact.ID}, "description": "Synthetic verification complete"}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	f.pending(string(text))
-	f.apply(http.StatusOK)
-	f.apply(http.StatusOK)
-	state := f.state()
-	if state.Graph.Project.Status != "completed" || len(state.Graph.Intents) != 2 {
-		t.Fatalf("goal actions blocked completion or replay duplicated it: %+v", state.Graph)
-	}
-}
-
 func TestNonCompletedWorkerOutcomeCannotBeAppliedAsSuccess(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
+	for _, kind := range []string{"explore"} {
 		for _, outcome := range []string{"continue", "incomplete"} {
 			t.Run(kind+"/"+outcome, func(t *testing.T) {
 				f := newExecutionProtocolFixture(t)
 				live := true
-				f.register(kind, &live, 1)
+				f.register(kind, &live, 2)
 				f.pending(`{"accepted":true,"outcome":"` + outcome + `","reason":"Required fixture reads remain"}`)
 				f.apply(http.StatusUnprocessableEntity)
 				state := f.state()
@@ -343,7 +360,7 @@ func TestIncompleteExecutionFailureNeverCreatesFact(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
 			live := true
-			f.register("explore", &live, 1)
+			f.register("explore", &live, 2)
 			output := `{"accepted":true,"outcome":"incomplete","reason":"Required fixture reads remain"}`
 			if pending {
 				f.pending(output)
@@ -363,25 +380,30 @@ func TestIncompleteExecutionFailureNeverCreatesFact(t *testing.T) {
 	}
 }
 
+var invalidExecutionProtocols = []struct {
+	name, field string
+	value       any
+}{
+	{"disabled_graph_mode", "graph_rpc", false},
+	{"legacy_version", "result_contract_version", 0},
+	{"outcome_only_version", "result_contract_version", 1},
+	{"null_graph_mode", "graph_rpc", nil},
+	{"string_graph_mode", "graph_rpc", "true"},
+	{"numeric_graph_mode", "graph_rpc", 1},
+	{"null_version", "result_contract_version", nil},
+	{"string_version", "result_contract_version", "1"},
+	{"boolean_version", "result_contract_version", true},
+	{"negative_version", "result_contract_version", -1},
+	{"fractional_version", "result_contract_version", 1.5},
+	{"unsupported_version", "result_contract_version", 3},
+}
+
 func TestExecutionRegistrationRejectsInvalidProtocolFields(t *testing.T) {
-	for _, tt := range []struct {
-		name, field string
-		value       any
-	}{
-		{"null_graph_mode", "graph_rpc", nil},
-		{"string_graph_mode", "graph_rpc", "true"},
-		{"numeric_graph_mode", "graph_rpc", 1},
-		{"null_version", "result_contract_version", nil},
-		{"string_version", "result_contract_version", "1"},
-		{"boolean_version", "result_contract_version", true},
-		{"negative_version", "result_contract_version", -1},
-		{"fractional_version", "result_contract_version", 1.5},
-		{"unsupported_version", "result_contract_version", 3},
-	} {
+	for _, tt := range invalidExecutionProtocols {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
 			live := true
-			f.registerWithFields("reason", &live, 1, map[string]any{tt.field: tt.value}, http.StatusUnprocessableEntity)
+			f.registerWithFields("reason", &live, 2, map[string]any{tt.field: tt.value}, http.StatusUnprocessableEntity)
 			var executions []board.Execution
 			executions = f.executionRecords()
 			if len(executions) != 0 {
@@ -391,42 +413,16 @@ func TestExecutionRegistrationRejectsInvalidProtocolFields(t *testing.T) {
 	}
 }
 
-func TestLegacyExecutionCannotIgnoreExplicitNonCompletion(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
-		for _, outcome := range []string{"continue", "incomplete"} {
-			t.Run(kind+"/"+outcome, func(t *testing.T) {
-				f := newExecutionProtocolFixture(t)
-				f.register(kind, nil, 0)
-				data := map[string]any{"description": "Only 19 of 30 chunks verified"}
-				if kind == "bootstrap" {
-					data = map[string]any{"fact": data, "complete": map[string]string{"description": "Process exited"}}
-				}
-				raw, err := json.Marshal(map[string]any{"accepted": true, "outcome": outcome, "data": data})
-				if err != nil {
-					t.Fatal(err)
-				}
-				before := f.state()
-				f.pending(string(raw))
-				f.apply(http.StatusUnprocessableEntity)
-				after := f.state()
-				if after.Revision != before.Revision || len(after.Graph.Facts) != len(before.Graph.Facts) || after.Steps[0].Status != "running" || after.Graph.Project.Status != "active" {
-					t.Fatal("legacy parser ignored explicit non-completion and ended the task")
-				}
-			})
-		}
-	}
-}
-
 func TestRegisteredExecutionContractCannotBeDowngraded(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
-		for _, live := range []bool{false, true} {
+	for _, kind := range []string{"explore"} {
+		for _, live := range []bool{true} {
 			name := kind + "/compatibility_graph"
 			if live {
 				name = kind + "/live_graph"
 			}
 			t.Run(name, func(t *testing.T) {
 				f := newExecutionProtocolFixture(t)
-				f.register(kind, &live, 1)
+				f.register(kind, &live, 2)
 				output := `{"accepted":true,"data":{"description":"19 of 30 chunks checked"}}`
 				if kind == "bootstrap" {
 					output = `{"accepted":true,"data":{"fact":{"description":"19 of 30 chunks checked"},"complete":{"description":"Worker exited"}}}`
@@ -439,42 +435,6 @@ func TestRegisteredExecutionContractCannotBeDowngraded(t *testing.T) {
 				after := f.state()
 				if after.Revision != before.Revision || len(after.Graph.Facts) != len(before.Graph.Facts) || after.Steps[0].Status != "running" || after.Graph.Project.Status != "active" {
 					t.Fatal("unversioned partial output was applied as completion")
-				}
-			})
-		}
-	}
-}
-
-func TestCompletedExecutionAppliesOnceAndKeepsProjectBoundary(t *testing.T) {
-	for _, kind := range []string{"bootstrap", "explore"} {
-		for _, conclude := range []bool{false, true} {
-			name := kind + "/execution"
-			if conclude {
-				name = kind + "/conclusion"
-			}
-			t.Run(name, func(t *testing.T) {
-				f := newExecutionProtocolFixture(t)
-				live := true
-				f.register(kind, &live, 1)
-				output := `{"accepted":true,"outcome":"completed","data":{"description":"All 30 chunks verified"}}`
-				if kind == "bootstrap" {
-					output = `{"accepted":true,"outcome":"completed","data":{"fact":{"description":"All 30 chunks verified"},"complete":{"description":"All required chunks match the fixture"}}}`
-				}
-				result := map[string]any{"status": "success", "text": output, "conclude": conclude}
-				f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]any{"status": "result_pending", "result": result}, true, http.StatusOK, nil)
-				f.apply(http.StatusOK)
-				first := f.state()
-				f.apply(http.StatusOK)
-				after := f.state()
-				if len(after.Graph.Facts) != 3 || after.Steps[0].Status != "completed" || after.Revision != first.Revision || len(after.Graph.Intents) != len(first.Graph.Intents) {
-					t.Fatalf("completed result was lost or applied twice: %+v", after)
-				}
-				wantStatus := "active"
-				if kind == "bootstrap" && !conclude {
-					wantStatus = "completed"
-				}
-				if after.Graph.Project.Status != wantStatus {
-					t.Fatalf("project status=%q, want %q", after.Graph.Project.Status, wantStatus)
 				}
 			})
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 )
@@ -40,6 +41,12 @@ type Loop struct {
 	// StopResult lets the runtime end immediately after an authoritative tool
 	// commit. Remaining calls are settled without executing more side effects.
 	StopResult func() (string, bool)
+	// StopResultTools is an exhaustive opt-in declaration of tools that can
+	// change StopResult. With a nonempty list, other tools retain ordinary
+	// Parallel execution between serial barriers. Such tools must not change
+	// the terminal state, and StopResult must permit concurrent reads. An empty
+	// list preserves the safe serial behavior for existing runtime callbacks.
+	StopResultTools []string
 	// A byte budget is an approximation, not a provider token count.
 	ContextBytes int
 	// ContextTokens is an optional input allowance after reserving output space.
@@ -53,6 +60,7 @@ type Loop struct {
 	SummaryMaxTokens    int
 	ObserveRequests     bool
 	mu                  sync.Mutex
+	stateOwned          bool
 }
 
 func (l *Loop) emit(e Event) {
@@ -63,23 +71,40 @@ func (l *Loop) emit(e Event) {
 		case "agent_start", "agent_end", "turn_start", "turn_end", "model_call_start", "model_call_end", "tool_start", "tool_end":
 			e.At = time.Now().UTC().Format(time.RFC3339Nano)
 		}
+		if e.Message != nil {
+			message := cloneMessage(*e.Message)
+			e.Message = &message
+		}
+		if e.Request != nil {
+			request := *e.Request
+			request.Usage = cloneUsage(request.Usage)
+			e.Request = &request
+		}
+		if e.Compaction != nil {
+			record := *e.Compaction
+			record.Quotes = slices.Clone(record.Quotes)
+			record.Usage = cloneUsage(record.Usage)
+			record.View = cloneMessages(record.View)
+			e.Compaction = &record
+		}
 		l.Emit(e)
 	}
 }
 func (l *Loop) append(m Message) error {
+	l.ownState()
 	if err := l.initCheckpoint(); err != nil {
 		return err
 	}
 	l.Checkpoint.LastSequence++
 	m.Sequence = l.Checkpoint.LastSequence
-	l.History = append(l.History, m)
+	l.History = append(l.History, cloneMessage(m))
 	l.emit(Event{Type: "message_end", Message: &m})
 	return l.saveState()
 }
 
 func (l *Loop) saveState() error {
 	if l.SaveState != nil {
-		return l.SaveState(l.History, l.Checkpoint)
+		return l.SaveState(cloneMessages(l.History), cloneCheckpoint(l.Checkpoint))
 	}
 	return nil
 }
@@ -102,6 +127,7 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 	if l.Provider == nil {
 		return "", errors.New("missing model provider")
 	}
+	l.ownState()
 	if err := l.initCheckpoint(); err != nil {
 		return "", err
 	}
@@ -170,6 +196,19 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 				}
 			}
 			if err != nil {
+				var modelErr *ModelError
+				if errors.As(err, &modelErr) && modelErr.Kind == ErrorToolArguments && l.Checkpoint.ToolArgumentRetries == 0 && ctx.Err() == nil {
+					// The provider rejected the whole response before any calls ran.
+					// Persist one allowance until a tool succeeds, including across restarts.
+					l.Checkpoint.ToolArgumentRetries++
+					if saveErr := l.append(Text("user", "The previous response had invalid JSON tool arguments; none of its calls ran. Return valid JSON tool arguments.")); saveErr != nil {
+						return last, saveErr
+					}
+					l.emit(Event{Type: "tool_argument_retry", Error: err.Error()})
+					l.emit(Event{Type: "turn_end"})
+					// Refresh runtime inputs and cancellation at the normal boundary.
+					continue
+				}
 				return last, err
 			}
 			if m.Role != "assistant" {
@@ -199,8 +238,19 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 			}
 			if len(calls) > 0 {
 				results := l.execute(ctx, calls, m.StopReason == "max_tokens" || m.StopReason == "length")
+				argumentRetries := l.Checkpoint.ToolArgumentRetries
+				// A later, independent argument error must not discard useful work.
+				// Replenish only with a successful tool receipt, saved atomically
+				// below; text or error receipts cannot replenish the allowance.
+				for _, result := range results {
+					if !result.IsError {
+						l.Checkpoint.ToolArgumentRetries = 0
+						break
+					}
+				}
 				// Always settle every emitted tool id, including after cancellation.
 				if err = l.append(Message{Role: "user", Content: results}); err != nil {
+					l.Checkpoint.ToolArgumentRetries = argumentRetries
 					return last, err
 				}
 			}
@@ -256,7 +306,6 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 }
 func (l *Loop) execute(ctx context.Context, calls []Block, truncated bool) []Block {
 	out := make([]Block, len(calls))
-	parallel := l.StopResult == nil
 	find := func(name string) *Tool {
 		for n := range l.Tools {
 			if l.Tools[n].Name == name {
@@ -265,10 +314,12 @@ func (l *Loop) execute(ctx context.Context, calls []Block, truncated bool) []Blo
 		}
 		return nil
 	}
-	for _, c := range calls {
-		if t := find(c.Name); t != nil && !t.Parallel {
-			parallel = false
+	parallel := func(c Block) bool {
+		if l.StopResult != nil && (len(l.StopResultTools) == 0 || slices.Contains(l.StopResultTools, c.Name)) {
+			return false
 		}
+		t := find(c.Name)
+		return t != nil && t.Parallel
 	}
 	run := func(n int) {
 		c := calls[n]
@@ -311,17 +362,25 @@ func (l *Loop) execute(ctx context.Context, calls []Block, truncated bool) []Blo
 		out[n] = Block{Type: "tool_result", ToolUseID: c.ID, Content: content, IsError: err != nil}
 		l.emit(e)
 	}
-	if parallel {
+	// Serial tools are barriers, not a reason to serialize independent reads
+	// elsewhere in the response. No tool crosses a write or terminal commit.
+	for start := 0; start < len(calls); {
+		end := start
+		for end < len(calls) && parallel(calls[end]) {
+			end++
+		}
+		if end <= start+1 {
+			run(start)
+			start++
+			continue
+		}
 		var wg sync.WaitGroup
-		for n := range calls {
+		for n := start; n < end; n++ {
 			wg.Add(1)
 			go func(n int) { defer wg.Done(); run(n) }(n)
 		}
 		wg.Wait()
-	} else {
-		for n := range calls {
-			run(n)
-		}
+		start = end
 	}
 	return out
 }
@@ -335,7 +394,7 @@ func invoke(ctx context.Context, t *Tool, raw json.RawMessage) (text string, err
 	if t.Execute == nil {
 		return "", errors.New("tool has no executor")
 	}
-	return t.Execute(ctx, raw)
+	return t.Execute(ctx, slices.Clone(raw))
 }
 
 func validateCalls(m Message) error {
@@ -358,6 +417,7 @@ func validateCalls(m Message) error {
 // RepairHistory settles interrupted tool batches with errors. Replaying them
 // could repeat a side effect that completed before the session was saved.
 func (l *Loop) RepairHistory() error {
+	l.ownState()
 	var pending []Block
 	for i, m := range l.History {
 		if len(pending) > 0 {

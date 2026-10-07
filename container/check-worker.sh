@@ -21,13 +21,13 @@ su -s /bin/sh kali -c 'test -w /workspace && test "$(sudo -n id -u)" = 0'
 # 必须能真正执行 git 操作，否则依赖 git 的任务会以 128 (dubious ownership) 失败。
 # 仅检查 git 命令存在无法覆盖这一点，故这里实际执行一次仓库操作。
 git -C /workspace status --short >/dev/null
-smoke_dir=$(mktemp -d /workspace/.xloom-smoke.XXXXXX)
+smoke_dir=$(mktemp -d /workspace/.pwnmesh-smoke.XXXXXX)
 trap 'rm -rf -- "$smoke_dir"' EXIT HUP INT TERM
 file="$smoke_dir/probe.txt"
-printf 'xloom-worker-smoke\n' > "$file"
-rg -q '^xloom-worker-smoke$' "$file"
+printf 'pwnmesh-worker-smoke\n' > "$file"
+rg -q '^pwnmesh-worker-smoke$' "$file"
 fd --hidden --no-ignore --type f '^probe\.txt$' "$smoke_dir" | grep -Fx "$file" >/dev/null
-test "$(cat "/home/kali/workspace/${smoke_dir##*/}/probe.txt")" = xloom-worker-smoke
+test "$(cat "/home/kali/workspace/${smoke_dir##*/}/probe.txt")" = pwnmesh-worker-smoke
 bash -c 'test "$BASH_VERSION"'
 ip -j link show lo | jq -e 'any(.[]; .ifname == "lo")' >/dev/null
 ping -n -c 1 -W 2 127.0.0.1 >/dev/null
@@ -42,7 +42,7 @@ node -e 'if (Number(process.versions.node.split(".")[0]) < 20) process.exit(1)'
 test "$PLAYWRIGHT_MCP_BROWSER" = chromium
 test "$PLAYWRIGHT_MCP_HEADLESS" = true
 test "$PLAYWRIGHT_MCP_SANDBOX" = false
-test "$PLAYWRIGHT_MCP_EXECUTABLE_PATH" = /usr/local/bin/xloom-chromium
+test "$PLAYWRIGHT_MCP_EXECUTABLE_PATH" = /usr/local/bin/pwnmesh-chromium
 test -x "$PLAYWRIGHT_MCP_EXECUTABLE_PATH"
 test "$PLAYWRIGHT_BROWSERS_PATH" = /opt/ms-playwright
 test -d "$PLAYWRIGHT_BROWSERS_PATH"
@@ -60,7 +60,7 @@ import sys
 import threading
 import venv
 
-assert sys.prefix == "/opt/xloom-venv", sys.prefix
+assert sys.prefix == "/opt/pwnmesh-venv", sys.prefix
 assert sys.version_info[:2] == (3, 13), sys.version
 assert ssl.create_default_context().cert_store_stats()["x509_ca"] > 0
 smoke_dir = pathlib.Path(sys.argv[1])
@@ -69,16 +69,16 @@ os.environ["PWNLIB_NOTERM"] = "1"
 
 # Exercise the added text tools and YAML bridge with local fixture bytes.
 columns = subprocess.check_output(
-    ["column", "-t", "-s", ","], input="name,value\nxloom,42\n", text=True, timeout=10,
+    ["column", "-t", "-s", ","], input="name,value\npwnmesh,42\n", text=True, timeout=10,
 ).splitlines()
-assert [line.split() for line in columns] == [["name", "value"], ["xloom", "42"]], columns
+assert [line.split() for line in columns] == [["name", "value"], ["pwnmesh", "42"]], columns
 assert columns[0].index("value") == columns[1].index("42"), columns
 assert subprocess.check_output(
     ["hexdump", "-v", "-e", '1/1 "%02x"'], input=b"\x00AB\xff", timeout=10,
 ) == b"004142ff"
 assert subprocess.check_output(
-    ["yq", "-r", ".service.name"], input="service:\n  name: xloom-worker\n", text=True, timeout=10,
-).strip() == "xloom-worker"
+    ["yq", "-r", ".service.name"], input="service:\n  name: pwnmesh-worker\n", text=True, timeout=10,
+).strip() == "pwnmesh-worker"
 
 # Local version paths only: no scans, SSH login, Kerberos tickets or ADB daemon.
 for command, label in (
@@ -123,7 +123,7 @@ with context.local(arch="amd64", os="linux", log_level="error"):
 
 import pymongo
 from bson import BSON, ObjectId
-document = {"_id": ObjectId("0123456789abcdef01234567"), "count": 3, "tags": ["xloom", "离线"]}
+document = {"_id": ObjectId("0123456789abcdef01234567"), "count": 3, "tags": ["pwnmesh", "离线"]}
 assert BSON(BSON.encode(document)).decode() == document
 assert pymongo.version == versions["pymongo"], pymongo.version
 
@@ -158,10 +158,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8" if self.path == "/browser" else "text/plain")
         self.end_headers()
         if self.path == "/browser":
-            self.wfile.write(b'<!doctype html><title>X-Loom browser smoke</title><p id="result">pending</p>'
+            self.wfile.write(b'<!doctype html><title>PwnMesh browser smoke</title><p id="result">pending</p>'
                             b'<script>document.querySelector("#result").textContent = "chromium-script-ran";</script>')
         else:
-            self.wfile.write(b"xloom-worker-smoke\n")
+            self.wfile.write(b"pwnmesh-worker-smoke\n")
 
     def log_message(self, *args):
         pass
@@ -176,15 +176,15 @@ with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
             ["curl", "--noproxy", "*", "--fail", "--silent", "--show-error", "--max-time", "5", url],
             ["wget", "--no-proxy", "--quiet", "--timeout=5", "--tries=1", "-O", "-", url],
         ):
-            assert subprocess.check_output(command, timeout=10) == b"xloom-worker-smoke\n"
-        session = "xloom-smoke-" + str(os.getpid())
+            assert subprocess.check_output(command, timeout=10) == b"pwnmesh-worker-smoke\n"
+        session = "pwnmesh-smoke-" + str(os.getpid())
         cli = ["playwright-cli", "-s=" + session]
         # Use the installed CLI and its Chromium defaults, not a separate Node API.
         # Its run-code command exits nonzero when either browser assertion fails.
         try:
             subprocess.run(cli + ["open", url + "browser"], cwd=smoke_dir, check=True, timeout=45)
             subprocess.run(cli + ["run-code", """async page => {
-                if ((await page.title()) !== 'X-Loom browser smoke') throw new Error('browser title mismatch');
+                if ((await page.title()) !== 'PwnMesh browser smoke') throw new Error('browser title mismatch');
                 if ((await page.locator('#result').innerText()) !== 'chromium-script-ran') throw new Error('page script did not execute');
             }"""], cwd=smoke_dir, check=True, timeout=20)
         finally:
@@ -198,6 +198,6 @@ PY
 for path in /home/kali/knowledges /home/kali/tools /home/kali/pocs /workspace/.agents /workspace/.claude /workspace/AGENTS.md /workspace/CLAUDE.md; do
     test ! -e "$path"
 done
-/usr/local/bin/xloom worker --help 2>&1 | grep -F -- '-job' >/dev/null
-test -r /usr/local/share/xloom/environment.md
+/usr/local/bin/pwnmesh worker --help 2>&1 | grep -F -- '-job' >/dev/null
+test -r /usr/local/share/pwnmesh/environment.md
 printf 'Kali Worker smoke passed: OS=%s user=%s workspace=%s\n' "$ID" "$(id -un)" "$PWD"

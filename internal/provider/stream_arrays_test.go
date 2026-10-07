@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 func TestGeneratePreservesFragmentedGraphActionArrays(t *testing.T) {

@@ -2,19 +2,33 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import json
 import math
 from pathlib import Path
+import re
 
 
 USAGE_KEYS = ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
-BUSINESS_OPS = {"fact", "step_completed", "fact_relation", "finding", "goal", "step", "complete"}
+BUSINESS_OPS = {"fact", "step_completed", "fact_relation", "finding", "candidate", "curate", "goal", "step", "complete"}
+GRAPH_PHASES = ("condition_duration_ms", "run_duration_ms", "verify_duration_ms",
+                "reconcile_duration_ms", "recovery_verify_duration_ms")
+RUN_ROOTS = (".pwnmesh", ".xloom")
 
 
 def read_json(path, default=None):
     return json.loads(path.read_text(encoding="utf-8-sig")) if path.exists() else default
+
+
+def run_events_path(output, run_id):
+    """Resolve retained journals across the rename, preferring the current brand."""
+    paths = [output / "workspace" / name / "runs" / run_id / "events.jsonl" for name in RUN_ROOTS]
+    for path in paths:
+        if path.is_file():
+            return path
+    # Preserve job/session evidence even when the journal was not collected.
+    return next((path for path in paths if path.parent.is_dir()), paths[0])
 
 
 def stamp(value):
@@ -51,6 +65,132 @@ def merge_intervals(intervals, window=None):
 
 def interval_seconds(intervals):
     return sum(end - start for start, end in intervals)
+
+
+def subtract_intervals(intervals, exclusions):
+    """Subtract unions, never cumulative durations of concurrent operations."""
+    remaining = merge_intervals(intervals)
+    for left, right in merge_intervals(exclusions):
+        next_remaining = []
+        for start, end in remaining:
+            if end <= left or start >= right:
+                next_remaining.append((start, end))
+                continue
+            if start < left:
+                next_remaining.append((start, left))
+            if end > right:
+                next_remaining.append((right, end))
+        remaining = next_remaining
+    return remaining
+
+
+def environment_intervals(output, manifest, runs):
+    """Read only identifiable startup spans; container lifetime is application work."""
+    path = output / "docker-events.jsonl"
+    containers, workers = {}, {}
+    if path.exists() and manifest.get("namespace"):
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            if not line.strip():
+                continue
+            event = json.loads(line)
+            actor = event.get("Actor") or {}
+            attrs = actor.get("Attributes") or {}
+            if attrs.get("pwnmesh.namespace", attrs.get("xloom.namespace")) != manifest["namespace"]:
+                continue
+            at = event.get("timeNano")
+            if not isinstance(at, (int, float)) or isinstance(at, bool) or not math.isfinite(at):
+                continue
+            action = event.get("Action", "").split(":", 1)[0]
+            if action in {"create", "start"} and actor.get("ID"):
+                containers.setdefault(actor["ID"], {}).setdefault(action, at / 1e9)
+            elif action in {"exec_create", "exec_start"} and attrs.get("execID"):
+                row = workers.setdefault(attrs["execID"], {})
+                row.setdefault(action, at / 1e9)
+                if action == "exec_create":
+                    row["worker"] = event.get("Action", "").startswith((
+                        "exec_create: /usr/local/bin/pwnmesh worker --job ",
+                        "exec_create: /usr/local/bin/xloom worker --job "))
+    worker_rows = [row for row in workers.values() if row.get("worker")]
+    pairs = [(row.get("create"), row.get("start")) for row in containers.values()]
+    pairs += [(row.get("exec_create"), row.get("exec_start")) for row in worker_rows]
+    valid = [(start, end) for start, end in pairs if start is not None and end is not None and end >= start]
+    expected = sum(len(run["runner_attempts"]) for run in runs)
+    complete = bool(containers) and len(valid) == len(pairs) and len(worker_rows) == expected
+    return valid, {"status": "collected_startup_spans" if complete else "partial" if pairs else "not_collected",
+                   "container_starts": len(containers), "worker_launches": len(worker_rows),
+                   "expected_runner_attempts": expected, "incomplete_spans": len(pairs) - len(valid),
+                   "basis": "Namespace-matched Docker create-to-start and Worker exec_create-to-start only. Worker exec_start-to-die and bridge execution include application work and are never subtracted. Image/build time before project start is outside the window. Unobserved Docker/API/storage latency remains unknown."}
+
+
+def manual_wait_intervals(output, runs):
+    record = read_json(output / "manual-recovery.json")
+    if record is None:
+        return [], {"status": "no_record", "recorded": 0, "resolved": 0}
+    records = record if isinstance(record, list) else [record]
+    intervals, resolved = [], 0
+    active = [(stamp(attempt.get("started")), stamp(attempt.get("finished")))
+              for run in runs for attempt in run["runner_attempts"]]
+    for item in records:
+        at = stamp(item.get("at"))
+        previous = [run for run in runs if run["run_id"] == item.get("previous_run_id")]
+        if at is None or item.get("http_status") != 200 or len(previous) != 1:
+            continue
+        run = previous[0]
+        end = stamp(run.get("finished"))
+        if (run.get("status") != "failed" and not run.get("runner_error")) or end is None or end > at:
+            continue
+        # An unclosed Runner may still be active. Its missing end cannot prove
+        # operator-only idle time, so leave this wait in the upper bound.
+        if any(start is None or (finish is None and start < at) for start, finish in active):
+            continue
+        resolved += 1
+        # Another Worker may still be doing useful work during operator delay.
+        intervals.extend(subtract_intervals([(end, at)], active))
+    return intervals, {"status": "recorded" if resolved == len(records) else "partial",
+                       "recorded": len(records), "resolved": resolved,
+                       "basis": "Failed Runner finish to recorded successful manual retry authorization, excluding concurrent Runner activity. Authorization-to-next-start remains in the residual. Absence of a record is not proof that a run was unattended."}
+
+
+def local_time_accounting(output, manifest, report, models, tools, window):
+    """Give observable non-model residuals, not invented pure scheduler timings."""
+    environment, environment_coverage = environment_intervals(output, manifest, report["runs"])
+    manual, manual_coverage = manual_wait_intervals(output, report["runs"])
+    models = merge_intervals(models, window)
+    environment = merge_intervals(environment, window)
+    manual = merge_intervals(manual, window)
+    excluded = merge_intervals(models + environment + manual, window)
+    remaining = subtract_intervals([window], excluded)
+    remaining_tools = subtract_intervals(merge_intervals(tools, window), excluded)
+    closed_attempts = []
+    for row in report["http_attempts"]:
+        start, end = stamp(row.get("started_at")), stamp(row.get("finished_at"))
+        if row.get("logical_request_index") is not None and start is not None and end is not None and end >= start:
+            closed_attempts.append((row, (start, end)))
+    proxy = merge_intervals([interval for _, interval in closed_attempts], window)
+    matched = {(row["run_id"], row["logical_request_index"]) for row, _ in closed_attempts}
+    requests = {(run["run_id"], call["index"]) for run in report["runs"] for call in run["requests"]}
+    provider_complete = (report["http_observation_status"] == "collected" and requests == matched and bool(requests)
+                         and len(closed_attempts) == len(report["http_attempts"]))
+    provider_remaining = subtract_intervals([window], proxy + environment + manual) if provider_complete else None
+    model_complete = (report["coverage"]["all_run_evidence_present"] and
+                      not report["coverage"]["incomplete_model_observations"] and
+                      not any(w in {"unpaired_model_start", "model_end_without_start"}
+                              for run in report["runs"] for w in run["warnings"]))
+    return {"wall_seconds": window[1] - window[0],
+            "model_call_union_seconds": interval_seconds(models),
+            "provider_http_union_seconds": interval_seconds(proxy) if provider_complete else None,
+            "provider_http_coverage": "matched_complete" if provider_complete else "incomplete_or_uncollected",
+            "model_call_coverage": "complete" if model_complete else "partial",
+            "observed_environment_union_seconds": interval_seconds(environment) if environment else (0 if environment_coverage["status"] == "collected_startup_spans" else None),
+            "manual_idle_union_seconds": interval_seconds(manual),
+            "excluded_union_seconds": interval_seconds(excluded),
+            "after_model_environment_manual_seconds": interval_seconds(remaining),
+            "after_provider_environment_manual_seconds": interval_seconds(provider_remaining) if provider_remaining is not None else None,
+            "remaining_tool_seconds": interval_seconds(remaining_tools),
+            "remaining_unattributed_seconds": interval_seconds(remaining) - interval_seconds(remaining_tools),
+            "remaining_intervals": [{"started": iso(start), "finished": iso(end)} for start, end in remaining],
+            "environment": environment_coverage, "manual_wait": manual_coverage,
+            "basis": "Project window minus UNION(model calls, observed Docker startup, recorded manual idle). HTTP variant subtracts matched HTTP attempts instead of logical model calls and therefore retains client retry/backoff/parsing. Residual includes useful tools, scheduling, persistence, unobserved environment and collection gaps; it bounds non-overlapped local delay visible on this fixed timeline, not total local work, pure scheduler time, a counterfactual zero-latency runtime, or a predicted concurrency speedup. Missing observations can increase this bound; category unions overlap and must not be added."}
 
 
 def timeline(model, tool, window):
@@ -108,6 +248,205 @@ def usage_totals(requests):
             "usage_basis": "model_call_end only; returned provider usage, not a verified bill"}
 
 
+def observed_intervals(rows, window, collected=True):
+    """Keep complete interval sums distinct from their clipped wall union."""
+    intervals = []
+    for row in rows:
+        try:
+            start, end = stamp(row.get("started")), stamp(row.get("finished"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if start is not None and end is not None and end >= start:
+            intervals.append((start, end))
+    measured = bool(intervals) or collected and not rows
+    return {"status": "collected" if collected and len(intervals) == len(rows) else "partial" if intervals else "unknown",
+            "complete_intervals": len(intervals), "incomplete_intervals": len(rows) - len(intervals),
+            "cumulative_seconds": interval_seconds(intervals) if measured else None,
+            "active_wall_seconds": interval_seconds(merge_intervals(intervals, window)) if measured else None}
+
+
+def graph_observations(directory, run_id):
+    """Read timing selectors only, never node output, artifact paths or errors."""
+    return graph_checkpoint_observations(directory / "graph" / "graph.json", run_id)
+
+
+def graph_checkpoint_observations(path, run_id):
+    result = {"status": "not_collected", "version": None, "nodes": []}
+    if not path.exists():
+        return result
+    result["status"] = "invalid_checkpoint"
+    try:
+        checkpoint = read_json(path)
+    except (OSError, ValueError):
+        return result
+    if not isinstance(checkpoint, dict) or checkpoint.get("schema_version") != 1 or checkpoint.get("run_id") != run_id or not isinstance(checkpoint.get("nodes"), list):
+        return result
+    nodes, seen = [], set()
+    for node in checkpoint["nodes"]:
+        if not isinstance(node, dict) or not isinstance(node.get("id"), str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", node["id"]) or node["id"] in seen or node.get("kind") not in {"function", "agent"} or node.get("status") not in {"pending", "running", "succeeded", "skipped", "failed", "blocked", "cancelled"}:
+            return result
+        seen.add(node["id"])
+        phases = {key: node[key] for key in GRAPH_PHASES
+                  if isinstance(node.get(key), (int, float)) and not isinstance(node[key], bool)
+                  and math.isfinite(node[key]) and node[key] >= 0}
+        nodes.append({"id": node["id"], "kind": node["kind"], "status": node["status"],
+                      "ready": node.get("ready_at"), "started": node.get("started_at"),
+                      "finished": node.get("finished_at"), **phases})
+    result.update(status="collected", version=checkpoint.get("version"), nodes=nodes)
+    return result
+
+
+def graph_parallel_timing(graph, window):
+    """Measure one graph only; cross-run overlap is not inner parallelism."""
+    attempted = [node for node in graph["nodes"] if node["status"] in {"running", "succeeded", "failed", "cancelled"}]
+    complete = graph["status"] == "collected"
+    summary = observed_intervals(attempted, window, complete)
+    intervals = []
+    for node in attempted:
+        try:
+            start, end = stamp(node.get("started")), stamp(node.get("finished"))
+        except (AttributeError, TypeError, ValueError):
+            continue
+        if start is not None and end is not None and end >= start:
+            start, end = max(start, window[0]), min(end, window[1])
+            if end >= start:
+                intervals.append((start, end))
+    union = merge_intervals(intervals)
+    measured = summary["active_wall_seconds"] is not None
+    envelope = union[-1][1] - union[0][0] if union else 0
+    # Gaps and peaks with incomplete spans are observed bounds, not inferred
+    # work or inactivity. A completed outer agent may contain inner graphs.
+    summary.update(peak_concurrent_nodes=peak_concurrency(intervals) if measured else None,
+                   observed_envelope_seconds=envelope if measured else None,
+                   observed_overlap_node_seconds=interval_seconds(intervals) - interval_seconds(union) if measured else None,
+                   uncovered_envelope_seconds=envelope - interval_seconds(union) if summary["status"] == "collected" else None,
+                   ready_to_start=observed_intervals([
+                       {"started": node.get("ready"), "finished": node.get("started")}
+                       for node in attempted], window, complete),
+                   phase_duration_ms={phase: stats(node.get(phase) for node in graph["nodes"]) for phase in GRAPH_PHASES},
+                   by_kind={kind: observed_intervals([node for node in attempted if node["kind"] == kind], window, complete)
+                            for kind in sorted({node["kind"] for node in graph["nodes"]})})
+    return summary
+
+
+def tool_graph_observations(directory, run_id, calls):
+    # One immutable checkpoint per key, even when the tool is invoked again
+    # to reuse/reconcile it. Never infer executions by counting tool calls.
+    keys = {call["graph_key"] for call in calls if call.get("graph_key")}
+    parent = directory / "graph-tools"
+    if parent.exists():
+        keys.update(path.parent.name for path in parent.glob("*/graph.json")
+                    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", path.parent.name))
+    return [{"key": key, "graph": graph_checkpoint_observations(parent / key / "graph.json", run_id)}
+            for key in sorted(keys)]
+
+
+def tool_graph_timing(runs, window):
+    graphs = [{"run_id": run["run_id"], **item} for run in runs for item in run["tool_graphs"]]
+    calls = [call for run in runs for call in run["tools"] if call.get("name") == "run_graph"]
+    unidentified = sum(not call.get("graph_key") for call in calls)
+    collected = sum(item["graph"]["status"] == "collected" for item in graphs)
+    journals = all("events.jsonl" not in run["missing_evidence_files"] for run in runs)
+    complete = journals and not unidentified and collected == len(graphs)
+    nodes = [node for item in graphs for node in item["graph"]["nodes"]
+             if node["status"] in {"running", "succeeded", "failed", "cancelled"}]
+    return {"status": "collected" if graphs and complete else "partial" if collected else "not_invoked" if complete and not calls else "not_collected",
+            "graphs": len(graphs), "collected_graphs": collected, "tool_invocations": len(calls),
+            "unidentified_invocations": unidentified,
+            "node_intervals": observed_intervals(nodes, window, complete),
+            "per_graph": [{"run_id": item["run_id"], "key": item["key"],
+                           "checkpoint_status": item["graph"]["status"],
+                           **graph_parallel_timing(item["graph"], window)} for item in graphs],
+            "basis": "run_graph command graphs are nested inside outer Worker agent/tool spans. These groups must never be added together. Each run/key checkpoint is counted once despite reuse calls. Parallel peaks belong to individual graphs. Missing journals/checkpoints are explicit; recorded intervals are lower bounds when incomplete. Node outputs, commands, errors and artifact paths are not exported."}
+
+
+def orchestration_timing(runs, window):
+    roles, graph_rows = {}, []
+    for role in sorted({run["role"] for run in runs}):
+        selected = [run for run in runs if run["role"] == role]
+        journals = sum("events.jsonl" not in run["missing_evidence_files"] for run in selected)
+        requests = [call for run in selected for call in run["requests"]]
+        tools = [call for run in selected for call in run["tools"]]
+        attempts = [attempt for run in selected for attempt in run["runner_attempts"]]
+        durations = [call["duration_ms"] for call in requests if call.get("duration_ms") is not None]
+        roles[role] = {"runs": len(selected), "runner_attempts": len(attempts), "event_journal_runs": journals,
+                       "model_calls": len(requests) if journals else None, "tool_calls": len(tools) if journals else None,
+                       "runner": observed_intervals(attempts, window, all(run["runner_attempts"] for run in selected)),
+                       "model": observed_intervals(requests, window, journals == len(selected)),
+                       "model_parallelism": cross_run_model_timing(selected, window),
+                       "tool": observed_intervals(tools, window, journals == len(selected)),
+                       "cumulative_model_request_seconds": sum(durations) / 1000 if durations or journals and not requests else None}
+    # Control roles do not use Worker graphs. A missing graph on an Execute is
+    # unknown (including legacy runs), never a measured zero-duration graph.
+    graph_runs = [run for run in runs if run["kind"] == "explore" or run["graph"]["status"] != "not_collected"]
+    for run in graph_runs:
+        for node in run["graph"]["nodes"]:
+            graph_rows.append({"run_id": run["run_id"], **node})
+    collected = sum(run["graph"]["status"] == "collected" for run in graph_runs)
+    attempted = [node for node in graph_rows if node["status"] in {"running", "succeeded", "failed", "cancelled"}]
+    by_node = {name: observed_intervals([node for node in attempted if node["id"] == name], window, collected == len(graph_runs))
+               for name in sorted({node["id"] for node in graph_rows})}
+    return roles, {"status": "collected" if graph_runs and collected == len(graph_runs) else "partial" if collected else "not_collected",
+                   "runs": len(graph_runs), "collected_runs": collected,
+                   "invalid_checkpoint_runs": sum(run["graph"]["status"] == "invalid_checkpoint" for run in graph_runs),
+                   "node_intervals": observed_intervals(attempted, window, bool(graph_runs) and collected == len(graph_runs)),
+                   "node_statuses": dict(Counter(node["status"] for node in graph_rows)), "by_node": by_node,
+                   "per_run": {run["run_id"]: graph_parallel_timing(run["graph"], window) for run in graph_runs},
+                   "basis": "Checkpoint start/end spans include callback, verification and any recovery downtime; they are not isolated graph overhead. Per-run peaks do not count parallel outer Workers as inner graph concurrency. Ready-to-start includes condition checks, persistence/scheduling and possible recovery downtime, not pure active queueing. Phase milliseconds exclude checkpoint I/O; verification includes output validation plus the optional Verify callback. Absent values are unknown, not zero. Condition/reconcile/recovery verification accumulate within the same run; run/verify retain the first attempt. Missing ends are excluded, never filled from project completion. Node outputs, errors and artifact paths are not exported."}
+
+
+def cross_run_model_timing(runs, window):
+    """Measure successful foreground model work across distinct immutable runs."""
+    intervals, contributing = [], 0
+    complete = bool(runs) and all("events.jsonl" not in run["missing_evidence_files"]
+                                 and not run.get("incomplete_model_observations")
+                                 and not any(w in {"unpaired_model_start", "model_end_without_start"}
+                                             for w in run.get("warnings", [])) for run in runs)
+    for run in runs:
+        raw = []
+        for call in run["requests"]:
+            if call.get("stream") != "main" or call.get("kind") != "turn" or call.get("failed"):
+                continue
+            start, end = stamp(call.get("started")), stamp(call.get("finished"))
+            if start is not None and end is not None and end > start:
+                raw.append((start, end))
+        # Merge within one run first: replays or multiple local streams must
+        # never manufacture evidence for a second independent Worker.
+        merged = merge_intervals(raw, window)
+        contributing += bool(merged)
+        intervals.extend(merged)
+    points = sorted([(start, 1) for start, end in intervals] + [(end, -1) for start, end in intervals])
+    active, overlap, last = 0, 0, None
+    for at, delta in points:
+        if last is not None and active >= 2:
+            overlap += at - last
+        active += delta
+        last = at
+    measured = bool(intervals) or complete
+    return {"status": "collected" if complete else "partial" if intervals else "unknown",
+            "contributing_runs": contributing if measured else None,
+            "peak_concurrent_runs": peak_concurrency(intervals) if measured else None,
+            "two_or_more_active_wall_seconds": overlap if measured else None,
+            "summed_per_run_active_seconds": interval_seconds(intervals) if measured else None,
+            "active_wall_seconds": interval_seconds(merge_intervals(intervals)) if measured else None,
+            "basis": "Successful main turn model intervals, unioned within each run, clipped to project window. Replan, summary and failed calls are excluded. Missing journals or incomplete observations make measured overlap a lower bound; this is distinct from Worker container or inner command-graph overlap."}
+
+
+def execution_role(job, kind, step_id):
+    if kind != "explore":
+        return kind or "unknown", "execution_kind"
+    # Intent is the compatible Cairn shape and has no dispute_id. The Step
+    # metadata lives in the immutable bounded view (or older full State).
+    for key in ("input_view", "state"):
+        view = job.get(key)
+        if not step_id or not isinstance(view, dict):
+            continue
+        matches = [step for step in view.get("steps", []) if isinstance(step, dict) and step.get("id") == step_id]
+        if len(matches) == 1:
+            return ("review" if matches[0].get("dispute_id") else "explore"), "immutable_job_" + key + "_step"
+    return "execute_unknown", "immutable_step_metadata_unavailable"
+
+
 def analyze_run(directory, observed):
     job = read_json(directory / "job.json", {})
     session = read_json(directory / "session.json", {})
@@ -130,6 +469,9 @@ def analyze_run(directory, observed):
               "recovery_count": session.get("recovery_count", 0), "repair_count": session.get("repair_count", 0),
               "requests": [], "tools": [], "decision_operations": [], "warnings": []}
     report["missing_evidence_files"] = [name for name in ("job.json", "session.json", "events.jsonl") if not (directory / name).exists()]
+    report["role"], report["role_basis"] = execution_role(job, report["kind"], report["step_id"])
+    report["job_reasoning_effort"] = (job.get("budget") or {}).get("reasoning_effort")
+    report["graph"] = graph_observations(directory, run_id)
     tool_inputs = {}
     for event in events:
         message = event.get("message") or {}
@@ -139,6 +481,8 @@ def analyze_run(directory, observed):
                     args = block.get("input") or {}
                     # Retain protocol selectors only, never commands or model text.
                     tool_inputs[block.get("id")] = {key: args[key] for key in ("op", "section") if key in args}
+                    if block.get("name") == "run_graph" and isinstance(args.get("key"), str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", args["key"]):
+                        tool_inputs[block.get("id")]["graph_key"] = args["key"]
     pending_models, pending_tools = {}, {}
     model_intervals, tool_intervals = [], []
     for index, event in enumerate(events):
@@ -207,7 +551,19 @@ def analyze_run(directory, observed):
     report["failed_model_calls"] = sum(bool(call.get("failed")) for call in report["requests"])
     report["model_duration_ms"] = stats(call.get("duration_ms") for call in report["requests"])
     report["tool_duration_ms"] = stats(tool.get("duration_ms") for tool in report["tools"])
+    report["tool_graphs"] = tool_graph_observations(directory, run_id, [call for call in report["tools"] if call.get("name") == "run_graph"])
     report.update(usage_totals(report["requests"]))
+    # Link latency to protocol actions, retaining selectors rather than model
+    # prose, commands, tool arguments or generated output.
+    for call in report["requests"]:
+        end = stamp(call.get("finished"))
+        following = [stamp(other.get("started")) for other in report["requests"]
+                     if other["stream"] == call["stream"] and other["index"] > call["index"] and stamp(other.get("started")) is not None]
+        next_start = min(following) if following else None
+        call["following_tools"] = [{key: tool[key] for key in ("name", "op", "section", "graph_key") if key in tool}
+                                   for tool in report["tools"] if end is not None and tool["stream"] == call["stream"]
+                                   and stamp(tool.get("started")) is not None and stamp(tool["started"]) >= end
+                                   and (next_start is None or stamp(tool["started"]) < next_start)]
     for tool in report["tools"]:
         if not tool.get("state_changed"):
             continue
@@ -239,12 +595,22 @@ def analyze(output):
         finished = max((value for value in candidates if value is not None), default=None)
     if started is None or finished is None or finished <= started:
         raise ValueError("retained evidence lacks a valid project time window")
-    run_dir = output / "workspace" / ".xloom" / "runs"
-    observations = {run["run_id"]: run for run in observed}
-    all_ids = set(observations) | {directory.name for directory in run_dir.iterdir() if directory.is_dir()} if run_dir.exists() else set(observations)
+    run_dirs = [output / "workspace" / name / "runs" for name in RUN_ROOTS]
+    attempts_by_run = defaultdict(list)
+    for attempt in observed:
+        attempts_by_run[attempt["run_id"]].append(attempt)
+    observations = {}
+    for run_id, attempts in attempts_by_run.items():
+        attempts.sort(key=lambda attempt: attempt.get("started") or "")
+        observations[run_id] = dict(attempts[-1], started=attempts[0].get("started"))
+    all_ids = set(observations) | {directory.name for run_dir in run_dirs if run_dir.is_dir()
+                                 for directory in run_dir.iterdir() if directory.is_dir()}
     runs, model_intervals, tool_intervals = [], [], []
     for run_id in sorted(all_ids, key=lambda key: observations.get(key, {}).get("started", "")):
-        run, models, tools = analyze_run(run_dir / run_id, observations.get(run_id, {}))
+        run, models, tools = analyze_run(run_events_path(output, run_id).parent, observations.get(run_id, {}))
+        run["runner_attempts"] = [{key: attempt.get(key) for key in ("started", "finished", "status", "failure_kind")}
+                                  for attempt in attempts_by_run.get(run_id, [])]
+        run["wall_seconds_basis"] = "first Runner start to final attempt finish, including recovery gaps; see runner_attempts for active intervals"
         runs.append(run)
         model_intervals.extend(models)
         tool_intervals.extend(tools)
@@ -258,12 +624,25 @@ def analyze(output):
     if completions:
         final_event = min((event for event in state_events if event.get("op") == "complete" and stamp(event.get("created_at")) is not None), key=lambda event: stamp(event["created_at"]))
         matching_commits = [tool for tool in tool_calls if bare_run(tool["run_id"]) == bare_run(final_event.get("run_id")) and tool.get("op") == "commit" and not tool.get("failed") and stamp(tool.get("started")) is not None and stamp(tool.get("finished")) is not None and stamp(tool["started"]) < event_finished + 1 and stamp(tool["finished"]) >= event_finished and any(operation.get("committed") for operation in tool.get("decision_operations", []))]
-        if matching_commits:
-            commit = min(matching_commits, key=lambda tool: stamp(tool["finished"]))
+        # Two commits in the same rounded second cannot be associated with
+        # this event from timing alone. Preserve the event's coarse boundary
+        # instead of attributing completion to an arbitrary earlier receipt.
+        if len(matching_commits) == 1:
+            commit = matching_commits[0]
             finished = stamp(commit["finished"])
             completion_commit_window = {"started": commit["started"], "finished": commit["finished"],
                                         "wall_seconds_lower": stamp(commit["started"]) - started, "wall_seconds_upper": finished - started}
             end_basis = "successful_complete_commit_receipt_observed"
+    acceptance_seconds = manifest.get("time_to_acceptance_seconds")
+    observed_completion = stamp(manifest.get("completed_observed"))
+    acceptance_floor = max(finished, observed_completion or finished) - started
+    # A later manual review cannot supply the missing original acceptance
+    # timestamp, nor can completed=true turn a failed delivery into a pass.
+    acceptance_measured = (original_validation.get("passed") is True and
+                           manifest.get("acceptance_passed") is True and
+                           isinstance(acceptance_seconds, (int, float)) and
+                           not isinstance(acceptance_seconds, bool) and
+                           math.isfinite(acceptance_seconds) and acceptance_seconds >= acceptance_floor)
     conflicts = [call for call in tool_calls if call.get("state_changed")]
     external_updates = []
     for run in runs:
@@ -320,7 +699,8 @@ def analyze(output):
                                   "app_minus_proxy": difference,
                                   "status": "different" if difference and any(difference.values()) else "equal" if difference is not None else "not_comparable"})
     proxy_usage = {key: sum(attempt["reported_usage"].get(key, 0) for attempt in attempts) for key in USAGE_KEYS}
-    execute_intervals = [(stamp(run["started"]), stamp(run["finished"])) for run in runs if run["kind"] in {"explore", "bootstrap"}]
+    execute_intervals = [(stamp(attempt.get("started")), stamp(attempt.get("finished")))
+                         for run in runs if run["kind"] in {"explore", "bootstrap"} for attempt in run["runner_attempts"]]
     longest = sorted((call for call in requests if call.get("duration_ms") is not None), key=lambda call: call["duration_ms"], reverse=True)[:10]
     budget_failures = [run["run_id"] for run in runs if run.get("failure_kind") == "budget_exhausted"]
     read_conflicts = [tool for tool in conflicts if tool["name"] in {"read_graph", "read_snapshot"}]
@@ -329,12 +709,19 @@ def analyze(output):
               "http_observation_mode": http_mode,
               "http_observation_status": "collected" if http_collected else "not_collected",
               "source_commit": manifest.get("source_commit"), "reasoning_effort": manifest.get("reasoning_effort"),
+              "reasoning_effort_by_role": manifest.get("reasoning_effort_by_role"),
+              "configured_concurrency": {key: manifest.get(key) for key in ("max_workers", "max_project_workers", "worker_max_running")},
+              "parallel_worker_acceptance": read_json(output / "parallel-validation.json"),
               "started": iso(started), "finished": iso(finished), "end_basis": end_basis,
               "project_wall_seconds": finished - started,
               "authoritative_event_wall_seconds_lower_bound": event_finished - started if event_finished is not None else None,
               "authoritative_event_precision_seconds": 1 if event_finished is not None else None,
               "completion_commit_window": completion_commit_window,
               "poll_completion_wall_seconds": manifest.get("project_wall_seconds"),
+              "time_to_acceptance_seconds": acceptance_seconds if acceptance_measured else None,
+              "acceptance_timing_status": "measured_original_pass" if acceptance_measured else "not_verified",
+              "collection_and_validation_seconds": manifest.get("collection_and_validation_seconds"),
+              "cleanup_seconds": manifest.get("cleanup_seconds"),
               "business_validation": validation, "original_business_validation": original_validation,
               "validation_review_applied": reviewed_validation is not None, "runs": runs,
               "timing": timeline(model_intervals, tool_intervals, (started, finished)),
@@ -387,6 +774,10 @@ def analyze(output):
                                         "model_duration_ms": sum(call.get("duration_ms", 0) for call in requests if call["run_kind"] == kind),
                                         **usage_totals([call for call in requests if call["run_kind"] == kind])}
                                  for kind in sorted({run["kind"] for run in runs if run["kind"]})}
+    report["role_timing"], report["graph_timing"] = orchestration_timing(runs, (started, finished))
+    report["tool_graph_timing"] = tool_graph_timing(runs, (started, finished))
+    report["model_parallelism"] = cross_run_model_timing(runs, (started, finished))
+    report["local_time_accounting"] = local_time_accounting(output, manifest, report, model_intervals, tool_intervals, (started, finished))
     return report
 
 
@@ -395,20 +786,32 @@ def render(report):
     http_collected = report.get("http_observation_status") != "not_collected"
     http_counts = (f"HTTP 尝试 {report['http_attempt_count']} 次，已匹配逻辑调用内重试 {report['http_retries_in_matched_logical_calls']} 次"
                    if http_collected else "HTTP 观测未采集（direct 直连），尝试次数和重试次数未知")
-    lines = ["# X-Loom 真实模型并发验收与耗时", "",
-             f"模型 `{report['model']}`，reasoning=`{report['reasoning_effort']}`，源码 `{report['source_commit']}`。项目 `{report['project_id']}`。",
-             f"业务验收：{'通过' if report['business_validation'].get('passed') else '未通过或尚未提供'}。项目墙钟 **{report['project_wall_seconds']:.3f} 秒**（结束依据：{report['end_basis']}）。",
+    wall_label = f"{report['project_wall_seconds']:.3f} 秒"
+    if report["end_basis"] == "authoritative_complete_state_event":
+        lower = report["authoritative_event_wall_seconds_lower_bound"]
+        wall_label = f"{lower:.3f}–{lower + 1:.3f} 秒（整秒事件范围，上界不含；后续活动占比按下界窗口计算）"
+    lines = ["# PwnMesh 真实模型并发验收与耗时", "",
+             f"模型 `{report['model']}`，reasoning 回退值=`{report['reasoning_effort']}`，按角色配置={json.dumps(report.get('reasoning_effort_by_role'), ensure_ascii=False)}，源码 `{report['source_commit']}`。项目 `{report['project_id']}`。",
+             f"业务验收：{'通过' if report['business_validation'].get('passed') else '未通过或尚未提供'}。项目墙钟 **{wall_label}**（结束依据：{report['end_basis']}）。",
              "", "## 时间归因", "", "| 项目墙钟内活动 | 秒 | 占项目墙钟 |", "| --- | ---: | ---: |"]
     for label, key in (("仅模型请求", "model_only_seconds"), ("仅工具执行", "tool_only_seconds"), ("模型与工具并发", "overlap_seconds"), ("两者均未活动", "neither_seconds")):
         lines.append(f"| {label} | {timing[key]:.3f} | {timing[key] / timing['wall_seconds']:.1%} |")
     lines += ["", f"模型请求累计 {report['cumulative_model_duration_ms'] / 1000:.3f} 秒，工具累计 {report['cumulative_tool_duration_ms'] / 1000:.3f} 秒。累计值包含并发，不能直接除以项目墙钟作为占比。空档包含调度、容器、落盘、图更新及尚未观测的工作，不等同于纯调度开销。",
               f"逻辑模型请求 {report['model_calls']} 次（summary {report['summary_calls']}，失败 {report['failed_model_calls']}）；{http_counts}；工具 {report['tool_calls']} 次。",
               "", "| 请求耗时统计 | p50 秒 | p95 秒 | 最大秒 |", "| --- | ---: | ---: | ---: |"]
+    local = report.get("local_time_accounting")
+    if local:
+        # Insert before the request-statistics table rather than breaking it.
+        lines[-3:-3] = ["", f"按区间并集排除逻辑模型调用、已观测 Docker 启动与人工等待后，剩余 **{local['after_model_environment_manual_seconds']:.3f} 秒**（工具 {local['remaining_tool_seconds']:.3f} 秒，未归因 {local['remaining_unattributed_seconds']:.3f} 秒）。模型覆盖 `{local['model_call_coverage']}`；环境覆盖 `{local['environment']['status']}`。",
+                          "残余包含必要执行和未观测环境，只限定本次时间线上未与排除项重叠的本地延迟；不是全部本地工作或纯调度时间，也不能直接预测零供应商延迟或增大并发后的完成时间。构建发生在项目窗口外时本来就未计入。"]
+        if local["after_provider_environment_manual_seconds"] is not None:
+            lines[-3:-3] = [f"若仅扣模型 HTTP 请求并集，保留客户端重试退避/解析，残余为 {local['after_provider_environment_manual_seconds']:.3f} 秒。人工等待按有明确重试授权记录且无其他 Runner 活动的区间扣除。"]
     for label, data in (("模型逻辑请求", report["model_duration_ms"]), ("工具", report["tool_duration_ms"])):
         lines.append(f"| {label} | {data.get('p50', 0) / 1000:.3f} | {data.get('p95', 0) / 1000:.3f} | {data.get('max', 0) / 1000:.3f} |")
     lines += ["", "百分位采用 nearest rank。", "", "## 各 run", "", "| run | 种类 / 状态 | 输入 revision | 墙钟秒 | 模型次数 / 累计秒 | 工具次数 / 累计秒 |", "| --- | --- | ---: | ---: | ---: | ---: |"]
     for run in report["runs"]:
         lines.append(f"| `{run['run_id']}` | {run['kind']} / {run['status']} | {run['input_revision']} | {(run['wall_seconds'] or 0):.3f} | {run['model_calls']} / {run['model_duration_ms'].get('sum', 0) / 1000:.3f} | {len(run['tools'])} / {run['tool_duration_ms'].get('sum', 0) / 1000:.3f} |")
+    lines += render_orchestration_timing(report)
     lines += ["", "完整输入版本、每次调用和最长请求见 timing-report.json。", "", "## 模型侧观测", ""]
     if http_collected:
         lines += render_http_observations(report)
@@ -424,6 +827,10 @@ def render(report):
         lines.append("本次并发覆盖不足：未同时满足至少两个 Execute 重叠及 Decide 期间其他 run 的事实更新。")
     if not coverage["all_run_evidence_present"]:
         lines.append("部分 run 原始证据文件缺失；计时、用量及未发现故障结论均不完整。")
+    if report.get("time_to_acceptance_seconds") is not None:
+        lines.append(f"项目启动至原始独立验收通过：**{report['time_to_acceptance_seconds']:.3f} 秒**；包含证据导出与验收，不包含后续清理。")
+    else:
+        lines.append("原始独立验收通过耗时未验证；completed 或事后复核不能代替原始验收计时。")
     if report.get("completion_commit_window"):
         bounds = report["completion_commit_window"]
         poll = report.get("poll_completion_wall_seconds")
@@ -445,8 +852,45 @@ def render(report):
               proxy_usage_row, "",
               f"应用覆盖状态 `{report['usage_status']}`，有 usage 的逻辑请求 {report['usage_calls']} 次。{comparison}",
               "应用只累计 model_call_end 的 usage；message_end、摘要记录不重复累计。当前应用合并流式 usage 时仅用正数覆盖，代理也接受显式零值；若供应商流包含归零，两边可能不同。仅凭这些观测不能确定供应商计费语义或哪边应作为账单。未返回的 usage、内部失败尝试账单无法据此确认；没有已核实的账号价格和账单，实际金额为未知。", "",
-              "业务验收明细：`validation.json`；逐次计时：`timing-report.json`；原始证据：`runs.json`、`http-observations.json`、`state-events.json` 和 `workspace/.xloom/runs/`。", ""]
+              "业务验收明细：`validation.json`；逐次计时：`timing-report.json`；原始证据：`runs.json`、`http-observations.json`、`state-events.json` 和 `workspace/.pwnmesh/runs/`（旧归档为 `workspace/.xloom/runs/`）。", ""]
     return "\n".join(lines)
+
+
+def render_orchestration_timing(report):
+    fmt = lambda value: "未知" if value is None else f"{value:.3f}"
+    lines = ["", "| 角色 | run / Runner 尝试 | Runner 累计 / 并集秒 | 模型累计 / 并集秒 | 工具累计 / 并集秒 |",
+             "| --- | ---: | ---: | ---: | ---: |"]
+    for role, row in report["role_timing"].items():
+        pairs = [f"{fmt(row[key]['cumulative_seconds'])} / {fmt(row[key]['active_wall_seconds'])}" for key in ("runner", "model", "tool")]
+        lines.append(f"| {role} | {row['runs']} / {row['runner_attempts']} | " + " | ".join(pairs) + " |")
+    lines += ["", "角色累计按完整观测区间求和，并集裁剪至项目窗口；不同角色仍可重叠，不可相加为项目墙钟。恢复复用同 run 的日志，只计一次模型与工具；Runner 按实际尝试分别统计，重试间空档不计为 Runner 活动。review 依据不可变 Job.input_view / State 中对应 Step 的 dispute_id 区分；缺少元数据时标为 execute_unknown。缺失日志或未闭合区间的覆盖状态见 JSON，已有部分数据仅为观测下界。"]
+    parallel = report.get("model_parallelism")
+    if parallel:
+        lines += ["", f"实际成功模型请求的跨 run 峰值并发：{parallel['peak_concurrent_runs']}；至少两个 run 同时请求的墙钟：{fmt(parallel['two_or_more_active_wall_seconds'])} 秒，覆盖状态 `{parallel['status']}`。",
+                  "此统计先合并每个 run 的区间，仅包含成功的 main turn 请求；replan、summary、失败请求不计入。不能用容器存活重叠或单 Worker 内命令图的并行代替多个 Worker 的模型并发。",
+                  f"配置的并发上限：{json.dumps(report.get('configured_concurrency'), ensure_ascii=False)}；上限不是实测并发。"]
+    acceptance = report.get("parallel_worker_acceptance")
+    if acceptance is not None:
+        lines.append(f"独立 Worker 并发附加验收：{'通过' if acceptance.get('passed') else '未通过'}；至少两个来源 Worker 同时成功请求模型的墙钟并集 {fmt(acceptance.get('model_overlap_seconds'))} 秒；身份与结果绑定明细见 parallel-validation.json。")
+    graph = report["graph_timing"]
+    if graph["status"] == "not_collected":
+        lines.append("Worker 图节点时间未知：没有可用的、身份匹配的图检查点。")
+    else:
+        lines += [f"Worker 图检查点覆盖 {graph['collected_runs']} / {graph['runs']} 个执行 run。", "",
+                  "| 图节点 | 完整 / 未闭合区间 | 累计秒 | 并集秒 |", "| --- | ---: | ---: | ---: |"]
+        for name, row in graph["by_node"].items():
+            lines.append(f"| {name} | {row['complete_intervals']} / {row['incomplete_intervals']} | {fmt(row['cumulative_seconds'])} | {fmt(row['active_wall_seconds'])} |")
+        lines.append("节点跨度包含回调、校验以及恢复停顿，不能称为纯图框架开销；没有结束时间的节点保持未知。")
+    inner = report["tool_graph_timing"]
+    if inner["graphs"] or inner["tool_invocations"]:
+        lines += ["", f"run_graph 检查点覆盖 {inner['collected_graphs']} / {inner['graphs']} 个命令图，工具调用 {inner['tool_invocations']} 次（同 key 恢复不重复计图）。", "",
+                  "| run / 命令图 | 覆盖 | 节点峰值并发 | 累计 / 并集秒 | 区间内未覆盖秒 |",
+                  "| --- | --- | ---: | ---: | ---: |"]
+        for row in inner["per_graph"]:
+            peak = row["peak_concurrent_nodes"] if row["peak_concurrent_nodes"] is not None else "未知"
+            lines.append(f"| {row['run_id']} / {row['key']} | {row['status']} | {peak} | {fmt(row['cumulative_seconds'])} / {fmt(row['active_wall_seconds'])} | {fmt(row['uncovered_envelope_seconds'])} |")
+        lines.append("命令图嵌套在 Worker 节点及工具区间中，两组时间不可相加。内部并发只按同一图计算；未闭合区间使峰值仅为观测下界。ready-to-start 含条件检查、持久化/调度及可能的恢复停机，不等于活跃排队；缺失阶段计时保持未知，阶段毫秒不含检查点 I/O，verify 包含输出结构校验与 Verify 回调。逐图函数/Agent、阶段及恢复耗时见 JSON。")
+    return lines
 
 
 def render_http_observations(report):

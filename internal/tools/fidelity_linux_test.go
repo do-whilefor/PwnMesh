@@ -39,6 +39,28 @@ func fidelitySet(t *testing.T) *Set {
 	return &Set{Dir: dir, RunDir: filepath.Join(dir, "run"), OutputBytes: 1 << 20}
 }
 
+func TestBashUsesConfiguredWorkingDirectory(t *testing.T) {
+	s := fidelitySet(t)
+	workspace := s.Dir
+	s.Dir = filepath.Join(workspace, "private-node")
+	if err := os.Mkdir(s.Dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range s.All() {
+		if tool.Name == "bash" && (!strings.Contains(tool.Description, "current working directory") || strings.Contains(tool.Description, "project workspace")) {
+			t.Fatalf("bash advertises the wrong working directory: %s", tool.Description)
+		}
+	}
+	output, err := callFidelityTool(t, s, context.Background(), "bash", map[string]any{"command": "pwd; printf local > artifact.txt"})
+	if err != nil || strings.TrimSpace(output) != s.Dir {
+		t.Fatalf("bash working directory: got %q, want %q: %v", output, s.Dir, err)
+	}
+	assertFidelityFile(t, filepath.Join(s.Dir, "artifact.txt"), []byte("local"))
+	if _, err := os.Stat(filepath.Join(workspace, "artifact.txt")); !os.IsNotExist(err) {
+		t.Fatalf("relative write escaped the configured working directory: %v", err)
+	}
+}
+
 func callFidelityTool(t *testing.T, s *Set, ctx context.Context, name string, args map[string]any) (string, error) {
 	t.Helper()
 	raw, err := json.Marshal(args)
@@ -253,7 +275,7 @@ func TestCanceledCopyStagingPreservesDestination(t *testing.T) {
 		t.Fatalf("canceled staging: %v", err)
 	}
 	assertFidelityFile(t, path, []byte("original"))
-	entries, err := filepath.Glob(filepath.Join(s.Dir, ".xloom-copy-*"))
+	entries, err := filepath.Glob(filepath.Join(s.Dir, ".pwnmesh-copy-*"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("canceled copy left temporary files: %v, %v", entries, err)
 	}
@@ -279,7 +301,7 @@ func TestWriteCopyRejectsOversizeSourceAndCancellation(t *testing.T) {
 		t.Fatalf("canceled copy: %v", err)
 	}
 	assertFidelityFile(t, filepath.Join(s.Dir, "target"), []byte("original"))
-	entries, err := filepath.Glob(filepath.Join(s.Dir, ".xloom-copy-*"))
+	entries, err := filepath.Glob(filepath.Join(s.Dir, ".pwnmesh-copy-*"))
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("temporary copies remain: %v, %v", entries, err)
 	}

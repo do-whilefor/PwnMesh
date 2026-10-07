@@ -10,10 +10,10 @@ function fixture(status = 'active') {
     findings:[{id:'finding',claim:'已验证发现',status:'verified',sources:['f'],support_valid:true}]};
 }
 
-test('create payload keeps the three real scenarios and omits obsolete bootstrap options', () => {
+test('Web creation selects orchestration for all scenarios and omits obsolete bootstrap options', () => {
   for (const scenario of ['ctf','pentest','audit']) {
-    assert.deepEqual(data.validateProject({title:' 项目 ',origin:'输入',goal:'目标',scenario,bootstrap_enabled:true}),
-      {title:'项目',origin:'输入',goal:'目标',scenario});
+    assert.deepEqual(data.validateProject({title:' 项目 ',origin:'输入',goal:'目标',scenario,bootstrap_enabled:true,orchestration_version:0}),
+      {title:'项目',origin:'输入',goal:'目标',scenario,orchestration_version:1});
   }
   assert.equal(data.scenarioName(undefined),'未分类');
   assert.throws(() => data.validateProject({title:'x'.repeat(201),origin:'x',goal:'y',scenario:'ctf'}));

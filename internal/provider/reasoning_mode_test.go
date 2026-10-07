@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 // OpenRouter's public MessagesRequest schema requires budget_tokens for enabled

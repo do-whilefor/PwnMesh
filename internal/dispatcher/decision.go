@@ -6,7 +6,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func (s *Scheduler) scheduleInput(ctx context.Context, id string) (board.SchedulePage, error) {

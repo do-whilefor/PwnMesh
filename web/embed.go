@@ -1,4 +1,4 @@
-// Package web embeds the X-Loom workspace.
+// Package web embeds the PwnMesh workspace.
 package web
 
 import (

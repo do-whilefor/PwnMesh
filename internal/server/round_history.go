@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	b "xloom/internal/board"
+	b "pwnmesh/internal/board"
 )
 
 func (s *Server) registerRoundRoutes(m *http.ServeMux) {
@@ -14,7 +14,7 @@ func (s *Server) registerRoundRoutes(m *http.ServeMux) {
 }
 
 func roundManagementRead(r *http.Request) error {
-	if r.Header.Get("X-Xloom-Run") != "" {
+	if r.Header.Get("X-PwnMesh-Run") != "" {
 		return b.Err(403, "archived rounds are a project-management view, not current execution input")
 	}
 	return nil

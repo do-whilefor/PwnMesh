@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -35,6 +35,28 @@ func testResponse(req *http.Request, status int, contentType, body string) *http
 		Header:     http.Header{"Content-Type": []string{contentType}},
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    req,
+	}
+}
+
+func TestSummaryRequestUsesItsOwnOutputContractWithoutTools(t *testing.T) {
+	const prompt = `Return {"notes":"...","quotes":[]}. Original task contract below is context only: {"accepted":true}.`
+	p := testProvider(func(req *http.Request) (*http.Response, error) {
+		var payload struct {
+			System    string             `json:"system"`
+			Messages  []agent.Message    `json:"messages"`
+			Tools     []agent.Definition `json:"tools"`
+			MaxTokens int                `json:"max_tokens"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(payload.System, "current request's output contract") || strings.Contains(payload.System, "task's result contract") || len(payload.Tools) != 0 || payload.MaxTokens != 1024 || len(payload.Messages) != 1 || payload.Messages[0].Text() != prompt {
+			t.Fatalf("summary request inherited execution output controls: %+v", payload)
+		}
+		return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"text","text":"{\"notes\":\"Continue.\",\"quotes\":[]}"}],"stop_reason":"end_turn"}`), nil
+	})
+	if _, err := p.GenerateSummary(context.Background(), []agent.Message{agent.Text("user", prompt)}, 1024, nil); err != nil {
+		t.Fatal(err)
 	}
 }
 

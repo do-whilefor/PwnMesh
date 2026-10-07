@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 func reviewReceipt(version string) board.DecisionReceipt {
@@ -82,6 +82,7 @@ func TestCompletionReviewIsInvalidatedWithDraft(t *testing.T) {
 				d.invalidate()
 				d.observeRead("overview")
 				d.observeRead("facts")
+				d.beforeRequest(loop)
 				if _, err := d.action(ctx, complete, "v2"); err != nil {
 					t.Fatal(err)
 				}
@@ -148,7 +149,7 @@ func TestCompletionReviewReachesModelBeforeCommit(t *testing.T) {
 		}
 		return draftModelCall("final", "graph_action", `{"op":"commit","idempotency_key":"final"}`), nil
 	})
-	result, err := Run(context.Background(), job, Options{RunDir: runDir, Provider: p, Output: bridge})
+	result, err := runTestWorker(context.Background(), job, Options{RunDir: runDir, Provider: p, Output: bridge})
 	if err != nil || result.Status != "success" || calls != 2 || previews != 1 || commits != 1 {
 		t.Fatalf("review flow failed: %+v %v calls=%d previews=%d commits=%d", result, err, calls, previews, commits)
 	}

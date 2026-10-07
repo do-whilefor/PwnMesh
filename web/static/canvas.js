@@ -2,7 +2,7 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomCanvas = api;
+  else root.PwnMeshCanvas = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
 

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func bindingSnapshotJob(t *testing.T, j Job) Job {
@@ -96,8 +96,8 @@ func assertSnapshotResumeRejectsChangedInput(t *testing.T, j Job, options Option
 		} else {
 			changed.InputView = json.RawMessage(`{"changed":true}`)
 		}
-		if _, err := Run(context.Background(), changed, options); err == nil || !strings.Contains(err.Error(), "immutable input mismatch") {
-			t.Fatalf("recovery accepted changed %s: %v", field, err)
+		if result, err := runTestWorker(context.Background(), changed, options); err != nil || result.Status != "failed" || result.FailureKind != "graph_checkpoint" || !strings.Contains(result.Error, "input mismatch") {
+			t.Fatalf("recovery accepted changed %s: %+v %v", field, result, err)
 		}
 	}
 }

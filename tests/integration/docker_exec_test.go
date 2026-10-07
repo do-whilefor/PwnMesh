@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 // Acceptance diagnostics read the test-owned store, not a production endpoint
@@ -124,7 +124,7 @@ for name in shell child; do
   fi
   printf '%s %s %s\n' "$name" "$pid" "$state"
 done`
-	text, err := dockerExec(ctx, container, []string{"bash", "-c", script, "xloom-cancellation-check", runDir})
+	text, err := dockerExec(ctx, container, []string{"bash", "-c", script, "pwnmesh-cancellation-check", runDir})
 	if err != nil {
 		return nil, err
 	}

@@ -25,11 +25,14 @@ type Task struct {
 	Timeout         int `yaml:"timeout" json:"timeout"`
 	ConcludeTimeout int `yaml:"conclude_timeout" json:"conclude_timeout"`
 	MaxIntents      int `yaml:"max_intents" json:"max_intents"`
+	// Empty inherits the backend's PWNMESH_REASONING_EFFORT. An explicit role
+	// policy is persisted in the Job, so same-run recovery keeps that choice.
+	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
 }
 type Tasks struct {
-	Bootstrap Task `yaml:"bootstrap"`
-	Reason    Task `yaml:"reason"`
-	Explore   Task `yaml:"explore"`
+	Reason  Task `yaml:"reason"`
+	Curate  Task `yaml:"curate"`
+	Explore Task `yaml:"explore"`
 }
 type Container struct {
 	Image           string   `yaml:"image"`
@@ -91,7 +94,7 @@ func (c *Config) Validate() error {
 		c.Container.Socket = "/var/run/docker.sock"
 	}
 	if c.Container.Namespace == "" {
-		c.Container.Namespace = "xloom"
+		c.Container.Namespace = "pwnmesh"
 	}
 	u, err := url.Parse(c.Server)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
@@ -109,9 +112,12 @@ func (c *Config) Validate() error {
 	if c.Runtime.Interval <= 0 || c.Runtime.MaxWorkers <= 0 || c.Runtime.MaxProjects <= 0 || c.Runtime.MaxProjectWorkers <= 0 || c.Runtime.HealthTimeout <= 0 {
 		return fmt.Errorf("invalid runtime limits")
 	}
-	for _, t := range []Task{c.Tasks.Bootstrap, c.Tasks.Reason, c.Tasks.Explore} {
+	for _, t := range []Task{c.Tasks.Reason, c.Tasks.Curate, c.Tasks.Explore} {
 		if t.Timeout < 0 {
 			return fmt.Errorf("task timeout must be nonnegative (0 disables the execution deadline)")
+		}
+		if !slices.Contains([]string{"", "low", "high", "max"}, t.ReasoningEffort) {
+			return fmt.Errorf("task reasoning_effort must be low, high or max, or omitted to inherit the backend setting")
 		}
 	}
 	if c.Tasks.Explore.ConcludeTimeout <= 0 || c.Tasks.Reason.MaxIntents <= 0 {
@@ -139,15 +145,15 @@ func (c *Config) Validate() error {
 		if w.Type == "" {
 			w.Type = "go"
 		}
-		if w.Type != "go" && w.Type != "mock" {
-			return fmt.Errorf("worker %q must use go or mock", w.Name)
+		if w.Type != "go" {
+			return fmt.Errorf("worker %q must use go", w.Name)
 		}
 		if len(w.TaskTypes) == 0 {
 			return fmt.Errorf("worker %q has no task types", w.Name)
 		}
 		types := map[string]bool{}
 		for _, typ := range w.TaskTypes {
-			if !slices.Contains([]string{"bootstrap", "reason", "explore"}, typ) || types[typ] {
+			if !slices.Contains([]string{"reason", "curate", "explore"}, typ) || types[typ] {
 				return fmt.Errorf("invalid task types for %q", w.Name)
 			}
 			types[typ] = true
@@ -173,32 +179,37 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("environment variable %s is required for worker %q", missing, w.Name)
 			}
 		}
-		w.Env = env
-		if w.Type == "go" {
-			if w.Env["ANTHROPIC_MODEL"] == "" {
-				w.Env["ANTHROPIC_MODEL"] = w.Env["ANTHROPIC_DEFAULT_FABLE_MODEL"]
-			}
-			for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
-				if strings.TrimSpace(w.Env[key]) == "" {
-					return fmt.Errorf("worker %q is missing %s", w.Name, key)
+		// Normalize after merging so execution and its environment identity use
+		// the same value. An explicitly empty canonical setting still wins.
+		for key, value := range env {
+			if suffix, legacy := strings.CutPrefix(key, "XLOOM_"); legacy {
+				canonical := "PWNMESH_" + suffix
+				if _, exists := env[canonical]; !exists {
+					env[canonical] = value
 				}
+			}
+		}
+		w.Env = env
+		if w.Env["ANTHROPIC_MODEL"] == "" {
+			w.Env["ANTHROPIC_MODEL"] = w.Env["ANTHROPIC_DEFAULT_FABLE_MODEL"]
+		}
+		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
+			if strings.TrimSpace(w.Env[key]) == "" {
+				return fmt.Errorf("worker %q is missing %s", w.Name, key)
 			}
 		}
 	}
 	if !capabilities["reason"] {
 		return fmt.Errorf("at least one worker must support reason (Decide) to plan projects")
 	}
-	if capabilities["bootstrap"] && c.Tasks.Bootstrap.ConcludeTimeout <= 0 {
-		return fmt.Errorf("bootstrap conclude_timeout must be positive when a worker supports legacy bootstrap runs")
-	}
 	return nil
 }
 func (c Config) Task(kind string) Task {
 	switch kind {
-	case "bootstrap":
-		return c.Tasks.Bootstrap
 	case "reason":
 		return c.Tasks.Reason
+	case "curate":
+		return c.Tasks.Curate
 	default:
 		return c.Tasks.Explore
 	}

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"xloom/internal/agent"
-	"xloom/internal/contract"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/contract"
 )
 
 const maxOutputRepairs = 2
@@ -102,5 +102,9 @@ func repairInstruction(j Job, concluding bool, attempt int, problem *outputFailu
 			fallback += " If further execution can finish the task, report continue; the runtime will restore tools in this same run under the original deadline."
 		}
 	}
-	return fmt.Sprintf("Result-format repair %d/%d in the same session. All tools are disabled. The previous response cannot be submitted: %s. Produce one complete JSON object using the original task contract and the current phase restrictions. Replace the invalid response; do not append a suffix or include the earlier JSON. Use only existing evidence. Do not invent facts, force accepted:true, or declare completion without its required proof. %s A truncated response must be rewritten more briefly, not trusted as a complete answer.\n", attempt, maxOutputRepairs, reason, fallback), nil
+	instruction := fmt.Sprintf("Result-format repair %d/%d in the same session. All tools are disabled. The previous response cannot be submitted: %s. Replace it with one complete JSON object using the original task contract and current phase restrictions; do not append a suffix or include the earlier JSON. Use only existing evidence and require the contract's proof for completion; never force accepted:true. %s", attempt, maxOutputRepairs, reason, fallback)
+	if problem.Reason == "output_truncated" {
+		instruction += " Rewrite the truncated response more briefly; a parseable prefix is not a complete answer."
+	}
+	return instruction + "\n", nil
 }

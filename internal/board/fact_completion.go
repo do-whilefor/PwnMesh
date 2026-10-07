@@ -9,8 +9,15 @@ import (
 // CheckLegacyConclusion prevents an immutable version-two job from bypassing
 // its evidence contract through the compatibility description-only endpoint.
 func (t *Tx) CheckLegacyConclusion(project, worker string) error {
+	g, err := t.Load(project)
+	if err != nil {
+		return err
+	}
+	if g.Project.OrchestrationVersion == 1 {
+		return Err(409, "orchestration version 1 requires the registered evidence completion protocol")
+	}
 	var raw []byte
-	err := t.QueryRow("SELECT job FROM xloom_executions WHERE project_id=? AND lease=?", project, worker).Scan(&raw)
+	err = t.QueryRow("SELECT job FROM xloom_executions WHERE project_id=? AND lease=?", project, worker).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -49,6 +56,15 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 	if err = t.CheckExecution(s.Graph, fence); err != nil {
 		return Conclusion{}, err
 	}
+	if s.Graph.Project.OrchestrationVersion == 1 {
+		e, err := t.executionForLease(project, fence.Run)
+		if err != nil {
+			return Conclusion{}, err
+		}
+		if err = t.CheckExecutionDependencies(e); err != nil {
+			return Conclusion{}, err
+		}
+	}
 	if len(factPayload) != 0 {
 		created, err := t.StateAction(project, fence, StateAction{Op: "fact", IdempotencyKey: fence.Run + ":final-fact", Payload: factPayload})
 		if err != nil {
@@ -72,6 +88,9 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 	}
 	if fact.Legacy || fact.Status != "valid" || fact.SourceStepID != fence.Intent || len(fact.Evidence) == 0 {
 		return Conclusion{}, Err(409, "conclusion requires an effective evidence-backed observation from this Step")
+	}
+	if s.Graph.Project.OrchestrationVersion == 1 && !runMatches(fence.Run, fact.RunID) {
+		return Conclusion{}, Err(409, "conclusion observation must come from the current execution")
 	}
 	for n := range s.Graph.Intents {
 		i := &s.Graph.Intents[n]

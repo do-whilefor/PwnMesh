@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func newDecisionBatchFixture(t *testing.T) *executionProtocolFixture {
@@ -122,9 +122,22 @@ func TestDecisionBatchRequiresRegisteredVersionAndFencesDirectWrites(t *testing.
 	f.request("POST", f.base()+"/state/actions", map[string]any{"op": "step", "idempotency_key": "bypass", "payload": map[string]any{"action": "add", "from": []string{"origin"}, "description": "bypass"}, "expected_version": board.DecisionStateVersion(f.state())}, true, http.StatusForbidden, nil)
 	for _, version := range []int{0, 1} {
 		legacy := newExecutionProtocolFixture(t)
-		legacy.register("reason", nil, version)
-		legacy.decision("commit", legacy.batch(batchAction("step", "", `{"action":"add","from":["origin"],"description":"Old protocol"}`)), http.StatusForbidden)
-		legacy.action("step", "legacy-action", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Old protocol still works"})
+		live := true
+		legacy.registerWithFields("reason", &live, version, nil, http.StatusUnprocessableEntity)
+		if len(legacy.executionRecords()) != 0 {
+			t.Fatal("retired protocol was registered")
+		}
+	}
+}
+
+func TestMainAgentCannotBypassBatchWithoutRegistration(t *testing.T) {
+	f := newExecutionProtocolFixture(t)
+	f.kind = "reason"
+	f.request("POST", f.base()+"/reason/claim", map[string]string{"worker": f.lease, "trigger": "initial"}, false, http.StatusOK, nil)
+	before := f.state()
+	f.request("POST", f.base()+"/state/actions", map[string]any{"op": "step", "idempotency_key": "direct", "payload": map[string]any{"action": "add", "from": []string{"origin"}, "description": "Unregistered plan"}}, true, http.StatusForbidden, nil)
+	if !reflect.DeepEqual(before, f.state()) {
+		t.Fatal("unregistered direct plan changed the board")
 	}
 }
 
@@ -155,14 +168,20 @@ func TestUncommittedDecisionCannotCrossStopOrRestart(t *testing.T) {
 func TestDecisionCanWithdrawAuxiliaryPlanAndCompleteAtomically(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	observed := f.newIntent()
-	var result board.Conclusion
-	f.request("POST", f.base()+"/intents/"+observed.ID+"/conclude", map[string]string{"worker": "fixture", "description": "Requested fixture rejects unauthenticated access"}, false, http.StatusOK, &result)
-	f.kind = "reason"
-	f.lease = "setup-planner"
-	f.request("POST", f.base()+"/reason/claim", map[string]string{"worker": f.lease, "trigger": "initial"}, false, http.StatusOK, nil)
-	goal := f.action("goal", "auxiliary-goal", map[string]any{"action": "add", "condition": "Optional supporting investigation"})
-	step := f.action("step", "auxiliary-step", map[string]any{"action": "add", "goal_id": goal.ID, "from": []string{"origin"}, "description": "Optional additional check"})
-	f.request("POST", f.base()+"/reason/release", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)
+	result := f.completeStep(observed, "Requested fixture rejects unauthenticated access")
+	f.kind, f.run, f.lease = "reason", "setup-planner", "planner@setup-planner"
+	prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
+	setupBatch := f.batch(
+		batchAction("goal", "auxiliary", `{"action":"add","condition":"Optional supporting investigation"}`),
+		batchAction("step", "auxiliary-step", `{"action":"add","goal_id":"$auxiliary","from":["origin"],"description":"Optional additional check"}`),
+	)
+	setupBatch.Assessment = &board.RootAssessment{Status: "missing", Description: "An additional condition may affect the original fixture result", Gaps: []board.RequirementGap{{ID: "condition", InputIDs: []string{"goal"}, Description: "Resolve whether the additional condition changes the requested observation"}}}
+	for n := range setupBatch.Actions {
+		setupBatch.Actions[n].GapID = "condition"
+	}
+	setup := f.decision("commit", setupBatch, http.StatusOK)
+	goal, step := setup.Results[0], setup.Results[1]
+	f.run = "completion-planner"
 	f.request("POST", f.base()+"/intents/"+step.ID+"/heartbeat", map[string]string{"worker": "existing-executor"}, false, http.StatusOK, nil)
 	f.lease = "planner@" + f.run
 	live := true
@@ -268,8 +287,8 @@ func TestConcurrentDecisionCommitRetriesShareOneReceipt(t *testing.T) {
 	for n := 0; n < 2; n++ {
 		go func() {
 			r := httptest.NewRequest("POST", f.base()+"/state/decisions/commit", bytes.NewReader(raw))
-			r.Header.Set("X-Xloom-Run", f.lease)
-			r.Header.Set("X-Xloom-Lease", f.kind)
+			r.Header.Set("X-PwnMesh-Run", f.lease)
+			r.Header.Set("X-PwnMesh-Lease", f.kind)
 			w := httptest.NewRecorder()
 			f.handler.ServeHTTP(w, r)
 			responses <- w

@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package tools exposes exactly the seven initial X-Loom tools.
+// Package tools exposes exactly the seven initial PwnMesh tools.
 package tools
 
 import (
@@ -19,13 +19,17 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"xloom/internal/agent"
-	"xloom/internal/process"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/process"
 )
 
 type Set struct {
-	Dir         string
-	RunDir      string
+	Dir    string
+	RunDir string
+	// ProcessDir binds child processes to the owning Worker launch. Output
+	// files remain private to RunDir; an empty value uses RunDir for both.
+	ProcessDir  string
+	Env         []string
 	OutputBytes int
 	ToolTimeout time.Duration
 }
@@ -36,7 +40,7 @@ func (s *Set) All() []agent.Tool {
 	}
 	return []agent.Tool{
 		def("read", "Read a text file with optional 1-based offset and line limit.", `{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}`, true, s.read),
-		def("bash", "Run a bash command in the project workspace. Long output is saved to a file.", `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1}},"required":["command"],"additionalProperties":false}`, false, s.bash),
+		def("bash", "Run a bash command in the current working directory. Long output is saved to a file.", `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1}},"required":["command"],"additionalProperties":false}`, false, s.bash),
 		def("edit", "Replace exactly one occurrence of oldText in a UTF-8 file.", `{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}`, false, s.edit),
 		def("write", "Write a file using exactly one of content (generated text) or source_path (byte-exact copy). Optional source_start_line/source_end_line must be paired, 1-based inclusive. source_sha256 verifies the entire source file before copying. Creates parent directories; returns byte count and SHA-256.", `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"source_path":{"type":"string"},"source_start_line":{"type":"integer","minimum":1},"source_end_line":{"type":"integer","minimum":1},"source_sha256":{"type":"string"}},"required":["path"],"additionalProperties":false}`, false, s.write),
 		def("grep", "Search file contents with ripgrep; regex by default.", `{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"ignoreCase":{"type":"boolean"},"literal":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}`, true, s.grep),
@@ -127,7 +131,15 @@ func (s *Set) run(ctx context.Context, timeout time.Duration, name string, args 
 	defer f.Close()
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	err = process.Run(ctx, s.Dir, s.RunDir, f, name, args...)
+	processDir := s.ProcessDir
+	if processDir == "" {
+		processDir = s.RunDir
+	}
+	if len(s.Env) != 0 {
+		args = append(append(append([]string{}, s.Env...), name), args...)
+		name = "env"
+	}
+	err = process.Run(ctx, s.Dir, processDir, f, name, args...)
 	return s.output(f, err)
 }
 func (s *Set) capture(ctx context.Context, write func(io.Writer) error) (string, error) {

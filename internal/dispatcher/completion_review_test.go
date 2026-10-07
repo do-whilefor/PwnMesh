@@ -8,23 +8,20 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
 	s, runner, store, graph := automaticRetryFixture(t, 0, "")
 	ctx := context.Background()
 	base := projectPath(graph.Project.ID)
-	var steps []board.Intent
+	var proposed []map[string]any
 	for n := 0; n < 5; n++ {
-		var step board.Intent
-		if err := s.Client.Do(ctx, "POST", base+"/intents", map[string]any{"from": []string{"origin"}, "description": fmt.Sprintf("%d%s", n, strings.Repeat("d", 16000)), "creator": "user"}, &step, nil); err != nil {
-			t.Fatal(err)
-		}
-		steps = append(steps, step)
+		proposed = append(proposed, map[string]any{"from": []string{"origin"}, "description": fmt.Sprintf("%d%s", n, strings.Repeat("d", 16000))})
 	}
+	steps := authorizeFixtureSteps(t, s, graph.Project.ID, proposed...)
 	fact := board.FactRecord{ID: "f001", Description: "Retained fixture observation", Status: "valid", Scope: "fixture", Evidence: []board.EvidenceRef{}}
 	for n := 0; n < 4; n++ {
 		fact.Evidence = append(fact.Evidence, board.EvidenceRef{RunID: "observation", Path: fmt.Sprintf("retained/%d.txt", n), Excerpt: strings.Repeat("e", 8192)})
@@ -62,7 +59,7 @@ func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
 	}
 	job := worker.Job{RunID: "completion-review", Kind: "reason", Graph: state.Graph, State: &state, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: config.Task{MaxIntents: 3}, Decision: &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}}
 	raw, _ := json.Marshal(job)
-	execution := board.Execution{ProjectID: graph.Project.ID, ID: job.RunID, Namespace: "xloom", Backend: "retry-fixture", Kind: "reason", Lease: lease.Run, Job: raw, RetryKey: "reason:completion-review"}
+	execution := board.Execution{ProjectID: graph.Project.ID, ID: job.RunID, Namespace: "pwnmesh", Backend: "retry-fixture", Kind: "reason", Lease: lease.Run, Job: raw, RetryKey: "reason:completion-review"}
 	registerLegacyExecution(t, store, execution)
 	batch := board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion}
 	for _, step := range steps {

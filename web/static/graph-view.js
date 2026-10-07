@@ -2,7 +2,7 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.XLoomGraphView = api;
+  else root.PwnMeshGraphView = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
   const STATES = {open: '待执行', pending: '待执行', running: '运行中', completed: '已完成', failed: '失败', abandoned: '已放弃', achieved: '已达成', withdrawn: '已撤回', valid: '有效', input: '输入', superseded: '被取代', refuted: '被反驳', narrowed: '已收窄', candidate: '待验证', verified: '已验证', paused: '已暂停', needs_review: '待复核', unknown: '未标明状态'};

@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 func TestDecisionMetricsSeparateDraftsFromCommittedReceipts(t *testing.T) {
@@ -64,6 +64,33 @@ func TestDecisionMetricsEmptyCommitAndLegacyOutcomes(t *testing.T) {
 	}
 }
 
+func TestDecisionMetricsCountCompletionEvidenceOutsideView(t *testing.T) {
+	view := json.RawMessage(`{"goals":[],"steps":[]}`)
+	assessment := &board.CompletionReview{
+		Acceptance:  "not_checked",
+		UserInputs:  []board.Fact{{ID: "goal", Description: "Check <all> required cases"}},
+		FactRecords: []board.FactRecord{{ID: "f001", Description: "Observed result"}},
+	}
+	raw, err := json.Marshal(assessment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, packet := range []*board.CompletionReview{nil, assessment} {
+		j := Job{Kind: "reason", Decision: &board.DecisionContext{
+			Version: 2, Mode: "completion", BaselineBytes: 4096, View: view,
+			CompletionAssessment: packet,
+		}}
+		want := len(view)
+		if packet != nil {
+			want += len(raw)
+		}
+		got := newDecisionMetrics().finish(j, Result{}, time.Time{}, time.Time{})
+		if got.SelectedViewBytes != want || got.BaselineViewBytes != 4096 || got.ViewMode != "completion" {
+			t.Fatalf("completion evidence missing from input accounting: got %+v, want %d bytes", got, want)
+		}
+	}
+}
+
 func TestDecisionMetricsReplayJournalReceipts(t *testing.T) {
 	dir := t.TempDir()
 	journal, err := openJournal(dir, nil)
@@ -93,83 +120,6 @@ func TestDecisionMetricsReplayJournalReceipts(t *testing.T) {
 	defer recovered.file.Close()
 	if !reflect.DeepEqual(recovered.metrics, want) || !recovered.metrics.Committed || recovered.metrics.CommittedActions != 2 {
 		t.Fatalf("replay changed observations: got %+v; want %+v", recovered.metrics, want)
-	}
-}
-
-func TestLegacySessionMetricsRecoverFromJournal(t *testing.T) {
-	t.Setenv("XLOOM_MOCK_REASON", "")
-	j, dir := scenarioJob(t, "", "reason"), t.TempDir()
-	j.WorkerType, j.Intent, j.Graph.Intents = "mock", nil, nil
-	identity, err := identityFor(j, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	journal, err := openJournal(dir, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	usage := agent.Usage{InputTokens: 19, OutputTokens: 7, CacheReadTokens: 3}
-	for _, event := range []agent.Event{
-		{Type: "model_call_start", Request: &agent.RequestObservation{Kind: "turn", InputBytes: 80}},
-		{Type: "model_call_end", Request: &agent.RequestObservation{Kind: "turn", Usage: &usage}},
-		(decisionOperation{Op: "draft", Actions: 2}).event(),
-		(decisionOperation{Op: "decision_commit", Failed: true}).event(),
-		(decisionOperation{Op: "decision_receipt", Committed: true, Actions: 2}).event(),
-		(decisionOperation{Op: "decision_receipt", Committed: true, Actions: 2}).event(),
-	} {
-		if err := journal.append(event); err != nil {
-			t.Fatal(err)
-		}
-	}
-	started := time.Now().UTC()
-	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, RunID: j.RunID, Kind: j.Kind, StartedAt: started}
-	if err := saved.save(dir, journal); err != nil {
-		t.Fatal(err)
-	}
-	if err := journal.file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	readSession := func() map[string]json.RawMessage {
-		t.Helper()
-		raw, err := os.ReadFile(filepath.Join(dir, "session.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &fields); err != nil {
-			t.Fatal(err)
-		}
-		return fields
-	}
-	legacy := readSession()
-	legacy["decision_metrics"] = json.RawMessage(`{"version":1,"model_calls":999,"usage":{"input_tokens":999},"committed_actions":999}`)
-	raw, err := json.Marshal(legacy)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := atomicSessionFile(dir, raw); err != nil {
-		t.Fatal(err)
-	}
-	opts := Options{RunDir: dir, Now: func() time.Time { return started }}
-	result, err := Run(context.Background(), j, opts)
-	if err != nil || result.Status != "success" || result.Metrics == nil {
-		t.Fatalf("legacy session did not recover: result=%+v err=%v", result, err)
-	}
-	m := result.Metrics
-	if m.ModelCalls != 1 || m.CompletedCalls != 1 || m.UsageCalls != 1 || m.Usage != usage || m.DraftCalls != 1 || m.DraftActions != 2 || m.CommitFailures != 1 || m.ReceiptCalls != 2 || !m.Committed || m.CommittedActions != 2 {
-		t.Fatalf("journal observations were replaced or counted twice: %+v", m)
-	}
-	current := readSession()
-	if _, ok := current["decision_metrics"]; ok {
-		t.Fatal("saved session retained the unused top-level metrics copy")
-	}
-	var persisted Result
-	if err := json.Unmarshal(current["result"], &persisted); err != nil || !reflect.DeepEqual(persisted.Metrics, result.Metrics) {
-		t.Fatalf("final result metrics changed when saved: %+v, %v", persisted.Metrics, err)
-	}
-	replayed, err := Run(context.Background(), j, opts)
-	if err != nil || !reflect.DeepEqual(replayed.Metrics, result.Metrics) {
-		t.Fatalf("terminal recovery changed final metrics: %+v, %v", replayed.Metrics, err)
 	}
 }
 
@@ -325,6 +275,7 @@ func TestDecisionMetricsRuntimeOperationsAndLostCommit(t *testing.T) {
 	call("read_graph", `{"section":"facts"}`, true)
 	call("read_graph", `{"section":"overview"}`, false)
 	call("read_graph", `{"section":"facts"}`, false)
+	o.decision.beforeRequest(&agent.Loop{})
 	call("graph_action", stage, false)
 	call("graph_action", `{"op":"commit","idempotency_key":"commit","payload":{}}`, true)
 	if m.Committed || m.StateChanged != 1 || m.CommitCalls != 1 || m.CommitFailures != 1 {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -64,7 +65,7 @@ type ExecutionCheck struct {
 const executionMetadataColumns = `generation,input_revision,decision_revision,state_version,has_state,fact_count,hint_count,open_count`
 const executionSummaryColumns = `project_id,id,namespace,backend,kind,intent,lease,retry_key,status,resumes,created_at,updated_at,` + executionMetadataColumns
 const pendingExecutionSQL = `status IN ('prepared','running','retryable','result_pending')`
-const executionFailureColumns = `COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.status') END,''),COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.failure_kind') END,'')`
+const executionFailureColumns = `COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.status') END,''),COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.failure_kind') END,''),COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.failure_cause') END,'')`
 
 func scanExecutionSummary(s scanner, prefix ...any) (ExecutionSummary, error) {
 	var e ExecutionSummary
@@ -217,7 +218,7 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 	if err != nil {
 		return out, err
 	}
-	err = t.QueryRow(`SELECT id FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND intent=? AND status='retry_requested' ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Kind, q.Intent).Scan(&out.PreviousRunID)
+	err = t.QueryRow(`SELECT id FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND intent=? AND status='retry_requested' AND (?!='curate' OR (retry_key=? AND generation=?)) ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Kind, q.Intent, q.Kind, q.RetryKey, q.Generation).Scan(&out.PreviousRunID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return out, err
 	}
@@ -227,6 +228,12 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 		return out, err
 	}
 	out.Blocked = out.Pending || (tried && out.PreviousRunID == "")
+	if !out.Blocked && q.Kind == "explore" {
+		out.Blocked, err = t.stepWriteBlocked(q.ProjectID, q.Intent)
+		if err != nil {
+			return out, err
+		}
+	}
 	err = t.QueryRow(`SELECT COUNT(*) FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND generation=? AND retry_key=?`, q.Namespace, q.ProjectID, q.Kind, q.Generation, q.RetryKey).Scan(&out.Attempts)
 	if err != nil {
 		return out, err
@@ -248,21 +255,21 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 			return out, err
 		}
 	}
-	if q.Kind != "reason" || out.Attempts != 1 || out.Pending || out.PreviousRunID != "" {
+	if !controlKind(q.Kind) || out.Attempts != 1 || out.Pending || out.PreviousRunID != "" {
 		return out, nil
 	}
 	// Extract only the small failure classification. Never materialize Result
 	// or Job just to decide whether this one candidate merits a retry request.
 	var candidate Execution
-	var status, failureKind string
-	err = t.QueryRow(`SELECT id,status,`+executionFailureColumns+` FROM xloom_executions WHERE namespace=? AND project_id=? AND generation=? AND kind='reason' AND retry_key=? LIMIT 1`, q.Namespace, q.ProjectID, q.Generation, q.RetryKey).Scan(&candidate.ID, &candidate.Status, &status, &failureKind)
+	var status, failureKind, failureCause string
+	err = t.QueryRow(`SELECT id,status,`+executionFailureColumns+` FROM xloom_executions WHERE namespace=? AND project_id=? AND generation=? AND kind=? AND retry_key=? LIMIT 1`, q.Namespace, q.ProjectID, q.Generation, q.Kind, q.RetryKey).Scan(&candidate.ID, &candidate.Status, &status, &failureKind, &failureCause)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, nil
 	}
 	if err != nil {
 		return out, err
 	}
-	if automaticDecisionRetryEligible("reason", candidate.Status, status, failureKind) {
+	if automaticDecisionRetryEligible(q.Kind, candidate.Status, status, failureKind, failureCause) {
 		out.AutomaticRetryID = candidate.ID
 	}
 	return out, nil
@@ -279,13 +286,28 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, intents []Intent
 	for _, step := range steps {
 		stepState[step.ID] = step
 	}
+	var writeOwners []Step
+	if slices.ContainsFunc(steps, func(step Step) bool { return len(step.WritePaths) != 0 || step.Repair != nil }) {
+		data, _, _, err := t.stateData(project)
+		if err != nil {
+			return nil, err
+		}
+		writeOwners, err = t.activeStepWriteOwners(project, data.Steps)
+		if err != nil {
+			return nil, err
+		}
+	}
 	values := make([]string, 0, len(intents))
 	args := make([]any, 0, 3*len(intents)+6)
 	for _, i := range intents {
 		kind := "explore"
 		if i.To == nil && i.ConcludedAt == nil && i.Description == "bootstrap" && i.Creator == "dispatcher.bootstrap" && len(i.From) == 1 && i.From[0] == "origin" {
 			kind = "bootstrap"
-		} else if step := stepState[i.ID]; i.To != nil || i.ConcludedAt != nil || i.Worker != nil || step.Status == "abandoned" || len(step.InvalidSources) > 0 {
+		} else if step := stepState[i.ID]; i.To != nil || i.ConcludedAt != nil || i.Worker != nil || step.Status == "abandoned" || len(step.InvalidSources) > 0 || len(step.BlockedBy) > 0 {
+			continue
+		}
+		if stepWriteConflict(stepState[i.ID], writeOwners) != "" {
+			checks[kind+":"+i.ID] = ExecutionCheck{Blocked: true}
 			continue
 		}
 		values = append(values, "(?,?,?)")

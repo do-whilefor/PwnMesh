@@ -6,7 +6,7 @@ import (
 	"context"
 	"sync"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 type replanProvider struct {

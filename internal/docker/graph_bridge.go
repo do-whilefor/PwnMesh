@@ -9,7 +9,7 @@ import (
 	"path"
 	"time"
 
-	"xloom/internal/worker"
+	"pwnmesh/internal/worker"
 )
 
 func (c *Client) SetGraphHandler(handler func(context.Context, worker.Job, worker.GraphRequest) (any, error)) {

@@ -1,7 +1,7 @@
 'use strict';
 
-// Start xloom serve with a dedicated empty database, then run:
-// XLOOM_WEB_URL=http://127.0.0.1:18767 node --test web/browser/browser_test.cjs
+// Start pwnmesh serve with a dedicated empty database, then run:
+// PWNMESH_WEB_URL=http://127.0.0.1:18767 node --test web/browser/browser_test.cjs
 // PLAYWRIGHT_MODULE and PLAYWRIGHT_CHROMIUM_EXECUTABLE optionally select local dependencies.
 // This test creates real projects and removes only the projects it created.
 const test = require('node:test');
@@ -11,10 +11,10 @@ const path = require('node:path');
 
 test('workbench persists project operations through the real HTTP service', {
   timeout: 150000,
-  skip: process.env.XLOOM_WEB_URL ? false : 'Set XLOOM_WEB_URL to a dedicated empty xloom serve instance',
+  skip: process.env.PWNMESH_WEB_URL ? false : 'Set PWNMESH_WEB_URL to a dedicated empty pwnmesh serve instance',
 }, async t => {
-  const base = new URL(process.env.XLOOM_WEB_URL);
-  assert.ok(['http:', 'https:'].includes(base.protocol), 'XLOOM_WEB_URL must be an HTTP service');
+  const base = new URL(process.env.PWNMESH_WEB_URL);
+  assert.ok(['http:', 'https:'].includes(base.protocol), 'PWNMESH_WEB_URL must be an HTTP service');
   const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const projectPath = id => '/projects/' + encodeURIComponent(id);
   const created = new Map();
@@ -82,7 +82,7 @@ test('workbench persists project operations through the real HTTP service', {
       await page.locator('#graph-empty').waitFor({state: 'visible'});
       assert.equal(await page.locator('#project-list .project-row').count(), 0);
       assert.equal(await page.locator('#graph-host .graph-node').count(), 0);
-      assert.match(await page.title(), /X-Loom/);
+      assert.match(await page.title(), /PwnMesh/);
       const scripts = await page.locator('script[src]').evaluateAll(elements => elements.map(element => element.getAttribute('src')));
       assert.ok(scripts.every(source => source.startsWith('/static/')));
       assert.ok(!scripts.some(source => /model\.js|cytoscape|dagre/.test(source)));
@@ -104,6 +104,7 @@ test('workbench persists project operations through the real HTTP service', {
         created.set(graph.project.id, graph.project);
         assert.equal(graph.project.scenario, scenario);
         assert.equal(graph.project.bootstrap_enabled, false);
+        assert.equal(graph.project.orchestration_version, 1);
         await page.locator('#create-dialog').waitFor({state: 'hidden'});
         await waitText('project-title', title);
       }
@@ -113,6 +114,8 @@ test('workbench persists project operations through the real HTTP service', {
       const stored = await request('/projects');
       assert.deepEqual(stored.map(project => project.scenario).sort(), ['audit', 'ctf', 'pentest']);
       for (const project of created.values()) {
+        const persisted = await request(projectPath(project.id));
+        assert.equal(persisted.project.orchestration_version, 1, 'Web-created orchestration must survive reload');
         const stamp = new Date(Date.parse(project.created_at) + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
         assert.ok((await row(project.title).innerText()).includes(stamp), `missing Shanghai creation time ${stamp}`);
       }

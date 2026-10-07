@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 func TestDecisionObservationIsIndependentOfImmutableBusinessResult(t *testing.T) {

@@ -13,11 +13,11 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/server"
-	"xloom/internal/worker"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/server"
+	"pwnmesh/internal/worker"
 )
 
 // This verifies delivery and publication, not a model's semantic judgment.
@@ -75,7 +75,7 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			execution := board.Execution{ProjectID: f.project.ID, ID: job.RunID, Namespace: "xloom", Backend: "fixture", Kind: "reason", Lease: lease.Run, Job: raw}
+			execution := board.Execution{ProjectID: f.project.ID, ID: job.RunID, Namespace: "pwnmesh", Backend: "fixture", Kind: "reason", Lease: lease.Run, Job: raw}
 			f.do("POST", projectPath(f.project.ID)+"/executions/prepare", execution, &execution, &lease)
 			if err := json.Unmarshal(execution.Job, &job); err != nil {
 				t.Fatal(err)
@@ -93,8 +93,11 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 				}
 				if request.Op == "decision_commit" {
 					commits++
-					if calls != 5 {
+					if calls != 6 && (accepted || calls != 7) {
 						t.Fatal("commit reached the Dispatcher before evidence delivery")
+					}
+					if !accepted && (request.Batch.Assessment == nil || request.Batch.Assessment.Status != "missing" || len(request.Batch.Actions) != 1 || request.Batch.Actions[0].GapID != "acceptance") {
+						t.Fatal("negative evidence did not bind follow-up work to the missing original requirement")
 					}
 				}
 				return forward(ctx, job, request)
@@ -115,12 +118,16 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 							t.Fatal("decisive response leaked into the initial view")
 						}
 					}
+					// A provisional model judgment is not acceptance. The real preview
+					// must still expose omitted evidence and permit revising this judgment.
+					return updateToolCall("assessment", "assess_root", `{"status":"satisfied","from":["f001"],"description":"The retained response is proposed as proof of R17 acceptance; preview must expose omitted evidence before publication."}`), nil
+				case 2:
 					message := updateToolCall("draft", "graph_action", `{"op":"complete","idempotency_key":"finish","payload":{"from":["f001"],"description":"The retained response confirms acceptance of R17."}}`)
 					message.Content = append(message.Content,
 						updateToolCall("preview", "graph_action", `{"op":"preview","idempotency_key":"preview","payload":{}}`).Content[0],
 						updateToolCall("premature", "graph_action", `{"op":"commit","idempotency_key":"premature","payload":{}}`).Content[0])
 					return message, nil
-				case 2:
+				case 3:
 					var receipt board.DecisionReceipt
 					if err := json.Unmarshal(completionEvidenceToolResult(t, history, "preview", false), &receipt); err != nil {
 						t.Fatal(err)
@@ -138,7 +145,7 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 						t.Fatal("preview published the proposed completion")
 					}
 					return updateToolCall("fact", "read_graph", `{"section":"facts","ids":["f001"],"limit":1}`), nil
-				case 3:
+				case 4:
 					var page struct {
 						StateVersion string `json:"state_version"`
 						Items        []struct {
@@ -155,7 +162,7 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 						t.Fatal("fact page did not expose its omitted evidence")
 					}
 					return updateToolCall("evidence-0", "read_graph", `{"section":"evidence","ids":["f001"],"limit":50}`), nil
-				case 4, 5:
+				case 5, 6:
 					var page struct {
 						StateVersion string              `json:"state_version"`
 						Items        []board.EvidenceRef `json:"items"`
@@ -171,13 +178,13 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 					delivered = append(delivered, page.Items...)
 					pages++
 					if page.Next != nil {
-						if calls != 4 || *page.Next <= next || len(delivered) >= len(fact.Evidence) {
+						if calls != 5 || *page.Next <= next || len(delivered) >= len(fact.Evidence) {
 							t.Fatal("decisive response did not require a second evidence page")
 						}
 						next = *page.Next
 						return updateToolCall(fmt.Sprintf("evidence-%d", next), "read_graph", fmt.Sprintf(`{"section":"evidence","ids":["f001"],"offset":%d,"limit":50}`, next)), nil
 					}
-					if calls != 5 || !reflect.DeepEqual(delivered, fact.Evidence) {
+					if calls != 6 || !reflect.DeepEqual(delivered, fact.Evidence) {
 						t.Fatal("complete retained evidence did not reach the provider losslessly")
 					}
 					var response struct {
@@ -191,8 +198,14 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 					}
 					message := updateToolCall("reset", "graph_action", `{"op":"reset","idempotency_key":"reset","payload":{}}`)
 					message.Content = append(message.Content,
-						updateToolCall("followup", "graph_action", `{"op":"step","idempotency_key":"followup","payload":{"action":"add","from":["f001"],"description":"Investigate why R17 was not accepted and obtain the required verifier confirmation.","goal_id":"goal"}}`).Content[0],
-						updateToolCall("commit", "graph_action", `{"op":"commit","idempotency_key":"commit","payload":{}}`).Content[0])
+						updateToolCall("reassessment", "assess_root", `{"status":"missing","from":["f001"],"description":"The complete retained response explicitly refuses R17.","gaps":[{"id":"acceptance","input_ids":["goal"],"description":"Obtain the required verifier acceptance of R17."}]}`).Content[0])
+					return message, nil
+				case 7:
+					if accepted || len(completionEvidenceToolResult(t, history, "reassessment", false)) == 0 {
+						t.Fatal("follow-up did not observe the revised missing requirement")
+					}
+					message := updateToolCall("followup", "graph_action", `{"op":"step","idempotency_key":"followup","gap_id":"acceptance","payload":{"action":"add","from":["f001"],"description":"Investigate why R17 was not accepted and obtain the required verifier confirmation.","goal_id":"goal"}}`)
+					message.Content = append(message.Content, updateToolCall("commit", "graph_action", `{"op":"commit","idempotency_key":"commit","payload":{}}`).Content[0])
 					return message, nil
 				default:
 					t.Fatalf("unexpected provider request %d: %s", calls, updateHistoryText(history[len(history)-1:]))
@@ -201,7 +214,11 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 			})
 			runner.options = worker.Options{Provider: provider, RunDir: t.TempDir(), ContextBytes: worker.DefaultContextBytes, ContextTokens: worker.DefaultContextTokens, ContextTargetTokens: worker.DefaultContextTargetTokens}
 			result, err := runner.Run(ctx, run.Worker, run.Job)
-			if err != nil || result.Status != "success" || calls != 5 || previews != 1 || commits != 1 || pages != 2 {
+			wantCalls := 6
+			if !accepted {
+				wantCalls = 7
+			}
+			if err != nil || result.Status != "success" || calls != wantCalls || previews != 1 || commits != 1 || pages != 2 {
 				t.Fatalf("evidence completion flow failed: result=%+v err=%v calls=%d previews=%d commits=%d pages=%d", result, err, calls, previews, commits, pages)
 			}
 			var final board.State

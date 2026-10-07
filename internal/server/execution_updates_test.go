@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 func prepareUpdateFixture(t *testing.T, input string) (*stepInvalidationFixture, worker.Job) {
@@ -29,9 +29,9 @@ func prepareUpdateFixture(t *testing.T, input string) (*stepInvalidationFixture,
 	case "legacy":
 		job.State = nil
 		e.Job, _ = json.Marshal(job)
-		f.registerLegacy(e, http.StatusCreated)
+		f.registerInline(e, http.StatusCreated)
 	default:
-		f.registerLegacy(e, http.StatusCreated)
+		f.registerInline(e, http.StatusCreated)
 	}
 	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
 	return f, job
@@ -135,7 +135,8 @@ func TestExecutionUpdatesHonorAbandonmentAndTerminalFence(t *testing.T) {
 		t.Run(stop, func(t *testing.T) {
 			f, _ := prepareUpdateFixture(t, "snapshot")
 			if stop == "abandon" {
-				f.decider.action("step", "abandon", map[string]string{"action": "abandon", "id": f.intent, "reason": "Direction no longer needed"})
+				f.request("POST", f.base()+"/hints", map[string]string{"content": "Cancel the obsolete direction", "creator": "user"}, false, http.StatusCreated, nil)
+				f.decider.planAction("step", "abandon", map[string]string{"action": "abandon", "id": f.intent, "reason": "Direction no longer needed"})
 			} else {
 				f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "failed"}, true, http.StatusOK, nil)
 			}

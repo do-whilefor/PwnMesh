@@ -10,7 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 const MaxGraphRPCBytes = 128 << 10
@@ -19,6 +19,9 @@ const MaxGraphRPCBytes = 128 << 10
 const maxGraphPageBytes = MaxGraphRPCBytes - 1024
 
 type GraphRequest struct {
+	// Internal evidence lookups are not model-visible graph observations.
+	// A successful full raw read records its observation only after validation.
+	evidenceLookup  bool
 	RequestID       string                     `json:"request_id"`
 	Op              string                     `json:"op"`
 	Section         string                     `json:"section,omitempty"`
@@ -56,8 +59,20 @@ func ValidateGraphRequest(j Job, r GraphRequest) error {
 	if !ValidGraphRequestID(r.RequestID) {
 		return errors.New("invalid graph request_id")
 	}
+	if j.Graph.Project.OrchestrationVersion < 0 || j.Graph.Project.OrchestrationVersion > 1 {
+		return errors.New("unsupported orchestration protocol")
+	}
+	if j.Kind == "curate" && !orchestrationJob(j) {
+		return errors.New("curate requires orchestration protocol 1")
+	}
+	if r.Op == "curate_receipt" {
+		if j.Kind != "curate" || !j.GraphRPC || j.Intent != nil || r.Action.Op != "" || r.Batch != nil || r.Updates != nil || r.Section != "" || len(r.IDs) != 0 || r.Offset != 0 || r.ByteOffset != nil || r.Limit != 0 || r.ExpectedVersion != "" || r.RecordVersion != "" {
+			return errors.New("curation receipt requires the registered curator identity only")
+		}
+		return nil
+	}
 	if r.Op == "read_updates" {
-		if !j.GraphRPC || j.Kind == "reason" || j.Intent == nil || j.RunID == "" || j.Graph.Project.ID == "" {
+		if !j.GraphRPC || controlJob(j) || j.Intent == nil || j.RunID == "" || j.Graph.Project.ID == "" {
 			return errors.New("execution updates require a registered Execute bridge")
 		}
 		if r.Section != "" || r.Offset != 0 || r.ByteOffset != nil || r.Limit != 0 || r.ExpectedVersion != "" || r.RecordVersion != "" || len(r.IDs) != 0 || r.Batch != nil || r.Action.Op != "" {
@@ -87,7 +102,7 @@ func ValidateGraphRequest(j Job, r GraphRequest) error {
 		if err := validateGraphOffsets(r); err != nil {
 			return err
 		}
-		if !slices.Contains([]string{"", "overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources"}, r.Section) {
+		if !slices.Contains([]string{"", "overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources", "candidates", "disputes"}, r.Section) {
 			return errors.New("unknown graph section")
 		}
 		return nil
@@ -98,12 +113,12 @@ func ValidateGraphRequest(j Job, r GraphRequest) error {
 	if j.Kind == "reason" && j.Decision != nil && j.Decision.Version == 2 {
 		return errors.New("version 2 Decide writes require a batch")
 	}
-	allowed := []string{"fact", "finding"}
-	if j.Kind == "reason" {
-		allowed = []string{"goal", "step", "fact_relation"}
-	}
+	allowed := graphActions(j)
 	if !slices.Contains(allowed, r.Action.Op) {
 		return errors.New("graph action is not allowed in this task mode")
+	}
+	if j.Kind == "curate" && (validateCuratorInput(j) != nil || r.Action.ExpectedVersion != j.curationVersion()) {
+		return errors.New("curation mutation requires its immutable input version")
 	}
 	if len(r.Action.IdempotencyKey) == 0 || len(r.Action.IdempotencyKey) > 256 || !json.Valid(r.Action.Payload) {
 		return errors.New("invalid graph action key or payload")
@@ -133,12 +148,7 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 	}
 	var data any
 	if r.Section == "overview" {
-		inputs := []board.Fact{}
-		for _, fact := range s.Graph.Facts {
-			if fact.ID == "origin" || fact.ID == "goal" {
-				inputs = append(inputs, fact)
-			}
-		}
+		inputs, _ := s.UserInputFacts()
 		data = struct {
 			Project          board.Project  `json:"project"`
 			Inputs           []board.Fact   `json:"user_inputs"`
@@ -146,7 +156,8 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 			DecisionRevision int64          `json:"decision_revision"`
 			StateVersion     string         `json:"state_version"`
 			Counts           map[string]int `json:"counts"`
-		}{s.Graph.Project, inputs, s.Revision, s.DecisionRevision, version, map[string]int{"facts": len(s.FactRecords), "goals": len(s.Goals), "steps": len(s.Steps), "findings": len(s.Findings), "relations": len(s.FactRelations), "hints": len(s.Graph.Hints)}}
+			Curation         any            `json:"curation,omitempty"`
+		}{s.Graph.Project, inputs, s.Revision, s.DecisionRevision, version, map[string]int{"facts": len(s.FactRecords), "goals": len(s.Goals), "steps": len(s.Steps), "findings": len(s.Findings), "relations": len(s.FactRelations), "hints": len(s.Graph.Hints), "candidates": len(s.Candidates), "disputes": len(s.Disputes)}, s.Curation}
 	} else {
 		if r.Section == "evidence" || r.Section == "sources" {
 			items, found, err := graphDetails(s, r)
@@ -171,6 +182,14 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 			raw, err = json.Marshal(s.Steps)
 		case "findings":
 			raw, err = json.Marshal(s.Findings)
+		case "candidates":
+			candidates := make([]board.CandidateView, 0, len(s.Candidates))
+			for _, candidate := range s.Candidates {
+				candidates = append(candidates, s.CandidateView(candidate))
+			}
+			raw, err = json.Marshal(candidates)
+		case "disputes":
+			raw, err = json.Marshal(s.Disputes)
 		case "relations":
 			raw, err = json.Marshal(s.FactRelations)
 		case "hints":
@@ -325,6 +344,17 @@ func graphDetails(s board.State, r GraphRequest) ([]json.RawMessage, bool, error
 		}
 	}
 	var items []json.RawMessage
+	if !found {
+		for _, candidate := range s.Candidates {
+			if candidate.ID == r.IDs[0] {
+				value, found = candidate.Evidence, true
+				if r.Section == "sources" {
+					value = candidate.Sources
+				}
+				break
+			}
+		}
+	}
 	if found {
 		raw, err := json.Marshal(value)
 		if err != nil {
@@ -395,7 +425,7 @@ func boundedGraphPage(s board.State, r GraphRequest, version string, items []jso
 }
 
 func compactGraphRecord(section string, raw json.RawMessage) (json.RawMessage, error) {
-	if section != "facts" && section != "findings" {
+	if section != "facts" && section != "findings" && section != "candidates" {
 		return raw, nil
 	}
 	var record map[string]json.RawMessage
@@ -441,9 +471,10 @@ func CompactGraphActionResult(raw json.RawMessage) (json.RawMessage, error) {
 		Revision      int64  `json:"revision"`
 		StateVersion  string `json:"state_version,omitempty"`
 		Unchanged     bool   `json:"unchanged,omitempty"`
+		Committed     bool   `json:"committed,omitempty"`
 		ResultOmitted bool   `json:"result_omitted"`
 		ReadMore      string `json:"read_more"`
-	}{result.Op, result.ID, result.Revision, result.StateVersion, result.Unchanged, true, "Write succeeded. Read this entity by id in its graph section; follow any evidence_omitted or sources_omitted detail pages. Do not resubmit the write because its entity payload is omitted."})
+	}{result.Op, result.ID, result.Revision, result.StateVersion, result.Unchanged, result.Committed, true, "Write succeeded. Read this entity by id in its graph section; follow any evidence_omitted or sources_omitted detail pages. Do not resubmit the write because its entity payload is omitted."})
 }
 
 type graphPage struct {

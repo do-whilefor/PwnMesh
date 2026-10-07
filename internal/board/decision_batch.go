@@ -15,11 +15,13 @@ import (
 type DecisionAction struct {
 	Op      string          `json:"op"`
 	Ref     string          `json:"ref,omitempty"`
+	GapID   string          `json:"gap_id,omitempty"`
 	Payload json.RawMessage `json:"payload"`
 }
 type DecisionBatch struct {
 	ExpectedVersion string           `json:"expected_version"`
 	Actions         []DecisionAction `json:"actions"`
+	Assessment      *RootAssessment  `json:"assessment,omitempty"`
 }
 type DecisionReceipt struct {
 	Committed        bool                `json:"committed"`
@@ -149,7 +151,7 @@ func normalizeDecisionActions(actions []DecisionAction) ([]DecisionAction, error
 	normalized := make([]DecisionAction, len(actions))
 	refs := map[string]bool{}
 	for n, action := range actions {
-		if !slices.Contains([]string{"goal", "step", "fact_relation", "complete"}, action.Op) {
+		if !slices.Contains([]string{"goal", "step", "fact_relation", "curation_request", "complete"}, action.Op) {
 			return nil, Err(422, "invalid decision action "+action.Op)
 		}
 		if action.Op == "complete" && n != len(actions)-1 {
@@ -202,7 +204,7 @@ func resolveDecisionReferences(raw json.RawMessage, ids map[string]string) (json
 		}
 		return nil, Err(422, "unknown or forward decision reference "+id)
 	}
-	for _, key := range []string{"id", "parent_id", "goal_id", "source", "target"} {
+	for _, key := range []string{"id", "parent_id", "goal_id", "source", "target", "dispute_id"} {
 		if value, ok := payload[key]; ok {
 			payload[key], err = resolve(value)
 			if err != nil {
@@ -210,7 +212,7 @@ func resolveDecisionReferences(raw json.RawMessage, ids map[string]string) (json
 			}
 		}
 	}
-	for _, key := range []string{"from", "sources"} {
+	for _, key := range []string{"from", "sources", "depends_on"} {
 		if values, ok := payload[key].([]any); ok {
 			for n, value := range values {
 				values[n], err = resolve(value)
@@ -234,6 +236,12 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 		return out, err
 	}
 	canonical, _ := json.Marshal(actions)
+	if batch.Assessment != nil {
+		canonical, _ = json.Marshal(struct {
+			Actions    []DecisionAction `json:"actions"`
+			Assessment *RootAssessment  `json:"assessment"`
+		}{actions, batch.Assessment})
+	}
 	prior, request, err := t.savedDecision(project, fence.Run)
 	if err != nil {
 		return out, err
@@ -262,6 +270,35 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	}
 	if err = t.CheckDecisionStateVersion(state, fence, batch.ExpectedVersion); err != nil {
 		return out, err
+	}
+	var policy struct {
+		Decision *DecisionContext `json:"decision"`
+	}
+	if err = json.Unmarshal(e.Job, &policy); err != nil {
+		return out, err
+	}
+	if policy.Decision != nil && policy.Decision.ClosureProtocol != 0 || batch.Assessment != nil {
+		if policy.Decision != nil && policy.Decision.ClosureProtocol != 0 && policy.Decision.ClosureProtocol != 1 {
+			return out, Err(422, "unsupported closure protocol")
+		}
+		inputs, _ := state.UserInputFacts()
+		if err = ValidateRootAssessment(batch.Assessment, inputs, state.Graph.Hints); err != nil {
+			return out, err
+		}
+		if len(batch.Assessment.From) != 0 {
+			if err = state.ValidateFactSources(batch.Assessment.From, true); err != nil {
+				return out, err
+			}
+		}
+		if err = ValidateClosureActions(batch.Assessment, actions); err != nil {
+			return out, err
+		}
+	} else {
+		for _, action := range actions {
+			if action.GapID != "" {
+				return out, Err(422, "gap_id requires a root assessment")
+			}
+		}
 	}
 	if t.inDecisionBatch {
 		return out, Err(409, "nested decision batch is not allowed")
@@ -360,6 +397,9 @@ func (t *Tx) CompleteProject(project string, fence ExecutionFence, from []string
 	if err != nil {
 		return Intent{}, err
 	}
+	if s.Graph.Project.OrchestrationVersion == 1 && fence.Lease != "reason" {
+		return Intent{}, Err(403, "only the main agent may complete an orchestrated project")
+	}
 	if err = s.Graph.RequireActive(); err != nil {
 		return Intent{}, err
 	}
@@ -373,7 +413,7 @@ func (t *Tx) CompleteProject(project string, fence ExecutionFence, from []string
 		return Intent{}, err
 	}
 	for _, step := range s.Steps {
-		if step.Status == "open" || step.Status == "running" || step.Status == "needs_review" {
+		if step.Status == "open" || step.Status == "running" || step.Status == "needs_review" || step.Status == "blocked" {
 			return Intent{}, Err(409, "Project has an active step; resolve it explicitly before completing")
 		}
 	}

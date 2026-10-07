@@ -4,12 +4,13 @@ import (
 	"net/http"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestProjectExecutionPagingHasOneResponseShapeAndValidatesBoundaries(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	f.register("reason", nil, 0)
+	live := true
+	f.register("reason", &live, 2)
 	var defaults board.ExecutionViewPage
 	f.request("GET", f.base()+"/executions", nil, false, http.StatusOK, &defaults)
 	var page board.ExecutionViewPage

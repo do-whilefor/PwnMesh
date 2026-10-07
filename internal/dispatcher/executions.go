@@ -8,15 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 func digest(v any) string {
@@ -26,7 +28,7 @@ func digest(v any) string {
 }
 func (s *Scheduler) namespace() string {
 	if s.Config.Container.Namespace == "" {
-		return "xloom"
+		return "pwnmesh"
 	}
 	return s.Config.Container.Namespace
 }
@@ -34,11 +36,11 @@ func (s *Scheduler) environmentID(w config.Worker) string {
 	// Credentials are intentionally excluded; rotating a token must not change
 	// the task. Provider/model/container configuration is part of its identity.
 	env := map[string]string{}
-	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "XLOOM_REASONING_EFFORT", "XLOOM_MAX_OUTPUT_TOKENS", "XLOOM_CONTEXT_BYTES", "XLOOM_REQUEST_TIMEOUT"} {
+	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {
 		env[key] = w.Env[key]
 	}
 	// Keep existing identities stable when these newer settings are absent.
-	for _, key := range []string{"XLOOM_CONTEXT_TOKENS", "XLOOM_CONTEXT_TARGET_TOKENS"} {
+	for _, key := range []string{"PWNMESH_CONTEXT_TOKENS", "PWNMESH_CONTEXT_TARGET_TOKENS"} {
 		if value := w.Env[key]; value != "" {
 			env[key] = value
 		}
@@ -67,6 +69,9 @@ func (s *Scheduler) releaseIdleAdmissions() {
 	}
 }
 func (s *Scheduler) retryKey(g board.Graph, kind string, intent *board.Intent) string {
+	if kind == "curate" {
+		return s.schedules[g.Project.ID].CurationRetryKey
+	}
 	if kind != "reason" {
 		if intent == nil {
 			return kind
@@ -95,11 +100,14 @@ func (s *Scheduler) executionCheck(ctx context.Context, g board.Graph, kind stri
 }
 
 func (s *Scheduler) candidateCheck(ctx context.Context, input board.SchedulePage, g board.Graph, kind string, intent *board.Intent) (board.ExecutionCheck, error) {
-	if check, ok := input.ExecutionChecks[kind+":"+intent.ID]; ok {
+	intentID := ""
+	if intent != nil {
+		intentID = intent.ID
+	}
+	if check, ok := input.ExecutionChecks[kind+":"+intentID]; ok {
 		return check, nil
 	}
-	// Older servers and a bootstrap created after the page was read have no
-	// candidate entry. Preserve their existing targeted query path.
+	// Targeted callers may not carry the precomputed scheduling checks.
 	return s.executionCheck(ctx, g, kind, intent, "")
 }
 
@@ -193,11 +201,19 @@ func (s *Scheduler) status(ctx context.Context, t *task, status string, result w
 func (s *Scheduler) terminal(t *task, status string, result worker.Result) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_ = s.status(ctx, t, status, result)
+	if err := s.status(ctx, t, status, result); err == nil && status == "failed" && result.FailureKind == "state_changed" && immutableInputVersion(t) != "" {
+		t.staleInputAt = time.Now()
+	}
 }
 func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]string) error {
+	// Resume control work before producers after a dispatcher restart. No
+	// business plan is changed; these are already registered executions.
+	sort.SliceStable(s.pendingExecutions, func(i, j int) bool {
+		control := func(kind string) bool { return kind == "reason" || kind == "curate" }
+		return control(s.pendingExecutions[i].Kind) && !control(s.pendingExecutions[j].Kind)
+	})
 	for _, e := range s.pendingExecutions {
-		if !e.Pending() || s.running[e.ID] != nil {
+		if !e.Pending() || s.running[e.ID] != nil || !slices.Contains([]string{"reason", "curate", "explore"}, e.Kind) {
 			continue
 		}
 		project := board.Project{ID: e.ProjectID, Generation: e.Generation}
@@ -237,11 +253,11 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 				break
 			}
 		}
-		if !found || !slices.Contains(t.Worker.TaskTypes, e.Kind) {
+		if !found || t.Worker.Type != "go" || !slices.Contains(t.Worker.TaskTypes, e.Kind) {
 			s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
 			continue
 		}
-		if backendCount >= t.Worker.MaxRunning || time.Now().Before(s.unhealthy[t.Worker.Name]) {
+		if backendCount >= t.Worker.MaxRunning {
 			continue
 		}
 		if err := s.Client.Do(ctx, "GET", executionPath(t)+"?namespace="+url.QueryEscape(s.namespace()), nil, &t.Execution, nil); err != nil {
@@ -257,9 +273,39 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		if err := json.Unmarshal(t.Execution.Job, &t.Job); err != nil {
 			return fmt.Errorf("execution %s has invalid job: %w", e.ID, err)
 		}
+		if t.Job.Graph.Project.OrchestrationVersion != 1 || !t.Job.GraphRPC || t.Job.ResultContractVersion != 2 {
+			continue // Retained legacy inputs are history, never runnable jobs.
+		}
+		if e.Kind == "explore" && (!s.executionCapacity(e.ProjectID) || !s.backendExecutionCapacity(t.Worker.Name, t.Worker.MaxRunning)) {
+			continue
+		}
 		if t.Job.EnvironmentID != s.environmentID(t.Worker) {
 			s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
 			continue
+		}
+		// Readiness only gates model work. Results already accepted by the
+		// server can finish delivery even while this backend is unavailable.
+		until := s.unhealthy[t.Worker.Name]
+		if t.Execution.Status != "result_pending" && (s.incompatible[t.Worker.Name] != "" || time.Now().Before(until)) {
+			committed, err := s.decisionCommitted(ctx, t)
+			if err != nil {
+				return err
+			}
+			if committed {
+				continue // Decide commits its execution status atomically.
+			}
+			if t.Job.Kind == "curate" {
+				committed, err = s.curationCommitted(ctx, t)
+				if err != nil {
+					return err
+				}
+			}
+			if !committed {
+				if s.incompatible[t.Worker.Name] == "" {
+					s.wakeAt(until)
+				}
+				continue
+			}
 		}
 		err := s.Client.Do(ctx, "POST", executionPath(t)+"/resume", map[string]any{}, &t.Execution, &t.Lease)
 		if err != nil {
@@ -285,6 +331,14 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 		}
 		return "interrupted", err
 	}
+	if t.Job.Kind == "curate" && t.Execution.Resumes > 0 {
+		if committed, err := s.finishCommittedCuration(ctx, t); committed || err != nil {
+			if err != nil {
+				return "interrupted", err
+			}
+			return "success", nil
+		}
+	}
 	var result worker.Result
 	if t.Execution.Status == "result_pending" {
 		if err := json.Unmarshal(t.Execution.Result, &result); err != nil {
@@ -292,6 +346,14 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 		}
 	}
 	if t.Execution.Status != "result_pending" {
+		if s.Config.Runtime.HealthMode == "startup_and_task" {
+			if err := s.health(ctx, t.Worker, t.Job.Budget); err != nil {
+				if ctx.Err() != nil {
+					return "cancelled", ctx.Err()
+				}
+				return "unhealthy", err
+			}
+		}
 		for attempt := 0; attempt <= 2; attempt++ {
 			if err := s.status(ctx, t, "running", worker.Result{}); err != nil {
 				var pe *ProtocolError
@@ -304,11 +366,22 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			var err error
 			// Container startup and same-run recovery must not issue a request
 			// against an input already superseded while the run was queued.
-			if t.Job.Kind == "reason" && t.Job.Decision != nil && t.Job.Decision.Version == 2 {
-				err = s.renewLease(ctx, t)
+			if immutableInputVersion(t) != "" {
+				err = s.renewLeaseWithVersion(ctx, t, true)
 			}
 			if err == nil {
 				result, err = s.Runner.Run(ctx, t.Worker, t.Job)
+			}
+			if t.Job.Kind == "curate" {
+				committed, receiptErr := s.curationCommitted(ctx, t)
+				if receiptErr != nil {
+					return "interrupted", receiptErr
+				}
+				if committed {
+					// The durable receipt is authoritative even when the model's
+					// final response or graph acknowledgement was lost.
+					result, err = curationResult(result.Metrics), nil
+				}
 			}
 			if result.Metrics != nil {
 				slog.Info("decision observation", "project", t.Job.Graph.Project.ID, "run", t.Job.RunID, "metrics", result.Metrics)
@@ -329,7 +402,11 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 				if decisionStateChanged(context.Cause(ctx)) {
 					return "interrupted", context.Cause(ctx) // runTask persists after joining the heartbeat.
 				}
-				s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: "hard_cancelled", Error: ctx.Err().Error()})
+				failure, detail := "hard_cancelled", ctx.Err().Error()
+				if cause := context.Cause(ctx); dependencyInvalidated(cause) {
+					failure, detail = "dependency_invalidated", cause.Error()
+				}
+				s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: failure, Error: detail})
 				return "cancelled", ctx.Err()
 			}
 			if err != nil {
@@ -360,7 +437,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			}
 		}
 		if err := s.status(ctx, t, "result_pending", result); err != nil {
-			return "interrupted", err
+			return s.resultDeliveryFailure(ctx, t, result, err)
 		}
 	}
 	// Finish the business transaction before another heartbeat can observe a
@@ -371,21 +448,58 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 	}
 	err := s.Client.Do(ctx, "POST", executionPath(t)+"/apply", map[string]any{}, &receipt, &t.Lease)
 	if err != nil {
-		var pe *ProtocolError
-		if errors.As(err, &pe) && pe.Status >= 400 && pe.Status < 500 {
-			result.Status, result.FailureKind, result.Error = "failed", "invalid_output", err.Error()
-			if pe.Status == 409 && strings.Contains(pe.Detail, "state_changed") {
-				result.FailureKind = "state_changed"
-			}
-			s.terminal(t, "failed", result)
-			return "failed", err
-		}
-		return "interrupted", err
+		return s.resultDeliveryFailure(ctx, t, result, err)
 	}
 	if receipt.Status == "rejected" {
 		return "rejected", nil
 	}
 	return "success", nil
+}
+
+// Publishing and applying a result share the same failure boundary. Invalid
+// output cannot become valid by replaying the saved Worker result; temporary
+// delivery failures must leave that result available for same-run recovery.
+func (s *Scheduler) resultDeliveryFailure(ctx context.Context, t *task, result worker.Result, err error) (string, error) {
+	if decisionStateChanged(context.Cause(ctx)) {
+		// A cancelled HTTP call may wrap its heartbeat ProtocolError. Reconcile
+		// the receipt after joining the heartbeat before recording a failure.
+		return "interrupted", context.Cause(ctx)
+	}
+	var pe *ProtocolError
+	if !errors.As(err, &pe) || pe.Status < 400 || pe.Status >= 500 || pe.Status == http.StatusRequestTimeout || pe.Status == http.StatusTooManyRequests {
+		return "interrupted", err
+	}
+	status := "failed"
+	result.Status, result.Retryable, result.FailureKind, result.Error = "failed", false, "invalid_output", err.Error()
+	if decisionStateChanged(err) {
+		result.FailureKind = "state_changed"
+	} else if dependencyInvalidated(err) {
+		status, result.FailureKind = "cancelled", "dependency_invalidated"
+	}
+	s.terminal(t, status, result)
+	return status, err
+}
+
+func dependencyInvalidated(err error) bool {
+	var pe *ProtocolError
+	return errors.As(err, &pe) && pe.Status == 409 && strings.Contains(pe.Detail, "dependency_invalidated:")
+}
+
+// Only roles whose entire write is bound to immutable input opt into early
+// invalidation. Legacy planners and independent Execute work keep their lease.
+func immutableInputVersion(t *task) string {
+	if t.Job.Kind == "reason" && t.Job.Decision != nil && t.Job.Decision.Version == 2 {
+		return t.Job.Decision.StateVersion
+	}
+	if t.Job.Kind == "curate" {
+		if t.Job.InputSnapshot != nil {
+			return t.Job.InputSnapshot.StateVersion
+		}
+		if t.Job.State != nil {
+			return board.DecisionStateVersion(*t.Job.State)
+		}
+	}
+	return ""
 }
 
 func decisionStateChanged(err error) bool {
@@ -467,6 +581,15 @@ func (s *Scheduler) configureGraphHandler() {
 		lease := Lease{Run: identity.Lease, Kind: identity.Kind, Intent: identity.Intent}
 		base := projectPath(j.Graph.Project.ID)
 		switch request.Op {
+		case "curate_receipt":
+			var result board.StateActionResult
+			err := s.Client.Do(ctx, "GET", base+"/state/curation/receipt", nil, &result, &lease)
+			var pe *ProtocolError
+			if errors.As(err, &pe) && pe.Status == 404 {
+				return board.StateActionResult{}, nil
+			}
+			result.Result = nil
+			return result, err
 		case "decision_preview", "decision_commit", "decision_receipt":
 			var result board.DecisionReceipt
 			op := strings.TrimPrefix(request.Op, "decision_")
@@ -476,6 +599,11 @@ func (s *Scheduler) configureGraphHandler() {
 				method, body = "GET", nil
 			}
 			err := s.Client.Do(ctx, method, base+"/state/decisions/"+op, body, &result, &lease)
+			if err == nil && op == "commit" && result.Committed && result.ChangedActions > 0 {
+				// Authorized work need not wait for the planner's final model
+				// response or the polling tick. Only Step reads scheduler maps.
+				s.wake()
+			}
 			// Commit and recovery need only a compact acknowledgement. Completion
 			// previews retain the authoritative review instead of repeating every
 			// projected entity, which could exceed the graph bridge frame.
@@ -498,6 +626,11 @@ func (s *Scheduler) configureGraphHandler() {
 		case "graph_action":
 			var result board.StateActionResult
 			err := s.Client.Do(ctx, "POST", base+"/state/actions", request.Action, &result, &lease)
+			if err == nil && !result.Unchanged {
+				// Intermediate observations start the existing coalescing window
+				// promptly; they do not bypass readiness or dependency checks.
+				s.wake()
+			}
 			return result, err
 		default:
 			return nil, errors.New("unknown graph request")

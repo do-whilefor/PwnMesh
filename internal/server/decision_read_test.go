@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker"
 )
 
 type decisionReadPage struct {
@@ -197,29 +197,4 @@ func TestDecisionReadViewDoesNotBypassFences(t *testing.T) {
 			f.request("POST", f.base()+"/state/read", worker.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_graph", Section: "facts", ExpectedVersion: view.StateVersion}, true, http.StatusConflict, nil)
 		})
 	}
-}
-
-func TestUnversionedDecisionGraphReadsRemainLive(t *testing.T) {
-	f := newExecutionProtocolFixture(t)
-	live := true
-	f.registerWithFields("reason", &live, 1, map[string]any{"decision": nil}, http.StatusCreated)
-	initial := decisionRead(t, f, "hints", "")
-	f.request("POST", f.base()+"/hints", map[string]string{"creator": "fixture", "content": "live compatibility update"}, false, http.StatusCreated, nil)
-	if got := decisionRead(t, f, "hints", ""); got.Total != 1 || got.StateVersion == initial.StateVersion {
-		t.Fatal("unversioned reason was unexpectedly pinned")
-	}
-}
-
-func TestVersionOneDecisionReadsStayLiveAfterOwnWrites(t *testing.T) {
-	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("reason", &live, 1)
-	initial := decisionRead(t, f, "overview", "")
-	added := f.action("step", "own-write", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Existing individual-write protocol"})
-	page := decisionRead(t, f, "steps", added.StateVersion)
-	if page.StateVersion == initial.StateVersion || page.Total != 1 {
-		t.Fatal("version 1 did not read its own current write")
-	}
-	f.request("POST", f.base()+"/hints", map[string]string{"creator": "fixture", "content": "new live observation"}, false, http.StatusCreated, nil)
-	f.request("POST", f.base()+"/state/read", worker.GraphRequest{RequestID: strings.Repeat("e", 32), Op: "read_graph", Section: "steps", ExpectedVersion: page.StateVersion}, true, http.StatusConflict, nil)
 }

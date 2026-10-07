@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 func coalescingFixture() (*Scheduler, board.Graph, board.SchedulePage, time.Time) {
@@ -67,7 +67,7 @@ func TestReasonContinuousUpdatesHaveBoundedWait(t *testing.T) {
 }
 
 func TestReasonUrgentInputsAndIdleExecutionBypassCoalescing(t *testing.T) {
-	for _, name := range []string{"hint", "initial", "explicit_retry", "idle", "drained", "invalid_dependency"} {
+	for _, name := range []string{"hint", "initial", "explicit_retry", "idle", "drained", "invalid_dependency", "blocked_dependency"} {
 		t.Run(name, func(t *testing.T) {
 			s, g, previous, now := coalescingFixture()
 			if got := s.trigger(g, board.ExecutionCheck{}, previous, now); got != "" {
@@ -88,6 +88,8 @@ func TestReasonUrgentInputsAndIdleExecutionBypassCoalescing(t *testing.T) {
 				input.OpenCount = 0
 			case "invalid_dependency":
 				input.Steps = []board.Step{{ID: "queued", InvalidSources: []string{"refuted"}}}
+			case "blocked_dependency":
+				input.Steps = []board.Step{{ID: "queued", BlockedBy: []string{"failed-producer"}}}
 			}
 			s.schedules[g.Project.ID] = input
 			if got := s.trigger(g, check, previous, now.Add(time.Second)); got == "" {

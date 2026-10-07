@@ -1,4 +1,4 @@
-"""Offline ParcelHub fixture used to exercise a complete local X-Loom audit."""
+"""Offline ParcelHub fixture used to exercise a complete local PwnMesh audit."""
 
 import argparse
 from contextlib import closing

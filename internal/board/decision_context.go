@@ -9,38 +9,43 @@ import (
 // DecisionContext is bound to one immutable State. A successful decision may
 // acknowledge only this generation and revision, never a later live snapshot.
 type DecisionContext struct {
-	Version       int             `json:"version"`
-	StateVersion  string          `json:"state_version"`
-	View          json.RawMessage `json:"view"`
-	Mode          string          `json:"mode"`
-	Fallback      string          `json:"fallback,omitempty"`
-	FromRevision  int64           `json:"from_revision"`
-	ToRevision    int64           `json:"to_revision"`
-	Generation    int64           `json:"generation"`
-	BaselineBytes int             `json:"baseline_bytes"`
+	Version              int               `json:"version"`
+	StateVersion         string            `json:"state_version"`
+	View                 json.RawMessage   `json:"view"`
+	Mode                 string            `json:"mode"`
+	Fallback             string            `json:"fallback,omitempty"`
+	FromRevision         int64             `json:"from_revision"`
+	ToRevision           int64             `json:"to_revision"`
+	Generation           int64             `json:"generation"`
+	BaselineBytes        int               `json:"baseline_bytes"`
+	CompletionAssessment *CompletionReview `json:"completion_assessment,omitempty"`
+	ClosureProtocol      int               `json:"closure_protocol,omitempty"`
 }
 
 type decisionChanges map[string][]string
 
 type decisionView struct {
-	Version          int              `json:"version"`
-	Revision         int64            `json:"revision"`
-	DecisionRevision int64            `json:"decision_revision"`
-	Generation       int64            `json:"generation"`
-	FromRevision     int64            `json:"from_revision"`
-	Project          Project          `json:"project"`
-	UserInputs       []Fact           `json:"user_inputs"`
-	Hints            []Hint           `json:"hints"`
-	Goals            []Goal           `json:"goals"`
-	Steps            []Step           `json:"steps"`
-	Facts            []FactRecord     `json:"fact_records"`
-	Findings         []Finding        `json:"findings"`
-	Relations        []FactRelation   `json:"fact_relations"`
-	Changed          decisionChanges  `json:"changed"`
-	Removed          decisionChanges  `json:"removed"`
-	Omitted          map[string]int   `json:"omitted"`
-	ReadMore         string           `json:"read_more"`
-	Overview         *contextOverview `json:"overview"`
+	Version          int               `json:"version"`
+	Revision         int64             `json:"revision"`
+	DecisionRevision int64             `json:"decision_revision"`
+	Generation       int64             `json:"generation"`
+	FromRevision     int64             `json:"from_revision"`
+	Project          Project           `json:"project"`
+	UserInputs       []Fact            `json:"user_inputs"`
+	Hints            []Hint            `json:"hints"`
+	Goals            []Goal            `json:"goals"`
+	Steps            []Step            `json:"steps"`
+	Facts            []FactRecord      `json:"fact_records"`
+	Findings         []Finding         `json:"findings"`
+	Relations        []FactRelation    `json:"fact_relations"`
+	Candidates       []CandidateView   `json:"candidates,omitempty"`
+	Disputes         []Dispute         `json:"disputes,omitempty"`
+	Curation         *CurationProgress `json:"curation,omitempty"`
+	Changed          decisionChanges   `json:"changed"`
+	Removed          decisionChanges   `json:"removed"`
+	Omitted          map[string]int    `json:"omitted"`
+	ReadMore         string            `json:"read_more"`
+	Overview         *contextOverview  `json:"overview"`
 }
 
 // Build the view from the current FGS and the cursor's event index.
@@ -48,10 +53,13 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	current = contextState(current)
 	project := current.Graph.Project
 	project.Reason = nil
+	project.Curator = nil
 	facts := decisionIndex(current.FactRecords, func(v FactRecord) string { return v.ID })
 	goals := decisionIndex(current.Goals, func(v Goal) string { return v.ID })
 	steps := decisionIndex(current.Steps, func(v Step) string { return v.ID })
 	findings := decisionIndex(current.Findings, func(v Finding) string { return v.ID })
+	activeCandidates := current.ActiveCandidates()
+	candidates := decisionIndex(activeCandidates, func(v Candidate) string { return v.ID })
 	fallback := func(reason string) (*DecisionContext, error) {
 		view, err := decisionFallbackView(current, baseline, changed, maxBytes)
 		if err != nil {
@@ -61,6 +69,7 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 		return result, nil
 	}
 	selectedFacts, selectedGoals, selectedSteps, selectedFindings := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	selectedCandidates, selectedDisputes := map[string]bool{}, map[string]bool{}
 	for _, id := range changed["fact_records"] {
 		selectedFacts[id] = true
 	}
@@ -72,6 +81,46 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	}
 	for _, id := range changed["findings"] {
 		selectedFindings[id] = true
+	}
+	for _, id := range changed["candidates"] {
+		if _, active := candidates[id]; active {
+			selectedCandidates[id] = true
+		}
+	}
+	for _, id := range changed["disputes"] {
+		selectedDisputes[id] = true
+	}
+	// Tentative notes need not pass through Curate to reach the next Decide.
+	// Keep their original support and unresolved disagreements alongside them.
+	for _, candidate := range activeCandidates {
+		if candidate.Revision > current.Curation.ThroughRevision {
+			selectedCandidates[candidate.ID] = true
+		}
+	}
+	for _, dispute := range current.Disputes {
+		if dispute.Status != "resolved" {
+			selectedDisputes[dispute.ID] = true
+		}
+		if selectedDisputes[dispute.ID] {
+			selectedFindings[dispute.FindingID] = true
+			for _, id := range dispute.CandidateIDs {
+				if _, active := candidates[id]; active {
+					selectedCandidates[id] = true
+				}
+			}
+			for _, id := range dispute.ReviewFactIDs {
+				selectedFacts[id] = true
+			}
+		}
+	}
+	for id := range selectedCandidates {
+		candidate := candidates[id]
+		for _, source := range candidate.Sources {
+			selectedFacts[source] = true
+		}
+		if candidate.SourceStepID != "" {
+			selectedSteps[candidate.SourceStepID] = true
+		}
 	}
 	for _, event := range ordered {
 		if event.ID != "" {
@@ -137,7 +186,20 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	// Include each selected node's causal support, including producers of
 	// process Facts and both ends of refutes/supersedes/narrows chains.
 	for {
-		count := len(selectedFacts) + len(selectedGoals) + len(selectedSteps) + len(selectedFindings)
+		count := len(selectedFacts) + len(selectedGoals) + len(selectedSteps) + len(selectedFindings) + len(selectedCandidates)
+		for _, candidate := range activeCandidates {
+			if references(candidate.Sources) {
+				selectedCandidates[candidate.ID] = true
+			}
+			if selectedCandidates[candidate.ID] {
+				for _, source := range candidate.Sources {
+					selectedFacts[source] = true
+				}
+				if candidate.SourceStepID != "" {
+					selectedSteps[candidate.SourceStepID] = true
+				}
+			}
+		}
 		for _, finding := range current.Findings {
 			if references(finding.Sources) {
 				selectedFindings[finding.ID] = true
@@ -176,12 +238,20 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 			}
 		}
 		decisionRelationClosure(current.FactRelations, selectedFacts)
-		if count == len(selectedFacts)+len(selectedGoals)+len(selectedSteps)+len(selectedFindings) {
+		if count == len(selectedFacts)+len(selectedGoals)+len(selectedSteps)+len(selectedFindings)+len(selectedCandidates) {
 			break
 		}
 	}
 
-	view := decisionView{Version: 1, Revision: current.Revision, DecisionRevision: current.DecisionRevision, Generation: project.Generation, FromRevision: result.FromRevision, Project: project, UserInputs: []Fact{}, Hints: append([]Hint{}, current.Graph.Hints...), Goals: []Goal{}, Steps: []Step{}, Facts: []FactRecord{}, Findings: []Finding{}, Relations: []FactRelation{}, Changed: changed, Removed: decisionChanges{}, Omitted: map[string]int{}, ReadMore: "Read omitted nodes and evidence using read_graph with ids. Omission is not absence; reads are pinned to state_version. Missing or ambiguous producers are not inferred."}
+	view := decisionView{Version: 1, Revision: current.Revision, DecisionRevision: current.DecisionRevision, Generation: project.Generation, FromRevision: result.FromRevision, Project: project, UserInputs: []Fact{}, Hints: append([]Hint{}, current.Graph.Hints...), Goals: []Goal{}, Steps: []Step{}, Facts: []FactRecord{}, Findings: []Finding{}, Relations: []FactRelation{}, Changed: changed, Removed: decisionChanges{}, Omitted: map[string]int{}, ReadMore: "Read omitted nodes and evidence using read_graph with ids. Omission is not absence; reads are pinned to state_version. Candidate notes are revisable interpretations, not completion proof. Missing or ambiguous producers are not inferred."}
+	if current.Graph.Project.OrchestrationVersion == 1 {
+		view.Curation = &current.Curation
+	}
+	for _, id := range changed["candidates"] {
+		if _, active := candidates[id]; !active {
+			view.Removed["candidates"] = append(view.Removed["candidates"], id)
+		}
+	}
 	// The same bounded discovery index accompanies full and incremental bodies.
 	// Keeping the latter narrow must not erase unrelated historical knowledge.
 	var overview struct {
@@ -191,11 +261,8 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 		return nil, err
 	}
 	view.Overview = overview.Overview
-	for _, fact := range current.Graph.Facts {
-		if fact.ID == "origin" || fact.ID == "goal" {
-			view.UserInputs = append(view.UserInputs, fact)
-		}
-	}
+	var inputIDs map[string]bool
+	view.UserInputs, inputIDs = current.UserInputFacts()
 	for _, goal := range current.Goals {
 		if selectedGoals[goal.ID] {
 			view.Goals = append(view.Goals, goal)
@@ -208,7 +275,7 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	}
 	inputRecords := 0
 	for _, fact := range current.FactRecords {
-		if fact.ID == "origin" || fact.ID == "goal" {
+		if inputIDs[fact.ID] {
 			inputRecords++ // These immutable records are already in user_inputs.
 			continue
 		}
@@ -221,6 +288,16 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 			view.Findings = append(view.Findings, finding)
 		}
 	}
+	for _, candidate := range activeCandidates {
+		if selectedCandidates[candidate.ID] {
+			view.Candidates = append(view.Candidates, current.CandidateView(candidate))
+		}
+	}
+	for _, dispute := range current.Disputes {
+		if selectedDisputes[dispute.ID] {
+			view.Disputes = append(view.Disputes, dispute)
+		}
+	}
 	for _, relation := range current.FactRelations {
 		if selectedFacts[relation.Source] || selectedFacts[relation.Target] {
 			view.Relations = append(view.Relations, relation)
@@ -231,6 +308,10 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	view.Omitted["fact_records"] = len(current.FactRecords) - len(view.Facts) - inputRecords
 	view.Omitted["findings"] = len(current.Findings) - len(view.Findings)
 	view.Omitted["fact_relations"] = len(current.FactRelations) - len(view.Relations)
+	if current.Graph.Project.OrchestrationVersion == 1 {
+		view.Omitted["candidates"] = len(activeCandidates) - len(view.Candidates)
+		view.Omitted["disputes"] = len(current.Disputes) - len(view.Disputes)
+	}
 	raw, err := json.Marshal(view)
 	if err != nil {
 		return nil, err

@@ -22,8 +22,8 @@ import (
 	"sync"
 	"time"
 
-	"xloom/internal/config"
-	"xloom/internal/worker"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 type Client struct {
@@ -107,7 +107,7 @@ func (c *Client) ensure(ctx context.Context, id string) (string, error) {
 		} `json:"HostConfig"`
 	}
 	err := c.json(ctx, "GET", "/containers/"+url.PathEscape(name)+"/json", nil, &info)
-	if err == nil && (info.Config.Labels["xloom.namespace"] != c.Config.Namespace || info.Config.Labels["xloom.project"] != id) {
+	if err == nil && (info.Config.Labels["pwnmesh.namespace"] != c.Config.Namespace || info.Config.Labels["pwnmesh.project"] != id) {
 		return "", errors.New("container name belongs to a different project or dispatcher namespace")
 	}
 	missing := status(err, 404)
@@ -126,12 +126,12 @@ func (c *Client) ensure(ctx context.Context, id string) (string, error) {
 		return "", errors.New("Docker returned an empty ID for the configured worker image")
 	}
 	if missing {
-		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": map[string]string{"xloom.namespace": c.Config.Namespace, "xloom.project": id}, "HostConfig": map[string]any{"NetworkMode": c.Config.Network, "CapAdd": c.Config.CapAdd, "Init": true}}
+		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": map[string]string{"pwnmesh.namespace": c.Config.Namespace, "pwnmesh.project": id}, "HostConfig": map[string]any{"NetworkMode": c.Config.Network, "CapAdd": c.Config.CapAdd, "Init": true}}
 		err = c.json(ctx, "POST", "/containers/create?name="+url.QueryEscape(name), input, nil)
 		if status(err, 409) {
 			missing = false
 			err = c.json(ctx, "GET", "/containers/"+url.PathEscape(name)+"/json", nil, &info)
-			if err == nil && (info.Config.Labels["xloom.namespace"] != c.Config.Namespace || info.Config.Labels["xloom.project"] != id) {
+			if err == nil && (info.Config.Labels["pwnmesh.namespace"] != c.Config.Namespace || info.Config.Labels["pwnmesh.project"] != id) {
 				return "", errors.New("container creation raced with a different project or dispatcher namespace")
 			}
 		}
@@ -184,7 +184,7 @@ func capabilities(values []string) []string {
 }
 
 func (c *Client) archive(ctx context.Context, name, target string, data []byte) error {
-	if !strings.HasPrefix(target, "/workspace/.xloom/runs/") || path.Clean(target) != target {
+	if !strings.HasPrefix(target, "/workspace/.pwnmesh/runs/") || path.Clean(target) != target {
 		return errors.New("invalid run archive path")
 	}
 	var buffer bytes.Buffer
@@ -293,11 +293,20 @@ func (s *resultSink) Write(p []byte) (int, error) {
 		if len(s.pending) > 32<<20 {
 			return 0, errors.New("worker event too large")
 		}
-		var result worker.Result
-		var event worker.GraphRequestEvent
-		if json.Unmarshal(s.pending, &event) == nil && event.Type == "graph_request" {
+		// Most lines are model/tool journal events. Inspect their envelope once
+		// without allocating fields that the dispatcher never consumes.
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		_ = json.Unmarshal(s.pending, &envelope)
+		switch envelope.Type {
+		case "graph_request":
 			if len(s.pending) > worker.MaxGraphRPCBytes {
 				return 0, errors.New("graph request exceeds 128 KiB")
+			}
+			var event worker.GraphRequestEvent
+			if err := json.Unmarshal(s.pending, &event); err != nil {
+				return 0, err
 			}
 			if s.graph == nil {
 				return 0, errors.New("worker requested an unavailable graph bridge")
@@ -305,15 +314,22 @@ func (s *resultSink) Write(p []byte) (int, error) {
 			if err := s.graph(event.Request); err != nil {
 				return 0, err
 			}
-		}
-		if json.Unmarshal(s.pending, &result) == nil && result.Type == "result" {
+		case "result":
 			if s.found {
 				return 0, errors.New("worker emitted multiple results")
+			}
+			var result worker.Result
+			if err := json.Unmarshal(s.pending, &result); err != nil {
+				return 0, err
 			}
 			s.result = result
 			s.found = true
 		}
-		s.pending = nil
+		if cap(s.pending) > 64<<10 {
+			s.pending = nil
+		} else {
+			s.pending = s.pending[:0]
+		}
 		p = p[end+1:]
 	}
 	if len(s.pending) > 32<<20 {
@@ -334,7 +350,7 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	if err != nil {
 		return worker.Result{}, err
 	}
-	target := "/workspace/.xloom/runs/" + j.RunID + "/job.json"
+	target := "/workspace/.pwnmesh/runs/" + j.RunID + "/job.json"
 	raw, err := json.Marshal(j)
 	if err != nil {
 		return worker.Result{}, err
@@ -352,15 +368,23 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	}
 	env := []string{}
 	for k, v := range w.Env {
-		if k == "XLOOM_LAUNCH_TOKEN" {
+		if k == "PWNMESH_LAUNCH_TOKEN" {
 			continue
 		}
 		env = append(env, k+"="+v)
 	}
-	env = append(env, "XLOOM_LAUNCH_TOKEN="+launchToken)
+	env = append(env, "PWNMESH_LAUNCH_TOKEN="+launchToken)
 	sort.Strings(env)
 	sink := &resultSink{graph: c.graphBridge(ctx, name, path.Dir(target), j)}
-	_, err = c.exec(ctx, name, []string{"/usr/local/bin/xloom", "worker", "--job", target}, env, sink)
+	_, err = c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--job", target}, env, sink)
+	if err == nil && ctx.Err() == nil {
+		if len(sink.pending) > 0 {
+			_, err = sink.Write([]byte{'\n'})
+		}
+		if err == nil && !sink.found {
+			err = errors.New("worker exited without a result")
+		}
+	}
 	if err != nil || ctx.Err() != nil {
 		if ctx.Err() != nil && !errors.Is(context.Cause(ctx), worker.ErrInterrupted) {
 			c.cancel(name, path.Dir(target))
@@ -372,27 +396,19 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 		}
 		return worker.Result{}, err
 	}
-	if len(sink.pending) > 0 {
-		if _, err = sink.Write([]byte{'\n'}); err != nil {
-			return worker.Result{}, err
-		}
-	}
-	if !sink.found {
-		return worker.Result{}, errors.New("worker exited without a result")
-	}
 	return sink.result, nil
 }
 
 func (c *Client) interrupt(name, runDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	_, err := c.exec(ctx, name, []string{"/usr/local/bin/xloom", "worker", "--interrupt", runDir}, nil, io.Discard)
+	_, err := c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--interrupt", runDir}, nil, io.Discard)
 	return err
 }
 func (c *Client) cancel(name, runDir string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	c.exec(ctx, name, []string{"/usr/local/bin/xloom", "worker", "--cancel", runDir}, nil, io.Discard)
+	c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--cancel", runDir}, nil, io.Discard)
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 	select {
@@ -400,7 +416,7 @@ func (c *Client) cancel(name, runDir string) {
 		return
 	case <-timer.C:
 	}
-	c.exec(ctx, name, []string{"/usr/local/bin/xloom", "worker", "--cancel", runDir, "--force"}, nil, io.Discard)
+	c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--cancel", runDir, "--force"}, nil, io.Discard)
 }
 func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	unlock := c.lock(id)
@@ -418,7 +434,7 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	if err != nil {
 		return err
 	}
-	if info.Config.Labels["xloom.namespace"] != c.Config.Namespace || info.Config.Labels["xloom.project"] != id {
+	if info.Config.Labels["pwnmesh.namespace"] != c.Config.Namespace || info.Config.Labels["pwnmesh.project"] != id {
 		return errors.New("refusing to clean up a container belonging to a different project or dispatcher namespace")
 	}
 	if info.ID == "" {
@@ -438,7 +454,7 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	return err
 }
 func (c *Client) Projects(ctx context.Context) ([]string, error) {
-	filters, _ := json.Marshal(map[string][]string{"label": {"xloom.namespace=" + c.Config.Namespace}})
+	filters, _ := json.Marshal(map[string][]string{"label": {"pwnmesh.namespace=" + c.Config.Namespace}})
 	var containers []struct {
 		Labels map[string]string `json:"Labels"`
 	}
@@ -447,7 +463,7 @@ func (c *Client) Projects(ctx context.Context) ([]string, error) {
 	}
 	ids := []string{}
 	for _, item := range containers {
-		if id := item.Labels["xloom.project"]; id != "" {
+		if id := item.Labels["pwnmesh.project"]; id != "" {
 			ids = append(ids, id)
 		}
 	}

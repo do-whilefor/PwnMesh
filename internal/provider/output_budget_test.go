@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 func TestGenerateOutputBudgetDefaultsAndOverrides(t *testing.T) {
@@ -157,12 +157,55 @@ func TestStreamedInvalidArgumentsWithNormalStopAreRejected(t *testing.T) {
 			}}}
 			_, err := loop.Run(context.Background(), "Record the value")
 			var modelErr *agent.ModelError
-			if !errors.As(err, &modelErr) || modelErr.Kind != agent.ErrorProvider || !strings.Contains(err.Error(), "invalid streamed tool arguments") || requests != 1 || effects != 0 {
-				t.Fatalf("malformed arguments were retried or executed: requests=%d effects=%d error=%v", requests, effects, err)
+			if !errors.As(err, &modelErr) || modelErr.Kind != agent.ErrorToolArguments || !strings.Contains(err.Error(), "invalid streamed tool arguments") || requests != 2 || effects != 0 {
+				t.Fatalf("malformed argument recovery exceeded its bound or executed calls: requests=%d effects=%d error=%v", requests, effects, err)
 			}
-			if len(loop.History) != 1 {
+			if len(loop.History) != 2 || loop.Checkpoint.ToolArgumentRetries != 1 || loop.History[1].Role != "user" {
 				t.Fatal("malformed provider response entered the durable conversation")
 			}
 		})
+	}
+}
+
+func TestStreamedInvalidArgumentsRegenerateWithoutPartialEffects(t *testing.T) {
+	requests, effects := 0, 0
+	savedAllowance := -1
+	p := testProvider(func(req *http.Request) (*http.Response, error) {
+		requests++
+		if requests == 1 {
+			return testResponse(req, http.StatusOK, "text/event-stream", toolResponseStream(t, "tool_use",
+				streamedToolCall{"good-in-rejected-batch", `{"value":"never"}`},
+				streamedToolCall{"bad", `{"value":`})), nil
+		}
+		if requests == 2 {
+			if effects != 0 || savedAllowance != 1 {
+				t.Fatalf("correction executed a rejected call or lost its persisted allowance: effects=%d allowance=%d", effects, savedAllowance)
+			}
+			return testResponse(req, http.StatusOK, "text/event-stream", toolResponseStream(t, "tool_use", streamedToolCall{"new", `{"value":"once"}`})), nil
+		}
+		if effects != 1 || savedAllowance != 0 {
+			t.Fatalf("successful receipt did not durably renew correction allowance: effects=%d allowance=%d", effects, savedAllowance)
+		}
+		return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`), nil
+	})
+	loop := &agent.Loop{Provider: p, SaveState: func(_ []agent.Message, checkpoint *agent.ContextCheckpoint) error {
+		savedAllowance = checkpoint.ToolArgumentRetries
+		return nil
+	}, Tools: []agent.Tool{{
+		Definition: agent.Definition{Name: "record", Schema: json.RawMessage(`{"type":"object"}`)},
+		Execute: func(_ context.Context, raw json.RawMessage) (string, error) {
+			effects++
+			if string(raw) != `{"value":"once"}` {
+				t.Fatalf("unexpected tool arguments: %s", raw)
+			}
+			return "recorded", nil
+		},
+	}}}
+	result, err := loop.Run(context.Background(), "Record once")
+	if err != nil || result != "done" || requests != 3 || effects != 1 || loop.Checkpoint.ToolArgumentRetries != 0 {
+		t.Fatalf("result=%q err=%v requests=%d effects=%d allowance=%d", result, err, requests, effects, loop.Checkpoint.ToolArgumentRetries)
+	}
+	if err := loop.RepairHistory(); err != nil {
+		t.Fatal(err)
 	}
 }

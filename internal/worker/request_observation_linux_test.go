@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 func TestExecutePersistsRequestObservationsWithoutDoubleCountingUsage(t *testing.T) {
@@ -25,7 +25,7 @@ func TestExecutePersistsRequestObservationsWithoutDoubleCountingUsage(t *testing
 		m.Usage = &agent.Usage{InputTokens: 19, OutputTokens: 7, CacheReadTokens: 3}
 		return m, nil
 	})
-	result, err := Run(context.Background(), j, Options{RunDir: runDir, Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}})
+	result, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}})
 	if err != nil || result.Status != "success" || turns != 2 || toolCalls != 1 {
 		t.Fatalf("execute failed: result=%+v err=%v turns=%d tools=%d", result, err, turns, toolCalls)
 	}

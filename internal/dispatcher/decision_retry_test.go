@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/server"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/server"
+	"pwnmesh/internal/worker"
 )
 
 type automaticRetryRunner struct {

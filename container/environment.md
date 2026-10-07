@@ -1,8 +1,8 @@
-# X-Loom Worker 环境
+# PwnMesh Worker 环境
 
-- 基于官方 Kali rolling 镜像（`linux/amd64`），安装 `kali-linux-headless` 元包及其必需工具依赖，使用 Go `xloom worker` 执行 Agent Loop。
+- 基于官方 Kali rolling 镜像（`linux/amd64`），安装 `kali-linux-headless` 元包及其必需工具依赖，使用 Go `pwnmesh worker` 执行 Agent Loop。
 - `/workspace` 是同一项目共享的工作目录；`/home/kali/workspace` 指向同一目录，且已初始化为 git 仓库。
-- `/workspace/.xloom/runs/<run-id>` 保存单次执行的任务、会话和工具输出。
+- `/workspace/.pwnmesh/runs/<run-id>` 保存单次执行的任务、会话和工具输出。
 - 默认用户为 root，以兼容 Dispatcher 写入的私有任务文件。保留 `kali` 用户和免密码 sudo，便于手动使用。
 - 时区为 `Asia/Shanghai`，Python 输出不缓冲。
 - 首次 APT 请求前从控制镜像提供 CA 证书，支持 HTTPS 镜像源；构建完成后由 Kali 的 `ca-certificates` 管理证书。
@@ -13,13 +13,13 @@ bash、curl、wget、ripgrep (`rg`)、fd (`fdfind`)、Python 3.13、pip、venv�
 
 另外显式安装 bsdextrautils（`column`、`hexdump`）、Node.js/npm、iputils-ping（`ping`）、sshpass、ncat、rlwrap、yq、krb5-user（`kinit`、`klist`）、adb。`yq` 是 Kali 提供的 jq 风格 Python 实现，可用 `yq -r '.name' file.yaml` 读取字段。
 
-headless 工具集包含 nmap、sqlmap 等命令及其随包数据；APT 不额外安装 Recommends。软件包安装期间不会自动启动服务。容器入口仍为 X-Loom，不运行 systemd；任务需要时可直接启动相应服务进程。
+headless 工具集包含 nmap、sqlmap 等命令及其随包数据；APT 不额外安装 Recommends。软件包安装期间不会自动启动服务。容器入口仍为 PwnMesh，不运行 systemd；任务需要时可直接启动相应服务进程。
 
 Nmap 去除了 Kali 软件包附带的文件 capabilities，避免 `CAP_NET_ADMIN` 超出 Docker 默认权限导致启动失败；默认 root 进程沿用容器已有权限。
 
 ## Python 与云 CLI
 
-`/opt/xloom-venv/bin` 已加入 PATH，`python`/`python3` 和 `pip`/`pip3` 默认使用该虚拟环境。两个虚拟环境均使用 Python 3.13，避免 pwntools 4.15.0 对 Python 3.14 部分字节码不兼容的问题。预装：
+`/opt/pwnmesh-venv/bin` 已加入 PATH，`python`/`python3` 和 `pip`/`pip3` 默认使用该虚拟环境。两个虚拟环境均使用 Python 3.13，避免 pwntools 4.15.0 对 Python 3.14 部分字节码不兼容的问题。预装：
 
 | 包 | 默认版本 | 用法 |
 | --- | --- | --- |
@@ -37,14 +37,14 @@ Nmap 去除了 Kali 软件包附带的文件 capabilities，避免 `CAP_NET_ADMI
 
 Node.js 和 npm 由 Kali APT 安装，提供 `node`、`npm`、`npx`；自检要求 Node.js 至少为 20。全局安装 `@playwright/cli@latest`，命令为 `playwright-cli`；构建时通过 `playwright-cli install` 下载 Chromium，并安装浏览器运行库及字体。
 
-浏览器文件位于 `/opt/ms-playwright`；`/usr/local/bin/xloom-chromium` 指向该版本的 Chromium。环境变量默认选择 Chromium、无头模式和 `sandbox=false`，适配镜像默认的 root 用户。CLI 通过 `PLAYWRIGHT_MCP_EXECUTABLE_PATH` 使用固定入口，可在任意工作目录运行，无需再次安装浏览器。
+浏览器文件位于 `/opt/ms-playwright`；`/usr/local/bin/pwnmesh-chromium` 指向该版本的 Chromium。环境变量默认选择 Chromium、无头模式和 `sandbox=false`，适配镜像默认的 root 用户。CLI 通过 `PLAYWRIGHT_MCP_EXECUTABLE_PATH` 使用固定入口，可在任意工作目录运行，无需再次安装浏览器。
 
 `latest` 在安装层实际执行时解析；Docker 缓存命中时沿用已有版本。更新方式和离线验证命令见仓库中的 `container/README.md`。
 
 ## 安装范围
 
-预装 Kali headless 工具集、上述补充工具及 X-Loom 二进制；不额外复制原竞赛环境的知识库、PoC、`AGENTS.md`、`CLAUDE.md` 和技能目录。Playwright 初始化在临时目录完成，不向项目注入 skills 或配置。
+预装 Kali headless 工具集、上述补充工具及 PwnMesh 二进制；不额外复制原竞赛环境的知识库、PoC、`AGENTS.md`、`CLAUDE.md` 和技能目录。Playwright 初始化在临时目录完成，不向项目注入 skills 或配置。
 
-镜像通过 `XLOOM_WORKER_ENVIRONMENT=kali-headless` 标识环境。Worker 在初始任务提示词中注入简短的 Kali/headless 说明和实际工作目录；执行阶段另提示可尝试 nuclei、ffuf 等命令，并以实际输出确认可用性。未设置或不识别该标记时，不声明 Kali 或预装工具集。收尾和修复阶段沿用原始说明，不重复注入。
+镜像通过 `PWNMESH_WORKER_ENVIRONMENT=kali-headless` 标识环境。Worker 在初始任务提示词中注入简短的 Kali/headless 说明和实际工作目录；执行阶段另提示可尝试 nuclei、ffuf 等命令，并以实际输出确认可用性。未设置或不识别该标记时，不声明 Kali 或预装工具集。收尾和修复阶段沿用原始说明，不重复注入。
 
 此文档全文不自动注入模型提示词。

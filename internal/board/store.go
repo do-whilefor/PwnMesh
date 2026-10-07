@@ -22,6 +22,10 @@ CREATE TABLE IF NOT EXISTS intents(id TEXT NOT NULL,project_id TEXT NOT NULL REF
 CREATE TABLE IF NOT EXISTS intent_sources(intent_id TEXT NOT NULL,project_id TEXT NOT NULL,fact_id TEXT NOT NULL,PRIMARY KEY(intent_id,project_id,fact_id),FOREIGN KEY(intent_id,project_id) REFERENCES intents(id,project_id) ON DELETE CASCADE);
 CREATE INDEX IF NOT EXISTS intent_sources_project ON intent_sources(project_id);
 CREATE TABLE IF NOT EXISTS hints(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,content TEXT NOT NULL,creator TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(id,project_id));
+CREATE INDEX IF NOT EXISTS facts_project ON facts(project_id);
+CREATE INDEX IF NOT EXISTS intents_project ON intents(project_id,created_at);
+CREATE INDEX IF NOT EXISTS hints_project ON hints(project_id,created_at);
+CREATE INDEX IF NOT EXISTS intents_active_leases ON intents(project_id) WHERE to_fact_id IS NULL AND worker IS NOT NULL;
 CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER NOT NULL DEFAULT 0);
 INSERT OR IGNORE INTO counters(name,value) VALUES('project',0);
 CREATE TABLE IF NOT EXISTS scoped_counters(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,kind TEXT NOT NULL,value INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,kind));
@@ -69,7 +73,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	defer migration.Rollback()
-	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema); err != nil {
+	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema); err != nil {
 		migration.Rollback()
 		db.Close()
 		return nil, err
@@ -166,7 +170,8 @@ func (t *Tx) RevokeRuns(project string) error {
 	_, err := t.Exec(`INSERT OR IGNORE INTO xloom_revoked_runs(project_id,worker)
 SELECT project_id,worker FROM intents WHERE project_id=? AND worker IS NOT NULL
 UNION SELECT id,reason_worker FROM projects WHERE id=? AND reason_worker IS NOT NULL
-UNION SELECT project_id,lease FROM xloom_executions WHERE project_id=?`, project, project, project)
+UNION SELECT project_id,lease FROM xloom_executions WHERE project_id=?
+UNION SELECT project_id,curator_worker FROM xloom_project_orchestration WHERE project_id=? AND curator_worker IS NOT NULL`, project, project, project, project)
 	return err
 }
 
@@ -175,17 +180,34 @@ func (t *Tx) RunRevoked(project, worker string) (bool, error) {
 	err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_revoked_runs WHERE project_id=? AND worker=?)", project, worker).Scan(&revoked)
 	return revoked, err
 }
-func (t *Tx) Expire() error {
+
+// ExpireProject limits lease housekeeping to the project being observed or
+// mutated. Global scheduling/list requests pass an empty project and still
+// expire all leases, including those whose workers have crashed.
+func (t *Tx) ExpireProject(project string) error {
 	s, err := t.Settings()
 	if err != nil {
 		return err
 	}
-	_, err = t.Exec(`UPDATE intents SET worker=NULL WHERE to_fact_id IS NULL AND worker IS NOT NULL AND (julianday(?)-julianday(last_heartbeat_at))*86400>?`, t.Now, s.IntentTimeout)
-	if err != nil {
-		return err
+	for _, expiry := range []struct {
+		query, projectColumn string
+		timeout              int
+	}{
+		{`UPDATE intents SET worker=NULL WHERE to_fact_id IS NULL AND worker IS NOT NULL AND (julianday(?)-julianday(last_heartbeat_at))*86400>?`, "project_id", s.IntentTimeout},
+		{`UPDATE projects SET reason_worker=NULL,reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE reason_worker IS NOT NULL AND (julianday(?)-julianday(reason_last_heartbeat_at))*86400>?`, "id", s.ReasonTimeout},
+		{`UPDATE xloom_project_orchestration SET curator_worker=NULL,curator_trigger=NULL,curator_started_at=NULL,curator_heartbeat=NULL WHERE curator_worker IS NOT NULL AND (julianday(?)-julianday(curator_heartbeat))*86400>?`, "project_id", s.ReasonTimeout},
+	} {
+		args := []any{t.Now, expiry.timeout}
+		expiry.query += " AND " + expiry.projectColumn + " IN (SELECT project_id FROM xloom_project_orchestration WHERE version=1)"
+		if project != "" {
+			expiry.query += " AND " + expiry.projectColumn + "=?"
+			args = append(args, project)
+		}
+		if _, err = t.Exec(expiry.query, args...); err != nil {
+			return err
+		}
 	}
-	_, err = t.Exec(`UPDATE projects SET reason_worker=NULL,reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE reason_worker IS NOT NULL AND (julianday(?)-julianday(reason_last_heartbeat_at))*86400>?`, t.Now, s.ReasonTimeout)
-	return err
+	return nil
 }
 func (t *Tx) Next(project, kind string) (string, error) {
 	if kind != "project" && kind != "fact" && kind != "intent" && kind != "hint" {
@@ -232,6 +254,9 @@ func (t *Tx) Load(id string) (Graph, error) {
 	}
 	if rw != nil {
 		g.Project.Reason = &Reason{*rw, Value(rt), Value(rs), Value(rh)}
+	}
+	if err = t.loadOrchestration(&g.Project); err != nil {
+		return g, err
 	}
 	rows, err := t.Query("SELECT id,description FROM facts WHERE project_id=? ORDER BY rowid", id)
 	if err != nil {
@@ -323,6 +348,9 @@ func (t *Tx) RequireProject(project string) error {
 
 func (t *Tx) Save(g Graph) error {
 	p := g.Project
+	if err := t.checkOrchestration(p); err != nil {
+		return err
+	}
 	if p.Scenario != "" && !ValidScenario(p.Scenario) {
 		return Err(422, "scenario must be ctf, pentest or audit")
 	}
@@ -333,6 +361,9 @@ func (t *Tx) Save(g Graph) error {
 	}
 	_, err := t.Exec(`INSERT INTO projects(id,title,status,bootstrap_enabled,created_at,reason_worker,reason_trigger,reason_started_at,reason_last_heartbeat_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,status=excluded.status,bootstrap_enabled=excluded.bootstrap_enabled,reason_worker=excluded.reason_worker,reason_trigger=excluded.reason_trigger,reason_started_at=excluded.reason_started_at,reason_last_heartbeat_at=excluded.reason_last_heartbeat_at`, p.ID, p.Title, p.Status, p.Bootstrap, p.CreatedAt, rw, rt, rs, rh)
 	if err != nil {
+		return err
+	}
+	if err = t.saveOrchestration(p); err != nil {
 		return err
 	}
 	// Older graph callers omit this optional metadata. Keep their updates from

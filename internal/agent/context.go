@@ -17,11 +17,13 @@ const DefaultSummaryMaxTokens = 16384
 // ContextCheckpoint is saved atomically with History. Detailed earlier
 // checkpoints remain in the append-only event log, not in the model context.
 type ContextCheckpoint struct {
-	Version         int                   `json:"version"`
-	LastSequence    uint64                `json:"last_sequence"`
-	CompactionCount uint64                `json:"compaction_count"`
-	OverflowRetries int                   `json:"overflow_retries"`
-	LastCompaction  *CompactionCheckpoint `json:"last_compaction,omitempty"`
+	Version         int    `json:"version"`
+	LastSequence    uint64 `json:"last_sequence"`
+	CompactionCount uint64 `json:"compaction_count"`
+	OverflowRetries int    `json:"overflow_retries"`
+	// ToolArgumentRetries counts corrections since the last successful tool receipt.
+	ToolArgumentRetries int                   `json:"tool_argument_retries,omitempty"`
+	LastCompaction      *CompactionCheckpoint `json:"last_compaction,omitempty"`
 }
 
 // CompactionCheckpoint retains the metadata needed to continue compaction.
@@ -59,6 +61,9 @@ func (l *Loop) initCheckpoint() error {
 	if l.Checkpoint != nil {
 		if l.Checkpoint.Version != ContextCheckpointVersion {
 			return errors.New("unsupported context checkpoint version")
+		}
+		if l.Checkpoint.ToolArgumentRetries < 0 || l.Checkpoint.ToolArgumentRetries > 1 {
+			return errors.New("invalid tool argument recovery allowance")
 		}
 		for _, m := range l.History {
 			if m.Sequence > l.Checkpoint.LastSequence {
@@ -101,7 +106,7 @@ func WireHistory(messages []Message) []Message {
 
 func (l *Loop) inputBytes(messages []Message, defs []Definition) (int, error) {
 	if sizer, ok := l.Provider.(RequestSizer); ok {
-		return sizer.InputBytes(messages, defs)
+		return sizer.InputBytes(cloneMessages(messages), cloneDefinitions(defs))
 	}
 	raw, err := json.Marshal(struct {
 		Messages []Message    `json:"messages"`

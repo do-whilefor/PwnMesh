@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"strconv"
 
-	b "xloom/internal/board"
+	b "pwnmesh/internal/board"
 )
 
 func (s *Server) registerUIRoutes(m *http.ServeMux) {

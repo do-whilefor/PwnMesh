@@ -1,9 +1,10 @@
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import tempfile
 import unittest
 
-from analyze_efficiency import analyze, api_observations, input_composition, normalize_api_path, render, tool_analysis
+from analyze_efficiency import analyze, api_observations, compare_runs, input_composition, normalize_api_path, render, render_comparison, tool_analysis
 
 
 def at(second):
@@ -11,6 +12,21 @@ def at(second):
 
 
 class EfficiencyAnalysisTests(unittest.TestCase):
+    def test_tool_inputs_read_old_archives_with_new_journal_precedence(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            runs = [{"run_id": "a", "tools": [{"name": "read", "tool_id": "read-1", "finished": at(2)}]}]
+            fingerprints = []
+            for brand in (".xloom", ".pwnmesh"):
+                path = root / "workspace" / brand / "runs/a/events.jsonl"
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps({"type": "message_end", "message": {
+                    "role": "assistant", "content": [{"type": "tool_use", "id": "read-1", "input": {"path": brand}}]}}), encoding="utf-8")
+                report = tool_analysis(runs, root)
+                self.assertEqual(report["reads_without_input_metadata"], 0)
+                fingerprints.append(report["read_fingerprints"][0]["input_sha256"])
+            self.assertNotEqual(*fingerprints)
+
     def minimal_evidence(self, root, completed=False):
         def save(name, value):
             (root / name).write_text(json.dumps(value), encoding="utf-8")
@@ -19,7 +35,7 @@ class EfficiencyAnalysisTests(unittest.TestCase):
             manifest["completed_observed"] = at(8)
         save("manifest.json", manifest)
         save("runs.json", [{"run_id": "run-a", "kind": "reason", "started": at(1), "finished": at(5)}])
-        path = root / "workspace" / ".xloom" / "runs" / "run-a"
+        path = root / "workspace" / ".pwnmesh" / "runs" / "run-a"
         path.mkdir(parents=True)
         events = [
             {"type": "model_call_start", "at": at(1), "request": {"kind": "turn"}},
@@ -80,7 +96,7 @@ class EfficiencyAnalysisTests(unittest.TestCase):
                     "failure_kind": "state_changed", "error": "private-error"}, "job": "private-job"},
                 {"id": "other", "kind": "reason", "status": "failed", "result": {"failure_kind": "provider"}},
                 {"id": "worker", "kind": "explore", "status": "failed", "result": {"failure_kind": "state_changed"}},
-                {"id": "missing", "kind": "reason", "status": "failed", "result": {"failure_kind": "state_changed"}},
+                {"id": "missing", "kind": "curate", "status": "failed", "result": {"failure_kind": "state_changed"}},
             ])
             report = analyze(root)
         execution = report["execution_analysis"]
@@ -237,7 +253,7 @@ class EfficiencyAnalysisTests(unittest.TestCase):
             save("runs.json", runs)
             save("http-observations.json", [{"request_id": 1, "run_id": "planner", "started_at": at(1), "finished_at": at(5), "http_status": 200, "usage": {"input_tokens": 9999}}])
             for run in runs:
-                path = root / "workspace" / ".xloom" / "runs" / run["run_id"]
+                path = root / "workspace" / ".pwnmesh" / "runs" / run["run_id"]
                 path.mkdir(parents=True)
                 (path / "job.json").write_text(json.dumps({"kind": run["kind"]}), encoding="utf-8")
                 (path / "session.json").write_text("{}", encoding="utf-8")
@@ -282,6 +298,156 @@ class EfficiencyAnalysisTests(unittest.TestCase):
         self.assertIn("不是 token", render(report))
         self.assertIn("结构/报告交付验证：通过", render(report))
         self.assertNotIn("业务验收：通过", render(report))
+
+
+class MatchedEfficiencyTests(unittest.TestCase):
+    def run_evidence(self, root, name, seconds, source="before", passed=True):
+        directory = root / name
+        directory.mkdir()
+        start = datetime(2026, 9, 28, tzinfo=timezone.utc)
+        manifest = {"comparison_protocol_version": 1, "workload_sha256": "a" * 64,
+                    "execution_knobs_sha256": "b" * 64, "model": "step-5-preview",
+                    "upstream": "https://example.invalid/step_plan", "reasoning_effort": "max",
+                    "orchestration_version": 1, "http_observation_mode": "proxy",
+                    "validation_scope": "current_support", "source_commit": source,
+                    "namespace": name, "project_id": "proj_001", "started": start.isoformat(),
+                    "completed_observed": (start + timedelta(seconds=seconds - 1)).isoformat(),
+                    "validation_finished": (start + timedelta(seconds=seconds)).isoformat(),
+                    "acceptance_passed": passed, "time_to_acceptance_seconds": seconds}
+        validation = {"passed": passed, "project_completed": True, "validation_scope": "current_support",
+                      "failures": [] if passed else ["delivery failed"]}
+        for filename, data in (("manifest.json", manifest), ("validation.json", validation)):
+            (directory / filename).write_text(json.dumps(data), encoding="utf-8")
+        (directory / "comparison-contract.json").write_text(json.dumps({"validation_contract_sha256": "f" * 64}), encoding="utf-8")
+        return directory
+
+    def update(self, directory, filename, **changes):
+        path = directory / filename
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        data.update(changes)
+        path.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_same_inputs_different_sources_report_each_attempt_median_and_range(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = [self.run_evidence(root, "a" + str(i), value) for i, value in enumerate((100, 200, 300))]
+            after = [self.run_evidence(root, "b" + str(i), value, "after") for i, value in enumerate((90, 100, 110))]
+            # Different image labels are expected when comparing source revisions.
+            self.update(after[0], "manifest.json", image="candidate:local")
+            report = compare_runs(before, after)
+        self.assertTrue(report["matched"])
+        self.assertTrue(report["sample_sufficient"])
+        self.assertEqual(report["summary"]["baseline"]["median_seconds"], 200)
+        self.assertEqual(report["summary"]["candidate"]["min_seconds"], 90)
+        self.assertEqual(report["summary"]["candidate"]["max_seconds"], 110)
+        self.assertEqual(report["observed_median_reduction_percent"], 50)
+        self.assertEqual(len(report["groups"]["candidate"]), 3)
+        self.assertTrue(render_comparison(report).startswith("# PwnMesh 相同样本耗时对照\n"))
+        self.assertIn("50.00%", render_comparison(report))
+        self.assertIn("p95", report["sample_note"])
+
+    def test_failed_and_reviewed_runs_never_enter_success_timing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self.run_evidence(root, "before", 100)
+            passed = self.run_evidence(root, "passed", 120, "after")
+            failed = self.run_evidence(root, "failed", 2, "after", passed=False)
+            self.update(failed, "validation-reviewed.json", passed=True, failures=[])
+            report = compare_runs([before], [failed, passed])
+        self.assertTrue(report["matched"])
+        self.assertFalse(report["sample_sufficient"])
+        self.assertIsNone(report["groups"]["candidate"][0]["time_to_acceptance_seconds"])
+        self.assertEqual(report["summary"]["candidate"], {"attempts": 2, "original_passes": 1,
+                         "timed_passes": 1, "median_seconds": 120, "min_seconds": 120, "max_seconds": 120})
+        self.assertEqual(report["observed_median_reduction_percent"], -20)
+        self.assertIn("样本不足", render_comparison(report))
+
+    def test_missing_or_different_workload_model_configuration_or_scope_rejects_comparison(self):
+        changes = {"comparison_protocol_version": 2, "workload_sha256": "c" * 64,
+                   "execution_knobs_sha256": "d" * 64, "model": "another-model",
+                   "upstream": "https://other.invalid", "reasoning_effort": "low",
+                   "orchestration_version": 0, "http_observation_mode": "direct",
+                   "validation_scope": "weaker_scope"}
+        for key, value in changes.items():
+            for changed in (value, None):
+                with self.subTest(key=key, value=changed), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary)
+                    before = self.run_evidence(root, "before", 100)
+                    after = self.run_evidence(root, "after", 50, "after")
+                    self.update(after, "manifest.json", **{key: changed})
+                    report = compare_runs([before], [after])
+                    self.assertFalse(report["matched"])
+                    self.assertIsNone(report["summary"]["candidate"]["median_seconds"])
+                    self.assertIsNone(report["observed_median_reduction_percent"])
+                    self.assertIn("拒绝比较", render_comparison(report))
+
+    def test_duplicate_evidence_and_mixed_sources_cannot_inflate_sample_counts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self.run_evidence(root, "before", 100)
+            after = self.run_evidence(root, "after", 50, "after")
+            copied = self.run_evidence(root, "copied", 50, "after")
+            self.update(copied, "manifest.json", namespace="after")
+            for runs in ([after, after], [after, copied]):
+                report = compare_runs([before], runs)
+                self.assertFalse(report["matched"])
+                self.assertTrue(any("duplicate run" in error for error in report["matching_errors"]))
+            self.update(copied, "manifest.json", namespace="copied", source_commit="third-source")
+            report = compare_runs([before], [after, copied])
+            self.assertFalse(report["matched"])
+            self.assertTrue(any("source_commit differs" in error for error in report["matching_errors"]))
+            with self.assertRaises(ValueError):
+                compare_runs([], [after])
+
+    def test_same_scope_with_changed_or_missing_validator_contract_is_rejected(self):
+        for value in (None, "c" * 64, "not-a-hash"):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                before = self.run_evidence(root, "before", 100)
+                after = self.run_evidence(root, "after", 50, "after")
+                self.update(after, "comparison-contract.json", validation_contract_sha256=value)
+                report = compare_runs([before], [after])
+                self.assertFalse(report["matched"])
+                self.assertIsNone(report["observed_median_reduction_percent"])
+                self.assertTrue(any("validation_contract_sha256" in error for error in report["matching_errors"]))
+
+    def test_missing_or_invalid_acceptance_timing_is_unknown_never_zero(self):
+        for value in (None, True, 0, -1, float("inf"), float("nan"), 1, 90):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                before = self.run_evidence(root, "before", 100)
+                after = self.run_evidence(root, "after", 50, "after")
+                self.update(after, "manifest.json", time_to_acceptance_seconds=value)
+                report = compare_runs([before], [after])
+                self.assertTrue(report["matched"])
+                self.assertEqual(report["summary"]["candidate"]["original_passes"], 1)
+                self.assertEqual(report["summary"]["candidate"]["timed_passes"], 0)
+                self.assertIsNone(report["observed_median_reduction_percent"])
+
+    def test_original_receipts_host_failure_and_timestamps_are_checked(self):
+        changes = [("validation.json", {"passed": False}), ("validation.json", {"project_completed": False}),
+                   ("validation.json", {"failures": ["archive failed"]}),
+                   ("manifest.json", {"acceptance_passed": False}), ("host-run.json", {"exit_code": 1}),
+                   ("host-run.json", {"test_exit_code": 1}),
+                   ("host-run.json", {"exit_code": 0, "test_exit_code": 1}),
+                   ("manifest.json", {"completed_observed": None}),
+                   ("manifest.json", {"validation_finished": "invalid"}),
+                   ("manifest.json", {"validation_finished": "2026-09-27T00:00:00Z"})]
+        for filename, values in changes:
+            with self.subTest(filename=filename, values=values), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                before = self.run_evidence(root, "before", 100)
+                after = self.run_evidence(root, "after", 50, "after")
+                self.update(after, filename, **values)
+                report = compare_runs([before], [after])
+                self.assertIsNone(report["groups"]["candidate"][0]["time_to_acceptance_seconds"])
+                self.assertIsNone(report["observed_median_reduction_percent"])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self.run_evidence(root, "before", 100)
+            after = self.run_evidence(root, "after", 50, "after")
+            self.update(after, "validation.json", validation_scope="different_validator")
+            self.assertFalse(compare_runs([before], [after])["matched"])
 
 
 if __name__ == "__main__":

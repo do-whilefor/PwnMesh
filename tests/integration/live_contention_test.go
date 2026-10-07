@@ -16,7 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 const liveContentionRoot = "/workspace/contention"
@@ -248,7 +248,7 @@ func validateLiveContention(state board.State, files map[string][]byte) []string
 		// Audit both the original artifact and those retained, hash-bound bytes.
 		rawRun := fact.RunID[strings.LastIndex(fact.RunID, "@")+1:]
 		original, originalExists := files[path]
-		retainedPath := "/workspace/.xloom/runs/" + rawRun + "/evidence/" + liveContentionDigest(original) + ".raw"
+		retainedPath := "/workspace/.pwnmesh/runs/" + rawRun + "/evidence/" + liveContentionDigest(original) + ".raw"
 		for _, ref := range fact.Evidence {
 			retained, retainedExists := files[ref.Path]
 			if !originalExists || !retainedExists || ref.Path != retainedPath || !bytes.Equal(retained, original) || strings.TrimSpace(ref.Excerpt) == "" || !bytes.Contains(retained, []byte(ref.Excerpt)) {
@@ -330,7 +330,7 @@ func liveContentionAuditFixture() (board.State, map[string][]byte) {
 		raw, _ := json.Marshal(expected)
 		files[path] = append(raw, '\n')
 		id, step := fmt.Sprintf("f-%s-%d", kind, count), "s-"+kind
-		retainedPath := "/workspace/.xloom/runs/run-" + kind + "/evidence/" + liveContentionDigest(files[path]) + ".raw"
+		retainedPath := "/workspace/.pwnmesh/runs/run-" + kind + "/evidence/" + liveContentionDigest(files[path]) + ".raw"
 		files[retainedPath] = append([]byte(nil), files[path]...)
 		state.FactRecords = append(state.FactRecords, board.FactRecord{ID: id, Description: fmt.Sprintf("CONT-%s-%d verified", kind, count), Status: "valid", ObservedAt: "2026-09-23T12:00:00Z", RunID: "general@run-" + kind, SourceStepID: step, Evidence: []board.EvidenceRef{{RunID: "run-" + kind, Path: retainedPath, Excerpt: string(raw)}}})
 		if count == 24 {
@@ -482,7 +482,7 @@ func TestLiveContentionPythonFixture(t *testing.T) {
 		raw := files[liveContentionRoot+"/"+kind+"/"+name]
 		for j := range state.FactRecords[i].Evidence {
 			ref := &state.FactRecords[i].Evidence[j]
-			ref.Path = "/workspace/.xloom/runs/" + ref.RunID + "/evidence/" + liveContentionDigest(raw) + ".raw"
+			ref.Path = "/workspace/.pwnmesh/runs/" + ref.RunID + "/evidence/" + liveContentionDigest(raw) + ".raw"
 			ref.Excerpt = strings.TrimSpace(string(raw))
 			files[ref.Path] = append([]byte(nil), raw...)
 		}

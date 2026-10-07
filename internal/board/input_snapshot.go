@@ -100,19 +100,22 @@ func DecisionRetryKey(g Graph, revision int64) string {
 // SchedulePage contains runtime metadata only. Node descriptions, evidence,
 // hints and historical Jobs never cross the daily scheduling boundary.
 type SchedulePage struct {
-	Project          Project                   `json:"project"`
-	FactCount        int                       `json:"fact_count"`
-	HintCount        int                       `json:"hint_count"`
-	OpenCount        int                       `json:"open_count"`
-	Initial          bool                      `json:"initial"`
-	Revision         int64                     `json:"revision"`
-	DecisionRevision int64                     `json:"decision_revision"`
-	StateVersion     string                    `json:"state_version"`
-	RetryKey         string                    `json:"retry_key"`
-	Intents          []Intent                  `json:"intents"`
-	Steps            []Step                    `json:"steps"`
-	NextOffset       int                       `json:"next_offset,omitempty"`
-	ExecutionChecks  map[string]ExecutionCheck `json:"execution_checks,omitempty"`
+	Project           Project                   `json:"project"`
+	FactCount         int                       `json:"fact_count"`
+	HintCount         int                       `json:"hint_count"`
+	OpenCount         int                       `json:"open_count"`
+	Initial           bool                      `json:"initial"`
+	Revision          int64                     `json:"revision"`
+	DecisionRevision  int64                     `json:"decision_revision"`
+	StateVersion      string                    `json:"state_version"`
+	RetryKey          string                    `json:"retry_key"`
+	Intents           []Intent                  `json:"intents"`
+	Steps             []Step                    `json:"steps"`
+	NextOffset        int                       `json:"next_offset,omitempty"`
+	ExecutionChecks   map[string]ExecutionCheck `json:"execution_checks,omitempty"`
+	CurationNeeded    bool                      `json:"curation_needed,omitempty"`
+	CurationRequested bool                      `json:"curation_requested,omitempty"`
+	CurationRetryKey  string                    `json:"curation_retry_key,omitempty"`
 }
 
 func (t *Tx) ScheduleInput(project string, offset int, expected string) (SchedulePage, error) {
@@ -128,6 +131,13 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 		return SchedulePage{}, Err(422, "invalid scheduling offset")
 	}
 	p := SchedulePage{Project: s.Graph.Project, FactCount: len(s.Graph.Facts), HintCount: len(s.Graph.Hints), OpenCount: s.Graph.OpenCount(), Revision: s.Revision, DecisionRevision: s.DecisionRevision, StateVersion: version, RetryKey: DecisionRetryKey(s.Graph, s.DecisionRevision), Intents: []Intent{}, Steps: []Step{}}
+	p.CurationRequested = s.PendingCurationRequest() != nil
+	if p.CurationNeeded, err = t.curationNeeded(s); err != nil {
+		return SchedulePage{}, err
+	}
+	if s.Graph.Project.OrchestrationVersion == 1 {
+		p.CurationRetryKey = CurationRetryKey(s)
+	}
 	p.Initial = len(s.Graph.Facts) == 2
 	origin, goal := false, false
 	for _, f := range s.Graph.Facts {
@@ -153,7 +163,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 		}
 		p.Intents = append(p.Intents, i)
 		step := steps[i.ID]
-		p.Steps = append(p.Steps, Step{ID: step.ID, Status: step.Status, Priority: step.Priority, InvalidSources: step.InvalidSources[:min(1, len(step.InvalidSources))]})
+		p.Steps = append(p.Steps, Step{ID: step.ID, Status: step.Status, Priority: step.Priority, InvalidSources: step.InvalidSources[:min(1, len(step.InvalidSources))], DependsOn: step.DependsOn, WritePaths: stepWritePaths(step), BlockedBy: step.BlockedBy, SupportValid: step.SupportValid})
 	}
 	if end < len(s.Graph.Intents) {
 		p.NextOffset = end

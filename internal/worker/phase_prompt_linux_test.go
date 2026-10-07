@@ -7,8 +7,9 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
-	"xloom/internal/agent"
+	"pwnmesh/internal/agent"
 )
 
 func phaseHistoryText(history []agent.Message) string {
@@ -35,8 +36,12 @@ func checkSharedPhaseInput(t *testing.T, history []agent.Message, policy string)
 }
 
 func TestPhaseDeltasSurviveConclusionRepairsAndRecovery(t *testing.T) {
+	t.Setenv("TSEC_SERVER_HOST", "https://fixture.invalid")
+	t.Setenv("TSEC_AGENT_TOKEN", "fixture-token")
 	for _, direct := range []bool{false, true} {
 		t.Run(map[bool]string{false: "after execution", true: "direct conclusion"}[direct], func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 			job, dir := scenarioJob(t, "ctf", "explore"), t.TempDir()
 			job.ResultContractVersion = 2
 			stop := make(chan struct{})
@@ -63,7 +68,7 @@ func TestPhaseDeltasSurviveConclusionRepairsAndRecovery(t *testing.T) {
 				}
 				return agent.Message{}, &agent.ModelError{Kind: agent.ErrorTransport, Err: errors.New("synthetic interrupted second repair")}
 			})}
-			first, err := Run(context.Background(), job, opts)
+			first, err := runTestWorker(ctx, job, opts)
 			if err != nil || !first.Retryable || !first.Conclude || concludingCalls != 3 {
 				t.Fatalf("expected recoverable repair interruption: result=%+v err=%v calls=%d", first, err, concludingCalls)
 			}
@@ -80,7 +85,7 @@ func TestPhaseDeltasSurviveConclusionRepairsAndRecovery(t *testing.T) {
 				}
 				return agent.Text("assistant", `{"accepted":false,"reason":"Synthetic fixture has no verified result"}`), nil
 			})
-			last, err := Run(context.Background(), job, opts)
+			last, err := runTestWorker(ctx, job, opts)
 			after := outcomeSession(t, dir)
 			if err != nil || last.Status != "success" || resumedCalls != 1 || after.RepairCount != before.RepairCount || !after.ConcludeDeadline.Equal(before.ConcludeDeadline) || after.TaskPrompt != before.TaskPrompt || after.ConclusionPrompt != before.ConclusionPrompt {
 				t.Fatalf("recovery changed task, phase or budget: result=%+v err=%v calls=%d", last, err, resumedCalls)

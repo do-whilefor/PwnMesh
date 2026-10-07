@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestPrepareRejectsMalformedProtocolsBeforeFreezingInput(t *testing.T) {
@@ -14,19 +14,7 @@ func TestPrepareRejectsMalformedProtocolsBeforeFreezingInput(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f, store := newSnapshotHTTPFixture(t)
 			template := snapshotTemplate(f, kind)
-			for _, tc := range []struct {
-				name, field string
-				value       any
-			}{
-				{"null bridge", "graph_rpc", nil},
-				{"string bridge", "graph_rpc", "true"},
-				{"numeric bridge", "graph_rpc", 1},
-				{"null result version", "result_contract_version", nil},
-				{"string result version", "result_contract_version", "2"},
-				{"fractional result version", "result_contract_version", 1.5},
-				{"negative result version", "result_contract_version", -1},
-				{"unknown result version", "result_contract_version", 3},
-			} {
+			for _, tc := range invalidExecutionProtocols {
 				t.Run(tc.name, func(t *testing.T) {
 					var fields map[string]any
 					_ = json.Unmarshal(template.Job, &fields)
@@ -58,16 +46,16 @@ func TestPrepareRejectsMalformedProtocolsBeforeFreezingInput(t *testing.T) {
 	}
 }
 
-func TestPreparePreservesExplicitCompatibilityProtocol(t *testing.T) {
+func TestPrepareRejectsExplicitCompatibilityProtocol(t *testing.T) {
 	f, _ := newSnapshotHTTPFixture(t)
 	template := snapshotTemplate(f, "reason")
 	var fields map[string]any
 	_ = json.Unmarshal(template.Job, &fields)
 	fields["graph_rpc"], fields["result_contract_version"] = false, 1
 	template.Job, _ = json.Marshal(fields)
-	_, job := prepareSnapshot(t, f, template)
-	if job.GraphRPC || job.ResultContractVersion != 1 || job.Decision.Version != 1 {
-		t.Fatal("explicit compatibility configuration was changed")
+	f.request("POST", f.base()+"/executions/prepare", template, true, http.StatusUnprocessableEntity, nil)
+	if len(f.executionRecords()) != 0 {
+		t.Fatal("old protocol persisted an execution")
 	}
 }
 

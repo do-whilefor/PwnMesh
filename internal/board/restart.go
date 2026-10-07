@@ -46,6 +46,7 @@ func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
 		}
 	}
 	g.Project.Status, g.Project.Reason = "active", nil
+	g.Project.Curator = nil
 	g.Project.Generation++
 	g.Project.RestartedAt = t.Now
 	g.Project.TerminatedAt = ""

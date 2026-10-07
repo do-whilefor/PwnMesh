@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
 )
 
 const sessionSchemaVersion = 1
@@ -68,6 +68,7 @@ type journalCheckpoint struct {
 }
 
 type session struct {
+	RepairCheck            *RepairCheck             `json:"repair_check,omitempty"`
 	SchemaVersion          int                      `json:"schema_version"`
 	Identity               executionIdentity        `json:"identity"`
 	Log                    journalCheckpoint        `json:"log_checkpoint"`
@@ -98,6 +99,7 @@ type session struct {
 	RepairPending          bool                     `json:"repair_pending,omitempty"`
 	ContinuationCount      int                      `json:"continuation_count,omitempty"`
 	ContinuationSequence   uint64                   `json:"continuation_sequence,omitempty"`
+	ToolProgress           toolProgress             `json:"tool_progress,omitempty"`
 }
 
 func (s *session) validate(i executionIdentity) error {
@@ -116,6 +118,16 @@ func (s *session) validate(i executionIdentity) error {
 	}
 	if s.ContinuationCount < 0 || s.ContinuationCount > maxContinuations {
 		return errors.New("invalid saved continuation count")
+	}
+	var lastSequence uint64
+	if s.ContextCheckpoint != nil {
+		lastSequence = s.ContextCheckpoint.LastSequence
+	}
+	for _, message := range s.History {
+		lastSequence = max(lastSequence, message.Sequence)
+	}
+	if err := s.ToolProgress.validate(lastSequence); err != nil {
+		return err
 	}
 	if s.RecoveryCount < 0 || s.RecoveryCount > maxRunRecoveries {
 		return errors.New("invalid saved recovery count")

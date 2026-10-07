@@ -6,11 +6,84 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 type stopResultProvider struct {
 	calls   int
 	message Message
+}
+
+func TestStopResultDeclaredReadOnlyBatchRemainsParallel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	started, release := make(chan string, 2), make(chan struct{})
+	defer close(release)
+	loop := &Loop{StopResult: func() (string, bool) { return "", false }, StopResultTools: []string{"finish"}}
+	for _, name := range []string{"read-a", "read-b"} {
+		loop.Tools = append(loop.Tools, Tool{Definition: Definition{Name: name, Schema: json.RawMessage(`{"type":"object"}`)}, Parallel: true,
+			Execute: func(ctx context.Context, _ json.RawMessage) (string, error) {
+				started <- name
+				select {
+				case <-release:
+					return name, nil
+				case <-ctx.Done():
+					return "", ctx.Err()
+				}
+			}})
+	}
+	results := make(chan []Block, 1)
+	go func() {
+		results <- loop.execute(ctx, []Block{{ID: "a", Name: "read-a", Input: json.RawMessage(`{}`)}, {ID: "b", Name: "read-b", Input: json.RawMessage(`{}`)}}, false)
+	}()
+	seen := map[string]bool{}
+	for range 2 {
+		select {
+		case name := <-started:
+			seen[name] = true
+		case <-ctx.Done():
+			t.Fatal("independent read-only tools did not start together before release")
+		}
+	}
+	if len(seen) != 2 {
+		t.Fatal("did not execute distinct reads")
+	}
+	// Release through cancellation so the test can also assert all outstanding
+	// IDs settle without requiring another model call or leaking goroutines.
+	cancel()
+	out := <-results
+	if len(out) != 2 || out[0].ToolUseID != "a" || out[1].ToolUseID != "b" || !out[0].IsError || !out[1].IsError {
+		t.Fatalf("parallel cancellation left unsettled results: %+v", out)
+	}
+}
+
+func TestStopResultDeclaredTerminalBatchStillSerialAndStops(t *testing.T) {
+	committed := false
+	effects := []string{}
+	provider := &stopResultProvider{message: Message{Role: "assistant", Content: []Block{
+		{Type: "tool_use", ID: "before", Name: "read", Input: json.RawMessage(`{}`)},
+		{Type: "tool_use", ID: "finish", Name: "finish", Input: json.RawMessage(`{}`)},
+		{Type: "tool_use", ID: "after", Name: "read", Input: json.RawMessage(`{}`)},
+	}}}
+	loop := &Loop{Provider: provider, StopResult: func() (string, bool) { return "finished", committed }, StopResultTools: []string{"finish"}}
+	for _, name := range []string{"read", "finish"} {
+		// Even an incorrectly Parallel-marked terminal tool remains a barrier
+		// based on its explicit terminal declaration.
+		loop.Tools = append(loop.Tools, Tool{Definition: Definition{Name: name, Schema: json.RawMessage(`{"type":"object"}`)}, Parallel: true,
+			Execute: func(context.Context, json.RawMessage) (string, error) {
+				effects = append(effects, name)
+				committed = committed || name == "finish"
+				return name, nil
+			}})
+	}
+	result, err := loop.Run(context.Background(), "Read then finish")
+	if err != nil || result != "finished" || provider.calls != 1 || strings.Join(effects, ",") != "read,finish" {
+		t.Fatalf("terminal declaration lost serial/stop behavior: %q %v effects=%v calls=%d", result, err, effects, provider.calls)
+	}
+	last := loop.History[len(loop.History)-1].Content
+	if len(last) != 3 || !last[2].IsError || !strings.Contains(string(last[2].Content), "not executed") {
+		t.Fatalf("post-terminal call was not settled as skipped: %+v", last)
+	}
 }
 
 func (p *stopResultProvider) Generate(context.Context, []Message, []Definition, Emit) (Message, error) {

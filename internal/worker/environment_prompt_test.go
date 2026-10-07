@@ -8,15 +8,15 @@ import (
 	"strings"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestInitialPromptDescribesActualWorkspaceAndDeclaredEnvironment(t *testing.T) {
 	for _, environment := range []string{"", "unknown", "kali-headless"} {
-		for _, kind := range []string{"bootstrap", "explore", "reason"} {
+		for _, kind := range []string{"explore", "reason"} {
 			for _, workspace := range []string{"/workspace", "/workspace/team \"blue\"\nscan\\results"} {
 				t.Run(environment+"/"+kind+"/"+strconv.Quote(workspace), func(t *testing.T) {
-					t.Setenv("XLOOM_WORKER_ENVIRONMENT", environment)
+					t.Setenv("PWNMESH_WORKER_ENVIRONMENT", environment)
 					job := Job{
 						Kind: kind, Workspace: workspace,
 						Graph: board.Graph{
@@ -48,6 +48,9 @@ func TestInitialPromptDescribesActualWorkspaceAndDeclaredEnvironment(t *testing.
 							t.Errorf("%s environment gives incorrect execution guidance for %s: %s", kind, tool, intro)
 						}
 					}
+					if kind == "explore" && strings.Count(intro, "tool availability") != 1 {
+						t.Fatal("execution environment lost or repeated its tool availability guidance")
+					}
 				})
 			}
 		}
@@ -55,8 +58,8 @@ func TestInitialPromptDescribesActualWorkspaceAndDeclaredEnvironment(t *testing.
 }
 
 func TestPhaseInstructionsDoNotRepeatEnvironment(t *testing.T) {
-	t.Setenv("XLOOM_WORKER_ENVIRONMENT", "kali-headless")
-	for _, kind := range []string{"bootstrap", "explore"} {
+	t.Setenv("PWNMESH_WORKER_ENVIRONMENT", "kali-headless")
+	for _, kind := range []string{"explore"} {
 		t.Run(kind, func(t *testing.T) {
 			job := Job{Kind: kind, Workspace: "/workspace/shared", ResultContractVersion: 2}
 			initial, err := Prompt(job, false, t.TempDir())
@@ -73,7 +76,7 @@ func TestPhaseInstructionsDoNotRepeatEnvironment(t *testing.T) {
 					t.Fatal(err)
 				}
 				combined := initial + conclusion + repair
-				for _, shared := range []string{"Environment:", "Kali Linux container", strconv.Quote(job.Workspace)} {
+				for _, shared := range []string{"Environment:", "Kali Linux container", strconv.Quote(job.Workspace), executionDiscipline} {
 					if strings.Count(combined, shared) != 1 {
 						t.Errorf("concluding=%t lost or repeated initial environment field %q", concluding, shared)
 					}
@@ -88,7 +91,7 @@ func TestKaliWorkerImageDeclaresInstalledEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "XLOOM_WORKER_ENVIRONMENT=kali-headless") {
+	if !strings.Contains(string(raw), "PWNMESH_WORKER_ENVIRONMENT=kali-headless") {
 		t.Fatal("Kali worker image does not declare its prompt environment")
 	}
 	if !regexp.MustCompile(`(?m)^\s+kali-linux-headless\s+\\\r?$`).Match(raw) {

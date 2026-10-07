@@ -5,8 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/contract"
+	"pwnmesh/internal/agent"
 )
 
 // DecisionMetrics reports observed work, not a bill or proof that proposed
@@ -132,13 +131,13 @@ func (m *DecisionMetrics) observe(event agent.Event) {
 			m.Usage.CacheWriteTokens += usage.CacheWriteTokens
 		}
 	case "tool_start":
-		if event.ToolName == "read_graph" {
+		if event.ToolName == "read_graph" || event.ToolName == "read_evidence" {
 			m.GraphReads++
 		} else if event.ToolName == "graph_action" {
 			m.GraphActions++
 		}
 	case "tool_end":
-		if event.ToolName == "read_graph" && event.Error != "" {
+		if (event.ToolName == "read_graph" || event.ToolName == "read_evidence") && event.Error != "" {
 			m.GraphReadFailures++
 		} else if event.ToolName == "graph_action" {
 			if event.Error == "" {
@@ -201,6 +200,12 @@ func (m DecisionMetrics) finish(j Job, r Result, started, ended time.Time) Decis
 	m.Trigger, m.Repeated = j.DecisionTrigger, j.DecisionRepeated
 	if j.Decision != nil {
 		m.ViewMode, m.BaselineViewBytes, m.SelectedViewBytes = j.Decision.Mode, j.Decision.BaselineBytes, len(j.Decision.View)
+		// Completion mode moves evidence out of View; it is still model input.
+		// Count both bodies so the projection cannot claim savings by relocation.
+		if j.Decision.CompletionAssessment != nil {
+			assessment, _ := json.Marshal(j.Decision.CompletionAssessment)
+			m.SelectedViewBytes += len(assessment)
+		}
 	}
 	if j.Decision != nil && j.Decision.Version == 2 {
 		if m.Committed {
@@ -220,17 +225,11 @@ func (m DecisionMetrics) finish(j Job, r Result, started, ended time.Time) Decis
 	if r.Status != "success" || m.GraphActions > 0 {
 		return m // An interrupted/failed action may have reached the server.
 	}
-	parsed, err := contract.Parse(r.Text, j.Kind, r.Conclude, j.openCount(), j.Budget.MaxIntents)
+	parsed, err := parseOutput(j, r.Conclude, r.Text)
 	if err != nil {
 		return m
 	}
 	switch parsed.Kind {
-	case "noop":
-		m.Outcome = "no_op_observed"
-	case "intents":
-		m.Outcome = "plan_proposed"
-	case "complete":
-		m.Outcome = "completion_proposed"
 	case "rejected":
 		m.Outcome = "rejected"
 	}

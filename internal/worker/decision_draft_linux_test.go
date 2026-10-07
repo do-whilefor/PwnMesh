@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
+	"pwnmesh/internal/agent"
+	"pwnmesh/internal/board"
 )
 
 func draftTestAction(op, key, payload string) board.StateAction {
@@ -172,7 +172,7 @@ func TestDecisionDraftOrdinaryPlanCommitsInOneModelResponse(t *testing.T) {
 		m.Content = append(m.Content, draftModelCall("commit", "graph_action", `{"op":"commit","idempotency_key":"commit"}`).Content...)
 		return m, nil
 	})
-	result, err := Run(context.Background(), job, Options{RunDir: runDir, Provider: provider, Output: bridge})
+	result, err := runTestWorker(context.Background(), job, Options{RunDir: runDir, Provider: provider, Output: bridge})
 	if err != nil || result.Status != "success" || calls != 1 || commits != 1 {
 		t.Fatalf("ordinary plan did not commit in one turn: %+v %v calls=%d commits=%d", result, err, calls, commits)
 	}
@@ -487,6 +487,10 @@ func TestDecisionDraftConflictRequiresFreshEvidenceRead(t *testing.T) {
 	if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["corrected"]}`)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := draftToolAction(t, action, "step", "old", oldPlan); err == nil {
+		t.Fatal("unseen tool results allowed a preplanned action to reuse the refreshed version")
+	}
+	opts.decision.beforeRequest(&agent.Loop{})
 	if _, err := draftToolAction(t, action, "step", "new", `{"action":"add","from":["corrected"],"description":"Inspect the corrected boundary"}`); err != nil {
 		t.Fatal(err)
 	}
@@ -597,13 +601,13 @@ func TestDecisionDraftRunRecoversCommittedReceiptWithoutModel(t *testing.T) {
 			return agent.Message{}, &agent.ModelError{Kind: agent.ErrorTransport, Err: errors.New("synthetic worker interruption")}
 		}
 	})
-	first, err := Run(context.Background(), job, Options{Provider: provider, RunDir: runDir, Output: bridge, Now: func() time.Time { return start }})
+	first, err := runTestWorker(context.Background(), job, Options{Provider: provider, RunDir: runDir, Output: bridge, Now: func() time.Time { return start }})
 	if err != nil || !first.Retryable || first.Status != "failed" || commits != 1 || calls != 3 {
 		t.Fatalf("did not reach the lost-commit-reply recovery boundary: %+v err=%v commits=%d calls=%d", first, err, commits, calls)
 	}
 	before := outcomeSession(t, runDir)
 	resumedCalls := 0
-	result, err := Run(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start.Add(3 * time.Second) }, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+	result, err := runTestWorker(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start.Add(3 * time.Second) }, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		resumedCalls++
 		return agent.Message{}, errors.New("recovery called the model despite a committed receipt")
 	})})
@@ -638,7 +642,7 @@ func TestDecisionDraftRunDiscardsUncommittedPlanOnResume(t *testing.T) {
 			return nil, nil
 		}
 	}}
-	first, err := Run(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start }, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+	first, err := runTestWorker(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start }, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		calls++
 		if calls == 1 {
 			return draftModelCall("private", "graph_action", `{"op":"goal","idempotency_key":"old","payload":{"action":"add","condition":"An old private direction"}}`), nil
@@ -650,12 +654,17 @@ func TestDecisionDraftRunDiscardsUncommittedPlanOnResume(t *testing.T) {
 	}
 	before := outcomeSession(t, runDir)
 	resumeCalls := 0
-	result, err := Run(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start.Add(5 * time.Second) }, Provider: scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
+	result, err := runTestWorker(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start.Add(5 * time.Second) }, Provider: scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		resumeCalls++
 		switch resumeCalls {
 		case 1:
 			if !strings.Contains(history[len(history)-1].Text(), "draft was discarded") {
 				t.Fatal("resumed model was not told its old private aliases are invalid")
+			}
+			for _, required := range []string{"completion_assessment reuse are invalid", "preview and review of completion_review in a subsequent model turn before commit", "ordinary plans can commit directly"} {
+				if !strings.Contains(history[len(history)-1].Text(), required) {
+					t.Fatalf("recovery omitted changed completion authority: %q", required)
+				}
 			}
 			return draftModelCall("stale", "graph_action", `{"op":"step","idempotency_key":"stale","payload":{"action":"add","goal_id":"$old","from":["origin"],"description":"Blindly reuse the old draft"}}`), nil
 		case 2:
@@ -694,10 +703,13 @@ func TestDecisionDraftRunBoundsUncommittedTextAndTruncatedTurns(t *testing.T) {
 				}
 				return board.DecisionReceipt{}, nil
 			}}
-			result, err := Run(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start }, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, definitions []agent.Definition, _ agent.Emit) (agent.Message, error) {
+			result, err := runTestWorker(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start }, Provider: scenarioProvider(func(_ context.Context, history []agent.Message, definitions []agent.Definition, _ agent.Emit) (agent.Message, error) {
 				calls++
 				if calls > maxContinuations+1 {
 					t.Fatal("uncommitted decision continued without a bound")
+				}
+				if calls > 1 && !strings.Contains(history[len(history)-1].Text(), "an empty plan requires a valid open or running Step") {
+					t.Fatal("planning continuation advertised an unconditional empty commit")
 				}
 				read, action := false, false
 				for _, definition := range definitions {
@@ -775,7 +787,7 @@ func TestDecisionDraftRunRecoversSavedRepairIntoPlanning(t *testing.T) {
 			return nil, nil
 		}
 	}}
-	result, err := Run(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start.Add(7 * time.Second) }, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, definitions []agent.Definition, _ agent.Emit) (agent.Message, error) {
+	result, err := runTestWorker(context.Background(), job, Options{RunDir: runDir, Output: bridge, Now: func() time.Time { return start.Add(7 * time.Second) }, Provider: scenarioProvider(func(_ context.Context, _ []agent.Message, definitions []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		calls++
 		read, action := false, false
 		for _, definition := range definitions {

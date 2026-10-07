@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"testing"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestCompletionPreviewReturnsAuthoritativeReviewWithoutAcceptanceOrWrites(t *testing.T) {

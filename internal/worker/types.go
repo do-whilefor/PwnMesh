@@ -4,8 +4,9 @@ package worker
 import (
 	"encoding/json"
 	"errors"
-	"xloom/internal/board"
-	"xloom/internal/config"
+	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
 )
 
 // ErrInterrupted marks a dispatcher shutdown/infrastructure interruption that
@@ -23,26 +24,28 @@ const (
 )
 
 type Job struct {
-	RunID                 string                 `json:"run_id"`
-	PreviousRunID         string                 `json:"previous_run_id,omitempty"`
-	GraphRPC              bool                   `json:"graph_rpc,omitempty"`
-	ResultContractVersion int                    `json:"result_contract_version,omitempty"`
-	EnvironmentID         string                 `json:"environment_id,omitempty"`
-	DecisionRevision      int64                  `json:"decision_revision,omitempty"`
-	Decision              *board.DecisionContext `json:"decision,omitempty"`
-	DecisionTrigger       string                 `json:"decision_trigger,omitempty"`
-	DecisionTriggers      []string               `json:"decision_triggers,omitempty"`
-	DecisionRepeated      bool                   `json:"decision_repeated,omitempty"`
-	Kind                  string                 `json:"kind"`
-	WorkerType            string                 `json:"worker_type"`
-	Graph                 board.Graph            `json:"graph"`
-	State                 *board.State           `json:"state,omitempty"`
-	InputSnapshot         *board.InputSnapshot   `json:"input_snapshot,omitempty"`
-	InputView             json.RawMessage        `json:"input_view,omitempty"`
-	PreparationKey        string                 `json:"preparation_key,omitempty"`
-	Intent                *board.Intent          `json:"intent,omitempty"`
-	Budget                config.Task            `json:"budget"`
-	Workspace             string                 `json:"workspace"`
+	Repair                *artifactcheck.Spec      `json:"repair,omitempty"`
+	RunID                 string                   `json:"run_id"`
+	PreviousRunID         string                   `json:"previous_run_id,omitempty"`
+	GraphRPC              bool                     `json:"graph_rpc,omitempty"`
+	ResultContractVersion int                      `json:"result_contract_version,omitempty"`
+	EnvironmentID         string                   `json:"environment_id,omitempty"`
+	DecisionRevision      int64                    `json:"decision_revision,omitempty"`
+	Decision              *board.DecisionContext   `json:"decision,omitempty"`
+	DecisionTrigger       string                   `json:"decision_trigger,omitempty"`
+	DecisionTriggers      []string                 `json:"decision_triggers,omitempty"`
+	DecisionRepeated      bool                     `json:"decision_repeated,omitempty"`
+	Kind                  string                   `json:"kind"`
+	WorkerType            string                   `json:"worker_type"`
+	Graph                 board.Graph              `json:"graph"`
+	State                 *board.State             `json:"state,omitempty"`
+	InputSnapshot         *board.InputSnapshot     `json:"input_snapshot,omitempty"`
+	InputView             json.RawMessage          `json:"input_view,omitempty"`
+	PreparationKey        string                   `json:"preparation_key,omitempty"`
+	Intent                *board.Intent            `json:"intent,omitempty"`
+	DependencyResults     []board.DependencyResult `json:"dependency_results,omitempty"`
+	Budget                config.Task              `json:"budget"`
+	Workspace             string                   `json:"workspace"`
 }
 
 func (j Job) openCount() int {
@@ -53,6 +56,7 @@ func (j Job) openCount() int {
 }
 
 type Result struct {
+	RepairCheck  *RepairCheck     `json:"repair_check,omitempty"`
 	Type         string           `json:"type"`
 	Text         string           `json:"text"`
 	Conclude     bool             `json:"conclude"`
@@ -60,6 +64,16 @@ type Result struct {
 	Error        string           `json:"error,omitempty"`
 	Retryable    bool             `json:"retryable,omitempty"`
 	FailureKind  string           `json:"failure_kind,omitempty"`
+	FailureCause string           `json:"failure_cause,omitempty"`
 	StateVersion string           `json:"state_version,omitempty"`
 	Metrics      *DecisionMetrics `json:"metrics,omitempty"`
+}
+
+// RepairCheck is a runtime observation, never a model-authored permission.
+type RepairCheck struct {
+	artifactcheck.Result
+	BlankContent   bool   `json:"blank_content,omitempty"`
+	Path           string `json:"path"`
+	ExpectedSHA256 string `json:"expected_sha256"`
+	Outcome        string `json:"outcome"`
 }

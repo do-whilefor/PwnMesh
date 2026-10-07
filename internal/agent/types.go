@@ -110,6 +110,7 @@ const (
 	ErrorRateLimit       ErrorKind = "rate_limit"
 	ErrorUnavailable     ErrorKind = "unavailable"
 	ErrorProvider        ErrorKind = "provider"
+	ErrorToolArguments   ErrorKind = "tool_arguments"
 	ErrorBudget          ErrorKind = "context_budget"
 )
 

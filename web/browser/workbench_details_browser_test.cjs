@@ -2,7 +2,7 @@
 
 // Loads the service's embedded assets while intercepting every project API call.
 // Safe to run against a populated development service: no project data is written.
-// XLOOM_WEB_URL=http://127.0.0.1:8000 node --test web/browser/workbench_details_browser_test.cjs
+// PWNMESH_WEB_URL=http://127.0.0.1:8000 node --test web/browser/workbench_details_browser_test.cjs
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
@@ -43,9 +43,9 @@ function fixture() {
 
 test('workbench collapses long logs and filters cards without losing the canvas view', {
   timeout:90000,
-  skip:process.env.XLOOM_WEB_URL ? false : 'Set XLOOM_WEB_URL to load the embedded workbench assets',
+  skip:process.env.PWNMESH_WEB_URL ? false : 'Set PWNMESH_WEB_URL to load the embedded workbench assets',
 }, async t => {
-  const base = new URL(process.env.XLOOM_WEB_URL);
+  const base = new URL(process.env.PWNMESH_WEB_URL);
   assert.ok(['http:','https:'].includes(base.protocol));
   const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});

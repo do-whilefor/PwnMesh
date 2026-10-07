@@ -76,7 +76,7 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 			pending("event_gap")
 		}
 		switch event.Op {
-		case "fact", "reopen", "finding", "goal", "step", "step_completed", "execution_failed", "complete", "hint", "fact_relation":
+		case "fact", "reopen", "finding", "goal", "step", "step_completed", "execution_failed", "complete", "hint", "fact_relation", "candidate", "curate", "curation_request", "dispute":
 		default:
 			pending("unknown_event")
 		}
@@ -114,7 +114,10 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 	}
 	relevant := !out.Complete
 	for _, event := range events {
-		if selected[event.ID] {
+		// A curation batch can correct several facts atomically. Its single
+		// event ID identifies the scan, not an individual target. Rebuild the
+		// bounded dependency view rather than silently acknowledging it.
+		if selected[event.ID] || event.Op == "curate" {
 			relevant = true
 		}
 	}

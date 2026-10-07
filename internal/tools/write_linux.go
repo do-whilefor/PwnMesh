@@ -189,7 +189,7 @@ func atomicCopyWrite(ctx context.Context, path string, data []byte) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".xloom-copy-*")
+	f, err := os.CreateTemp(filepath.Dir(path), ".pwnmesh-copy-*")
 	if err != nil {
 		return err
 	}

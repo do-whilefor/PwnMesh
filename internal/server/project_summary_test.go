@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"xloom/internal/board"
+	"pwnmesh/internal/board"
 )
 
 func TestProjectListSummariesExpireLeasesWithoutLoadingGraph(t *testing.T) {

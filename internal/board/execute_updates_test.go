@@ -50,6 +50,20 @@ func TestExecuteUpdatesDoNotBroadcastUnrelatedChanges(t *testing.T) {
 	}
 }
 
+func TestExecuteUpdatesCarryAtomicCurationCorrections(t *testing.T) {
+	state, cursor, _ := executeUpdateFixture()
+	state.Graph.Project.OrchestrationVersion = 1
+	update, err := BuildExecuteUpdates(state, cursor, []string{"F1"}, []StateChange{{Revision: 2, Op: "curate", ID: "curation"}}, true, 0)
+	if err != nil || !update.Complete || !reflect.DeepEqual(update.InvalidSources, []string{"F1"}) || len(update.Relations) != 1 || len(update.Facts) != 2 {
+		t.Fatalf("curation batch silently acknowledged invalidated evidence: %+v, %v", update, err)
+	}
+	cursor.Revision = update.ToRevision
+	replayed, err := BuildExecuteUpdates(state, cursor, []string{"F1"}, nil, true, 0)
+	if err != nil || !replayed.Complete || len(replayed.Facts)+len(replayed.Relations)+len(replayed.InvalidSources) != 0 {
+		t.Fatalf("acknowledged curation correction was repeated: %+v, %v", replayed, err)
+	}
+}
+
 func TestExecuteUpdatesBoundSilentAcknowledgementEnvelope(t *testing.T) {
 	state, cursor, _ := executeUpdateFixture()
 	events := []StateChange{{Revision: 2, Op: "fact", ID: "unrelated"}}

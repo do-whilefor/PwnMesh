@@ -17,8 +17,8 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
-	"xloom/internal/board"
-	"xloom/internal/contract"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/contract"
 )
 
 const maxEvidenceFileBytes = 32 << 20
@@ -37,7 +37,7 @@ func retainEvidenceBytes(ctx context.Context, run, dir string, raw []byte) (boar
 // freezes selected files once; conclusion selects only its persisted boundary
 // fragments and never follows a newly supplied workspace path.
 func prepareFinalEvidence(ctx context.Context, j Job, runDir string, r Result, frozen []board.EvidenceRef) (Result, error) {
-	if j.ResultContractVersion < 2 || j.Kind == "reason" || r.Status != "success" {
+	if j.ResultContractVersion < 2 || controlJob(j) || r.Status != "success" {
 		return r, nil
 	}
 	parsed, err := parseOutput(j, r.Conclude, r.Text)
@@ -120,7 +120,7 @@ func prepareEvidence(ctx context.Context, j Job, runDir string, action board.Sta
 	if err := ctx.Err(); err != nil {
 		return action, err
 	}
-	if action.Op != "fact" && action.Op != "finding" {
+	if action.Op != "fact" && action.Op != "finding" && action.Op != "candidate" {
 		return action, nil
 	}
 	if len(action.Payload) > MaxGraphRPCBytes {
@@ -217,7 +217,7 @@ func prepareEvidence(ctx context.Context, j Job, runDir string, action board.Sta
 	prepared := evidenceAction{Input: input}
 	for i, ref := range refs {
 		if !currentEvidence(ref.RunID, j.RunID) {
-			if action.Op != "finding" {
+			if action.Op != "finding" && action.Op != "candidate" {
 				return action, errors.New("new fact evidence must belong to this run")
 			}
 			// Existing references must match a cited Fact at the server. Never
@@ -345,6 +345,13 @@ func readEvidenceFile(ctx context.Context, path string, limit int) ([]byte, erro
 	}
 	f := os.NewFile(uintptr(fd), path)
 	defer f.Close()
+	return readEvidenceHandle(ctx, f, limit)
+}
+
+func readEvidenceHandle(ctx context.Context, f *os.File, limit int) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	before, err := f.Stat()
 	if err != nil {
 		return nil, err

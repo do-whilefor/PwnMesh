@@ -16,11 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"xloom/internal/agent"
-	"xloom/internal/board"
-	"xloom/internal/config"
-	"xloom/internal/provider"
-	"xloom/internal/worker"
+	"pwnmesh/internal/board"
+	"pwnmesh/internal/config"
+	"pwnmesh/internal/worker"
 )
 
 type Runner interface {
@@ -47,6 +45,8 @@ type task struct {
 	Execution    board.Execution
 	LeaseTimeout time.Duration
 	committedAt  atomic.Int64
+	staleInputAt time.Time // Written before publishing this task to done.
+	urgentInput  bool      // An invalid dependency is consumed only by success.
 }
 type finished struct {
 	Task    *task
@@ -65,13 +65,17 @@ type Scheduler struct {
 	admitted          map[string]bool
 	checkpoints       map[string]checkpoint
 	reasonWaits       map[string]reasonWait
+	curationWaits     map[string]reasonWait
+	controlConflicts  map[string]time.Time
 	unhealthy         map[string]time.Time
+	incompatible      map[string]string
 	rejected          map[string]time.Time
 	cleanup           map[string]string
 	cleaned           map[string]string
 	done              chan finished
 	cleanupDone       chan cleaned
 	wakeup            chan struct{}
+	nextWake          time.Time
 	wg                sync.WaitGroup
 	cursor            int
 	pendingExecutions []board.ExecutionSummary
@@ -92,6 +96,7 @@ func New(c config.Config, r Runner) *Scheduler {
 	s.generations = map[string]int64{}
 	s.restartCleaned = map[string]int64{}
 	s.reasonWaits = map[string]reasonWait{}
+	s.controlConflicts = map[string]time.Time{}
 	s.wakeup = make(chan struct{}, 1)
 	return s
 }
@@ -101,26 +106,14 @@ func (s *Scheduler) Health(ctx context.Context, force bool) error {
 	}
 	var result error
 	for _, w := range s.Config.Workers {
-		if err := s.health(ctx, w); err != nil {
-			s.unhealthy[w.Name] = time.Now().Add(5 * time.Second)
+		err := s.health(ctx, w)
+		s.recordHealth(w.Name, err)
+		if err != nil {
 			result = errors.Join(result, fmt.Errorf("worker %s: %w", w.Name, err))
 			slog.Warn("worker health failed", "worker", w.Name, "error", err)
 		}
 	}
 	return result
-}
-func (s *Scheduler) health(ctx context.Context, w config.Worker) error {
-	if s.CheckHealth != nil {
-		return s.CheckHealth(ctx, w)
-	}
-	if w.Type == "mock" {
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(s.Config.Runtime.HealthTimeout)*time.Second)
-	defer cancel()
-	p := provider.Anthropic{BaseURL: w.Env["ANTHROPIC_BASE_URL"], Token: w.Env["ANTHROPIC_AUTH_TOKEN"], Model: w.Env["ANTHROPIC_MODEL"], MaxTokens: 10}
-	_, err := p.Generate(ctx, []agent.Message{agent.Text("user", "Reply OK")}, nil, nil)
-	return err
 }
 func (s *Scheduler) Run(ctx context.Context) error {
 	var settings board.Settings
@@ -155,16 +148,26 @@ func (s *Scheduler) Run(ctx context.Context) error {
 	}()
 	tick := time.NewTicker(time.Duration(s.Config.Runtime.Interval) * time.Second)
 	defer tick.Stop()
+	deadline := time.NewTimer(time.Hour)
+	deadline.Stop()
+	defer deadline.Stop()
 	for {
 		if err := s.Step(ctx); err != nil && ctx.Err() == nil {
 			slog.Warn("dispatcher tick failed", "error", err)
+		}
+		var ready <-chan time.Time
+		if !s.nextWake.IsZero() {
+			deadline.Reset(time.Until(s.nextWake))
+			ready = deadline.C
 		}
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
 		case <-s.wakeup:
+		case <-ready:
 		}
+		deadline.Stop()
 	}
 }
 
@@ -182,9 +185,21 @@ func (s *Scheduler) reap() {
 		select {
 		case f := <-s.done:
 			delete(s.running, f.Task.Job.RunID)
+			if f.Outcome == "failed" && f.Task.urgentInput && f.Task.Job.Graph.Project.Generation == s.generations[f.Task.Job.Graph.Project.ID] {
+				id := f.Task.Job.Graph.Project.ID
+				wait := s.reasonWaits[id]
+				wait.Urgent = true
+				s.reasonWaits[id] = wait
+			}
+			if f.Outcome == "failed" && !f.Task.staleInputAt.IsZero() && f.Task.Job.Graph.Project.Generation == s.generations[f.Task.Job.Graph.Project.ID] {
+				id, until := f.Task.Job.Graph.Project.ID, f.Task.staleInputAt.Add(reasonMaxWait)
+				if until.After(s.controlConflicts[id]) {
+					s.controlConflicts[id] = until
+				}
+			}
 			key := s.rejectKey(f.Task.Job.Graph.Project.ID, f.Task.Job.Kind, f.Task.Worker.Name)
 			if f.Outcome == "unhealthy" {
-				s.unhealthy[f.Task.Worker.Name] = time.Now().Add(5 * time.Second)
+				s.recordHealth(f.Task.Worker.Name, f.Err)
 			} else {
 				delete(s.unhealthy, f.Task.Worker.Name)
 			}
@@ -226,6 +241,7 @@ cleanup:
 	}
 }
 func (s *Scheduler) Step(ctx context.Context) error {
+	s.nextWake = time.Time{}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -266,6 +282,16 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	for id := range s.reasonWaits {
 		if states[id] != "active" {
 			delete(s.reasonWaits, id)
+		}
+	}
+	for id := range s.curationWaits {
+		if states[id] != "active" {
+			delete(s.curationWaits, id)
+		}
+	}
+	for id := range s.controlConflicts {
+		if states[id] != "active" {
+			delete(s.controlConflicts, id)
 		}
 	}
 	for _, t := range s.running {
@@ -360,9 +386,6 @@ func (s *Scheduler) Step(ctx context.Context) error {
 	}
 	return nil
 }
-func bootstrap(i board.Intent) bool {
-	return i.To == nil && i.ConcludedAt == nil && i.Description == "bootstrap" && i.Creator == "dispatcher.bootstrap" && len(i.From) == 1 && i.From[0] == "origin"
-}
 func (s *Scheduler) trigger(g board.Graph, check board.ExecutionCheck, previous board.SchedulePage, now time.Time) string {
 	if check.PreviousRunID != "" {
 		return "explicit_retry"
@@ -392,18 +415,17 @@ func (s *Scheduler) trigger(g board.Graph, check board.ExecutionCheck, previous 
 
 func (s *Scheduler) waitForReason(g board.Graph, previous board.SchedulePage, now time.Time) bool {
 	id := g.Project.ID
-	busy := false
-	for _, t := range s.running {
-		busy = busy || t.Job.Graph.Project.ID == id && t.Job.Kind != "reason"
-	}
-	for _, intent := range g.Intents {
-		busy = busy || intent.Worker != nil && intent.To == nil && intent.ConcludedAt == nil
-	}
-	if !busy {
+	if !s.producersRunning(g) {
+		delete(s.controlConflicts, id)
 		return false
 	}
 	input := s.schedules[id]
 	s.noteInvalidDependencies(id, previous, input)
+	if !s.reasonWaits[id].Urgent {
+		if until, ok := s.controlConflicts[id]; ok {
+			return s.waitForControlConflict(until, now)
+		}
+	}
 	wait, ok := s.reasonWaits[id]
 	if !ok || wait.First.IsZero() {
 		wait.First, wait.Changed, wait.Revision = now, now, input.DecisionRevision
@@ -411,7 +433,47 @@ func (s *Scheduler) waitForReason(g board.Graph, previous board.SchedulePage, no
 		wait.Changed, wait.Revision = now, input.DecisionRevision
 	}
 	s.reasonWaits[id] = wait
-	return !wait.Urgent && now.Sub(wait.Changed) < reasonQuietPeriod && now.Sub(wait.First) < reasonMaxWait
+	return s.waitForQuiet(wait, now)
+}
+
+// Honor the coalescing boundary itself, rather than rounding it up to the
+// next heartbeat tick. Only still-pending waits schedule a wake, so an expired
+// wait that cannot acquire a worker does not turn into a busy retry loop.
+func (s *Scheduler) waitForQuiet(wait reasonWait, now time.Time) bool {
+	until := wait.Changed.Add(reasonQuietPeriod)
+	if maximum := wait.First.Add(reasonMaxWait); maximum.Before(until) {
+		until = maximum
+	}
+	if wait.Urgent || !now.Before(until) {
+		return false
+	}
+	s.wakeAt(until)
+	return true
+}
+
+func (s *Scheduler) wakeAt(until time.Time) {
+	if s.nextWake.IsZero() || until.Before(s.nextWake) {
+		s.nextWake = until
+	}
+}
+
+func invalidStepSupport(step board.Step) bool {
+	return len(step.InvalidSources) > 0 || len(step.BlockedBy) > 0
+}
+
+// A queued dependency is normal pipeline progress. Missing, failed or invalid
+// accepted dependencies require a new decision rather than more execution.
+func supportNeedsDecision(step board.Step, steps map[string]board.Step) bool {
+	if len(step.InvalidSources) > 0 {
+		return true
+	}
+	for _, id := range step.BlockedBy {
+		upstream, exists := steps[id]
+		if !exists || !slices.Contains([]string{"open", "running", "blocked"}, upstream.Status) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Scheduler) noteInvalidDependencies(id string, previous, input board.SchedulePage) {
@@ -419,11 +481,18 @@ func (s *Scheduler) noteInvalidDependencies(id string, previous, input board.Sch
 	// when a planner slot only becomes available on a later tick. Old invalid
 	// steps must not disable coalescing for every subsequent ordinary update.
 	oldInvalid := map[string]bool{}
+	oldSteps, currentSteps := map[string]board.Step{}, map[string]board.Step{}
 	for _, step := range previous.Steps {
-		oldInvalid[step.ID] = len(step.InvalidSources) > 0
+		oldSteps[step.ID] = step
 	}
 	for _, step := range input.Steps {
-		if len(step.InvalidSources) > 0 && !oldInvalid[step.ID] {
+		currentSteps[step.ID] = step
+	}
+	for _, step := range previous.Steps {
+		oldInvalid[step.ID] = supportNeedsDecision(step, oldSteps)
+	}
+	for _, step := range input.Steps {
+		if supportNeedsDecision(step, currentSteps) && !oldInvalid[step.ID] {
 			wait := s.reasonWaits[id]
 			wait.Urgent = true
 			s.reasonWaits[id] = wait
@@ -444,6 +513,8 @@ func (s *Scheduler) observeGeneration(project board.Project) {
 		delete(s.stateRevisions, project.ID)
 		delete(s.schedules, project.ID)
 		delete(s.reasonWaits, project.ID)
+		delete(s.curationWaits, project.ID)
+		delete(s.controlConflicts, project.ID)
 		s.generations[project.ID] = project.Generation
 	}
 }
@@ -490,12 +561,12 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		return false, nil
 	}
 	running := 0
-	localReason, localBootstrap := false, false
+	localReason, localCurator := false, false
 	for _, t := range s.running {
 		if t.Job.Graph.Project.ID == id {
 			running++
 			localReason = localReason || t.Job.Kind == "reason"
-			localBootstrap = localBootstrap || t.Job.Kind == "bootstrap"
+			localCurator = localCurator || t.Job.Kind == "curate"
 		}
 	}
 	if running >= s.Config.Runtime.MaxProjectWorkers {
@@ -506,6 +577,9 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		return false, err
 	}
 	g := board.Graph{Project: input.Project, Intents: input.Intents}
+	if g.Project.OrchestrationVersion != 1 {
+		return false, nil
+	}
 	state := board.State{Graph: g, Steps: input.Steps, Revision: input.Revision, DecisionRevision: input.DecisionRevision}
 	s.observeGeneration(g.Project)
 	previous := s.schedules[id]
@@ -529,90 +603,85 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	if g.Project.Status != "active" {
 		return false, nil
 	}
-	reasonCheck, err := s.executionCheck(ctx, g, "reason", nil, "")
+	// Preserve a correction while either control role is coalescing or a stale
+	// attempt is still releasing its lease.
+	s.noteInvalidDependencies(id, previous, input)
+	if !s.producersRunning(g) {
+		delete(s.controlConflicts, id)
+	}
+	// Curation is driven by a durable input boundary. Heartbeats and a
+	// curator's own acknowledgement never create work. Keep its readiness while
+	// checking already-authorized Steps so a new dependency result does not
+	// insert a whole curation model turn into the execution chain.
+	if !input.CurationNeeded {
+		delete(s.curationWaits, id)
+	}
+	curating := localCurator || g.Project.Curator != nil
+	var curationCheck board.ExecutionCheck
+	curationReady := false
+	if input.CurationNeeded && !localCurator {
+		check, err := s.candidateCheck(ctx, input, g, "curate", nil)
+		if err != nil {
+			return false, err
+		}
+		if err := s.automaticRetry(ctx, &g, &check, "curate"); err != nil {
+			return false, err
+		}
+		// An exhausted curator attempt must not prevent the main Agent from
+		// handling failed work. Keep pending/runnable curation ahead of planning;
+		// a new input version can authorize curation again after a terminal run.
+		curating = g.Project.Curator != nil || check.Pending || !check.Blocked
+		curationCheck = check
+		curationReady = g.Project.Curator == nil && curating && (input.CurationRequested || check.PreviousRunID != "" || !s.waitForCuration(g, input.Revision, time.Now()))
+	}
+	reasonCheck, err := s.candidateCheck(ctx, input, g, "reason", nil)
 	if err != nil {
 		return false, err
 	}
 	s.restoreDecisionBoundary(id, reasonCheck.LatestDecision)
 	if !localReason {
-		if err := s.automaticDecisionRetry(ctx, &g, &reasonCheck); err != nil {
+		if err := s.automaticRetry(ctx, &g, &reasonCheck, "reason"); err != nil {
 			return false, err
 		}
 	}
-	// A failed bootstrap may already have handed planning to Decide. Explicit
-	// retry still refers to that same Step, even after normal steps were added.
-	// Drain current project work first, then run the authorized initialization
-	// attempt alone, just as the original bootstrap gate does.
-	for n := range g.Intents {
-		i := &g.Intents[n]
-		if !bootstrap(*i) {
-			continue
+	if input.Initial && !curating {
+		if g.Project.Reason != nil || localReason {
+			return false, nil
 		}
-		check, err := s.candidateCheck(ctx, input, g, "bootstrap", i)
-		if err != nil {
-			return false, err
-		}
-		if check.PreviousRunID != "" {
-			if running > 0 || g.Project.Reason != nil || i.Worker != nil {
-				return false, nil
+		return s.launch(ctx, g, "reason", nil, "initial", reasonCheck)
+	}
+	if curationReady {
+		// User corrections and newly invalid support must reach the planner
+		// before draining more of its old authorization. Curation still runs
+		// first because both control writes are bound to the same live version.
+		if input.CurationRequested || input.HintCount > s.checkpoints[id].Hints || s.reasonWaits[id].Urgent {
+			if ok, err := s.launch(ctx, g, "curate", nil, "pending_observations", curationCheck); ok || err != nil {
+				return ok, err
 			}
-			return s.launch(ctx, g, "bootstrap", i, "", check)
 		}
 	}
-	bootstrapFailed := false
-	for _, step := range state.Steps {
-		if step.Status == "failed" {
-			for _, intent := range g.Intents {
-				if intent.ID == step.ID && bootstrap(intent) {
-					bootstrapFailed = true
+	// An explicit request says the current interpretation needs attention.
+	// Hold new execution while that curator can run; an exhausted attempt still
+	// lets Decide plan recovery through the existing blocked-control path.
+	if input.CurationRequested && curating {
+		return false, nil
+	}
+	deferredReason := ""
+	if g.Project.Reason == nil && !localReason && !curating {
+		if trigger := s.trigger(g, reasonCheck, previous, time.Now()); trigger != "" {
+			// Between successful producers, continue the finite authorized
+			// pipeline before starting another planning turn. Live producers
+			// retain the existing quiet/max-wait deadline; urgent input and
+			// unresolved execution failures still reach Decide first.
+			preferReady := trigger == "new_facts_or_hints_or_finished_intents" && !s.producersRunning(g) && input.HintCount <= s.checkpoints[id].Hints && !s.reasonWaits[id].Urgent
+			for _, step := range state.Steps {
+				if len(step.InvalidSources) > 0 || step.Status == "failed" || step.Status == "needs_review" {
+					preferReady = false
 				}
 			}
-		}
-	}
-	if input.Initial && !bootstrapFailed {
-		if g.Project.Reason != nil || localReason || localBootstrap {
-			return false, nil
-		}
-		var boot *board.Intent
-		for n := range g.Intents {
-			i := &g.Intents[n]
-			if bootstrap(*i) && (boot == nil || bootstrapBefore(*i, *boot)) {
-				boot = i
-			}
-		}
-		supported := false
-		for _, w := range s.Config.Workers {
-			supported = supported || slices.Contains(w.TaskTypes, "bootstrap")
-		}
-		if !g.Project.Bootstrap || (boot == nil && !supported) {
-			return s.launch(ctx, g, "reason", nil, "initial", reasonCheck)
-		}
-		if boot == nil {
-			var i board.Intent
-			err = s.Client.Do(ctx, "POST", projectPath(id)+"/intents", map[string]any{"from": []string{"origin"}, "description": "bootstrap", "creator": "dispatcher.bootstrap"}, &i, nil)
-			if err != nil {
-				return false, err
-			}
-			boot = &i
-			g.Intents = append(g.Intents, i)
-		}
-		if boot.Worker != nil {
-			return false, nil
-		}
-		check, err := s.candidateCheck(ctx, input, g, "bootstrap", boot)
-		if err != nil {
-			return false, err
-		}
-		return s.launch(ctx, g, "bootstrap", boot, "", check)
-	}
-	if g.Project.Reason != nil || localReason {
-		// Still record invalidation while a stale planner is cancelling; the
-		// next page already includes it and cannot rediscover the transition.
-		s.noteInvalidDependencies(id, previous, input)
-	}
-	if g.Project.Reason == nil && !localReason {
-		if trigger := s.trigger(g, reasonCheck, previous, time.Now()); trigger != "" {
-			if ok, err := s.launch(ctx, g, "reason", nil, trigger, reasonCheck); ok || err != nil {
+			if preferReady {
+				deferredReason = trigger
+			} else if ok, err := s.launch(ctx, g, "reason", nil, trigger, reasonCheck); ok || err != nil {
 				return ok, err
 			}
 		}
@@ -621,11 +690,11 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	for _, step := range state.Steps {
 		stepState[step.ID] = step
 	}
-	var newest *board.Intent
-	var newestCheck board.ExecutionCheck
+	var next *board.Intent
+	var nextCheck board.ExecutionCheck
 	for n := range g.Intents {
 		i := &g.Intents[n]
-		if i.To != nil || i.ConcludedAt != nil || i.Worker != nil || bootstrap(*i) || stepState[i.ID].Status == "abandoned" || len(stepState[i.ID].InvalidSources) > 0 {
+		if i.To != nil || i.ConcludedAt != nil || i.Worker != nil || stepState[i.ID].Status == "abandoned" || invalidStepSupport(stepState[i.ID]) {
 			continue
 		}
 		check, err := s.candidateCheck(ctx, input, g, "explore", i)
@@ -641,25 +710,30 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 				local = true
 			}
 		}
-		if !local && (newest == nil || stepState[i.ID].Priority > stepState[newest.ID].Priority || (stepState[i.ID].Priority == stepState[newest.ID].Priority && i.CreatedAt > newest.CreatedAt)) {
-			newest, newestCheck = i, check
+		// Explicit priority wins; equal-priority work drains oldest first so
+		// newly appended Steps cannot continually overtake the ready queue.
+		// Scheduling pages preserve creation/row order for equal timestamps.
+		if !local && (next == nil || stepState[i.ID].Priority > stepState[next.ID].Priority || (stepState[i.ID].Priority == stepState[next.ID].Priority && i.CreatedAt < next.CreatedAt)) {
+			next, nextCheck = i, check
 		}
 	}
-	if newest != nil {
-		return s.launch(ctx, g, "explore", newest, "", newestCheck)
+	if next != nil && s.executionCapacity(id) {
+		if ok, err := s.launch(ctx, g, "explore", next, "", nextCheck); ok || err != nil {
+			return ok, err
+		}
+	}
+	if deferredReason != "" {
+		return s.launch(ctx, g, "reason", nil, deferredReason, reasonCheck)
+	}
+	// Execute cannot consume the reserved control slot. In a one-slot setup,
+	// drain the finite authorized batch before consolidating its observations;
+	// blocked/invalid Steps never bypass their existing candidate checks.
+	if curationReady {
+		return s.launch(ctx, g, "curate", nil, "pending_observations", curationCheck)
 	}
 	return false, nil
 }
 
-func bootstrapBefore(a, b board.Intent) bool {
-	if (a.Worker == nil) != (b.Worker == nil) {
-		return a.Worker == nil
-	}
-	if a.CreatedAt != b.CreatedAt {
-		return a.CreatedAt < b.CreatedAt
-	}
-	return a.ID < b.ID
-}
 func (s *Scheduler) rejectKey(project, kind, name string) string {
 	return project + "\x00" + kind + "\x00" + name
 }
@@ -671,7 +745,26 @@ func (s *Scheduler) choose(project, kind string) *config.Worker {
 	candidates := []config.Worker{}
 	now := time.Now()
 	for _, w := range s.Config.Workers {
-		if !slices.Contains(w.TaskTypes, kind) || counts[w.Name] >= w.MaxRunning || now.Before(s.unhealthy[w.Name]) || now.Before(s.rejected[s.rejectKey(project, kind, w.Name)]) {
+		if w.Type != "go" {
+			continue
+		}
+		if s.incompatible[w.Name] != "" {
+			continue
+		}
+		if !slices.Contains(w.TaskTypes, kind) || counts[w.Name] >= w.MaxRunning {
+			continue
+		}
+		if kind == "explore" && !s.backendExecutionCapacity(w.Name, w.MaxRunning) {
+			continue
+		}
+		until := s.unhealthy[w.Name]
+		if rejected := s.rejected[s.rejectKey(project, kind, w.Name)]; rejected.After(until) {
+			until = rejected
+		}
+		if now.Before(until) {
+			// A short readiness/refusal backoff must not inherit a much longer
+			// polling interval. Capacity-bound work wakes on actual completion.
+			s.wakeAt(until)
 			continue
 		}
 		candidates = append(candidates, w)
@@ -690,18 +783,18 @@ func (s *Scheduler) choose(project, kind string) *config.Worker {
 	return &candidates[0]
 }
 func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, intent *board.Intent, trigger string, check board.ExecutionCheck) (bool, error) {
-	if check.Blocked {
+	if check.Blocked || g.Project.OrchestrationVersion != 1 || !slices.Contains([]string{"reason", "curate", "explore"}, kind) {
 		return false, nil
 	}
 	w := s.choose(g.Project.ID, kind)
 	if w == nil {
-		if kind == "reason" {
+		if kind == "reason" || kind == "curate" {
 			configured := false
 			for _, candidate := range s.Config.Workers {
-				configured = configured || slices.Contains(candidate.TaskTypes, kind)
+				configured = configured || slices.Contains(candidate.TaskTypes, kind) && candidate.Type == "go"
 			}
 			if !configured {
-				return false, errors.New("Decide requires a worker supporting reason")
+				return false, fmt.Errorf("project requires a worker supporting %s", kind)
 			}
 		}
 		return false, nil
@@ -714,8 +807,8 @@ func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, inte
 	lease := Lease{Run: w.Name + "@" + id, Kind: kind}
 	claim := projectPath(g.Project.ID)
 	body := map[string]string{"worker": lease.Run}
-	if kind == "reason" {
-		claim += "/reason/claim"
+	if kind == "reason" || kind == "curate" {
+		claim += "/" + kind + "/claim"
 		body["trigger"] = trigger
 	} else {
 		lease.Intent = intent.ID
@@ -728,9 +821,10 @@ func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, inte
 	// Worker owns its execution budget and the separate conclusion deadline.
 	// A dispatcher deadline measured from container startup could abort before
 	// a long current turn reaches the boundary where soft conclusion begins.
-	t := &task{Job: worker.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: w.Type != "mock", ResultContractVersion: 2, DecisionRevision: s.stateRevisions[g.Project.ID], EnvironmentID: s.environmentID(*w)}, Worker: *w, Lease: lease}
+	t := &task{Job: worker.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, DecisionRevision: s.stateRevisions[g.Project.ID], EnvironmentID: s.environmentID(*w)}, Worker: *w, Lease: lease}
 	if kind == "reason" {
 		t.Job.DecisionTrigger = trigger
+		t.urgentInput = s.reasonWaits[g.Project.ID].Urgent
 	}
 	if err := s.register(ctx, t); err != nil {
 		_ = s.Client.Do(ctx, "POST", s.leasePath(t)+"/release", map[string]string{"worker": lease.Run}, nil, nil)
@@ -739,6 +833,12 @@ func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, inte
 	s.start(ctx, t)
 	if kind == "reason" {
 		delete(s.reasonWaits, g.Project.ID)
+	}
+	if kind == "curate" {
+		delete(s.curationWaits, g.Project.ID)
+	}
+	if kind == "reason" || kind == "curate" {
+		delete(s.controlConflicts, g.Project.ID)
 	}
 	return true, nil
 }
@@ -751,15 +851,30 @@ func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runEr
 	defer func() {
 		stopLease()
 		<-heartbeatDone
+		if cause := context.Cause(ctx); outcome != "success" && dependencyInvalidated(cause) && (t.Root == nil || t.Root.Err() == nil) {
+			// The same terminal boundary covers cancellation during model calls,
+			// health checks and infrastructure retry backoff. Recovery must not
+			// restart work after its accepted upstream result became invalid.
+			s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: "dependency_invalidated", Error: cause.Error()})
+			outcome, runErr = "cancelled", cause
+		}
 		// Invalidation can interrupt startup, a model call, or recovery backoff.
 		// Reconcile once after the heartbeat stops, before releasing this lease.
 		if cause := context.Cause(ctx); outcome != "failed" && outcome != "success" && decisionStateChanged(cause) && (t.Root == nil || t.Root.Err() == nil) {
-			committed, err := s.decisionCommitted(ctx, t)
+			var committed bool
+			var err error
+			if t.Job.Kind == "curate" {
+				// Curation commits its facts before the final execution result.
+				// Recovery must apply that result, not merely report success.
+				committed, err = s.finishCommittedCuration(ctx, t)
+			} else {
+				committed, err = s.decisionCommitted(ctx, t)
+			}
 			switch {
-			case committed:
-				outcome, runErr = "success", nil
 			case err != nil:
 				outcome, runErr = "interrupted", err
+			case committed:
+				outcome, runErr = "success", nil
 			default:
 				s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "state_changed", Error: cause.Error()})
 				outcome, runErr = "failed", cause
@@ -769,40 +884,44 @@ func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runEr
 		defer c()
 		_ = s.Client.Do(releaseCtx, "POST", s.leasePath(t)+"/release", map[string]string{"worker": t.Lease.Run}, nil, nil)
 	}()
-	if s.Config.Runtime.HealthMode == "startup_and_task" {
-		if err := s.health(ctx, t.Worker); err != nil {
-			if ctx.Err() != nil {
-				return "cancelled", ctx.Err()
-			}
-			return "unhealthy", err
-		}
-	}
 	return s.runRegistered(ctx, t, func() { stopLease(); <-heartbeatDone })
 }
 func (s *Scheduler) leasePath(t *task) string {
 	base := projectPath(t.Job.Graph.Project.ID)
-	if t.Job.Kind == "reason" {
-		return base + "/reason"
+	if t.Job.Kind == "reason" || t.Job.Kind == "curate" {
+		return base + "/" + t.Job.Kind
 	}
 	return base + "/intents/" + t.Lease.Intent
 }
 func (s *Scheduler) renewLease(ctx context.Context, t *task) error {
+	return s.renewLeaseWithVersion(ctx, t, t.Job.Kind != "reason" || t.Job.Decision == nil || t.Job.Decision.Version != 2)
+}
+
+// A running batch planner can refresh its stable read view after a conflict.
+// Its initial whole-graph hash must not kill that session when producers publish
+// new facts. Startup/recovery still reject obsolete inputs before model work;
+// periodic renewal retains the project, generation and execution lease fences.
+func (s *Scheduler) renewLeaseWithVersion(ctx context.Context, t *task, checkInput bool) error {
 	body := map[string]string{"worker": t.Lease.Run}
-	if t.Job.Kind == "reason" && t.Job.Decision != nil && t.Job.Decision.Version == 2 {
-		body["expected_version"] = t.Job.Decision.StateVersion
+	if version := immutableInputVersion(t); checkInput && version != "" {
+		body["expected_version"] = version
 	}
 	return s.Client.Do(ctx, "POST", s.leasePath(t)+"/heartbeat", body, nil, &t.Lease)
 }
 
 func (s *Scheduler) heartbeat(ctx context.Context, t *task, cancel context.CancelCauseFunc) {
 	interval := time.Duration(s.Config.Runtime.Interval) * time.Second
-	tick := time.NewTicker(interval)
-	defer tick.Stop()
-	last := time.Now()
 	timeout := t.LeaseTimeout
 	if timeout <= interval {
 		timeout = 2 * interval
 	}
+	// A valid configured interval may consume most of the lease. Renew early
+	// enough to leave another interval for the request and one for shutdown;
+	// otherwise the first renewal can start with an already expired deadline.
+	interval = min(interval, timeout/3)
+	tick := time.NewTicker(interval)
+	defer tick.Stop()
+	last := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
