@@ -3,7 +3,6 @@
 
 import argparse
 import base64
-import binascii
 import hashlib
 import http.client
 import json
@@ -96,7 +95,8 @@ def validate(request):
         except CaptureError as exc:
             raise CaptureError("invalid Host header") from exc
         default = 443 if parsed.scheme == "https" else 80
-        if host.path or host.query or host.hostname.lower() != parsed.hostname.lower() or (host.port or default) != (parsed.port or default):
+        if (hosts[0] != host.netloc or host.hostname.lower() != parsed.hostname.lower() or
+                (host.port if host.port is not None else default) != (parsed.port if parsed.port is not None else default)):
             raise CaptureError("Host header differs from request URL/base URL")
     return request
 
@@ -115,7 +115,7 @@ def har_request(entry):
         if encoding == "base64":
             try:
                 body = base64.b64decode(post["text"], validate=True)
-            except (ValueError, binascii.Error) as exc:
+            except ValueError as exc:
                 raise CaptureError("invalid base64 request body") from exc
         elif encoding is not None:
             raise CaptureError("unsupported HAR body encoding")
@@ -138,7 +138,7 @@ def har_request(entry):
         if not values(headers, "Content-Type") and post.get("mimeType"):
             headers.extend(checked_headers([{"name": "Content-Type", "value": post["mimeType"]}]))
     body_size = req.get("bodySize", -1)
-    if not isinstance(body_size, int) or body_size < -1:
+    if type(body_size) is not int or body_size < -1:
         raise CaptureError("invalid HAR bodySize")
     if body_size >= 0 and body_size != len(body):
         raise CaptureError("HAR bodySize does not match captured body bytes")
@@ -181,7 +181,7 @@ def raw_request(data, base_url):
         if not base_url:
             raise CaptureError("origin-form raw request requires --base-url with an explicit http(s) origin")
         origin = checked_url(base_url)
-        if origin.path not in ("", "/") or origin.query:
+        if origin.path not in ("", "/") or "?" in base_url:
             raise CaptureError("--base-url must be an origin without a path or query")
         target = urlunsplit((origin.scheme, origin.netloc, "", "", "")) + target
     return validate({"method": method, "url": target, "headers": checked_headers(headers), "body": body})
@@ -267,20 +267,33 @@ def replay(request, output, timeout):
             connection.putheader(name, value)
         connection.endheaders(request["body"])
         response = connection.getresponse()
-        details = {"status": response.status, "reason": response.reason, "headers": metadata_headers(response.getheaders()), "complete": False}
+        response_headers = response.getheaders()
+        details = {"status": response.status, "reason": response.reason, "headers": metadata_headers(response_headers), "complete": False}
         save_json(directory, "response.json", details)
+        lengths = values(response_headers, "Content-Length")
+        transfers = values(response_headers, "Transfer-Encoding")
+        if len(lengths) > 1 or lengths and (not re.fullmatch(r"[0-9]+", lengths[0]) or response.length is None):
+            raise CaptureError("ambiguous or invalid response Content-Length")
+        if transfers and (lengths or [value.lower() for value in transfers] != ["chunked"]):
+            raise CaptureError("ambiguous or unsupported response Transfer-Encoding")
+        if response.status < 200:
+            raise CaptureError("interim or protocol upgrade response cannot be final evidence")
         digest = hashlib.sha256()
         count = 0
-        with os.fdopen(os.open(directory / "response.body", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
-            while chunk := response.read(65536):
-                stream.write(chunk)
-                digest.update(chunk)
-                count += len(chunk)
-        if response.length not in (None, 0):
-            raise CaptureError("response ended before its declared Content-Length")
-        details.update(complete=True, body_bytes=count, body_sha256=digest.hexdigest())
-        # This file belongs to this newly created private directory.
-        (directory / "response.json").write_text(json.dumps(details, indent=2) + "\n", encoding="utf-8")
+        try:
+            with os.fdopen(os.open(directory / "response.body", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as stream:
+                # read1 preserves received bytes before a later truncation or timeout.
+                while chunk := response.read1(65536):
+                    stream.write(chunk)
+                    digest.update(chunk)
+                    count += len(chunk)
+            if response.length not in (None, 0):
+                raise CaptureError("response ended before its declared Content-Length")
+            details["complete"] = True
+        finally:
+            details.update(body_bytes=count, body_sha256=digest.hexdigest())
+            # This file belongs to this newly created private directory.
+            (directory / "response.json").write_text(json.dumps(details, indent=2) + "\n", encoding="utf-8")
         return {"status": response.status, "body_bytes": count, "output": str(directory)}
     except (OSError, http.client.HTTPException, CaptureError) as exc:
         # Exception messages can contain target URLs or credentials. Persist only type.

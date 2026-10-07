@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -28,6 +29,33 @@ class CaptureTests(unittest.TestCase):
             def do_GET(self):
                 body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
                 cls.received.append((self.command, self.path, self.headers, body))
+                if self.path.startswith("/chunked"):
+                    self.send_response(200)
+                    self.send_header("Transfer-Encoding", "chunked")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    payload = b"4\r\ndone\r\n2\r\nab\r\n0\r\n\r\n"
+                    if self.path == "/chunked-short":
+                        payload = b"4\r\ndone\r\n4\r\nab"
+                    elif self.path == "/chunked-unterminated":
+                        payload = b"4\r\ndone\r\n"
+                    self.wfile.write(payload)
+                    self.close_connection = True
+                    return
+                if self.path.startswith("/framing-"):
+                    framing = {
+                        "/framing-conflict": b"Content-Length: 2\r\nContent-Length: 4\r\n",
+                        "/framing-invalid": b"Content-Length: invalid\r\n",
+                        "/framing-huge": b"Content-Length: " + b"9" * 5000 + b"\r\n",
+                        "/framing-transfer": b"Transfer-Encoding: gzip, chunked\r\n",
+                        "/framing-both": b"Transfer-Encoding: chunked\r\nContent-Length: 4\r\n",
+                        "/framing-interim": b"",
+                    }[self.path]
+                    status = b"103 Early Hints" if self.path == "/framing-interim" else b"200 OK"
+                    payload = b"4\r\ndone\r\n0\r\n\r\n" if self.path == "/framing-both" else b"done"
+                    self.wfile.write(b"HTTP/1.1 " + status + b"\r\n" + framing + b"Connection: close\r\n\r\n" + payload)
+                    self.close_connection = True
+                    return
                 if self.path.startswith("/redirect"):
                     self.send_response(302)
                     self.send_header("Location", "/destination")
@@ -39,10 +67,12 @@ class CaptureTests(unittest.TestCase):
                 self.send_header("Set-Cookie", "session=response-secret; HttpOnly")
                 self.send_header("Connection", "close")
                 self.end_headers()
-                self.wfile.write(b"done")
+                if self.command != "HEAD":
+                    self.wfile.write(b"done")
                 self.close_connection = True
 
             do_POST = do_GET
+            do_HEAD = do_GET
 
             def log_message(self, *args):
                 pass
@@ -116,15 +146,19 @@ class CaptureTests(unittest.TestCase):
 
     def test_selected_entry_cookie_fallback_and_role_overrides(self):
         path = self.capture(self.entry(url=self.origin + "/unused"), self.entry(
-            headers=[{"name": "Authorization", "value": "Bearer account-a"}, {"name": "X-Remove", "value": "remove"}],
+            headers=[{"name": "Authorization", "value": "Bearer account-a"},
+                     {"name": "authorization", "value": "Bearer duplicate-account-a"},
+                     {"name": "Cookie", "value": "sid=account-a"},
+                     {"name": "cookie", "value": "sid=duplicate-account-a"},
+                     {"name": "X-Remove", "value": "remove"}],
             cookies=[{"name": "sid", "value": "account-a"}]))
         headers_path = self.root / "role-b.json"
         headers_path.write_text(json.dumps({"authorization": "Bearer account-b", "Cookie": "sid=account-b", "X-Remove": None}))
         code, _, err = self.call("replay", path, "--index", "2", "--output", str(self.root / "role-b"), "--headers", str(headers_path))
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(len(self.received), 1)
-        self.assertEqual(self.received[0][2]["Authorization"], "Bearer account-b")
-        self.assertEqual(self.received[0][2]["Cookie"], "sid=account-b")
+        self.assertEqual(self.received[0][2].get_all("Authorization"), ["Bearer account-b"])
+        self.assertEqual(self.received[0][2].get_all("Cookie"), ["sid=account-b"])
         self.assertIsNone(self.received[0][2]["X-Remove"])
         code, _, err = self.call("replay", path, "--index", "2", "--output", str(self.root / "anonymous"), "--remove-header", "cookie", "--remove-header", "AUTHORIZATION")
         self.assertEqual((code, err), (0, ""))
@@ -169,8 +203,44 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("partial evidence", err)
         self.assertEqual((output / "response.body").read_bytes(), b"done")
-        self.assertFalse(json.loads((output / "response.json").read_text())["complete"])
+        details = json.loads((output / "response.json").read_text())
+        self.assertFalse(details["complete"])
+        self.assertEqual(details["body_bytes"], 4)
+        self.assertEqual(details["body_sha256"], hashlib.sha256(b"done").hexdigest())
         self.assertTrue((output / "error.json").exists())
+
+    def test_chunked_response_keeps_all_received_bytes_on_failure(self):
+        for route, body, complete in (("/chunked", b"doneab", True),
+                                      ("/chunked-short", b"doneab", False),
+                                      ("/chunked-unterminated", b"done", False)):
+            with self.subTest(route=route):
+                output = self.root / route[1:]
+                path = self.capture(self.entry(url=self.origin + route))
+                code, _, _ = self.call("replay", path, "--index", "1", "--output", str(output))
+                self.assertEqual(code, 0 if complete else 1)
+                self.assertEqual((output / "response.body").read_bytes(), body)
+                details = json.loads((output / "response.json").read_text())
+                self.assertEqual(details["complete"], complete)
+                self.assertEqual(details["body_bytes"], len(body))
+                self.assertEqual(details["body_sha256"], hashlib.sha256(body).hexdigest())
+
+    def test_ambiguous_response_framing_is_not_complete_evidence(self):
+        for suffix in ("conflict", "invalid", "huge", "transfer", "both", "interim"):
+            with self.subTest(suffix=suffix):
+                path = self.capture(self.entry(url=self.origin + "/framing-" + suffix))
+                output = self.root / suffix
+                code, _, _ = self.call("replay", path, "--index", "1", "--output", str(output))
+                self.assertEqual(code, 1)
+                self.assertFalse(json.loads((output / "response.json").read_text())["complete"])
+                self.assertTrue((output / "error.json").exists())
+
+    def test_head_response_content_length_does_not_imply_a_body(self):
+        path = self.capture(self.entry(method="HEAD"))
+        output = self.root / "head"
+        code, _, err = self.call("replay", path, "--index", "1", "--output", str(output))
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual((output / "response.body").read_bytes(), b"")
+        self.assertTrue(json.loads((output / "response.json").read_text())["complete"])
 
     def test_invalid_capture_and_selection_send_nothing(self):
         malformed = self.root / "broken.har"
@@ -196,6 +266,7 @@ class CaptureTests(unittest.TestCase):
             {"method": "POST"},
             {"postData": {"text": "decoded"}, "headers": [{"name": "Content-Encoding", "value": "gzip"}]},
             {"bodySize": 3},
+            {"bodySize": True, "postData": {"text": "x"}},
             {"headers": [{"name": "Content-Length", "value": "12"}]},
             {"headers": [{"name": "Content-Length", "value": "²"}]},
             {"headers": [{"name": "Content-Length", "value": "9" * 5000}]},
@@ -203,6 +274,8 @@ class CaptureTests(unittest.TestCase):
             {"headers": [{"name": ":authority", "value": "example.test"}]},
             {"headers": [{"name": "Cookie", "value": "x\r\nInjected: y"}]},
             {"headers": [{"name": "Host", "value": "different.test"}]},
+            {"headers": [{"name": "Host", "value": "127.0.0.1:" + str(self.server.server_port) + "?"}]},
+            {"url": "http://example.test:0/", "headers": [{"name": "Host", "value": "example.test"}]},
             {"url": "https://user:password@example.test/"},
             {"url": "https://example.test/#fragment"},
             {"cookies": [{"name": "sid", "value": "bad; other=identity"}]},
@@ -224,6 +297,8 @@ class CaptureTests(unittest.TestCase):
                 http.raw_request(raw, self.origin)
         request = http.raw_request(("GET " + self.origin + "/ HTTP/1.1\r\n\r\n").encode(), None)
         self.assertEqual(request["url"], self.origin + "/")
+        with self.assertRaisesRegex(http.CaptureError, "base-url"):
+            http.raw_request(b"GET / HTTP/1.1\r\n\r\n", self.origin + "?")
 
     def test_lf_header_separator_precedes_crlf_bytes_in_binary_body(self):
         body = b"\x00\r\n\r\n\xff"
