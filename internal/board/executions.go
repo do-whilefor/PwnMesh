@@ -277,7 +277,13 @@ func (t *Tx) ResumeExecution(e Execution) error {
 	if !e.Pending() {
 		return Err(409, "Execution is terminal")
 	}
-	if e.Resumes >= 2 {
+	// Reclaiming a lease to apply an immutable result does not restart a
+	// Worker. Temporary delivery failures must not consume execution recovery.
+	resume := 0
+	if e.Status != "result_pending" {
+		resume = 1
+	}
+	if resume != 0 && e.Resumes >= 2 {
 		return Err(409, "Dispatcher recovery allowance exhausted")
 	}
 	g, err := t.Load(e.ProjectID)
@@ -350,7 +356,7 @@ func (t *Tx) ResumeExecution(e Execution) error {
 	if err = t.Save(g); err != nil {
 		return err
 	}
-	_, err = t.Exec(`UPDATE xloom_executions SET resumes=resumes+1,updated_at=? WHERE project_id=? AND id=?`, t.Now, e.ProjectID, e.ID)
+	_, err = t.Exec(`UPDATE xloom_executions SET resumes=resumes+?,updated_at=? WHERE project_id=? AND id=?`, resume, t.Now, e.ProjectID, e.ID)
 	return err
 }
 

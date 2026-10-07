@@ -206,8 +206,14 @@ func TestCuratorReceiptSurvivesResumeAndIdempotentApplication(t *testing.T) {
 		t.Fatal("accepted curation did not return a durable receipt")
 	}
 	f.pending(`{"accepted":true,"data":{"curated":true}}`)
-	f.request("POST", f.base()+"/curate/release", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)
-	f.request("POST", f.base()+"/executions/"+f.run+"/resume", map[string]any{}, true, http.StatusOK, nil)
+	for range 4 {
+		f.request("POST", f.base()+"/curate/release", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)
+		var resumed board.Execution
+		f.request("POST", f.base()+"/executions/"+f.run+"/resume", map[string]any{}, true, http.StatusOK, &resumed)
+		if resumed.Status != "result_pending" || resumed.Resumes != 0 {
+			t.Fatalf("result delivery consumed Worker recovery: status=%s resumes=%d", resumed.Status, resumed.Resumes)
+		}
+	}
 	f.apply(http.StatusOK)
 	completed := f.state()
 	f.apply(http.StatusOK)
@@ -229,7 +235,7 @@ func TestCuratorReceiptSurvivesResumeAndIdempotentApplication(t *testing.T) {
 			t.Fatal("compact HTTP acknowledgement changed the persisted receipt")
 		}
 		e, err := tx.Execution(f.project, f.run)
-		if err == nil && (e.Status != "succeeded" || e.Resumes != 1 || !strings.Contains(string(e.Result), "curated")) {
+		if err == nil && (e.Status != "succeeded" || e.Resumes != 0 || !strings.Contains(string(e.Result), "curated")) {
 			t.Fatalf("curation execution was not recovered: %+v", e)
 		}
 		return err

@@ -99,8 +99,10 @@ func TestResultDeliveryTemporaryFailuresRecoverTheSameRun(t *testing.T) {
 				}
 				execution := curationExecution(t, store, run)
 				wantStatus, wantCalls := "running", int32(2)
+				wantResumes := 1
 				if phase == "apply" {
 					wantStatus, wantCalls = "result_pending", 1
+					wantResumes = 0
 				}
 				if execution.Status != wantStatus || execution.Resumes != 0 {
 					t.Fatalf("delivery lost its recovery boundary: status=%s resumes=%d", execution.Status, execution.Resumes)
@@ -113,7 +115,7 @@ func TestResultDeliveryTemporaryFailuresRecoverTheSameRun(t *testing.T) {
 				}
 				s.wg.Wait()
 				execution = curationExecution(t, store, run)
-				if execution.Status != "succeeded" || execution.Resumes != 1 || runner.calls.Load() != wantCalls {
+				if execution.Status != "succeeded" || execution.Resumes != wantResumes || runner.calls.Load() != wantCalls {
 					t.Fatalf("same-run delivery did not settle: status=%s resumes=%d worker_calls=%d", execution.Status, execution.Resumes, runner.calls.Load())
 				}
 			})

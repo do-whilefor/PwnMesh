@@ -97,6 +97,7 @@ func (s *Scheduler) finishCommittedCuration(ctx context.Context, t *task) (bool,
 	if err = s.Client.Do(finishCtx, "GET", executionPath(t)+"?namespace="+url.QueryEscape(s.namespace()), nil, &current, nil); err != nil {
 		return true, err
 	}
+	t.Execution.Status = current.Status
 	if current.Status == "succeeded" {
 		return true, nil
 	}

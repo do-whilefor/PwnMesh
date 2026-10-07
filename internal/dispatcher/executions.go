@@ -196,7 +196,11 @@ func executionPath(t *task) string {
 	return projectPath(t.Job.Graph.Project.ID) + "/executions/" + url.PathEscape(t.Job.RunID)
 }
 func (s *Scheduler) status(ctx context.Context, t *task, status string, result worker.Result) error {
-	return s.Client.Do(ctx, "POST", executionPath(t)+"/status", map[string]any{"status": status, "result": result}, nil, &t.Lease)
+	err := s.Client.Do(ctx, "POST", executionPath(t)+"/status", map[string]any{"status": status, "result": result}, nil, &t.Lease)
+	if err == nil && status == "result_pending" {
+		t.Execution.Status = status
+	}
+	return err
 }
 func (s *Scheduler) terminal(t *task, status string, result worker.Result) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -206,6 +210,11 @@ func (s *Scheduler) terminal(t *task, status string, result worker.Result) {
 	}
 }
 func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]string) error {
+	for run, until := range s.deliveryWaits {
+		if !time.Now().Before(until) {
+			delete(s.deliveryWaits, run)
+		}
+	}
 	// Resume control work before producers after a dispatcher restart. No
 	// business plan is changed; these are already registered executions.
 	sort.SliceStable(s.pendingExecutions, func(i, j int) bool {
@@ -220,6 +229,10 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		t := &task{Job: worker.Job{RunID: e.ID, Graph: board.Graph{Project: project}}, Lease: Lease{Run: e.Lease, Kind: e.Kind, Intent: e.Intent}}
 		if states[e.ProjectID] != "active" || e.Generation != s.generations[e.ProjectID] {
 			s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: "hard_cancelled", Error: "project is not active"})
+			continue
+		}
+		if until, waiting := s.deliveryWaits[e.ID]; waiting {
+			s.wakeAt(until)
 			continue
 		}
 		if !s.restartReady(ctx, project) {
@@ -245,21 +258,6 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		if staleRound || projectCount >= s.Config.Runtime.MaxProjectWorkers {
 			continue
 		}
-		found := false
-		for _, w := range s.Config.Workers {
-			if w.Name == e.Backend {
-				t.Worker = w
-				found = true
-				break
-			}
-		}
-		if !found || t.Worker.Type != "go" || !slices.Contains(t.Worker.TaskTypes, e.Kind) {
-			s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
-			continue
-		}
-		if backendCount >= t.Worker.MaxRunning {
-			continue
-		}
 		if err := s.Client.Do(ctx, "GET", executionPath(t)+"?namespace="+url.QueryEscape(s.namespace()), nil, &t.Execution, nil); err != nil {
 			var pe *ProtocolError
 			if errors.As(err, &pe) && pe.Status == 404 {
@@ -276,12 +274,23 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		if t.Job.Graph.Project.OrchestrationVersion != 1 || !t.Job.GraphRPC || t.Job.ResultContractVersion != 2 {
 			continue // Retained legacy inputs are history, never runnable jobs.
 		}
-		if e.Kind == "explore" && (!s.executionCapacity(e.ProjectID) || !s.backendExecutionCapacity(t.Worker.Name, t.Worker.MaxRunning)) {
-			continue
-		}
-		if t.Job.EnvironmentID != s.environmentID(t.Worker) {
-			s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
-			continue
+		// A saved result only needs its registered lease and input fences. Its
+		// original model/backend may have been removed since execution finished.
+		t.Worker.Name = e.Backend
+		if t.Execution.Status != "result_pending" {
+			for _, w := range s.Config.Workers {
+				if w.Name == e.Backend {
+					t.Worker = w
+					break
+				}
+			}
+			if t.Worker.Type != "go" || !slices.Contains(t.Worker.TaskTypes, e.Kind) || t.Job.EnvironmentID != s.environmentID(t.Worker) {
+				s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
+				continue
+			}
+			if backendCount >= t.Worker.MaxRunning || e.Kind == "explore" && (!s.executionCapacity(e.ProjectID) || !s.backendExecutionCapacity(t.Worker.Name, t.Worker.MaxRunning)) {
+				continue
+			}
 		}
 		// Readiness only gates model work. Results already accepted by the
 		// server can finish delivery even while this backend is unavailable.

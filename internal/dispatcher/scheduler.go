@@ -70,6 +70,7 @@ type Scheduler struct {
 	unhealthy         map[string]time.Time
 	incompatible      map[string]string
 	rejected          map[string]time.Time
+	deliveryWaits     map[string]time.Time
 	cleanup           map[string]string
 	cleaned           map[string]string
 	done              chan finished
@@ -97,6 +98,7 @@ func New(c config.Config, r Runner) *Scheduler {
 	s.restartCleaned = map[string]int64{}
 	s.reasonWaits = map[string]reasonWait{}
 	s.controlConflicts = map[string]time.Time{}
+	s.deliveryWaits = map[string]time.Time{}
 	s.wakeup = make(chan struct{}, 1)
 	return s
 }
@@ -185,6 +187,13 @@ func (s *Scheduler) reap() {
 		select {
 		case f := <-s.done:
 			delete(s.running, f.Task.Job.RunID)
+			// Retained results can retry delivery indefinitely, but a Server
+			// outage must not turn completion wakeups into an immediate loop.
+			if f.Outcome == "interrupted" && f.Task.Execution.Status == "result_pending" {
+				s.deliveryWaits[f.Task.Job.RunID] = time.Now().Add(5 * time.Second)
+			} else {
+				delete(s.deliveryWaits, f.Task.Job.RunID)
+			}
 			if f.Outcome == "failed" && f.Task.urgentInput && f.Task.Job.Graph.Project.Generation == s.generations[f.Task.Job.Graph.Project.ID] {
 				id := f.Task.Job.Graph.Project.ID
 				wait := s.reasonWaits[id]

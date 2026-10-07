@@ -69,8 +69,14 @@ func TestReadinessRecoveryBlocksModelWorkButSettlesStoredResults(t *testing.T) {
 						if execution.Resumes != 0 || execution.Status != "running" || len(s.running) != 0 {
 							t.Fatalf("unready model work consumed recovery or entered dispatch: %+v", execution)
 						}
-					} else if execution.Status != "succeeded" || execution.Resumes != 1 {
-						t.Fatalf("readiness stranded an existing result: status=%s resumes=%d", execution.Status, execution.Resumes)
+					} else {
+						wantResumes := 1
+						if boundary == "result_pending" {
+							wantResumes = 0
+						}
+						if execution.Status != "succeeded" || execution.Resumes != wantResumes {
+							t.Fatalf("readiness stranded an existing result: status=%s resumes=%d", execution.Status, execution.Resumes)
+						}
 					}
 				})
 			}
