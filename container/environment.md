@@ -17,6 +17,23 @@ headless 工具集包含 nmap、sqlmap 等命令及其随包数据；APT 不额�
 
 Nmap 去除了 Kali 软件包附带的文件 capabilities，避免 `CAP_NET_ADMIN` 超出 Docker 默认权限导致启动失败；默认 root 进程沿用容器已有权限。
 
+## 客户端接口与本地材料
+
+项目可以上传 HAR、原始 HTTP 请求、APK、源码压缩包、配置和数据库等二进制文件。上传结果中的工作区路径就是 Worker 的输入路径；上传本身不解压或执行文件。使用任务要求说明授权接口范围、分析目标和不同测试账号的身份。
+
+`pwn-http inspect <文件>` 离线读取 HAR 或原始 HTTP 请求，输出请求索引、方法、脱敏 URL、请求头名称和 body 大小。`pwn-http replay <文件> --index 1 --output <新目录>` 单次发送选中的完整请求并保存请求/响应证据；不会自动跟随跳转或重试。原始请求使用相对路径时需指定 `--base-url <源站>`。HTTP 错误状态同样保存为证据；缺失或无法完整还原的 body 会拒绝重放。
+
+用 `--headers <JSON文件>` 覆盖测试身份的认证头，JSON 值为 null 时删除对应头，也可用 `--remove-header Cookie` 去掉原会话。认证失败或响应不同只代表观察结果，需要结合账号权限、业务预期和实际影响判断。请求或响应 body 中可能含敏感数据，证据目录和原始材料应按凭据文件保护。
+
+显式安装 Java JDK（`java`、`javac`、`jar`）、`jadx`、`apktool`、`file`、`sqlite3`，结合现有 `unzip`、`strings`、`rg`、`jq` 和 `yq` 支持：
+
+- `jadx -d <新目录> <APK/JAR/DEX>`：反编译代码，查找接口、认证实现和本地数据处理；混淆或加固包可能需要补充源码。
+- `apktool d <APK> -o <新目录>`：解码 Manifest、资源和 smali，检查声明的权限、导出组件、备份及网络配置。
+- `file <文件>`、`unzip -l <压缩包>`：确认类型和内容，再将需要分析的源码或资源提取到独立目录；不要直接运行来历未知的安装包和构建脚本。
+- `sqlite3 -readonly <数据库>`：只读检查本地表结构与保存的数据；JSON/YAML/文本配置使用 `jq`、`yq`、`rg`。
+
+以上覆盖客户端服务端接口重放和本地静态分析。抓包由已有测试设备/代理导出 HAR 或原始请求；镜像不新增设备代理、Android/iOS 原生页面操作或自动登录。设备签名、客户端证书绑定、过期令牌等仍可能使离开原设备的请求无法重放。
+
 ## Python 与云 CLI
 
 `/opt/pwnmesh-venv/bin` 已加入 PATH，`python`/`python3` 和 `pip`/`pip3` 默认使用该虚拟环境。两个虚拟环境均使用 Python 3.13，避免 pwntools 4.15.0 对 Python 3.14 部分字节码不兼容的问题。预装：

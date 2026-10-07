@@ -40,6 +40,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
         bash ca-certificates curl wget ripgrep fd-find \
         python3.13 python3.13-venv git coreutils procps \
         iproute2 dnsutils unzip zip xz-utils sudo tzdata groff-base \
+        default-jdk-headless jadx apktool file sqlite3 \
         binutils cpp build-essential python3.13-dev libssl-dev libffi-dev \
         libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 \
         libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 libglib2.0-0t64 \
@@ -101,9 +102,10 @@ RUN if ! id kali >/dev/null 2>&1; then useradd -m -s /bin/bash kali; fi \
     && git config --system --add safe.directory /workspace
 
 COPY container/environment.md container/check-worker.sh /usr/local/share/pwnmesh/
+COPY container/pwn-http.py /usr/local/bin/pwn-http
 # Kali 为 Nmap 设置的 CAP_NET_ADMIN 超出 Docker 默认权限，连 --version 也会无法执行。
 # 去掉文件 capabilities，让默认 root 进程沿用容器已有权限。
-RUN chmod 0755 /usr/local/share/pwnmesh/check-worker.sh \
+RUN chmod 0755 /usr/local/share/pwnmesh/check-worker.sh /usr/local/bin/pwn-http \
     && if [ -f /usr/lib/nmap/nmap ] && [ -n "$(getcap /usr/lib/nmap/nmap)" ]; then \
         setcap -r /usr/lib/nmap/nmap; \
     fi

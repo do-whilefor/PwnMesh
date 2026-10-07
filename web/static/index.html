@@ -92,6 +92,9 @@
       <label class="field-label" for="create-name">项目名称</label><input id="create-name" name="title" required maxlength="200" placeholder="例如：认证服务安全评估" autocomplete="off">
       <label class="field-label" for="create-origin">起点 / 已知信息</label><textarea id="create-origin" name="origin" required maxlength="32768" rows="2" placeholder="目标地址、代码位置，或你已经掌握的线索"></textarea>
       <label class="field-label" for="create-goal">终点 / 项目目标</label><textarea id="create-goal" name="goal" required maxlength="32768" rows="2" placeholder="希望解决什么问题？怎样算完成？"></textarea>
+      <label class="field-label" for="create-files">测试材料（可选）</label><input id="create-files" type="file" multiple aria-describedby="create-files-help">
+      <p id="create-files-help" class="hint-caption">APK、HAR、HTTP 请求、源码压缩包、配置或其他文件。目录请先打包；文件保留原样，不会自动解压。每个文件最多 256 MiB，每项目最多 32 个文件、共 512 MiB。</p>
+      <ul id="create-file-list" class="input-files"></ul><p id="create-progress" class="hint-caption" role="status" aria-live="polite"></p>
       <p class="form-error" id="create-error" role="alert"></p><footer class="dialog-footer"><span>保存至 PwnMesh 服务</span><button class="button secondary" type="button" data-close="create-dialog">取消</button><button class="button primary" type="submit" id="submit-create">创建并开始<svg class="icon"><use href="#i-chevron"/></svg></button></footer>
     </form>
   </dialog>
@@ -100,6 +103,10 @@
       <header class="dialog-heading"><div><span id="hint-project" class="dialog-kicker"></span><h2 id="hint-title">补充提示</h2></div><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充提示"><svg class="icon"><use href="#i-close"/></svg></button></header>
       <label class="field-label" for="hint-input">补充背景，或调整探索方向</label>
       <textarea id="hint-input" rows="5" maxlength="32768" placeholder="告诉 Agent 优先关注什么，或补充新的线索…" aria-label="补充提示内容" aria-describedby="hint-error" autofocus></textarea>
+      <label class="field-label" for="hint-files">添加测试材料（可单独上传）</label><input id="hint-files" type="file" multiple aria-describedby="hint-files-help">
+      <p id="hint-files-help" class="hint-caption">支持 APK、HAR、HTTP 请求、源码压缩包、配置和其他文件；目录请先打包。每个文件最多 256 MiB，每项目最多 32 个文件、共 512 MiB。</p>
+      <ul id="hint-file-list" class="input-files"></ul><p id="hint-progress" class="hint-caption" role="status" aria-live="polite"></p>
+      <details class="imported-inputs"><summary>已导入的测试材料</summary><p id="imported-inputs-status" class="hint-caption" role="status"></p><ul id="imported-inputs" class="input-files"></ul></details>
       <p id="hint-caption" class="hint-caption">提示将写入当前项目的黑板</p><p id="hint-error" class="form-error" role="alert"></p>
       <footer class="dialog-footer"><span>Ctrl / ⌘ + Enter 发送</span><button type="button" class="button secondary" data-close="hint-dialog">取消</button><button type="submit" class="button primary" id="send-hint">发送补充<svg class="icon"><use href="#i-arrow"/></svg></button></footer>
     </form>

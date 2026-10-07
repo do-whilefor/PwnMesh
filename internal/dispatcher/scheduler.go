@@ -93,6 +93,7 @@ type Scheduler struct {
 func New(c config.Config, r Runner) *Scheduler {
 	s := &Scheduler{Config: c, Runner: r, Client: &Client{Base: c.Server}, running: map[string]*task{}, admitted: map[string]bool{}, checkpoints: map[string]checkpoint{}, unhealthy: map[string]time.Time{}, rejected: map[string]time.Time{}, cleanup: map[string]string{}, cleaned: map[string]string{}, done: make(chan finished, c.Runtime.MaxWorkers), cleanupDone: make(chan cleaned, c.Runtime.MaxProjects+8), decisionRevisions: map[string]int64{}, stateRevisions: map[string]int64{}}
 	s.configureGraphHandler()
+	s.configureInputReader()
 	s.schedules = map[string]board.SchedulePage{}
 	s.generations = map[string]int64{}
 	s.restartCleaned = map[string]int64{}

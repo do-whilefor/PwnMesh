@@ -85,6 +85,7 @@ func New(store *b.Store) http.Handler {
 	s.registerObservationRoutes(m)
 	s.registerUIRoutes(m)
 	s.registerRoundRoutes(m)
+	s.registerInputRoutes(m)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !allowBrowserMutation(r) {
 			writeError(w, r, b.Err(http.StatusForbidden, "Cross-origin mutations are not allowed"))
@@ -362,6 +363,15 @@ func (s *Server) projects(t *b.Tx, q *request, r *http.Request) (int, any, error
 		return 0, nil, err
 	}
 	g := b.Graph{Project: b.Project{ID: id, Title: title, Status: "active", Bootstrap: bootstrap, CreatedAt: t.Now, Scenario: scenario, OrchestrationVersion: orchestrationVersion}, Facts: []b.Fact{{ID: "origin", Description: origin}, {ID: "goal", Description: goal}}, Intents: []b.Intent{}, Hints: []b.Hint{}}
+	if value, exists := q.fields["start_paused"]; exists {
+		paused, ok := value.(bool)
+		if !ok {
+			return 0, nil, b.Err(422, "start_paused must be a boolean")
+		}
+		if paused {
+			g.Project.Status = "stopped"
+		}
+	}
 	if err = t.Save(g); err != nil {
 		return 0, nil, err
 	}

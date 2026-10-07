@@ -28,17 +28,22 @@
       } while (cursor);
       return items;
     }
-    async request(path, {method = 'GET', body, signal} = {}) {
+    async uploadInput(projectPath, file) {
+      const body = new FormData(); body.append('file', file, file.name);
+      return this.request(projectPath + '/inputs', {method:'POST', body, timeout:300000});
+    }
+    async request(path, {method = 'GET', body, signal, timeout = this.timeout} = {}) {
       if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) throw new APIError('仅支持本站接口');
       const controller = new AbortController();
       const abort = () => controller.abort(signal.reason);
       if (signal?.aborted) abort();
       else signal?.addEventListener('abort', abort, {once:true});
-      const timer = setTimeout(() => controller.abort(new Error('请求超时')), this.timeout);
+      const timer = setTimeout(() => controller.abort(new Error('请求超时')), timeout);
+      const multipart = typeof FormData !== 'undefined' && body instanceof FormData;
       try {
         const response = await this.fetcher(path, {method, credentials:'same-origin', cache:'no-store',
-          headers:body === undefined ? {Accept:'application/json'} : {Accept:'application/json','Content-Type':'application/json'},
-          body:body === undefined ? undefined : JSON.stringify(body), signal:controller.signal});
+          headers:body === undefined || multipart ? {Accept:'application/json'} : {Accept:'application/json','Content-Type':'application/json'},
+          body:body === undefined || multipart ? body : JSON.stringify(body), signal:controller.signal});
         if (response.status === 204) return null;
         const text = await response.text();
         let result;

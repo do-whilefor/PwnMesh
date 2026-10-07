@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/worker"
 )
@@ -32,6 +33,7 @@ type Client struct {
 	locks        sync.Map
 	graphMu      sync.RWMutex
 	graphHandler func(context.Context, worker.Job, worker.GraphRequest) (any, error)
+	inputReader  func(context.Context, worker.Job, board.InputFile) (io.ReadCloser, error)
 }
 type APIError struct{ Status int }
 
@@ -348,6 +350,9 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	}
 	name, err := c.ensure(ctx, j.Graph.Project.ID)
 	if err != nil {
+		return worker.Result{}, err
+	}
+	if err = c.stageInputs(ctx, name, j); err != nil {
 		return worker.Result{}, err
 	}
 	target := "/workspace/.pwnmesh/runs/" + j.RunID + "/job.json"

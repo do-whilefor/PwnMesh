@@ -118,6 +118,9 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if err = verifyInputFiles(parent, j); err != nil {
+		return Result{}, err
+	}
 	if err = os.MkdirAll(o.RunDir, 0700); err != nil {
 		return Result{}, err
 	}

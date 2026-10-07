@@ -24,6 +24,7 @@ const (
 )
 
 type Job struct {
+	InputFiles            []board.InputFile        `json:"input_files,omitempty"`
 	Repair                *artifactcheck.Spec      `json:"repair,omitempty"`
 	RunID                 string                   `json:"run_id"`
 	PreviousRunID         string                   `json:"previous_run_id,omitempty"`

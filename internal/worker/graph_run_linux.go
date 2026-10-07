@@ -49,6 +49,9 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 	if err != nil {
 		return Result{}, err
 	}
+	if err = verifyInputFiles(ctx, j); err != nil {
+		return Result{}, err
+	}
 	dir := filepath.Join(o.RunDir, "graph")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return Result{}, err

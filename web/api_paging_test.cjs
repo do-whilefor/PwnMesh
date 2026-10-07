@@ -83,3 +83,30 @@ test('broken continuation fails instead of silently presenting partial history',
     await assert.rejects(client.projectExecutions('/projects/example'), /分页边界无效/);
   }
 });
+
+test('input uploads preserve binary FormData and let fetch set its boundary', async () => {
+  const file = new File([new Uint8Array([0, 255, 13, 10])], 'capture.har');
+  let received;
+  const client = new Client(async (path, options) => {
+    received = {path, options};
+    return {status:201, ok:true, text:async () => JSON.stringify({id:'input-1'})};
+  }, 1);
+  assert.deepEqual(await client.uploadInput('/projects/p', file), {id:'input-1'});
+  assert.equal(received.path, '/projects/p/inputs');
+  assert.equal(received.options.method, 'POST');
+  assert.equal(received.options.headers['Content-Type'], undefined);
+  assert.ok(received.options.body instanceof FormData);
+  assert.deepEqual([...received.options.body.keys()], ['file']);
+  assert.deepEqual(new Uint8Array(await received.options.body.get('file').arrayBuffer()), new Uint8Array([0, 255, 13, 10]));
+});
+
+test('upload timeout is independent of the short JSON request timeout', async () => {
+  const client = new Client(async () => {
+    await new Promise(resolve => setTimeout(resolve, 20));
+    return {status:201, ok:true, text:async () => '{}'};
+  }, 1);
+  let uploadSignal;
+  const fetcher = client.fetcher; client.fetcher = (...args) => { uploadSignal = args[1].signal; return fetcher(...args); };
+  await client.uploadInput('/projects/p', new File(['test'], 'sample.http'));
+  assert.equal(uploadSignal.aborted, false);
+});

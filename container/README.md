@@ -5,7 +5,9 @@
 `kali-linux-headless` 是 APT 元包，不是 Docker 的 `FROM` 镜像名。
 
 明确补齐 bsdextrautils、nodejs/npm、jq、iputils-ping、sshpass、ncat、rlwrap、yq、krb5-user、adb、
-ripgrep（`rg`）和 fd-find（`fd`）。其中 yq 使用 Kali 的 jq 风格 Python 实现，例如 `yq -r '.name' file.yaml`。
+ripgrep（`rg`）、fd-find（`fd`），以及 Java JDK、jadx、apktool、file、sqlite3。
+其中 yq 使用 Kali 的 jq 风格 Python 实现，例如 `yq -r '.name' file.yaml`。
+镜像还分发 `pwn-http`，用于离线检查 HAR/原始 HTTP 请求和单次重放保存证据。
 APT 使用 `--no-install-recommends`；安装期间禁止自动启动软件包服务，实际任务需要时再启动。
 
 `python`/`python3` 和 `pip`/`pip3` 使用 `/opt/pwnmesh-venv`；tccli 使用独立虚拟环境，
@@ -77,6 +79,7 @@ APT 索引下载失败会使构建失败，避免把使用旧索引的警告误�
 `check-worker.sh` 已随镜像分发到 `/usr/local/share/pwnmesh/`。自检检查 headless 元包和新增工具，
 实际执行回环 ping、文本与 YAML 处理、pwntools 汇编和常量求值、
 BSON 编解码、云 CLI 版本命令、由 groff-base 渲染的 AWS CLI 帮助，以及 Playwright CLI 打开回环地址页面并验证 JavaScript 运行结果；
+还会现场生成无外部依赖的 JAR/APK，验证 jadx 反编译、apktool 构建及解码 Manifest/smali、SQLite 只读查询，以及 `pwn-http` 解析/重放回环服务的 HAR 并校验证据；
 无需外网或云凭据。
 
 ```bash
@@ -109,3 +112,48 @@ docker run --rm --pull never --network none --init \
 Chromium 默认无头运行，root 环境使用 `sandbox=false`。浏览器位于 `/opt/ms-playwright`，
 CLI 通过 `/usr/local/bin/pwnmesh-chromium` 固定入口运行，可从任意工作目录调用，不需要项目 skills。
 实际访问 MongoDB、云服务或外部网页时，再由任务提供目标地址、所需凭据和网络连接。
+
+### 客户端接口与静态分析
+
+在项目中上传抓包文件（HAR 或原始 HTTP 请求）、APK、源码包、配置或本地数据库。给任务描述授权范围、目标账号角色和要验证的业务行为；使用上传结果给出的实际 Worker 路径。上传不会自动执行或解压文件。
+
+在「创建项目」中选择测试材料，文件全部上传成功后才启动任务；上传失败可原地重试，已创建项目保持暂停。
+现有项目通过「补充」添加文件，也可以不填写文字。源码目录请先打包为 ZIP/TAR；配置、脚本、数据库可以直接上传。
+每个文件最大 256 MiB，每个项目最多 32 个文件、合计 512 MiB。同名同内容重试会去重，变更内容保留为新文件。
+文件原件与项目数据一起保存，重启项目保留，删除项目一并删除；上传内容不属于凭据保险库。
+新增材料供后续新任务使用，已经运行的任务仍保留原输入。Worker 中路径为 `/workspace/.pwnmesh/inputs/<id>/<文件名>`；修改或解压前先复制到工作目录。
+
+API 也可使用 `POST /projects/{pid}/inputs` 上传单个 multipart `file` 字段，`GET /projects/{pid}/inputs` 获取元数据清单，`GET /projects/{pid}/inputs/{id}` 下载原件。创建时传 `start_paused:true` 可以在上传完成后通过项目状态接口开始调度。
+
+下面假设已把材料放在 `/workspace/inputs/`；输出目录应是新目录：
+
+```bash
+# 先离线核对捕获到的请求和可重放状态，再选择有授权的请求。
+mkdir -p /workspace/evidence /workspace/analysis
+pwn-http inspect /workspace/inputs/client.har
+pwn-http replay /workspace/inputs/client.har --index 1 --output /workspace/evidence/role-a
+
+# 单独准备测试身份 B 的 JSON 头覆盖文件，例如 {"Authorization":"Bearer ...","Cookie":null}。
+# 原始请求、头覆盖文件及证据可能包含敏感数据，不要提交到 Git。
+pwn-http replay /workspace/inputs/client.har --index 1 \
+  --headers /workspace/inputs/role-b-headers.json --output /workspace/evidence/role-b
+
+# 原始 HTTP 请求的 request-target 为相对路径时，显式提供匹配的源站。
+pwn-http inspect /workspace/inputs/request.http --base-url https://api.example.invalid
+
+# 解码 APK，分析代码、Manifest、资源及本地存储。
+file /workspace/inputs/client.apk
+jadx -d /workspace/analysis/java /workspace/inputs/client.apk
+apktool d /workspace/inputs/client.apk -o /workspace/analysis/apk
+rg -n 'https?://|android:exported|allowBackup|cleartextTrafficPermitted' /workspace/analysis
+sqlite3 -readonly /workspace/inputs/client.db '.schema'
+```
+
+`pwn-http` 只重放指定的一条请求，不自动重试或跟随重定向；HTTP 4xx/5xx 仍记录响应证据。
+`--headers` 使用 JSON 字符串值覆盖头，用 null 删除头；也可用 `--remove-header <名称>`。
+请求头中的敏感值和 URL 查询值会脱敏，但请求/响应 body 保留原始字节供核验，不能将证据目录视为已经完全脱敏。
+比较两个身份的返回内容和状态只能提供测试证据，权限问题仍需按业务权限和实际影响确认。
+
+抓包需由测试设备和已有代理工具完成后导入；本次不提供手机原生界面操作。
+受设备签名、客户端证书或会话绑定保护的接口需要原设备参与或补充测试条件。
+APK 的静态结果不等于 Android 运行时验证；加固包、iOS 二进制或本地原生库应按材料补充对应工具与运行环境。

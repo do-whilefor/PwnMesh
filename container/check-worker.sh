@@ -9,11 +9,11 @@ test "$(readlink -f /home/kali/workspace)" = /workspace
 test "$TZ" = Asia/Shanghai
 test "$PYTHONUNBUFFERED" = 1
 test -s /etc/ssl/certs/ca-certificates.crt
-for package in ca-certificates kali-linux-headless bsdextrautils iputils-ping sshpass ncat rlwrap yq krb5-user adb nodejs npm jq ripgrep fd-find; do
+for package in ca-certificates kali-linux-headless bsdextrautils iputils-ping sshpass ncat rlwrap yq krb5-user adb nodejs npm jq ripgrep fd-find default-jdk-headless jadx apktool file sqlite3; do
     dpkg-query -W -f '${Status}\n' "$package" | grep -Fx 'install ok installed' >/dev/null
 done
 for tool in bash curl wget rg fd python python3 pip pip3 jq git cat ps ip dig unzip zip sudo as objcopy cpp aws tccli aliyun node npm playwright-cli \
-    column hexdump ping sshpass ncat rlwrap yq kinit klist adb nmap sqlmap; do
+    column hexdump ping sshpass ncat rlwrap yq kinit klist adb nmap sqlmap java javac jar jadx apktool file strings sqlite3 pwn-http; do
     command -v "$tool" >/dev/null
 done
 su -s /bin/sh kali -c 'test -w /workspace && test "$(sudo -n id -u)" = 0'
@@ -51,6 +51,7 @@ test -d "$PLAYWRIGHT_BROWSERS_PATH"
 python - "$smoke_dir" <<'PY'
 import http.server
 import importlib.metadata
+import json
 import os
 import pathlib
 import re
@@ -79,6 +80,64 @@ assert subprocess.check_output(
 assert subprocess.check_output(
     ["yq", "-r", ".service.name"], input="service:\n  name: pwnmesh-worker\n", text=True, timeout=10,
 ).strip() == "pwnmesh-worker"
+
+# Build synthetic local inputs; decompile actual bytecode and decode a real APK.
+# Nothing is downloaded and no device or production package is needed.
+java_source = smoke_dir / "ClientProbe.java"
+java_source.write_text('package example; public class ClientProbe { public String endpoint() { return "https://api.example.invalid/v1"; } }\n')
+subprocess.run(["javac", "--release", "8", "-Xlint:-options", "-d", str(smoke_dir), str(java_source)], check=True, timeout=30)
+java_archive = smoke_dir / "client.jar"
+subprocess.run(["jar", "cf", str(java_archive), "-C", str(smoke_dir), "example/ClientProbe.class"], check=True, timeout=30)
+java_decoded = smoke_dir / "java-decoded"
+subprocess.run(["jadx", "--no-res", "-d", str(java_decoded), str(java_archive)], check=True, timeout=90)
+assert "https://api.example.invalid/v1" in (java_decoded / "sources/example/ClientProbe.java").read_text()
+
+apk_source = smoke_dir / "apk-source"
+(apk_source / "smali/example").mkdir(parents=True)
+(apk_source / "apktool.yml").write_text("""version: 2.7.0
+apkFileName: client.apk
+isFrameworkApk: false
+usesFramework:
+  ids: [1]
+sdkInfo:
+  minSdkVersion: '21'
+  targetSdkVersion: '28'
+versionInfo:
+  versionCode: '1'
+  versionName: '1.0'
+""")
+(apk_source / "AndroidManifest.xml").write_text('''<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="example.clientprobe" android:versionCode="1" android:versionName="1.0">
+  <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="28"/>
+  <uses-permission android:name="android.permission.INTERNET"/>
+  <application android:label="Client probe" android:allowBackup="false"/>
+</manifest>
+''')
+(apk_source / "smali/example/ClientProbe.smali").write_text('''.class public Lexample/ClientProbe;
+.super Ljava/lang/Object;
+.method public static endpoint()Ljava/lang/String;
+    .registers 1
+    const-string v0, "https://api.example.invalid/mobile"
+    return-object v0
+.end method
+''')
+apk_file = smoke_dir / "client.apk"
+apk_framework = smoke_dir / "apk-framework"
+subprocess.run(["apktool", "b", str(apk_source), "-p", str(apk_framework), "-o", str(apk_file)], check=True, timeout=90)
+apk_decoded = smoke_dir / "apk-decoded"
+subprocess.run(["apktool", "d", str(apk_file), "-p", str(apk_framework), "-o", str(apk_decoded)], check=True, timeout=90)
+assert 'package="example.clientprobe"' in (apk_decoded / "AndroidManifest.xml").read_text()
+assert "api.example.invalid/mobile" in (apk_decoded / "smali/example/ClientProbe.smali").read_text()
+apk_java = smoke_dir / "apk-java"
+subprocess.run(["jadx", "--no-res", "-d", str(apk_java), str(apk_file)], check=True, timeout=90)
+assert "api.example.invalid/mobile" in (apk_java / "sources/example/ClientProbe.java").read_text()
+file_type = subprocess.check_output(["file", "-b", str(apk_file)], text=True, timeout=10).lower()
+assert any(kind in file_type for kind in ("archive", "android package")), file_type
+
+# Read a local database without modifying the supplied input.
+database = smoke_dir / "client.db"
+subprocess.run(["sqlite3", str(database), "CREATE TABLE config(name TEXT, value TEXT); INSERT INTO config VALUES ('api', 'https://api.example.invalid');"], check=True, timeout=10)
+assert subprocess.check_output(["sqlite3", "-readonly", str(database), "SELECT value FROM config WHERE name='api';"], text=True, timeout=10).strip() == "https://api.example.invalid"
 
 # Local version paths only: no scans, SSH login, Kerberos tickets or ADB daemon.
 for command, label in (
@@ -177,6 +236,17 @@ with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
             ["wget", "--no-proxy", "--quiet", "--timeout=5", "--tries=1", "-O", "-", url],
         ):
             assert subprocess.check_output(command, timeout=10) == b"pwnmesh-worker-smoke\n"
+        capture = smoke_dir / "client.har"
+        capture.write_text(json.dumps({"log": {"version": "1.2", "entries": [{"request": {
+            "method": "GET", "url": url, "headers": [], "bodySize": 0,
+        }}]}}))
+        inspected = json.loads(subprocess.check_output(["pwn-http", "inspect", str(capture)], text=True, timeout=10))
+        assert len(inspected) == 1 and inspected[0]["replayable"], inspected
+        evidence = smoke_dir / "http-evidence"
+        replayed = json.loads(subprocess.check_output(["pwn-http", "replay", str(capture), "--index", "1", "--output", str(evidence)], text=True, timeout=10))
+        assert replayed["status"] == 200, replayed
+        assert (evidence / "response.body").read_bytes() == b"pwnmesh-worker-smoke\n"
+        assert json.loads((evidence / "response.json").read_text())["status"] == 200
         session = "pwnmesh-smoke-" + str(os.getpid())
         cli = ["playwright-cli", "-s=" + session]
         # Use the installed CLI and its Chromium defaults, not a separate Node API.

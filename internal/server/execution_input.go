@@ -77,6 +77,9 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	if (j.Kind == "reason" || j.Kind == "curate") && j.Intent != nil {
 		return 0, nil, b.Err(422, "Control preparation must not carry an intent")
 	}
+	if len(j.InputFiles) != 0 {
+		return 0, nil, b.Err(422, "input_files are assigned by the server")
+	}
 	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
 		return 0, nil, b.Err(403, "Execution preparation requires its lease")
 	}
@@ -126,6 +129,10 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	}
 	j.PreviousRunID = check.PreviousRunID
 	j.Graph = b.Graph{Project: state.Graph.Project}
+	j.InputFiles, err = t.InputFiles(e.ProjectID)
+	if err != nil {
+		return 0, nil, err
+	}
 	j.DecisionRevision = state.DecisionRevision
 	if e.Kind == "reason" {
 		var cursor *b.DecisionCursor

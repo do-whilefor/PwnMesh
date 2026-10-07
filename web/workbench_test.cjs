@@ -96,6 +96,7 @@ function standard(url, states, extra = () => undefined) {
   const match = url.match(/^\/projects\/([^/?]+)(.*)$/); if (!match) throw new Error(url);
   const state = states[match[1]], suffix = match[2];
   if (suffix === '/state') return state;
+  if (suffix === '/inputs') return [];
   if (suffix.startsWith('/executions')) return {items:[],through:0};
   if (suffix.startsWith('/state/events')) return [];
   if (suffix === '/identity') return {id:state.graph.project.id,generation:state.graph.project.generation};
@@ -311,4 +312,84 @@ test('restart conflict refreshes the round and requires a new confirmation befor
   await h.elements.get('confirm-form').emit('submit'); assert.equal(restarts,1,'stale confirmation cannot replay the write');
   h.elements.get('confirm-dialog').close(); await openRestart(); await h.elements.get('confirm-form').emit('submit');
   assert.equal(restarts,2); assert.equal(h.calls.filter(call => call.url.endsWith('/restart'))[1].options.body.expected_generation,1);
+});
+
+async function chooseFiles(h, prefix, files) {
+  const input = h.elements.get(prefix + '-files'); input.files = files; await input.emit('change');
+}
+async function fillCreate(h) {
+  await h.elements.get('new-project').click();
+  for (const [name,value] of Object.entries({name:'客户端测试',origin:'测试 HAR 和 APK',goal:'验证接口权限和本地配置'})) h.elements.get('create-' + name).value = value;
+}
+
+test('creation uploads to a paused project and retries only unfinished files without duplicate projects', async () => {
+  const states = {A:snapshot('A')}, uploads = [], writes = []; let creates = 0, fail = true;
+  const h = harness((url,options) => {
+    if (options.method === 'POST' && url === '/projects') { creates++; assert.equal(options.body.start_paused,true); states.B = snapshot('B'); states.B.graph.project.status = 'stopped'; writes.push('create'); return states.B.graph; }
+    if (options.method === 'POST' && url === '/projects/B/inputs') {
+      const name = options.body.get('file').name; uploads.push(name); writes.push(name);
+      if (name === 'client.apk' && fail) { fail = false; throw Object.assign(new Error('上传失败'),{status:503}); }
+      return {id:name,name,path:'/workspace/' + name,size:3,sha256:'a'.repeat(64),created_at:now};
+    }
+    if (url === '/projects/B/status' && options.method === 'PUT') { assert.equal(options.body.status,'active'); states.B.graph.project.status = 'active'; writes.push('activate'); return states.B.graph; }
+    return standard(url,states);
+  });
+  await settle(); await fillCreate(h); await chooseFiles(h,'create',[new File(['har'],'capture.har'),new File(['apk'],'client.apk')]);
+  await h.elements.get('create-form').emit('submit');
+  assert.equal(creates,1); assert.equal(states.B.graph.project.status,'stopped'); assert.match(h.elements.get('create-error').textContent,/重试将继续此项目/);
+  assert.equal(h.elements.get('create-dialog').open,true); assert.equal(h.elements.get('create-name').disabled,true);
+  await h.elements.get('create-form').emit('submit');
+  assert.equal(creates,1); assert.deepEqual(uploads,['capture.har','client.apk','client.apk']); assert.equal(writes.at(-1),'activate');
+  assert.equal(states.B.graph.project.status,'active'); assert.equal(h.elements.get('create-dialog').open,false);
+  assert.equal(h.elements.get('create-file-list').children.length,0); assert.equal(h.elements.get('project-title').textContent,'B');
+});
+
+test('ambiguous project creation cannot be retried and refresh reveals the paused project', async () => {
+  const states = {A:snapshot('A')}; let creates = 0;
+  const h = harness((url,options) => {
+    if (url === '/projects' && options.method === 'POST') { creates++; states.B = snapshot('B'); states.B.graph.project.status = 'stopped'; throw Object.assign(new Error('network lost'),{status:0}); }
+    return standard(url,states);
+  });
+  await settle(); await fillCreate(h); await chooseFiles(h,'create',[new File(['apk'],'client.apk')]); await h.elements.get('create-form').emit('submit');
+  await h.elements.get('create-form').emit('submit'); assert.equal(creates,1); assert.equal(h.elements.get('submit-create').disabled,true);
+  assert.match(h.elements.get('create-error').textContent,/创建结果未确认/); assert.equal(h.elements.get('project-count').textContent,'2');
+  assert.equal(h.calls.some(call => call.options.method === 'POST' && call.url.endsWith('/inputs')),false);
+});
+
+test('creation without files keeps the existing active-project request unchanged', async () => {
+  const states = {A:snapshot('A')}; let payload;
+  const h = harness((url,options) => { if (url === '/projects' && options.method === 'POST') { payload = options.body; states.B = snapshot('B'); return states.B.graph; } return standard(url,states); });
+  await settle(); await fillCreate(h); await h.elements.get('create-form').emit('submit');
+  assert.equal(payload.start_paused,undefined); assert.equal(h.calls.some(call => call.url.endsWith('/inputs') || call.url.endsWith('/status')),false);
+});
+
+test('file-only supplement is allowed, retains completed uploads on failure and clears after success', async () => {
+  const states = {A:snapshot('A')}, imported = [], names = []; let fail = true;
+  const h = harness((url,options) => {
+    if (url === '/projects/A/inputs') {
+      if (options.method !== 'POST') return imported;
+      const name = options.body.get('file').name; names.push(name);
+      if (name === 'source.zip' && fail) { fail = false; throw Object.assign(new Error('retry upload'),{status:503}); }
+      const item = {id:name,name,path:'/workspace/' + name,size:3,sha256:'a'.repeat(64),created_at:now}; imported.push(item); return item;
+    }
+    return standard(url,states);
+  });
+  await settle(); await h.elements.get('add-hint').click(); await chooseFiles(h,'hint',[new File(['http'],'request.http'),new File(['zip'],'source.zip')]);
+  await h.elements.get('hint-form').emit('submit'); await settle(); assert.equal(h.elements.get('hint-dialog').open,true); assert.equal(imported.length,1);
+  assert.match(h.elements.get('imported-inputs').textContent,/request.http.*SHA-256:/);
+  await h.elements.get('hint-form').emit('submit'); assert.deepEqual(names,['request.http','source.zip','source.zip']); assert.equal(h.elements.get('hint-dialog').open,false);
+  assert.equal(h.calls.some(call => call.url.endsWith('/hints')),false); assert.equal(h.elements.get('hint-file-list').children.length,0);
+});
+
+test('supplement file selection is discarded when switching projects', async () => {
+  const states = {A:snapshot('A'),B:snapshot('B')}; const h = harness(url => standard(url,states));
+  await settle(); await h.elements.get('add-hint').click(); await chooseFiles(h,'hint',[new File(['A only'],'private.conf')]); h.elements.get('hint-dialog').close();
+  await h.select('B'); await h.elements.get('add-hint').click(); assert.equal(h.elements.get('hint-file-list').children.length,0);
+  await h.elements.get('hint-form').emit('submit'); assert.match(h.elements.get('hint-error').textContent,/选择测试材料/);
+});
+
+test('oversized file selection is rejected before project creation', async () => {
+  const states = {A:snapshot('A')}; const h = harness(url => standard(url,states));
+  await settle(); await fillCreate(h); await chooseFiles(h,'create',[{name:'large.apk',size:256 * 1048576 + 1}]);
+  assert.match(h.elements.get('create-error').textContent,/256 MiB/); assert.equal(h.elements.get('create-file-list').children.length,0);
 });

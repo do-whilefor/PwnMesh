@@ -8,6 +8,7 @@
   let selectedNode = null, selectedEdge = null, tab = 'board', systemFilter = 'all', logLimit = 300;
   let timer, toastTimer, management = null, hintProjectId = '', mutating = false, connected = false;
   let projectsSignature = '', activitySignature = '', workspaceSignature = '', workspaceVersion = 0, createDraft = false, updatingGraph = false;
+  let createFiles = [], hintFiles = [], createPending = null, createUncertain = false, hintFilesProjectId = '', inputReadVersion = 0;
   try { selectedId = new URLSearchParams(location.search).get('project') || localStorage.getItem('pwnmesh.selected-project') || ''; } catch {}
   const pathFor = id => '/projects/' + encodeURIComponent(id);
   const current = () => state?.graph?.project || projects.find(project => project.id === selectedId);
@@ -198,6 +199,7 @@
   function selectEdge(edge) { selectedEdge = edge; if (edge) { selectedNode = null; if (!updatingGraph) tab = 'board'; } renderActivity({reset:!updatingGraph}); }
   function updateGraph(value) { updatingGraph = true; try { graph.setState(value); } finally { updatingGraph = false; } }
   function resetSelection(id) {
+    if (id !== selectedId) { hintFiles = []; hintFilesProjectId = ''; $('hint-files').value = ''; renderFiles('hint', hintFiles); }
     selectedId = id; state = null; executions = []; events = []; logs = []; selectedNode = null; selectedEdge = null; logLimit = 300; activitySignature = ''; workspaceSignature = '';
     updateGraph(null); renderHeader(); renderActivity({reset:true}); try { if (id) localStorage.setItem('pwnmesh.selected-project', id); else localStorage.removeItem('pwnmesh.selected-project'); } catch {}
   }
@@ -233,10 +235,10 @@
     finally { if (requests.current(request.version)) timer = setTimeout(() => loadWorkspace(selectedId), retryGeneration ? 0 : document.hidden ? 10000 : 2500); }
   }
   function startMutation() {
-    mutating = true; clearTimeout(timer); requests.cancel(); closeMenus(); document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = true; }); renderHeader(); renderProjects();
+    mutating = true; clearTimeout(timer); requests.cancel(); closeMenus(); document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = true; }); lockInputs(); renderHeader(); renderProjects();
   }
   async function finishMutation() {
-    mutating = false; document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = false; }); renderHeader(); renderProjects(); await loadWorkspace(selectedId);
+    mutating = false; document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = false; }); lockInputs(); renderHeader(); renderProjects(); await loadWorkspace(selectedId);
   }
   const mutationError = error => error.message + (error.status === 0 ? '；结果未确认，请先刷新核对，避免重复操作。' : error.status === 409 ? '；项目状态或轮次已变化，正在刷新数据。请关闭此窗口并重新确认操作。' : '');
   async function changeStatus(id, action) {
@@ -252,23 +254,78 @@
       : '将删除「' + project.title + '」的项目记录，并取消未结束的执行。容器清理由后台处理，工作目录文件不会因此删除。';
     $('confirm-action').textContent = title; $('confirm-action').className = 'button primary' + (action === 'restart' ? '' : ' danger-button'); $('confirm-dialog').showModal();
   }
-  function openCreate() { if (mutating) return; if (!createDraft) $('create-form').reset(); $('create-error').textContent = ''; $('create-dialog').showModal(); $('create-name').focus(); }
+  const fileSize = size => size >= 1048576 ? (size / 1048576).toFixed(1) + ' MiB' : size >= 1024 ? (size / 1024).toFixed(1) + ' KiB' : size + ' B';
+  function lockInputs() {
+    for (const id of ['create-name','create-origin','create-goal']) $(id).disabled = mutating || !!createPending || createUncertain;
+    document.querySelectorAll('#scenario-options input').forEach(input => { input.disabled = mutating || !!createPending || createUncertain; });
+    $('create-files').disabled = mutating || createUncertain; $('hint-files').disabled = $('hint-input').disabled = mutating;
+    $('submit-create').disabled = mutating || createUncertain;
+    renderFiles('create', createFiles); renderFiles('hint', hintFiles);
+  }
+  function renderFiles(prefix, queue) {
+    $(prefix + '-file-list').replaceChildren(...queue.map((item, index) => {
+      const row = el('li'), copy = el('span', 'input-file-copy', item.file.name);
+      copy.append(el('small', '', fileSize(item.file.size) + (item.result ? ' · 已导入' : ' · 待上传'))); row.append(copy);
+      if (!item.result) { const remove = el('button', '', '移除'); remove.type = 'button'; remove.disabled = mutating; remove.setAttribute('aria-label', '移除 ' + item.file.name); remove.addEventListener('click', () => { queue.splice(index, 1); renderFiles(prefix, queue); }); row.append(remove); }
+      return row;
+    }));
+  }
+  function validateFiles(queue) {
+    if (queue.length > 32) throw new Error('每项目最多导入 32 个文件。');
+    if (queue.some(item => item.file.size > 256 * 1048576)) throw new Error('每个文件不能超过 256 MiB。');
+    if (queue.reduce((size, item) => size + item.file.size, 0) > 512 * 1048576) throw new Error('每项目文件总大小不能超过 512 MiB。');
+  }
+  async function uploadFiles(id, prefix, queue) {
+    for (let index = 0; index < queue.length; index++) {
+      const item = queue[index]; if (item.result) continue;
+      $(prefix + '-progress').textContent = '正在上传 ' + (index + 1) + ' / ' + queue.length + '：' + item.file.name;
+      item.result = await api.uploadInput(pathFor(id), item.file); renderFiles(prefix, queue);
+    }
+    $(prefix + '-progress').textContent = queue.length ? '已导入 ' + queue.length + ' 个文件' : '';
+  }
+  async function loadInputs(id) {
+    const version = ++inputReadVersion; $('imported-inputs').replaceChildren(); $('imported-inputs-status').textContent = '正在读取材料列表…';
+    try {
+      const inputs = await api.request(pathFor(id) + '/inputs'); if (version !== inputReadVersion || hintProjectId !== id) return;
+      $('imported-inputs-status').textContent = inputs.length ? inputs.length + ' 个文件 · 保留原始材料用于核对' : '尚未导入文件';
+      $('imported-inputs').replaceChildren(...inputs.map(input => {
+        const row = el('li'), copy = el('span', 'input-file-copy', input.name);
+        copy.append(el('small', '', fileSize(input.size) + ' · ' + data.formatTime(input.created_at)), el('small', '', input.path), el('small', '', 'SHA-256: ' + input.sha256)); row.append(copy); return row;
+      }));
+    } catch (error) { if (version === inputReadVersion && hintProjectId === id) $('imported-inputs-status').textContent = '材料列表读取失败：' + error.message; }
+  }
+  function openCreate() { if (mutating) return; if (!createDraft) $('create-form').reset(); if (!createUncertain) $('create-error').textContent = ''; lockInputs(); $('create-dialog').showModal(); $('create-name').focus(); }
   function openHint() {
     const project = current(); if (!project || !['active','stopped'].includes(project.status) || mutating || !connected) return;
-    hintProjectId = project.id; $('hint-project').textContent = project.title; $('hint-input').value = drafts.get(project.id) || ''; $('hint-error').textContent = ''; $('hint-input').removeAttribute('aria-invalid'); renderHeader(); $('hint-dialog').showModal(); $('hint-input').focus();
+    hintProjectId = project.id; if (hintFilesProjectId !== project.id) { hintFiles = []; $('hint-files').value = ''; $('hint-progress').textContent = ''; } hintFilesProjectId = project.id;
+    $('hint-project').textContent = project.title; $('hint-input').value = drafts.get(project.id) || ''; $('hint-error').textContent = ''; $('hint-input').removeAttribute('aria-invalid'); renderFiles('hint', hintFiles); renderHeader(); $('hint-dialog').showModal(); $('hint-input').focus(); loadInputs(project.id);
   }
   data.SCENARIOS.forEach((item,index) => {
     const choice = el('label', 'scenario-choice'), radio = el('input'), card = el('span', 'scenario-card'); radio.type = 'radio'; radio.name = 'scenario'; radio.value = item.id; radio.defaultChecked = index === 0; radio.checked = index === 0;
     card.append(icon(scenarioIcon({scenario:item.id})), el('strong', '', item.name), el('small', '', item.description)); choice.append(radio, card); $('scenario-options').append(choice);
   });
   $('create-form').addEventListener('input', () => { createDraft = true; $('create-error').textContent = ''; });
+  for (const prefix of ['create','hint']) $(prefix + '-files').addEventListener('change', () => {
+    if (mutating) return; const queue = prefix === 'create' ? createFiles : hintFiles;
+    const additions = Array.from($(prefix + '-files').files || [], file => ({file}));
+    try { validateFiles(queue.concat(additions)); queue.push(...additions); $(prefix + '-error').textContent = ''; if (prefix === 'create') createDraft = true; }
+    catch (error) { $(prefix + '-error').textContent = error.message; }
+    $(prefix + '-files').value = ''; renderFiles(prefix, queue);
+  });
   $('create-form').addEventListener('submit', async event => {
-    event.preventDefault(); if (mutating || $('submit-create').disabled) return; let started = false;
+    event.preventDefault(); if (mutating || $('submit-create').disabled || createUncertain) return; let started = false, creating = false;
     try {
-      const payload = data.validateProject({title:$('create-name').value,origin:$('create-origin').value,goal:$('create-goal').value,scenario:new FormData($('create-form')).get('scenario')});
+      const payload = createPending?.payload || data.validateProject({title:$('create-name').value,origin:$('create-origin').value,goal:$('create-goal').value,scenario:new FormData($('create-form')).get('scenario')}); validateFiles(createFiles);
       createDraft = true; $('submit-create').disabled = true; $('create-error').textContent = ''; startMutation(); started = true;
-      const created = await api.request('/projects', {method:'POST',body:payload}); createDraft = false; $('create-dialog').close(); $('create-form').reset(); $('project-search').value = ''; tab = 'board'; resetSelection(created.project.id); toast('项目已创建');
-    } catch (error) { $('create-error').textContent = mutationError(error); } finally { $('submit-create').disabled = false; if (started) await finishMutation(); }
+      let created;
+      if (createPending) created = createPending.created;
+      else { creating = true; created = await api.request('/projects', {method:'POST',body:createFiles.length ? {...payload,start_paused:true} : payload}); creating = false; if (createFiles.length) createPending = {created,payload}; }
+      if (createPending) { await uploadFiles(created.project.id, 'create', createFiles); await api.request(pathFor(created.project.id) + '/status', {method:'PUT',body:{status:'active'}}); }
+      createPending = null; createFiles = []; createDraft = false; $('create-progress').textContent = ''; $('create-dialog').close(); $('create-form').reset(); $('project-search').value = ''; tab = 'board'; resetSelection(created.project.id); toast('项目已创建');
+    } catch (error) {
+      if (creating && error.status === 0) createUncertain = true;
+      $('create-error').textContent = createPending ? error.message + '；项目已保存，已导入文件会保留。重试将继续此项目，上传完成后启动。' : createUncertain ? '创建结果未确认，已停止重试以避免重复项目。请关闭窗口，在项目列表核对；有附件的项目会保持暂停，可在「补充提示」中继续上传。核对完成后刷新页面。' : mutationError(error);
+    } finally { lockInputs(); if (started) await finishMutation(); }
   });
   $('confirm-form').addEventListener('submit', async event => {
     event.preventDefault(); if (!management || mutating || $('confirm-action').disabled) return; const command = {...management}; let requireConfirm = false; $('confirm-action').disabled = true; startMutation();
@@ -283,13 +340,13 @@
   });
   $('confirm-dialog').addEventListener('close', () => { management = null; });
   $('hint-input').addEventListener('input', () => { $('hint-error').textContent = ''; $('hint-input').removeAttribute('aria-invalid'); if (hintProjectId) drafts.set(hintProjectId, $('hint-input').value); });
-  $('hint-dialog').addEventListener('close', () => { if (hintProjectId) drafts.set(hintProjectId, $('hint-input').value); hintProjectId = ''; });
+  $('hint-dialog').addEventListener('close', () => { if (hintProjectId) drafts.set(hintProjectId, $('hint-input').value); hintProjectId = ''; inputReadVersion++; });
   $('hint-form').addEventListener('submit', async event => {
     event.preventDefault(); if (!hintProjectId || mutating || $('send-hint').disabled) return; const id = hintProjectId, content = $('hint-input').value.trim();
-    if (!content || content.length > 32768) { $('hint-error').textContent = content ? '提示不能超过 32768 个字符。' : '请输入补充提示。'; $('hint-input').setAttribute('aria-invalid', 'true'); return; }
+    if ((!content && !hintFiles.length) || content.length > 32768) { $('hint-error').textContent = content ? '提示不能超过 32768 个字符。' : '请输入补充提示或选择测试材料。'; $('hint-input').setAttribute('aria-invalid', 'true'); return; }
     drafts.set(id, $('hint-input').value); startMutation();
-    try { await api.request(pathFor(id) + '/hints', {method:'POST',body:{content,creator:'user'}}); $('hint-input').value = ''; drafts.delete(id); $('hint-dialog').close(); selectedNode = null; selectedEdge = null; graph.selectNode(null); tab = 'board'; toast('补充提示已保存'); }
-    catch (error) { $('hint-error').textContent = mutationError(error); } finally { await finishMutation(); }
+    try { await uploadFiles(id, 'hint', hintFiles); if (content) await api.request(pathFor(id) + '/hints', {method:'POST',body:{content,creator:'user'}}); hintFiles = []; $('hint-progress').textContent = ''; $('hint-input').value = ''; drafts.delete(id); $('hint-dialog').close(); selectedNode = null; selectedEdge = null; graph.selectNode(null); tab = 'board'; toast('补充材料已保存'); }
+    catch (error) { $('hint-error').textContent = mutationError(error); loadInputs(id); } finally { await finishMutation(); }
   });
   $('hint-input').addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); $('hint-form').requestSubmit(); } });
   $('new-project').addEventListener('click', openCreate); $('empty-create').addEventListener('click', openCreate); $('add-hint').addEventListener('click', openHint);
