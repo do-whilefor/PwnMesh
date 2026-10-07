@@ -344,10 +344,14 @@ test('creation uploads to a paused project and retries only unfinished files wit
   assert.equal(h.elements.get('create-file-list').children.length,0); assert.equal(h.elements.get('project-title').textContent,'B');
 });
 
-test('ambiguous project creation cannot be retried and refresh reveals the paused project', async () => {
+for (const outcome of ['connection lost', 'unreadable success']) test('ambiguous project creation cannot be retried: ' + outcome, async () => {
   const states = {A:snapshot('A')}; let creates = 0;
   const h = harness((url,options) => {
-    if (url === '/projects' && options.method === 'POST') { creates++; states.B = snapshot('B'); states.B.graph.project.status = 'stopped'; throw Object.assign(new Error('network lost'),{status:0}); }
+    if (url === '/projects' && options.method === 'POST') {
+      creates++; states.B = snapshot('B'); states.B.graph.project.status = 'stopped';
+      if (outcome === 'unreadable success') return new Client(async () => ({status:201,ok:true,text:async () => '{"project":'})).request(url,options);
+      throw Object.assign(new Error('network lost'),{status:0});
+    }
     return standard(url,states);
   });
   await settle(); await fillCreate(h); await chooseFiles(h,'create',[new File(['apk'],'client.apk')]); await h.elements.get('create-form').emit('submit');

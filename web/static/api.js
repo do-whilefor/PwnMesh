@@ -48,7 +48,7 @@
         const text = await response.text();
         let result;
         try { result = JSON.parse(text); }
-        catch { throw new APIError(response.ok ? '服务返回了无法读取的数据' : '请求失败（HTTP ' + response.status + '）', response.status); }
+        catch { throw new APIError(response.ok ? '服务返回了无法读取的数据' : '请求失败（HTTP ' + response.status + '）', response.ok ? 0 : response.status); }
         if (!response.ok) throw new APIError(errorMessage(result?.detail, response.status), response.status);
         return result;
       } catch (error) {

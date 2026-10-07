@@ -53,6 +53,19 @@ test('connection failures identify PwnMesh and preserve the original request cou
   assert.equal(calls,1);
 });
 
+test('unreadable successful writes have an unknown outcome while rejected writes keep their status', async () => {
+  for (const status of [201, 422]) {
+    let calls = 0;
+    const client = new Client(async () => {
+      calls++;
+      return {status,ok:status < 300,text:async () => '<html>truncated response'};
+    });
+    await assert.rejects(client.request('/projects',{method:'POST',body:{title:'client audit'}}),
+      error => error instanceof APIError && error.status === (status === 201 ? 0 : status));
+    assert.equal(calls,1);
+  }
+});
+
 test('selection scopes reject a late old response even when the transport ignored cancellation', async () => {
   const scope = new RequestScope();
   const first = scope.begin();
