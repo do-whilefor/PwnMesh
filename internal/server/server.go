@@ -241,31 +241,6 @@ func (r *request) optional(key string) *string {
 	}
 	return b.Ptr(r.text(key))
 }
-func (r *request) sources() []string {
-	v := r.fields["from"]
-	if v == nil {
-		v = r.fields["from_"]
-	}
-	items, ok := v.([]any)
-	if !ok || len(items) == 0 {
-		r.invalid("from", "must contain at least one fact id")
-	}
-	out := []string{}
-	seen := map[string]bool{}
-	for _, item := range items {
-		s, ok := item.(string)
-		s = strings.TrimSpace(s)
-		if !ok || s == "" {
-			r.invalid("from", "fact ids must not be empty")
-		}
-		if seen[s] {
-			r.invalid("from", "duplicate fact ids")
-		}
-		seen[s] = true
-		out = append(out, s)
-	}
-	return out
-}
 func (r *request) integer(key string) int {
 	var str string
 	switch v := r.fields[key].(type) {
@@ -430,15 +405,19 @@ func (s *Server) project(t *b.Tx, _ *request, r *http.Request) (int, any, error)
 }
 func (s *Server) title(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	title := q.text("title")
-	g, err := t.Load(r.PathValue("pid"))
+	if q.err != nil {
+		return 0, nil, q.err
+	}
+	state, err := t.State(r.PathValue("pid"))
 	if err != nil {
 		return 0, nil, err
 	}
-	g.Project.Title = title
-	if err = t.Save(g); err != nil {
+	state.Graph.Project.Title = title
+	if err = b.ValidateContextCapacity(state); err != nil {
 		return 0, nil, err
 	}
-	return 200, g.Project, t.CheckContextCapacity(g.Project.ID)
+	_, err = t.Exec("UPDATE projects SET title=? WHERE id=?", title, state.Graph.Project.ID)
+	return 200, state.Graph.Project, err
 }
 func (s *Server) status(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	status, _ := q.fields["status"].(string)

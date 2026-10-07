@@ -105,6 +105,8 @@ func TestLegacyStepMetadataProjectionAfterReopen(t *testing.T) {
 		{name: "abandoned", metadata: `{"steps":[{"id":"i001","goal_id":"goal","status":"abandoned","reason":"cancelled plan"}]}`, status: "abandoned", goal: "goal", reason: "cancelled plan"},
 		{name: "missing goal stays missing", metadata: `{"steps":[{"id":"i001","status":"failed"}]}`, status: "open"},
 		{name: "historical intent defaults to root", metadata: `{"steps":[]}`, status: "open", goal: "goal"},
+		{name: "duplicate metadata keeps last fields", metadata: `{"steps":[{"id":"i001","goal_id":"stale","priority":1,"reason":"old"},{"id":"i001","goal_id":"goal","priority":9,"reason":"latest"}]}`, status: "open", goal: "goal", priority: 9, reason: "latest"},
+		{name: "duplicate metadata retains abandonment", metadata: `{"steps":[{"id":"i001","status":"abandoned","reason":"old"},{"id":"i001","goal_id":"goal","priority":9,"reason":"latest","status":"completed"}]}`, status: "abandoned", goal: "goal", priority: 9, reason: "latest"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "legacy.db")
@@ -151,5 +153,52 @@ func TestLegacyStepMetadataProjectionAfterReopen(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "legacy-facts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	err = store.Do(context.Background(), func(tx *Tx) error {
+		graph := Graph{
+			Project: Project{ID: "legacy", Title: "Historical observations", Status: "active", CreatedAt: tx.Now},
+			Facts: []Fact{{ID: "origin", Description: "Original requirement"}, {ID: "goal", Description: "Root goal"},
+				{ID: "f001", Description: "First graph fact"}, {ID: "f002", Description: "Second graph fact"}, {ID: "f003", Description: "Legacy fact"}},
+		}
+		if err := tx.Save(graph); err != nil {
+			return err
+		}
+		const raw = `{"facts":[{"id":"f002","description":"Second observation","status":"valid"},{"id":"f001","description":"First observation","status":"valid"},{"id":"f001","description":"Duplicate must not replace the first","status":"refuted"},{"id":"missing","description":"Unlinked record","status":"valid"}],"fact_relations":[{"kind":"refutes","target":"f001","source":"f002"},{"kind":"narrows","target":"f001","source":"f002"}]}`
+		if _, err := tx.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES('legacy',?,4,2)", raw); err != nil {
+			return err
+		}
+		state, err := tx.State("legacy")
+		if err != nil {
+			return err
+		}
+		want := []FactRecord{
+			{ID: "origin", Description: "Original requirement", Status: "input", Evidence: []EvidenceRef{}, Legacy: true},
+			{ID: "goal", Description: "Root goal", Status: "input", Evidence: []EvidenceRef{}, Legacy: true},
+			{ID: "f001", Description: "First observation", Status: "narrowed"},
+			{ID: "f002", Description: "Second observation", Status: "valid"},
+			{ID: "f003", Description: "Legacy fact", Status: "valid", Evidence: []EvidenceRef{}, Legacy: true},
+		}
+		if !reflect.DeepEqual(state.FactRecords, want) || !reflect.DeepEqual(state.Graph.Facts, graph.Facts) {
+			t.Fatalf("historical fact projection changed: %+v", state.FactRecords)
+		}
+		var saved string
+		if err := tx.QueryRow("SELECT data FROM xloom_state WHERE project_id='legacy'").Scan(&saved); err != nil {
+			return err
+		}
+		if saved != raw || state.Revision != 4 || state.DecisionRevision != 2 {
+			t.Fatal("reading historical facts changed their retained data or revisions")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

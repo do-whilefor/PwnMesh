@@ -354,12 +354,6 @@ func (t *Tx) ResumeExecution(e Execution) error {
 	return err
 }
 
-func (t *Tx) HasDecisionActions(project, run string) (bool, error) {
-	var found bool
-	err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_state_events WHERE project_id=? AND json_extract(event,'$.run_id')=? AND json_extract(event,'$.op') IN ('goal','step','fact_relation'))`, project, run).Scan(&found)
-	return found, err
-}
-
 // CheckNewStepLimit counts every direction this decision already created,
 // including subsequently abandoned steps. Tool submissions and the final
 // structured result share one registered budget.

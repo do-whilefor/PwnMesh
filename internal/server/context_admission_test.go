@@ -57,10 +57,10 @@ func TestInitialInputAndTitleAdmissionCountsEncodedBytes(t *testing.T) {
 	if len(projects) != 1 {
 		t.Fatal("rejected project left partial data")
 	}
-	before := f.state().Graph.Project.Title
+	before, beforeEvents := f.state(), storedEvents(f)
 	f.request("PUT", f.base()+"/title", map[string]string{"title": strings.Repeat("t", 32768)}, false, http.StatusUnprocessableEntity, nil)
-	if f.state().Graph.Project.Title != before {
-		t.Fatal("oversized title was persisted")
+	if after := f.state(); !reflect.DeepEqual(after, before) || !reflect.DeepEqual(storedEvents(f), beforeEvents) {
+		t.Fatal("rejected title changed the graph or event history")
 	}
 }
 

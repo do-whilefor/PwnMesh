@@ -220,6 +220,16 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 	project := g.Project.ID
 	s := State{Graph: g, Goals: []Goal{}, Steps: []Step{}, FactRecords: []FactRecord{}, Findings: d.Findings, FactRelations: d.FactRelations, Revision: revision, DecisionRevision: decision, Candidates: d.Candidates, Disputes: d.Disputes, Curation: d.Curation}
 	root := Goal{ID: "goal", Status: "open", Sources: []string{}, CreatedAt: g.Project.CreatedAt}
+	facts := make(map[string]FactRecord, len(d.Facts))
+	for _, record := range d.Facts {
+		if _, exists := facts[record.ID]; !exists {
+			facts[record.ID] = record
+		}
+	}
+	statuses := make(map[string]string, len(d.FactRelations))
+	for _, relation := range d.FactRelations {
+		statuses[relation.Target] = map[string]string{"supersedes": "superseded", "refutes": "refuted", "narrows": "narrowed"}[relation.Kind]
+	}
 	for _, f := range g.Facts {
 		if f.ID == "goal" {
 			root.Condition = f.Description
@@ -228,16 +238,11 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 		if f.ID == "origin" || f.ID == "goal" {
 			record.Status = "input"
 		}
-		for _, existing := range d.Facts {
-			if existing.ID == f.ID {
-				record = existing
-				break
-			}
+		if existing, ok := facts[f.ID]; ok {
+			record = existing
 		}
-		for _, relation := range d.FactRelations {
-			if relation.Target == f.ID {
-				record.Status = map[string]string{"supersedes": "superseded", "refutes": "refuted", "narrows": "narrowed"}[relation.Kind]
-			}
+		if status, ok := statuses[f.ID]; ok {
+			record.Status = status
 		}
 		s.FactRecords = append(s.FactRecords, record)
 	}
@@ -283,6 +288,15 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 	if err != nil {
 		return State{}, err
 	}
+	metadataByID := make(map[string]stepMetadata, len(d.Steps))
+	for _, metadata := range d.Steps {
+		// Preserve historical duplicate records: the last metadata wins, while
+		// any retained abandonment still overrides the runtime projection.
+		if metadataByID[metadata.ID].Status == "abandoned" {
+			metadata.Status = "abandoned"
+		}
+		metadataByID[metadata.ID] = metadata
+	}
 	for _, i := range g.Intents {
 		step := Step{ID: i.ID, From: i.From, GoalID: "goal", Description: i.Description, Status: "open", Result: i.To, Worker: i.Worker, CreatedAt: i.CreatedAt}
 		if i.Worker != nil {
@@ -291,16 +305,14 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 		if i.To != nil {
 			step.Status = "completed"
 		}
-		for _, metadata := range d.Steps {
-			if metadata.ID == i.ID {
-				step.GoalID, step.Priority, step.Reason = metadata.GoalID, metadata.Priority, metadata.Reason
-				step.DisputeID = metadata.DisputeID
-				step.Repair = metadata.Repair
-				step.DependsOn = append([]string(nil), metadata.DependsOn...)
-				step.WritePaths = append([]string(nil), metadata.WritePaths...)
-				if metadata.Status == "abandoned" {
-					step.Status = "abandoned"
-				}
+		if metadata, ok := metadataByID[i.ID]; ok {
+			step.GoalID, step.Priority, step.Reason = metadata.GoalID, metadata.Priority, metadata.Reason
+			step.DisputeID = metadata.DisputeID
+			step.Repair = metadata.Repair
+			step.DependsOn = append([]string(nil), metadata.DependsOn...)
+			step.WritePaths = append([]string(nil), metadata.WritePaths...)
+			if metadata.Status == "abandoned" {
+				step.Status = "abandoned"
 			}
 		}
 		if execution, ok := latest[i.ID]; ok && i.To == nil && step.Status != "abandoned" && slices.Contains([]string{"failed", "rejected", "cancelled"}, execution.Status) {

@@ -34,7 +34,6 @@ func (g Graph) ValidateSources(from []string) error {
 // retains the public Cairn semantics for existing clients.
 type ExecutionFence struct {
 	Run, Lease, Intent string
-	AllowConcluded     bool
 }
 
 func (t *Tx) CheckExecution(g Graph, fence ExecutionFence) error {
@@ -61,9 +60,7 @@ func (t *Tx) CheckExecution(g Graph, fence ExecutionFence) error {
 		return nil
 	}
 	for _, i := range g.Intents {
-		// Bootstrap concludes before completing. No other late operation may
-		// use an already-concluded intent to authorize new graph writes.
-		if i.ID == fence.Intent && (i.To == nil || fence.AllowConcluded) && Value(i.Worker) == fence.Run {
+		if i.ID == fence.Intent && i.To == nil && Value(i.Worker) == fence.Run {
 			return nil
 		}
 	}
