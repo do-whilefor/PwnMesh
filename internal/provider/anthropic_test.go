@@ -112,17 +112,78 @@ func TestGenerateStopsAfterThreeTransportAttempts(t *testing.T) {
 }
 
 func TestGenerateStillRetriesUnavailableHTTPStatus(t *testing.T) {
-	var calls int
+	for _, status := range []int{http.StatusServiceUnavailable, http.StatusTooManyRequests} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls int
+			p := testProvider(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return testResponse(req, status, "application/json", `{}`), nil
+				}
+				return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn"}`), nil
+			})
+			got, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "Reply OK")}, nil, nil)
+			if err != nil || calls != 2 || got.Text() != "OK" {
+				t.Fatalf("calls=%d, response=%q, error=%v", calls, got.Text(), err)
+			}
+		})
+	}
+}
+
+func TestGenerateBackoffDeadlinePreservesInfrastructureCause(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		cause  error
+		kind   agent.ErrorKind
+	}{
+		{"unavailable", http.StatusServiceUnavailable, nil, agent.ErrorUnavailable},
+		{"rate limit", http.StatusTooManyRequests, nil, agent.ErrorRateLimit},
+		{"transport", 0, io.EOF, agent.ErrorTransport},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			p := testProvider(func(req *http.Request) (*http.Response, error) {
+				calls++
+				if tc.cause != nil {
+					return nil, tc.cause
+				}
+				return testResponse(req, tc.status, "application/json", `{}`), nil
+			})
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			defer cancel()
+			_, err := p.Generate(ctx, []agent.Message{agent.Text("user", "Reply OK")}, nil, nil)
+			var modelErr *agent.ModelError
+			if calls != 1 || !errors.Is(err, context.DeadlineExceeded) || !errors.As(err, &modelErr) || modelErr.Kind != tc.kind {
+				t.Fatalf("backoff lost its cause or deadline: calls=%d error=%v", calls, err)
+			}
+			if tc.cause != nil {
+				if !errors.Is(err, tc.cause) {
+					t.Fatalf("backoff lost transport cause: %v", err)
+				}
+			} else {
+				var httpErr *HTTPError
+				if !errors.As(err, &httpErr) || httpErr.Status != tc.status {
+					t.Fatalf("backoff lost HTTP status: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestGenerateCancelledBackoffDoesNotReturnInfrastructureFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	calls := 0
 	p := testProvider(func(req *http.Request) (*http.Response, error) {
 		calls++
-		if calls == 1 {
-			return testResponse(req, http.StatusServiceUnavailable, "application/json", `{}`), nil
-		}
-		return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn"}`), nil
+		cancel()
+		return testResponse(req, http.StatusServiceUnavailable, "application/json", `{}`), nil
 	})
-	got, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "Reply OK")}, nil, nil)
-	if err != nil || calls != 2 || got.Text() != "OK" {
-		t.Fatalf("calls=%d, response=%q, error=%v", calls, got.Text(), err)
+	_, err := p.Generate(ctx, []agent.Message{agent.Text("user", "Reply OK")}, nil, nil)
+	var modelErr *agent.ModelError
+	if calls != 1 || !errors.Is(err, context.Canceled) || errors.As(err, &modelErr) {
+		t.Fatalf("cancelled backoff gained infrastructure retry permission: calls=%d error=%v", calls, err)
 	}
 }
 

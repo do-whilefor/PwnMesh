@@ -161,6 +161,7 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 		req.Header.Set("x-api-key", p.Token)
 		req.Header.Set("User-Agent", "pwnmesh/0.1")
 		req.Header.Set("x-opencode-session", p.sessionID)
+		var retryErr error
 		res, err = requestClient.Do(req)
 		if err != nil {
 			if attempt >= 2 || ctx.Err() != nil || !retryableTransport(err) {
@@ -170,6 +171,7 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 				}
 				return agent.Message{}, &agent.ModelError{Kind: kind, Err: err}
 			}
+			retryErr = &agent.ModelError{Kind: agent.ErrorTransport, Err: err}
 		} else {
 			if res.StatusCode >= 200 && res.StatusCode < 300 {
 				break
@@ -184,8 +186,14 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 			if attempt >= 2 || !retryableStatus(status) {
 				return agent.Message{}, classified
 			}
+			retryErr = classified
 		}
 		if err := waitRetry(ctx, attempt); err != nil {
+			// A deadline during backoff must retain the failure that required
+			// the retry. Human cancellation does not acquire retry permission.
+			if !errors.Is(err, context.Canceled) {
+				err = errors.Join(retryErr, err)
+			}
 			return agent.Message{}, err
 		}
 	}
