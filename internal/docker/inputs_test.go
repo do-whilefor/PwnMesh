@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -84,41 +85,58 @@ type inputTestTransport func(*http.Request) (*http.Response, error)
 
 func (f inputTestTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestInputArchiveClosesBlockedDownloadOnEarlyEngineFailure(t *testing.T) {
-	source := &blockedInput{started: make(chan struct{}), closed: make(chan struct{})}
-	defer source.Close()
-	cleanup := false
-	c := &Client{http: &http.Client{Transport: inputTestTransport(func(r *http.Request) (*http.Response, error) {
-		status, body := 200, ""
-		switch {
-		case strings.HasSuffix(r.URL.Path, "/archive"):
-			defer r.Body.Close()
-			tr := tar.NewReader(r.Body)
-			for n := 0; n < 4; n++ {
-				if _, err := tr.Next(); err != nil {
-					return nil, err
+func TestInputArchiveClosesBlockedDownloadOnFailure(t *testing.T) {
+	for _, mode := range []string{"engine failure", "canceled"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			source := &blockedInput{started: make(chan struct{}), closed: make(chan struct{})}
+			defer source.Close()
+			cleanup, cleanupContextOK := false, true
+			c := &Client{http: &http.Client{Transport: inputTestTransport(func(r *http.Request) (*http.Response, error) {
+				status, body := 200, ""
+				if !strings.HasSuffix(r.URL.Path, "/archive") {
+					deadline, bounded := r.Context().Deadline()
+					cleanupContextOK = cleanupContextOK && r.Context().Err() == nil && bounded && time.Until(deadline) > 0 && time.Until(deadline) <= 10*time.Second
 				}
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/archive"):
+					defer r.Body.Close()
+					tr := tar.NewReader(r.Body)
+					for n := 0; n < 4; n++ {
+						if _, err := tr.Next(); err != nil {
+							return nil, err
+						}
+					}
+					<-source.started
+					if mode == "canceled" {
+						cancel()
+						return nil, r.Context().Err()
+					}
+					status = 500
+				case strings.HasSuffix(r.URL.Path, "/exec"):
+					cleanup = true
+					body = `{"Id":"cleanup"}`
+				case strings.HasSuffix(r.URL.Path, "/json"):
+					body = `{"Running":false,"ExitCode":0}`
+				}
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}}
+			done := make(chan error, 1)
+			go func() { done <- c.archiveInput(ctx, "test", inputFixture([]byte("x")), source) }()
+			select {
+			case err := <-done:
+				if err == nil || !cleanup || !cleanupContextOK {
+					t.Fatalf("expected failed archive and bounded uncanceled cleanup: %v, cleanup=%v, context=%v", err, cleanup, cleanupContextOK)
+				}
+				if mode == "canceled" && !errors.Is(err, context.Canceled) {
+					t.Fatalf("cancellation was not preserved: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				_ = source.Close()
+				<-done
+				t.Fatal("failed archive waited for a blocked download instead of closing it")
 			}
-			<-source.started
-			status = 500
-		case strings.HasSuffix(r.URL.Path, "/exec"):
-			cleanup = true
-			body = `{"Id":"cleanup"}`
-		case strings.HasSuffix(r.URL.Path, "/json"):
-			body = `{"Running":false,"ExitCode":0}`
-		}
-		return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}, nil
-	})}}
-	done := make(chan error, 1)
-	go func() { done <- c.archiveInput(context.Background(), "test", inputFixture([]byte("x")), source) }()
-	select {
-	case err := <-done:
-		if err == nil || !cleanup {
-			t.Fatalf("expected failed archive and partial-file cleanup: %v, cleanup=%v", err, cleanup)
-		}
-	case <-time.After(2 * time.Second):
-		_ = source.Close()
-		<-done
-		t.Fatal("Engine failure waited for a blocked download instead of closing it")
+		})
 	}
 }
