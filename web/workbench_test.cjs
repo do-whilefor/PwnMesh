@@ -236,6 +236,25 @@ test('current round execution filtering and list counts do not use worker capaci
   assert.equal(h.elements.get('project-count').textContent,'2'); assert.equal(h.elements.get('running-project-count').textContent,'1');
 });
 
+test('unchanged polls and tab switches reuse logs while execution updates still refresh without a board revision', async () => {
+  const states = {A:snapshot('A')};
+  let run = {id:'run',generation:0,status:'running',kind:'explore'};
+  const h = harness(url => standard(url,states,value => value.includes('/executions?') ? {through:1,items:[run]} : undefined));
+  await settle(); assert.equal(h.projections.length,1);
+  await h.elements.get('tab-system').click(); await h.elements.get('tab-result').click();
+  const resultPanel = h.elements.get('activity-content').children[0];
+  await h.fireTimer(2500);
+  assert.equal(h.projections.length,1,'unchanged refresh reuses its projection');
+  assert.equal(h.displayed.filter(Boolean).length,1,'unchanged refresh reuses its graph');
+  assert.equal(h.elements.get('activity-content').children[0],resultPanel,'unchanged refresh preserves the rendered panel');
+  run = {...run,status:'succeeded',result:{text:'{"description":"已核验的新执行结果"}'}};
+  await h.fireTimer(2500);
+  assert.equal(h.projections.length,2,'execution status changes independently of state revision');
+  assert.match(h.elements.get('activity-content').textContent,/已核验的新执行结果/);
+  assert.equal(states.A.revision,1);
+  assert.equal(h.calls.filter(call => call.url.includes('/executions?limit=20&cursor=0&through=0')).length,3,'each refresh rereads active statuses');
+});
+
 test('hint draft survives a poll, failed write, closing and reopening the dialog', async () => {
   const states = {A:snapshot('A')}; let submissions = 0; const gate = deferred();
   const h = harness((url,options) => {

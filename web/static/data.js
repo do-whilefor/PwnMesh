@@ -397,10 +397,10 @@
         .filter(Boolean).join(' ').toLocaleLowerCase().includes(query)));
   }
 
-  function buildSystemLogs(state, events = [], executions = []) {
+  function buildSystemLogs(rows = []) {
     // Public execution records identify a phase, not the cause of an upstream
     // transport failure. Never infer an LLM provider or HTTP status from text.
-    const logs = buildLogs(state, events, executions).filter(log =>
+    const logs = rows.filter(log =>
       (log.source === 'execution' && log.kind !== 'model') ||
       (log.source === 'event' && (log.runId || log.title.startsWith('状态更新'))) ||
       log.id.startsWith('project:')
@@ -408,7 +408,7 @@
     return {logs, unavailable:['LLM 请求日志','组件运行日志']};
   }
 
-  function buildResult(state, executions = []) {
+  function buildResult(state, logs = []) {
     state = object(state);
     const graph = object(state.graph), project = object(graph.project);
     const facts = new Map(array(state.fact_records).map(fact => [fact.id,fact]));
@@ -417,7 +417,7 @@
       return {id:string(finding.id),claim:visibleFinalText(finding.claim),status:string(finding.status),
         statusLabel:findingLabel(finding,supportValid),supportValid,sources:refs(finding.sources)};
     });
-    const executionLogs = buildLogs(state, [], executions).filter(log => log.source === 'execution');
+    const executionLogs = logs.filter(log => log.source === 'execution');
     const conclusions = executionLogs.filter(log => log.kind === 'model');
     const truncated = executionLogs.some(log => log.truncated);
     const rootGoal = array(state.goals).find(goal => goal?.id === 'goal');

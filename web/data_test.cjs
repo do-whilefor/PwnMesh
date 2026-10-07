@@ -58,7 +58,7 @@ test('candidate findings, invalid support, rejected and truncated output never b
     {id:'b',claim:'旧结论',status:'verified',sources:['f'],support_valid:false}];
   const executions = ['failed','rejected','succeeded'].map((status,i) => ({id:String(i),project_id:'p',generation:1,
     status,kind:'reason',result:{text:JSON.stringify({complete:{description:'不要当成完成'}}),truncated:i===2}}));
-  const result = data.buildResult(state,executions);
+  const result = data.buildResult(state,data.buildLogs(state,[],executions));
   assert.equal(result.status,'pending');
   assert.deepEqual(result.conclusions,[]);
   assert.equal(result.truncated,true);
@@ -71,18 +71,20 @@ test('execution conclusions remain separate from project completion and never in
   const state = fixture();
   const executions = [{id:'old',generation:0,status:'succeeded',kind:'explore',result:{text:'{"description":"旧轮"}'}},
     {id:'current',generation:1,status:'succeeded',kind:'explore',result:{text:'{"description":"观察结果","reasoning":"内部推理"}'}}];
-  const result = data.buildResult(state,executions);
+  const logs = data.buildLogs(state,[],executions);
+  const result = data.buildResult(state,logs);
   assert.equal(result.status,'pending');
   assert.equal(result.conclusions.length,1);
   assert.equal(result.conclusions[0].body,'观察结果');
-  const executionLogs = data.buildLogs(state,[],executions).filter(log => log.source === 'execution');
+  assert.equal(result.conclusions[0],logs.find(log => log.source === 'execution' && log.kind === 'model'),'result reuses the accepted log projection');
+  const executionLogs = logs.filter(log => log.source === 'execution');
   assert.doesNotMatch(JSON.stringify(executionLogs),/内部推理|旧轮/);
 });
 
 test('system projection identifies real execution phases and reports unavailable log sources', () => {
   const state = fixture();
-  const result = data.buildSystemLogs(state,[],[{id:'run',generation:1,status:'failed',kind:'reason',
-    updated_at:'2026-09-24T00:01:00Z',result:{error:'HTTP 503: execution failed'}}]);
+  const result = data.buildSystemLogs(data.buildLogs(state,[],[{id:'run',generation:1,status:'failed',kind:'reason',
+    updated_at:'2026-09-24T00:01:00Z',result:{error:'HTTP 503: execution failed'}}]));
   const error = result.logs.find(log => log.runId === 'run');
   assert.equal(error.component,'Decide');
   assert.equal(error.level,'error');

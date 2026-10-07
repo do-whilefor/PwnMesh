@@ -7,7 +7,7 @@
   let projects = [], state = null, executions = [], events = [], logs = [], selectedId = '';
   let selectedNode = null, selectedEdge = null, tab = 'board', systemFilter = 'all', logLimit = 300;
   let timer, toastTimer, management = null, hintProjectId = '', mutating = false, connected = false;
-  let projectsSignature = '', activitySignature = '', createDraft = false, updatingGraph = false;
+  let projectsSignature = '', activitySignature = '', workspaceSignature = '', workspaceVersion = 0, createDraft = false, updatingGraph = false;
   try { selectedId = new URLSearchParams(location.search).get('project') || localStorage.getItem('pwnmesh.selected-project') || ''; } catch {}
   const pathFor = id => '/projects/' + encodeURIComponent(id);
   const current = () => state?.graph?.project || projects.find(project => project.id === selectedId);
@@ -173,7 +173,7 @@
     return box;
   }
   function renderResult() {
-    const result = data.buildResult(state, executions); $('activity-tools').append(el('span', '', '结论与证据'), el('span', '', result.status === 'completed' ? '本轮已完成' : '当前轮')); $('activity-count').textContent = result.findings.length + ' 项发现';
+    const result = data.buildResult(state, logs); $('activity-tools').append(el('span', '', '结论与证据'), el('span', '', result.status === 'completed' ? '本轮已完成' : '当前轮')); $('activity-count').textContent = result.findings.length + ' 项发现';
     const titles = {completed:'探索已完成',terminated:'本轮已终止',pending:'答案正在探索中',unverified:'完成证据待核对'};
     if (result.status === 'completed') { const header = el('div', 'result-header'), check = el('span', 'result-check'); check.append(icon('check')); header.append(check, el('h3', '', titles[result.status])); $('activity-content').append(header, el('p', 'result-summary', result.summary)); }
     else $('activity-content').append(emptyPanel(titles[result.status] || titles.pending, result.notice || '当前轮还没有可确认的项目完成结论。'));
@@ -185,8 +185,9 @@
   }
   function renderActivity({reset = false} = {}) {
     if (selectedNode && !graph.getNodes().some(node => nodeKey(node) === nodeKey(selectedNode))) selectedNode = null; if (selectedEdge && !graph.getEdgeDetails(selectedEdge.id)) selectedEdge = null;
-    const system = data.buildSystemLogs(state, events, executions), signature = JSON.stringify([tab, systemFilter, logs, system, state, nodeKey(selectedNode), selectedEdge?.id, logLimit]);
+    const signature = JSON.stringify([tab, systemFilter, workspaceVersion, nodeKey(selectedNode), selectedEdge?.id, logLimit]);
     if (!reset && signature === activitySignature) return; activitySignature = signature; const content = $('activity-content'), previousTop = content.scrollTop;
+    const system = data.buildSystemLogs(logs);
     content.replaceChildren(); $('activity-tools').replaceChildren(); renderInspector();
     document.querySelectorAll('[data-tab]').forEach(button => { const active = button.dataset.tab === tab; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; }); content.setAttribute('aria-labelledby', 'tab-' + tab);
     const errors = system.logs.filter(log => log.level === 'error').length; $('system-alert').textContent = errors ? String(errors) : ''; $('system-alert').title = '本轮已记录的执行与系统错误';
@@ -197,7 +198,7 @@
   function selectEdge(edge) { selectedEdge = edge; if (edge) { selectedNode = null; if (!updatingGraph) tab = 'board'; } renderActivity({reset:!updatingGraph}); }
   function updateGraph(value) { updatingGraph = true; try { graph.setState(value); } finally { updatingGraph = false; } }
   function resetSelection(id) {
-    selectedId = id; state = null; executions = []; events = []; logs = []; selectedNode = null; selectedEdge = null; logLimit = 300; activitySignature = '';
+    selectedId = id; state = null; executions = []; events = []; logs = []; selectedNode = null; selectedEdge = null; logLimit = 300; activitySignature = ''; workspaceSignature = '';
     updateGraph(null); renderHeader(); renderActivity({reset:true}); try { if (id) localStorage.setItem('pwnmesh.selected-project', id); else localStorage.removeItem('pwnmesh.selected-project'); } catch {}
   }
   async function selectProject(id) { if (mutating) return; if (id !== selectedId || !state) resetSelection(id); closeMenus(); renderProjects(); await loadWorkspace(id); }
@@ -224,7 +225,10 @@
       cache = {after,generation,stateRevision:nextState.revision,events:cache.events.concat(batch)}; eventCache.set(target, cache);
       if (state && (state.graph.project.generation || 0) !== generation) { selectedNode = null; selectedEdge = null; logLimit = 300; }
       state = nextState; executions = runs.filter(run => (run.generation || 0) === generation); events = cache.events.filter(event => event.revision <= state.revision);
-      logs = data.buildLogs(state, events, executions); updateGraph(state); renderActivity(); setConnection(true); $('last-update').textContent = '刷新 ' + data.formatTime(new Date().toISOString());
+      // Execution status can change without advancing the board revision.
+      const signature = JSON.stringify([state, events, executions]);
+      if (signature !== workspaceSignature) { workspaceSignature = signature; workspaceVersion++; logs = data.buildLogs(state, events, executions); updateGraph(state); renderActivity(); }
+      setConnection(true); $('last-update').textContent = '刷新 ' + data.formatTime(new Date().toISOString());
     } catch (error) { if (!requests.current(request.version)) return; setConnection(false, error.message + '。已显示的数据会保留，稍后自动重试。'); }
     finally { if (requests.current(request.version)) timer = setTimeout(() => loadWorkspace(selectedId), retryGeneration ? 0 : document.hidden ? 10000 : 2500); }
   }
