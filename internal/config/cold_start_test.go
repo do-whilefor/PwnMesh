@@ -14,22 +14,31 @@ func coldStartConfig() Config {
 		Tasks:     Tasks{Reason: Task{Timeout: 300, MaxIntents: 3}, Explore: Task{ConcludeTimeout: 60}},
 		Container: Container{Image: "fixture", Network: "bridge", CompletedAction: "stop"},
 		CommonEnv: map[string]string{"ANTHROPIC_BASE_URL": "http://unused.invalid", "ANTHROPIC_AUTH_TOKEN": "fixture", "ANTHROPIC_MODEL": "fixture"},
-		Workers:   []Worker{{Name: "fixture", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 4}},
+		Workers:   []Worker{{Name: "fixture", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 4}},
 	}
 }
 
-func TestDecideExecuteConfigDoesNotRequireBootstrapBudget(t *testing.T) {
+func TestOrchestrationConfigDoesNotRequireBootstrapBudget(t *testing.T) {
 	c := coldStartConfig()
 	if err := c.Validate(); err != nil {
-		t.Fatalf("reason + explore configuration: %v", err)
+		t.Fatalf("reason + curate + explore configuration: %v", err)
 	}
 }
 
-func TestConfigRequiresDecideCapability(t *testing.T) {
-	c := coldStartConfig()
-	c.Workers[0].TaskTypes = []string{"explore"}
-	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "reason (Decide)") {
-		t.Fatalf("missing Decide capability: %v", err)
+func TestConfigRequiresEveryOrchestrationRole(t *testing.T) {
+	for _, missing := range []string{"reason", "curate", "explore"} {
+		t.Run(missing, func(t *testing.T) {
+			c := coldStartConfig()
+			c.Workers[0].TaskTypes = nil
+			for _, kind := range []string{"reason", "curate", "explore"} {
+				if kind != missing {
+					c.Workers[0].TaskTypes = append(c.Workers[0].TaskTypes, kind)
+				}
+			}
+			if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "must support "+missing+" (") {
+				t.Fatalf("missing %s capability: %v", missing, err)
+			}
+		})
 	}
 }
 
@@ -51,10 +60,11 @@ func TestConfigRejectsRetiredBootstrapAndMock(t *testing.T) {
 	}
 }
 
-func TestDecideCapabilityCanBeProvidedBySeparateWorker(t *testing.T) {
+func TestOrchestrationRolesCanBeProvidedBySeparateWorkers(t *testing.T) {
 	c := coldStartConfig()
 	c.Workers[0].TaskTypes = []string{"explore"}
 	c.Workers = append(c.Workers, Worker{Name: "planner", Type: "go", TaskTypes: []string{"reason"}, MaxRunning: 1})
+	c.Workers = append(c.Workers, Worker{Name: "curator", Type: "go", TaskTypes: []string{"curate"}, MaxRunning: 1})
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
 	}

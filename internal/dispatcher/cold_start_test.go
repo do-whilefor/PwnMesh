@@ -58,7 +58,7 @@ func TestNewProjectsStartWithDecideAndRespectExecuteLimits(t *testing.T) {
 				Runtime:   config.Runtime{Interval: 1, MaxWorkers: 3, MaxProjects: 1, MaxProjectWorkers: 3, HealthTimeout: 5, HealthMode: "disabled"},
 				Tasks:     config.Tasks{Reason: config.Task{MaxIntents: 3}, Explore: config.Task{ConcludeTimeout: 60}},
 				Container: config.Container{Image: "fixture", Network: "bridge", CompletedAction: "stop"},
-				Workers:   []config.Worker{{Name: "fixture", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 3, Env: map[string]string{"ANTHROPIC_BASE_URL": "http://unused.invalid", "ANTHROPIC_AUTH_TOKEN": "fixture", "ANTHROPIC_MODEL": "fixture"}}},
+				Workers:   []config.Worker{{Name: "fixture", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 3, Env: map[string]string{"ANTHROPIC_BASE_URL": "http://unused.invalid", "ANTHROPIC_AUTH_TOKEN": "fixture", "ANTHROPIC_MODEL": "fixture"}}},
 			}
 			if err = cfg.Validate(); err != nil {
 				t.Fatal(err)

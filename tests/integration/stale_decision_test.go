@@ -138,7 +138,7 @@ func TestDockerDecisionSurvivesNewFactsUntilDeadlineWithoutStoppingExecute(t *te
 		Runtime:   config.Runtime{Interval: 1, MaxWorkers: 2, MaxProjects: 1, MaxProjectWorkers: 2, HealthMode: "disabled", HealthTimeout: 10},
 		Tasks:     config.Tasks{Reason: config.Task{Timeout: 20, MaxIntents: 3}, Explore: config.Task{Timeout: 0, ConcludeTimeout: 10}},
 		Container: config.Container{Image: image, Network: testContainerNetwork(t), Namespace: fmt.Sprintf("pwnmesh-stale-%d", time.Now().UnixNano()), CompletedAction: "stop"},
-		Workers: []config.Worker{{Name: "controlled", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 2,
+		Workers: []config.Worker{{Name: "controlled", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 2,
 			Env: map[string]string{"ANTHROPIC_BASE_URL": model.URL, "ANTHROPIC_AUTH_TOKEN": "controlled-test-only", "ANTHROPIC_MODEL": "controlled", "PWNMESH_REQUEST_TIMEOUT": "120"}}},
 	}
 	if err := c.Validate(); err != nil {

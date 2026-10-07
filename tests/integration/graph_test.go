@@ -299,7 +299,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 	}))
 	defer model.Close()
 	network := testContainerNetwork(t)
-	c := config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, MaxWorkers: 2, MaxProjects: 1, MaxProjectWorkers: 2, HealthMode: "disabled", HealthTimeout: 10}, Tasks: config.Tasks{Reason: config.Task{Timeout: 45, MaxIntents: 3}, Explore: config.Task{Timeout: 45, ConcludeTimeout: 5}}, Container: config.Container{Image: image, Network: network, Namespace: fmt.Sprintf("pwnmesh-graph-%d", time.Now().UnixNano()), CompletedAction: "stop"}, Workers: []config.Worker{{Name: "controlled", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 1, Env: map[string]string{"ANTHROPIC_BASE_URL": model.URL, "ANTHROPIC_AUTH_TOKEN": "controlled-test-only", "ANTHROPIC_MODEL": "controlled", "PWNMESH_REQUEST_TIMEOUT": "10"}}}}
+	c := config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, MaxWorkers: 2, MaxProjects: 1, MaxProjectWorkers: 2, HealthMode: "disabled", HealthTimeout: 10}, Tasks: config.Tasks{Reason: config.Task{Timeout: 45, MaxIntents: 3}, Explore: config.Task{Timeout: 45, ConcludeTimeout: 5}}, Container: config.Container{Image: image, Network: network, Namespace: fmt.Sprintf("pwnmesh-graph-%d", time.Now().UnixNano()), CompletedAction: "stop"}, Workers: []config.Worker{{Name: "controlled", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 1, Env: map[string]string{"ANTHROPIC_BASE_URL": model.URL, "ANTHROPIC_AUTH_TOKEN": "controlled-test-only", "ANTHROPIC_MODEL": "controlled", "PWNMESH_REQUEST_TIMEOUT": "10"}}}}
 	runtimeContainer = c.Container.Namespace + "-dispatch-" + project.Project.ID
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)

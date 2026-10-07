@@ -189,7 +189,7 @@ func batchSchedulerFixture(t *testing.T, directions int) (*Scheduler, *batchProt
 		Runtime:   config.Runtime{Interval: 1, MaxWorkers: 1, MaxProjects: 1, MaxProjectWorkers: 1, HealthTimeout: 5, HealthMode: "disabled"},
 		Tasks:     config.Tasks{Reason: config.Task{MaxIntents: 3}, Explore: config.Task{ConcludeTimeout: 60}},
 		Container: config.Container{Image: "synthetic", Network: "bridge", CompletedAction: "stop"},
-		Workers:   []config.Worker{{Name: "scripted", Type: "go", TaskTypes: []string{"reason", "explore"}, MaxRunning: 1, Env: map[string]string{"ANTHROPIC_BASE_URL": "http://unused.invalid", "ANTHROPIC_AUTH_TOKEN": "synthetic-test-token", "ANTHROPIC_MODEL": "synthetic"}}},
+		Workers:   []config.Worker{{Name: "scripted", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 1, Env: map[string]string{"ANTHROPIC_BASE_URL": "http://unused.invalid", "ANTHROPIC_AUTH_TOKEN": "synthetic-test-token", "ANTHROPIC_MODEL": "synthetic"}}},
 	}
 	if err = cfg.Validate(); err != nil {
 		t.Fatal(err)

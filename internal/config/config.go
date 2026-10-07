@@ -199,8 +199,10 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
-	if !capabilities["reason"] {
-		return fmt.Errorf("at least one worker must support reason (Decide) to plan projects")
+	for _, role := range []struct{ kind, name string }{{"reason", "Decide"}, {"curate", "Curate"}, {"explore", "Execute"}} {
+		if !capabilities[role.kind] {
+			return fmt.Errorf("at least one worker must support %s (%s) to run projects", role.kind, role.name)
+		}
 	}
 	return nil
 }

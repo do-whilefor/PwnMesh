@@ -4,7 +4,6 @@ import "testing"
 
 func TestCurationCapabilityAndBudget(t *testing.T) {
 	c := coldStartConfig()
-	c.Workers[0].TaskTypes = append(c.Workers[0].TaskTypes, "curate")
 	c.Tasks.Curate = Task{Timeout: 240}
 	if err := c.Validate(); err != nil {
 		t.Fatal(err)
@@ -18,12 +17,9 @@ func TestCurationCapabilityAndBudget(t *testing.T) {
 	}
 }
 
-func TestCurationRemainsOptionalForLegacyConfigurations(t *testing.T) {
+func TestConfigRejectsDuplicateCurationCapability(t *testing.T) {
 	c := coldStartConfig()
-	if err := c.Validate(); err != nil {
-		t.Fatal(err)
-	}
-	c.Workers[0].TaskTypes = append(c.Workers[0].TaskTypes, "curate", "curate")
+	c.Workers[0].TaskTypes = append(c.Workers[0].TaskTypes, "curate")
 	if err := c.Validate(); err == nil {
 		t.Fatal("duplicate curation capability accepted")
 	}

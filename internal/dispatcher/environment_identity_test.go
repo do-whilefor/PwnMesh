@@ -15,7 +15,7 @@ func TestEnvironmentIdentityTracksLegacySettings(t *testing.T) {
 			Tasks:     config.Tasks{Explore: config.Task{ConcludeTimeout: 60}},
 			Container: config.Container{Image: "fixture", Network: "bridge", CompletedAction: "stop"},
 			CommonEnv: map[string]string{"ANTHROPIC_BASE_URL": "http://unused.invalid", "ANTHROPIC_AUTH_TOKEN": "fixture", "ANTHROPIC_MODEL": "fixture"},
-			Workers:   []config.Worker{{Name: "fixture", TaskTypes: []string{"reason"}, MaxRunning: 1, Env: env}},
+			Workers:   []config.Worker{{Name: "fixture", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 1, Env: env}},
 		}
 		if err := c.Validate(); err != nil {
 			t.Fatal(err)
