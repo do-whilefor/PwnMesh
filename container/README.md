@@ -4,16 +4,8 @@
 再安装 pwntools、pymongo、AWS CLI v1、腾讯云 tccli、阿里云 aliyun，以及全局 Playwright CLI 和 Chromium。
 `kali-linux-headless` 是 APT 元包，不是 Docker 的 `FROM` 镜像名。
 
-明确补齐 bsdextrautils、nodejs/npm、jq、iputils-ping、sshpass、ncat、rlwrap、yq、krb5-user、adb、
-ripgrep（`rg`）、fd-find（`fd`），以及 Java JDK、jadx、apktool、file、sqlite3。
-其中 yq 使用 Kali 的 jq 风格 Python 实现，例如 `yq -r '.name' file.yaml`。
-镜像还分发 `pwn-http`，用于离线检查 HAR/原始 HTTP 请求和单次重放保存证据。
-APT 使用 `--no-install-recommends`；安装期间禁止自动启动软件包服务，实际任务需要时再启动。
-
-`python`/`python3` 和 `pip`/`pip3` 使用 `/opt/pwnmesh-venv`；tccli 使用独立虚拟环境，
-其命令同样已加入 PATH。任务可按需继续安装 Python 依赖。
-两个虚拟环境均使用 Python 3.13，避免 pwntools 4.15.0 在 Python 3.14 下的字节码兼容问题。
-完整运行约定见 [environment.md](environment.md)。
+客户端材料使用 `pwn-http` 检查/重放 HTTP 请求，使用 jadx、apktool 和 SQLite 静态分析 APK、Java 归档及本地存储。
+完整工具清单、Python 环境、浏览器默认值和运行边界见 [environment.md](environment.md)。
 
 在**仓库根目录**执行。本 Dockerfile 的所有 `COPY` 源路径都以仓库根为构建上下文
 （与 `compose.yaml` 中 `worker-image` 的 `context: .` 一致），在 `container/` 目录内构建会找不到源文件。
@@ -79,7 +71,8 @@ APT 索引下载失败会使构建失败，避免把使用旧索引的警告误�
 `check-worker.sh` 已随镜像分发到 `/usr/local/share/pwnmesh/`。自检检查 headless 元包和新增工具，
 实际执行回环 ping、文本与 YAML 处理、pwntools 汇编和常量求值、
 BSON 编解码、云 CLI 版本命令、由 groff-base 渲染的 AWS CLI 帮助，以及 Playwright CLI 打开回环地址页面并验证 JavaScript 运行结果；
-还会现场生成无外部依赖的 JAR/APK，验证 jadx 反编译、apktool 构建及解码 Manifest/smali、SQLite 只读查询，以及 `pwn-http` 解析/重放回环服务的 HAR 并校验证据；
+还会现场生成无外部依赖的 JAR/多 DEX APK，验证代码反编译、Manifest 权限/导出组件/深链/备份声明、网络安全资源和 assets 的解码，以及原 APK 字节不变；
+另验证 SQLite 只读查询和 `pwn-http` 解析/重放回环服务的 HAR 并校验证据。
 无需外网或云凭据。
 
 ```bash
@@ -90,28 +83,6 @@ docker run --rm --pull never --network none --init \
 # 验证镜像自身 ENTRYPOINT/CMD（等价于 pwnmesh worker --help）
 docker run --rm --pull never --network none pwnmesh-worker:dev
 ```
-
-也可在容器内直接使用这些包和命令。以下示例在 `/tmp` 打开 Chromium 空白页，全程离线：
-
-```bash
-docker run --rm --pull never --network none --init \
-  --entrypoint /bin/sh pwnmesh-worker:dev -ec '
-    python -c "from pwn import context, asm; import pymongo; context.arch = \"amd64\"; print(asm(\"ret\").hex(), pymongo.version)"
-    aws --version
-    MANPAGER=cat PAGER=cat aws help >/dev/null
-    tccli --version
-    aliyun version
-    playwright-cli --version
-    cd /tmp
-    playwright-cli -s=demo open about:blank
-    playwright-cli -s=demo snapshot
-    playwright-cli -s=demo close
-  '
-```
-
-Chromium 默认无头运行，root 环境使用 `sandbox=false`。浏览器位于 `/opt/ms-playwright`，
-CLI 通过 `/usr/local/bin/pwnmesh-chromium` 固定入口运行，可从任意工作目录调用，不需要项目 skills。
-实际访问 MongoDB、云服务或外部网页时，再由任务提供目标地址、所需凭据和网络连接。
 
 ### 客户端接口与静态分析
 
@@ -145,7 +116,7 @@ pwn-http inspect /workspace/inputs/request.http --base-url https://api.example.i
 file /workspace/inputs/client.apk
 jadx -d /workspace/analysis/java /workspace/inputs/client.apk
 apktool d /workspace/inputs/client.apk -o /workspace/analysis/apk
-rg -n 'https?://|android:exported|allowBackup|cleartextTrafficPermitted' /workspace/analysis
+rg -n 'https?://|android:exported|allowBackup|debuggable|networkSecurityConfig|cleartextTrafficPermitted' /workspace/analysis
 sqlite3 -readonly /workspace/inputs/client.db '.schema'
 ```
 
@@ -156,4 +127,6 @@ sqlite3 -readonly /workspace/inputs/client.db '.schema'
 
 抓包需由测试设备和已有代理工具完成后导入；本次不提供手机原生界面操作。
 受设备签名、客户端证书或会话绑定保护的接口需要原设备参与或补充测试条件。
-APK 的静态结果不等于 Android 运行时验证；加固包、iOS 二进制或本地原生库应按材料补充对应工具与运行环境。
+APK 中的导出声明、深链和网络配置必须结合组件权限、代码校验、资源限定符和目标 Android 版本判断；关键词命中本身不是漏洞证明。
+多 DEX 应检查全部反编译结果；拆分 APK 需要完整 split 集，单个 base APK 不代表完整应用。
+静态自检不覆盖签名真实性或 Android 运行时行为；加固包、iOS 二进制或本地原生库应按材料补充对应工具与运行环境。

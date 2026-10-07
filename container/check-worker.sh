@@ -50,6 +50,7 @@ test -d "$PLAYWRIGHT_BROWSERS_PATH"
 # 仅连接回环地址，因此构建及 --network none 下的测试均无需外网。
 python - "$smoke_dir" <<'PY'
 import http.server
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -60,6 +61,8 @@ import subprocess
 import sys
 import threading
 import venv
+import xml.etree.ElementTree as ET
+import zipfile
 
 assert sys.prefix == "/opt/pwnmesh-venv", sys.prefix
 assert sys.version_info[:2] == (3, 13), sys.version
@@ -93,7 +96,8 @@ subprocess.run(["jadx", "--no-res", "-d", str(java_decoded), str(java_archive)],
 assert "https://api.example.invalid/v1" in (java_decoded / "sources/example/ClientProbe.java").read_text()
 
 apk_source = smoke_dir / "apk-source"
-(apk_source / "smali/example").mkdir(parents=True)
+for directory in ("smali/example", "smali_classes2/example", "res/xml", "assets"):
+    (apk_source / directory).mkdir(parents=True)
 (apk_source / "apktool.yml").write_text("""version: 2.7.0
 apkFileName: client.apk
 isFrameworkApk: false
@@ -110,9 +114,27 @@ versionInfo:
 <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="example.clientprobe" android:versionCode="1" android:versionName="1.0">
   <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="28"/>
   <uses-permission android:name="android.permission.INTERNET"/>
-  <application android:label="Client probe" android:allowBackup="false"/>
+  <application android:label="Client probe" android:allowBackup="false" android:debuggable="true" android:networkSecurityConfig="@xml/network_security_config">
+    <activity android:name="example.ProbeActivity" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.VIEW"/>
+        <category android:name="android.intent.category.BROWSABLE"/>
+        <data android:scheme="probe" android:host="client"/>
+      </intent-filter>
+    </activity>
+    <provider android:name="example.PrivateProvider" android:authorities="example.clientprobe.data" android:exported="false"/>
+  </application>
 </manifest>
 ''')
+(apk_source / "res/xml/network_security_config.xml").write_text('''<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false"/>
+  <domain-config cleartextTrafficPermitted="true">
+    <domain includeSubdomains="true">api.example.invalid</domain>
+  </domain-config>
+</network-security-config>
+''')
+(apk_source / "assets/client.json").write_text('{"api":"https://api.example.invalid/asset"}\n')
 (apk_source / "smali/example/ClientProbe.smali").write_text('''.class public Lexample/ClientProbe;
 .super Ljava/lang/Object;
 .method public static endpoint()Ljava/lang/String;
@@ -121,16 +143,46 @@ versionInfo:
     return-object v0
 .end method
 ''')
+(apk_source / "smali_classes2/example/SecondaryProbe.smali").write_text('''.class public Lexample/SecondaryProbe;
+.super Ljava/lang/Object;
+.method public static endpoint()Ljava/lang/String;
+    .registers 1
+    const-string v0, "https://api.example.invalid/secondary"
+    return-object v0
+.end method
+''')
 apk_file = smoke_dir / "client.apk"
 apk_framework = smoke_dir / "apk-framework"
 subprocess.run(["apktool", "b", str(apk_source), "-p", str(apk_framework), "-o", str(apk_file)], check=True, timeout=90)
+apk_digest = hashlib.sha256(apk_file.read_bytes()).digest()
+with zipfile.ZipFile(apk_file) as archive:
+    assert {"classes.dex", "classes2.dex", "resources.arsc", "AndroidManifest.xml", "assets/client.json"} <= set(archive.namelist())
 apk_decoded = smoke_dir / "apk-decoded"
 subprocess.run(["apktool", "d", str(apk_file), "-p", str(apk_framework), "-o", str(apk_decoded)], check=True, timeout=90)
-assert 'package="example.clientprobe"' in (apk_decoded / "AndroidManifest.xml").read_text()
+android = "{http://schemas.android.com/apk/res/android}"
+manifest = ET.parse(apk_decoded / "AndroidManifest.xml").getroot()
+assert manifest.attrib["package"] == "example.clientprobe"
+assert manifest.find("uses-permission").attrib[android + "name"] == "android.permission.INTERNET"
+application = manifest.find("application")
+assert application.attrib[android + "allowBackup"] == "false"
+assert application.attrib[android + "debuggable"] == "true"
+assert application.attrib[android + "networkSecurityConfig"] == "@xml/network_security_config"
+activity = application.find("activity")
+assert activity.attrib[android + "exported"] == "true"
+assert activity.find("intent-filter/data").attrib[android + "scheme"] == "probe"
+assert application.find("provider").attrib[android + "exported"] == "false"
+network = ET.parse(apk_decoded / "res/xml/network_security_config.xml").getroot()
+assert network.find("base-config").attrib["cleartextTrafficPermitted"] == "false"
+assert network.find("domain-config").attrib["cleartextTrafficPermitted"] == "true"
+assert network.find("domain-config/domain").text.strip() == "api.example.invalid"
+assert json.loads((apk_decoded / "assets/client.json").read_text())["api"].endswith("/asset")
 assert "api.example.invalid/mobile" in (apk_decoded / "smali/example/ClientProbe.smali").read_text()
+assert "api.example.invalid/secondary" in (apk_decoded / "smali_classes2/example/SecondaryProbe.smali").read_text()
 apk_java = smoke_dir / "apk-java"
 subprocess.run(["jadx", "--no-res", "-d", str(apk_java), str(apk_file)], check=True, timeout=90)
 assert "api.example.invalid/mobile" in (apk_java / "sources/example/ClientProbe.java").read_text()
+assert "api.example.invalid/secondary" in (apk_java / "sources/example/SecondaryProbe.java").read_text()
+assert hashlib.sha256(apk_file.read_bytes()).digest() == apk_digest, "analysis changed the original APK"
 file_type = subprocess.check_output(["file", "-b", str(apk_file)], text=True, timeout=10).lower()
 assert any(kind in file_type for kind in ("archive", "android package")), file_type
 
