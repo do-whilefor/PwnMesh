@@ -165,12 +165,15 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 	defer api.Close()
 	client := &dispatcher.Client{Base: api.URL}
 	var project board.Graph
-	if err := client.Do(context.Background(), "POST", "/projects", map[string]any{"title": "Controlled observation correction", "origin": "Use only synthetic local files and retain the original observation.", "goal": "Correct the mistaken sum and complete using effective evidence.", "bootstrap_enabled": false, "orchestration_version": 1}, &project, nil); err != nil {
+	if err := client.Do(context.Background(), "POST", "/projects", map[string]any{"title": "Controlled observation correction", "origin": "Use only synthetic local files and retain the original observation.", "goal": "Correct the mistaken sum, reconcile the original and corrected observations, and complete using effective evidence.", "bootstrap_enabled": false, "orchestration_version": 1}, &project, nil); err != nil {
 		t.Fatal(err)
 	}
 	modelErrors := make(chan error, 16)
 	var mu sync.Mutex
 	turns := map[string]int{}
+	plans := map[string]map[string]any{}
+	assessments := map[string]board.RootAssessment{}
+	assessmentReviewed := map[string]bool{}
 	var oldID, correctedID, oldCandidateID, freshCandidateID string
 	rollbackChecked := false
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -210,7 +213,46 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 		}
 		switch job.Kind {
 		case "reason":
-			switch turn {
+			closure := job.Decision != nil && job.Decision.ClosureProtocol == 1
+			plan := func(op, key string, payload map[string]any) {
+				if !closure {
+					reply.action(op, key, payload)
+					return
+				}
+				input := map[string]any{"op": op, "idempotency_key": key, "payload": payload}
+				assessment := board.RootAssessment{
+					Status: "missing", From: []string{},
+					Description: "The required correction and reconciliation are not both complete.",
+					Gaps:        []board.RequirementGap{{ID: "correction", InputIDs: []string{"goal"}, Description: "Recalculate the retained input and reconcile the original and corrected observations."}},
+				}
+				if op == "complete" {
+					assessment = board.RootAssessment{Status: "satisfied", From: []string{correctedID}, Description: "The accepted correction and committed reconciliation retain the original observation and current effective evidence."}
+				} else {
+					input["gap_id"] = "correction"
+				}
+				plans[run], assessments[run] = input, assessment
+				reply.call("assess_root", assessment)
+			}
+			// Observe the assessment in a separate request before staging its
+			// gap-bound work or evidence-backed completion.
+			if closure && turn == 3 {
+				text, _ := last(false)
+				var receipt struct {
+					Assessment board.RootAssessment `json:"assessment"`
+				}
+				if json.Unmarshal([]byte(text), &receipt) != nil || !reflect.DeepEqual(receipt.Assessment, assessments[run]) || plans[run] == nil {
+					fail(errors.New("missing original-requirement assessment"))
+					return
+				}
+				assessmentReviewed[run] = true
+				reply.call("graph_action", plans[run])
+				return
+			}
+			plannerTurn := turn
+			if closure && turn > 3 {
+				plannerTurn--
+			}
+			switch plannerTurn {
 			case 1:
 				reply.call("read_graph", map[string]any{"section": "steps", "limit": 20})
 			case 2:
@@ -223,7 +265,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 					return
 				}
 				if len(page.Items) == 0 {
-					reply.action("step", "producer", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Retain the mistaken transcription, recalculate the same fixed input and publish a correction."})
+					plan("step", "producer", map[string]any{"action": "add", "from": []string{"origin"}, "description": "Retain the mistaken transcription, recalculate the same fixed input and publish a correction."})
 				} else if len(page.Items) == 1 && page.Items[0].Status == "completed" && correctedID != "" {
 					var state board.State
 					if err := store.Do(r.Context(), func(tx *board.Tx) error {
@@ -237,10 +279,10 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 					if state.Curation.ThroughRevision == 0 {
 						// This workload requires reconciliation even though its facts
 						// could otherwise support goal-scoped completion directly.
-						reply.action("curation_request", "review-correction", map[string]any{"sources": []string{oldID, correctedID}, "reason": curationReason})
+						plan("curation_request", "review-correction", map[string]any{"sources": []string{oldID, correctedID}, "reason": curationReason})
 						return
 					}
-					reply.action("complete", "finish", map[string]any{"from": []string{correctedID}, "description": "Recalculation corrected the mistaken interpretation; original evidence and curator relation are retained."})
+					plan("complete", "finish", map[string]any{"from": []string{correctedID}, "description": "Recalculation corrected the mistaken interpretation; original evidence and curator relation are retained."})
 				} else {
 					fail(fmt.Errorf("unexpected planner Steps: %+v", page.Items))
 				}
@@ -459,9 +501,20 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 	}
 	mu.Lock()
 	checked := rollbackChecked
+	reviewedCuration, reviewedCompletion := false, false
+	for run, plan := range plans {
+		if !assessmentReviewed[run] {
+			continue
+		}
+		reviewedCuration = reviewedCuration || plan["op"] == "curation_request" && assessments[run].Status == "missing"
+		reviewedCompletion = reviewedCompletion || plan["op"] == "complete" && assessments[run].Status == "satisfied"
+	}
 	mu.Unlock()
 	if !checked {
 		t.Fatal("invalid atomic curation batch was not exercised")
+	}
+	if !reviewedCuration || !reviewedCompletion {
+		t.Fatal("curation work and final completion did not observe their original-requirement assessments")
 	}
 	var events []board.StateEvent
 	if err := client.Do(ctx, "GET", "/projects/"+project.Project.ID+"/state/events?after=0", nil, &events, nil); err != nil {
