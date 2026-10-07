@@ -36,7 +36,7 @@ func TestCTFSubmissionCapabilityRequiresConfiguredChannel(t *testing.T) {
 			t.Setenv("TSEC_AGENT_TOKEN", tc.token)
 			for _, kind := range []string{"reason", "explore"} {
 				job := scenarioJob(t, "ctf", kind)
-				prompt, err := Prompt(job, false, t.TempDir())
+				prompt, err := Prompt(job, false)
 				if err != nil {
 					t.Fatal(err)
 				}

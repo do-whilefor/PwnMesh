@@ -233,7 +233,10 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	}
 	if o.decision != nil {
 		allowed = append(allowed, "complete", "preview", "commit", "reset")
-		description += " Actions are private drafts until commit. Keys for draft actions are letters/digits/underscore/hyphen, start with a letter, at most 64 characters. New goal/step returns $key for later id/goal_id/parent_id references. Ordinary plan actions and commit can share one response; preview is optional. complete payload contains only {from:[fact IDs],description:proof}, with no action, and must be last; first explicitly abandon unnecessary active Steps and withdraw only auxiliary subgoals. Completion requires preview and review of completion_review in a subsequent model turn before commit, except when the supplied completion_assessment meets its reuse conditions. commit publishes the entire batch and ends this run; an empty batch requires a valid open or running Step. reset discards the draft and disables completion_assessment reuse; recovery also disables reuse. preview/commit/reset omit payload or use {}; other actions require payload. A state_changed conflict discards the private draft; read the current overview and affected graph section, then rebuild under the original deadline. InvalidSources mark premises requiring review before further execution, never silently assume they remain effective."
+		description += " Actions are private drafts until commit. Keys are letters/digits/underscore/hyphen, start with a letter, at most 64 characters. New goal/step returns $key for later id/goal_id/parent_id references. Ordinary plan actions and commit can share one response; preview is optional. complete payload contains only {from:[fact IDs],description:proof}, with no action, and must be last; first explicitly abandon unnecessary active Steps and withdraw only auxiliary subgoals. Completion requires preview and review of completion_review in a subsequent model turn before commit. commit publishes the entire batch and ends this run; an empty batch requires a valid open or running Step. reset discards the draft. preview/commit/reset omit payload or use {}; other actions require payload. A state_changed conflict discards the draft; read the current overview and affected graph section, then rebuild under the original deadline. InvalidSources require review before further execution."
+		if j.Decision != nil && j.Decision.CompletionAssessment != nil {
+			description += " The supplied completion_assessment can replace that completion review only with empty omitted_fact_ids, no omitted notes/disputes or their evidence, unchanged state/evidence, and no other draft actions, reset or recovery; runtime still previews. If reuse is unavailable or rejected, follow the preview/review sequence."
+		}
 	} else if !controlJob(j) && j.ResultContractVersion >= 2 {
 		description += " Reuse a published evidence Fact in completed.data.fact_id to finish this Step."
 	}
@@ -253,7 +256,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	}
 	if o.decision != nil && o.decision.closureProtocol {
 		properties["gap_id"] = map[string]any{"type": "string", "description": "Required for goal add, step add/retry and curation_request: reference a missing requirement gap from assess_root."}
-		description += " First call assess_root and read its result in a subsequent model request. New work requires top-level gap_id; satisfied permits explicit closure and complete, never additional work. reset discards the root assessment too."
+		description += " New work requires top-level gap_id from assess_root; satisfied permits explicit closure and complete, never additional work. reset discards the root assessment too."
 	}
 	schema, _ := json.Marshal(map[string]any{"type": "object", "properties": properties, "required": required, "additionalProperties": false})
 	action := agent.Tool{Definition: agent.Definition{Name: "graph_action", Description: description, Schema: schema}, Execute: func(ctx context.Context, raw json.RawMessage) (string, error) {

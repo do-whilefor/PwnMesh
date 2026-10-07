@@ -12,7 +12,7 @@ type Policy struct {
 	GraphRPC bool
 }
 
-func ParseWithPolicy(output, kind string, conclude bool, openIntents, maxIntents int, policy Policy) (Result, error) {
+func ParseWithPolicy(output, kind string, conclude bool, policy Policy) (Result, error) {
 	if policy.Version != 2 || !policy.GraphRPC {
 		return Result{}, errors.New("execution requires result contract 2 and a live graph bridge")
 	}

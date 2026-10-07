@@ -11,18 +11,13 @@ import (
 	"pwnmesh/internal/board"
 )
 
-func TestDependencySchemaIsLimitedToOrchestrationReason(t *testing.T) {
+func TestDependencySchemaIsLimitedToReason(t *testing.T) {
 	for _, kind := range []string{"reason", "explore", "curate"} {
-		for _, protocol := range []int{0, 1} {
-			schema := graphActionPayloadSchema(kind)
-			if protocol == 1 {
-				schema = orchestrationPayloadSchema(kind)
-			}
-			properties := schema["properties"].(map[string]any)
-			_, present := properties["depends_on"]
-			if present != (protocol == 1 && kind == "reason") {
-				t.Fatalf("unexpected dependency field for protocol %d, kind %s", protocol, kind)
-			}
+		schema := orchestrationPayloadSchema(kind)
+		properties := schema["properties"].(map[string]any)
+		_, present := properties["depends_on"]
+		if present != (kind == "reason") {
+			t.Fatalf("unexpected dependency field for kind %s", kind)
 		}
 	}
 	schema, err := json.Marshal(orchestrationPayloadSchema("reason"))
@@ -129,7 +124,7 @@ func TestDecisionDependencyDraftRejectsInvalidReferencesWithoutReservingKey(t *t
 func TestDependencyPromptKeepsInvalidSuccessRecoveryExplicit(t *testing.T) {
 	job := scenarioJob(t, "", "reason")
 	job.Graph.Project.OrchestrationVersion = 1
-	prompt, err := Prompt(job, false, t.TempDir())
+	prompt, err := Prompt(job, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +140,7 @@ func TestDependencyResultsRemainVisibleAndBoundToExecution(t *testing.T) {
 	job.Graph.Project.OrchestrationVersion = 1
 	job = bindingSnapshotJob(t, job)
 	job.DependencyResults = []board.DependencyResult{{StepID: "step_upstream", FactID: "fact_accepted", RunID: "run_accepted"}}
-	prompt, err := Prompt(job, false, t.TempDir())
+	prompt, err := Prompt(job, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +166,7 @@ func TestDependencyResultsRemainVisibleAndBoundToExecution(t *testing.T) {
 		}
 	}
 	job.Graph.Project.OrchestrationVersion = 0
-	legacy, err := Prompt(job, false, t.TempDir())
+	legacy, err := Prompt(job, false)
 	if err != nil || strings.Contains(legacy, "dependency_results") {
 		t.Fatalf("dependency input leaked into legacy protocol: %v", err)
 	}

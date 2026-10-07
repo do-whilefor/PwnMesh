@@ -11,55 +11,16 @@ const factScopeDescription = "For a fact, preserve any task-specified scope valu
 // Describe every input field available in this mode, including the transition
 // discriminator. Conditional requirements and operation semantics remain with
 // the draft/server validators; this is not a second action validator.
-func graphActionPayloadSchema(kind string) map[string]any {
+func orchestrationPayloadSchema(kind string) map[string]any {
 	text := map[string]any{"type": "string"}
-	ids := map[string]any{"type": "array", "items": text}
-	properties := map[string]any{
-		"description": text,
-		"reason":      text,
-		"sources":     ids,
-	}
 	if kind == "reason" {
-		properties["action"] = map[string]any{
-			"type": "string", "enum": []string{"add", "achieve", "withdraw", "abandon", "priority"},
-			"description": "Only goal (add/achieve/withdraw) and step (add/abandon/priority) use action. Complete uses from and description without action; the root goal is completed only by complete.",
-		}
-		for _, name := range []string{"id", "condition", "parent_id", "goal_id", "source", "target"} {
+		properties := map[string]any{"description": text}
+		for _, name := range []string{"id", "condition", "parent_id"} {
 			properties[name] = text
 		}
 		properties["from"] = map[string]any{"type": "array", "items": text, "description": "Step inputs: published, effective Fact IDs or origin. Complete: published, effective Fact IDs only, never origin. goal is a user constraint, never a source; assign a Goal with goal_id instead."}
 		properties["goal_id"] = map[string]any{"type": "string", "description": "The Goal this Step advances; use goal for the root requirement. Never put this ID in from."}
 		properties["priority"] = map[string]any{"type": "integer", "minimum": 0, "maximum": 1000000}
-		properties["kind"] = map[string]any{"type": "string", "enum": []string{"supersedes", "refutes", "narrows"}}
-	} else {
-		properties["scope"] = map[string]any{"type": "string", "description": factScopeDescription}
-		properties["observed_at"] = map[string]any{"type": "string", "format": "date-time"}
-		properties["claim"] = text
-		properties["status"] = map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}}
-		properties["replace_support"] = map[string]any{"type": "boolean"}
-		properties["evidence"] = map[string]any{"type": "array", "items": map[string]any{
-			"type": "object", "description": evidenceSelectionDescription, "properties": map[string]any{
-				"path": text,
-				// Historical references remain valid for Findings backed by sources.
-				"run_id":     text,
-				"excerpt":    text,
-				"start_line": map[string]any{"type": "integer"},
-				"end_line":   map[string]any{"type": "integer"},
-			},
-		}}
-	}
-	return map[string]any{"type": "object", "properties": properties}
-}
-
-func orchestrationPayloadSchema(kind string) map[string]any {
-	base := graphActionPayloadSchema(kind)
-	properties := base["properties"].(map[string]any)
-	text := map[string]any{"type": "string"}
-	ids := map[string]any{"type": "array", "items": text, "uniqueItems": true}
-	if kind == "reason" {
-		delete(properties, "kind")
-		delete(properties, "source")
-		delete(properties, "target")
 		properties["action"] = map[string]any{
 			"type": "string", "enum": []string{"add", "achieve", "withdraw", "abandon", "priority", "retry"},
 			"description": "Only goal (add/achieve/withdraw) and step (add/abandon/priority/retry) use action. Complete uses from and description without action; the root goal is completed only by complete. step retry requires only id, latest_run_id and reason and authorizes one new execution after failure.",
@@ -78,14 +39,29 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 		}
 		properties["sources"] = map[string]any{"type": "array", "items": text, "description": "Goal achievement support. For curation_request, provide 1-32 unique published, effective observation Fact IDs; never origin, goal or draft aliases. The server validates current support."}
 		properties["reason"] = map[string]any{"type": "string", "description": "Explain the action. For curation_request, state the concrete evidence conflict or merge requiring Curate; its payload uses only sources and reason."}
-		base["additionalProperties"] = false
-		return base
+		return map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
 	}
 	if kind != "curate" {
-		delete(properties, "replace_support")
-		properties["status"] = map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}, "description": "Optional producer judgment; omitted means a tentative candidate, never a shared conclusion."}
-		properties["supersedes"] = map[string]any{"type": "string", "description": "Optional active Candidate ID from this run with the same claim and scope. Supply current support; earlier evidence, reasoning and judgment remain in history."}
-		return base
+		return map[string]any{"type": "object", "properties": map[string]any{
+			"description": text,
+			"reason":      text,
+			"sources":     map[string]any{"type": "array", "items": text},
+			"scope":       map[string]any{"type": "string", "description": factScopeDescription},
+			"observed_at": map[string]any{"type": "string", "format": "date-time"},
+			"claim":       text,
+			"status":      map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}, "description": "Optional producer judgment; omitted means a tentative candidate, never a shared conclusion."},
+			"supersedes":  map[string]any{"type": "string", "description": "Optional active Candidate ID from this run with the same claim and scope. Supply current support; earlier evidence, reasoning and judgment remain in history."},
+			"evidence": map[string]any{"type": "array", "items": map[string]any{
+				"type": "object", "description": evidenceSelectionDescription, "properties": map[string]any{
+					"path": text,
+					// Historical references remain valid for Findings backed by sources.
+					"run_id":     text,
+					"excerpt":    text,
+					"start_line": map[string]any{"type": "integer"},
+					"end_line":   map[string]any{"type": "integer"},
+				},
+			}},
+		}}
 	}
 	return map[string]any{"type": "object", "properties": map[string]any{
 		"relations": map[string]any{"type": "array", "maxItems": board.MaxCurationRelations, "items": map[string]any{
@@ -96,7 +72,7 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 		}},
 		"groups": map[string]any{"type": "array", "maxItems": 128, "description": "One group per equal candidate group_key requiring reconciliation (read-only grouping hint, not a graph ID). Identify each group with active candidate_ids; omit group_key. Combine original and review candidate IDs; unrelated singleton notes need no group.", "items": map[string]any{
 			"type": "object", "properties": map[string]any{
-				"candidate_ids": ids, "status": map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}},
+				"candidate_ids": map[string]any{"type": "array", "items": text, "uniqueItems": true}, "status": map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}},
 				"reason": text, "question": text, "dispute_id": map[string]any{"type": []string{"string", "null"}},
 				"review_fact_ids": map[string]any{"type": []string{"array", "null"}, "items": text, "uniqueItems": true, "description": "Independent review evidence for an existing dispute only; omit for ordinary corroboration."},
 				"resolution":      map[string]any{"type": []string{"string", "null"}, "enum": []any{"resolved", "uncertain", nil}, "description": "Only for an existing dispute; include its dispute_id."},

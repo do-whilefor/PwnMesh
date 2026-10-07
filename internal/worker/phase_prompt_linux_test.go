@@ -97,7 +97,7 @@ func TestPhaseDeltasSurviveConclusionRepairsAndRecovery(t *testing.T) {
 func TestPhaseDeltasRetainTaskThroughCompaction(t *testing.T) {
 	job, dir := scenarioJob(t, "pentest", "explore"), t.TempDir()
 	job.ResultContractVersion = 2
-	task, err := Prompt(job, false, dir)
+	task, err := Prompt(job, false)
 	if err != nil {
 		t.Fatal(err)
 	}

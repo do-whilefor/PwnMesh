@@ -165,24 +165,16 @@ func TestGraphActionCollectionSchemaPreservesSupportedPayloads(t *testing.T) {
 }
 
 func TestPlanningFieldsDistinguishSourceFactsFromGoals(t *testing.T) {
-	for _, schema := range []map[string]any{graphActionPayloadSchema("reason"), orchestrationPayloadSchema("reason")} {
-		properties := schema["properties"].(map[string]any)
-		from := properties["from"].(map[string]any)["description"].(string)
-		goal := properties["goal_id"].(map[string]any)["description"].(string)
-		if !strings.Contains(from, "Step inputs: published, effective Fact IDs or origin") || !strings.Contains(from, "Complete: published, effective Fact IDs only, never origin") || !strings.Contains(from, "goal is a user constraint, never a source") || !strings.Contains(goal, "Never put this ID in from") {
-			t.Fatalf("planning fields conflate source evidence with assignment: from=%q goal_id=%q", from, goal)
-		}
+	properties := orchestrationPayloadSchema("reason")["properties"].(map[string]any)
+	from := properties["from"].(map[string]any)["description"].(string)
+	goal := properties["goal_id"].(map[string]any)["description"].(string)
+	if !strings.Contains(from, "Step inputs: published, effective Fact IDs or origin") || !strings.Contains(from, "Complete: published, effective Fact IDs only, never origin") || !strings.Contains(from, "goal is a user constraint, never a source") || !strings.Contains(goal, "Never put this ID in from") {
+		t.Fatalf("planning fields conflate source evidence with assignment: from=%q goal_id=%q", from, goal)
 	}
 }
 
 func TestEvidenceSelectionSchemasDescribeRuntimeLimits(t *testing.T) {
-	schemas := map[string]map[string]any{}
-	for _, kind := range []string{"explore", "curate"} {
-		schemas["legacy_"+kind] = graphActionPayloadSchema(kind)
-		if kind != "curate" {
-			schemas["orchestration_"+kind] = orchestrationPayloadSchema(kind)
-		}
-	}
+	schemas := map[string]map[string]any{"explore": orchestrationPayloadSchema("explore")}
 	var finish map[string]any
 	if err := json.Unmarshal((&stepFinish{}).tool().Schema, &finish); err != nil {
 		t.Fatal(err)
@@ -209,9 +201,7 @@ func TestEvidenceSelectionSchemasDescribeRuntimeLimits(t *testing.T) {
 
 func TestFactScopeSchemasPreserveAssignedValuesAndAllowFreeScopes(t *testing.T) {
 	schemas := map[string]map[string]any{
-		"legacy_explore":        graphActionPayloadSchema("explore"),
-		"legacy_curate":         graphActionPayloadSchema("curate"),
-		"orchestration_explore": orchestrationPayloadSchema("explore"),
+		"explore": orchestrationPayloadSchema("explore"),
 	}
 	var finish map[string]any
 	if err := json.Unmarshal((&stepFinish{}).tool().Schema, &finish); err != nil {

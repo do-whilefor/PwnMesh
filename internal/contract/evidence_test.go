@@ -22,7 +22,7 @@ func TestEvidenceResultRequiresOneSupportedAnchor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			output := `{"accepted":true,"outcome":"completed","data":` + tc.data + `}`
 			for _, conclude := range []bool{false, true} {
-				got, err := ParseWithPolicy(output, "explore", conclude, 1, 3, Policy{Version: 2, GraphRPC: true})
+				got, err := ParseWithPolicy(output, "explore", conclude, Policy{Version: 2, GraphRPC: true})
 				if (err == nil) != tc.valid {
 					t.Fatalf("result=%+v error=%v", got, err)
 				}

@@ -276,7 +276,7 @@ func applyExecution(t *b.Tx, e b.Execution) (int, any, error) {
 		}
 	}
 	// The only executable protocol is fixed by registration, never by apply input.
-	parsed, err := contract.ParseWithPolicy(result.Text, e.Kind, result.Conclude, 0, 0, contract.Policy{Version: 2, GraphRPC: true})
+	parsed, err := contract.ParseWithPolicy(result.Text, e.Kind, result.Conclude, contract.Policy{Version: 2, GraphRPC: true})
 	if err != nil {
 		return 0, nil, b.Err(422, err.Error())
 	}
@@ -360,7 +360,7 @@ func validateRepairResult(jobRaw, resultRaw json.RawMessage) error {
 		!strings.HasPrefix(check.Path, strings.TrimSuffix(job.Workspace, "/")+"/") || job.Kind != "explore" || !job.GraphRPC || job.ResultContractVersion != 2 {
 		return b.Err(422, "repair receipt requires its registered run and workspace")
 	}
-	parsed, err := contract.ParseWithPolicy(result.Text, job.Kind, result.Conclude, 0, 0, contract.Policy{Version: job.ResultContractVersion, GraphRPC: job.GraphRPC})
+	parsed, err := contract.ParseWithPolicy(result.Text, job.Kind, result.Conclude, contract.Policy{Version: job.ResultContractVersion, GraphRPC: job.GraphRPC})
 	if err != nil || parsed.Kind != "fact" || parsed.Outcome != "completed" || len(parsed.FactPayload) == 0 || parsed.FactID != "" {
 		return b.Err(422, "repair success requires an inline fact with retained check evidence")
 	}

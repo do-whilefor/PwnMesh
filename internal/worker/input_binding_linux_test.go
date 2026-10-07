@@ -68,11 +68,11 @@ func TestSnapshotPromptRejectsInvalidBindings(t *testing.T) {
 		} {
 			t.Run(kind+"/"+name, func(t *testing.T) {
 				j := bindingSnapshotJob(t, outcomeJob(t, kind))
-				if _, err := Prompt(j, false, t.TempDir()); err != nil {
+				if _, err := Prompt(j, false); err != nil {
 					t.Fatal(err)
 				}
 				mutate(&j)
-				if _, err := Prompt(j, false, t.TempDir()); err == nil {
+				if _, err := Prompt(j, false); err == nil {
 					t.Fatal("accepted invalid snapshot binding")
 				}
 			})
@@ -80,7 +80,7 @@ func TestSnapshotPromptRejectsInvalidBindings(t *testing.T) {
 	}
 	j := bindingSnapshotJob(t, outcomeJob(t, "reason"))
 	j.Intent = &board.Intent{ID: "invented", Description: "unbound instruction"}
-	if _, err := Prompt(j, false, t.TempDir()); err == nil {
+	if _, err := Prompt(j, false); err == nil {
 		t.Fatal("Decide accepted an unrelated Intent")
 	}
 }

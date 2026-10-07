@@ -62,10 +62,13 @@ func TestDecideFirstRequestPreservesOriginalRequirements(t *testing.T) {
 			}
 			if definition.Name == "graph_action" {
 				foundRootRoute = strings.Contains(definition.Description, rootRoute)
-				for _, required := range []string{"reset discards the draft and disables completion_assessment reuse", "recovery also disables reuse", "review of completion_review in a subsequent model turn before commit"} {
+				for _, required := range []string{"reset discards the draft", "review of completion_review in a subsequent model turn before commit"} {
 					if !strings.Contains(definition.Description, required) {
 						t.Fatalf("planning tool omits completion review boundary: %q", required)
 					}
+				}
+				if strings.Contains(definition.Description, "The supplied completion_assessment can replace") != (job.Decision.CompletionAssessment != nil) {
+					t.Fatal("planning tool offered review reuse without a supplied assessment")
 				}
 				for _, actionField := range []bool{false, true} {
 					payload := `"from":["f001"],"description":"Original requirements met"`

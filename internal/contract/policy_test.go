@@ -14,13 +14,13 @@ func TestCurrentResultPolicy(t *testing.T) {
 		{"explore", `{"accepted":true,"outcome":"continue","reason":"verify remaining inputs"}`, "continue", false},
 		{"explore", `{"accepted":true,"outcome":"incomplete","reason":"missing inputs"}`, "incomplete", true},
 	} {
-		got, err := ParseWithPolicy(tc.output, tc.kind, tc.conclude, 0, 3, policy)
+		got, err := ParseWithPolicy(tc.output, tc.kind, tc.conclude, policy)
 		if err != nil || got.Kind != tc.want {
 			t.Fatalf("%s: %+v %v", tc.kind, got, err)
 		}
 	}
 	for _, kind := range []string{"reason", "curate", "explore"} {
-		got, err := ParseWithPolicy(`{"accepted":false,"reason":"Missing original evidence"}`, kind, false, 0, 3, policy)
+		got, err := ParseWithPolicy(`{"accepted":false,"reason":"Missing original evidence"}`, kind, false, policy)
 		if err != nil || got.Kind != "rejected" || got.Reason == "" {
 			t.Fatalf("%s: %+v %v", kind, got, err)
 		}
@@ -29,11 +29,11 @@ func TestCurrentResultPolicy(t *testing.T) {
 
 func TestPolicyRejectsLegacyExecutionAndAmbiguousResults(t *testing.T) {
 	for _, version := range []int{-1, 0, 1, 3, 999} {
-		if _, err := ParseWithPolicy(`{"accepted":false,"reason":"declined"}`, "explore", false, 0, 3, Policy{Version: version, GraphRPC: true}); err == nil {
+		if _, err := ParseWithPolicy(`{"accepted":false,"reason":"declined"}`, "explore", false, Policy{Version: version, GraphRPC: true}); err == nil {
 			t.Fatalf("accepted version %d", version)
 		}
 	}
-	if _, err := ParseWithPolicy(`{"accepted":false,"reason":"declined"}`, "explore", false, 0, 3, Policy{Version: 2}); err == nil {
+	if _, err := ParseWithPolicy(`{"accepted":false,"reason":"declined"}`, "explore", false, Policy{Version: 2}); err == nil {
 		t.Fatal("accepted offline execution")
 	}
 	for _, tc := range []struct {
@@ -56,7 +56,7 @@ func TestPolicyRejectsLegacyExecutionAndAmbiguousResults(t *testing.T) {
 		{"explore", `{"accepted":true,"outcome":"incomplete","reason":null}`, false},
 		{"explore", `{"accepted":true,"outcome":"unknown","reason":"more"}`, false},
 	} {
-		if _, err := ParseWithPolicy(tc.output, tc.kind, tc.conclude, 1, 3, Policy{Version: 2, GraphRPC: true}); err == nil {
+		if _, err := ParseWithPolicy(tc.output, tc.kind, tc.conclude, Policy{Version: 2, GraphRPC: true}); err == nil {
 			t.Fatalf("accepted %s %s", tc.kind, tc.output)
 		}
 	}
@@ -65,11 +65,11 @@ func TestPolicyRejectsLegacyExecutionAndAmbiguousResults(t *testing.T) {
 func TestPolicyUsesFirstExtractedObject(t *testing.T) {
 	policy := Policy{Version: 2, GraphRPC: true}
 	valid := `{"accepted":true,"data":{"decided":true}}`
-	got, err := ParseWithPolicy("model prose\n"+valid+`{"accepted":false}`, "reason", false, 1, 3, policy)
+	got, err := ParseWithPolicy("model prose\n"+valid+`{"accepted":false}`, "reason", false, policy)
 	if err != nil || got.Kind != "decided" {
 		t.Fatalf("first object changed: %+v %v", got, err)
 	}
-	if _, err := ParseWithPolicy(`{"accepted":null}`+valid, "reason", false, 1, 3, policy); err == nil {
+	if _, err := ParseWithPolicy(`{"accepted":null}`+valid, "reason", false, policy); err == nil {
 		t.Fatal("skipped invalid first object")
 	}
 }

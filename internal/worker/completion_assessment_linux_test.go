@@ -196,7 +196,7 @@ func TestCompletionAssessmentReachesFirstModelAndStillPreviewsBeforeOneTurnCommi
 		}
 		return nil, errors.New("unexpected graph operation")
 	}}
-	p := scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
+	p := scenarioProvider(func(_ context.Context, history []agent.Message, definitions []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		calls++
 		if calls != 1 {
 			return agent.Message{}, errors.New("redundant model confirmation")
@@ -211,9 +211,12 @@ func TestCompletionAssessmentReachesFirstModelAndStillPreviewsBeforeOneTurnCommi
 		for _, message := range history {
 			text += message.Text()
 		}
-		for _, required := range []string{"Keep planning if requirements are unmet", "Otherwise stage complete with supporting IDs and proof", "empty omitted_fact_ids", "unchanged state/evidence", "no other draft actions, reset or recovery", "If reuse is unavailable or rejected, call preview and review completion_review in a subsequent model turn before commit"} {
-			if !strings.Contains(text, required) {
-				t.Fatalf("completion assessment omitted reuse condition or fallback: %q", required)
+		for _, definition := range definitions {
+			text += "\n" + definition.Description
+		}
+		for _, required := range []string{"Complete only when valid facts satisfy every original root requirement", "empty omitted_fact_ids", "no omitted notes/disputes or their evidence", "unchanged state/evidence", "no other draft actions, reset or recovery", "runtime still previews", "If reuse is unavailable or rejected, follow the preview/review sequence", "review of completion_review in a subsequent model turn before commit"} {
+			if strings.Count(text, required) != 1 {
+				t.Fatalf("completion assessment omitted or repeated a condition or fallback: %q", required)
 			}
 		}
 		encoded, _ := json.Marshal(a.FactRecords[0].Evidence[0].Excerpt)

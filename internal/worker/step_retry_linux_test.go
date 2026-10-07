@@ -22,7 +22,7 @@ func TestStepRetryToolsAndPromptDescribeAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatalf("protocol %d has incorrect retry schema: %v", protocol, err)
 	}
-	prompt, err := Prompt(j, false, t.TempDir())
+	prompt, err := Prompt(j, false)
 	if err != nil {
 		t.Fatal(err)
 	}

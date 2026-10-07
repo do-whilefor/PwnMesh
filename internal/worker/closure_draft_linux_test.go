@@ -14,15 +14,39 @@ const missingRoot = `{"status":"missing","from":["f001"],"description":"The user
 const satisfiedRoot = `{"status":"satisfied","from":["f001","f002"],"description":"Both user-requested flags have direct response evidence"}`
 
 func TestRootAssessmentPromptRequiresEvaluationBeforeCompletionReuse(t *testing.T) {
-	job := draftRunJob(t)
-	job.Decision.ClosureProtocol = 1
-	job.Decision.CompletionAssessment = assessmentFixture(job.Decision.StateVersion)
-	prompt, err := Prompt(job, false, "/run")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(prompt, "After the root assessment has been observed in a subsequent model request") || strings.Contains(prompt, "Commit in this response only") {
-		t.Fatal("completion reuse instructions contradicted the mandatory root assessment turn")
+	for _, supplied := range []bool{false, true} {
+		job := draftRunJob(t)
+		job.Decision.ClosureProtocol = 1
+		if supplied {
+			job.Decision.CompletionAssessment = assessmentFixture(job.Decision.StateVersion)
+		}
+		prompt, err := Prompt(job, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		opts := Options{}
+		if err := ConfigureRuntimeTools(job, &opts); err != nil {
+			t.Fatal(err)
+		}
+		instructions := prompt
+		for _, tool := range opts.Tools {
+			instructions += "\n" + tool.Description
+		}
+		for _, required := range []string{
+			"read in a subsequent model request before any graph_action",
+			"New work requires top-level gap_id from assess_root",
+			"satisfied permits explicit closure and complete, never additional work",
+		} {
+			if strings.Count(instructions, required) != 1 {
+				t.Fatalf("root assessment boundary missing or repeated: %q", required)
+			}
+		}
+		if strings.Contains(instructions, "The supplied completion_assessment can replace") != supplied {
+			t.Fatal("completion review reuse must be offered only for a supplied assessment")
+		}
+		if strings.Contains(prompt, "subsequent model request") || strings.Contains(instructions, "Commit in this response only") {
+			t.Fatal("role prompt repeated or contradicted the tool's mandatory assessment turn")
+		}
 	}
 }
 

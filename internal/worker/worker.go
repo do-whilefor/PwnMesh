@@ -454,7 +454,7 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 				l.TaskPrompt = l.History[0].Text()
 			} else {
 				var err error
-				l.TaskPrompt, err = Prompt(j, false, o.RunDir)
+				l.TaskPrompt, err = Prompt(j, false)
 				if err != nil {
 					return nil, err
 				}
@@ -757,7 +757,7 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 		if l.Concluding {
 			prompt = l.ConclusionPrompt
 		} else {
-			prompt, err = Prompt(j, false, o.RunDir)
+			prompt, err = Prompt(j, false)
 		}
 		if err != nil {
 			return Result{}, err

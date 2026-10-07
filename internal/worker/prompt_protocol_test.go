@@ -28,7 +28,7 @@ func TestPromptExamplesMatchRegisteredResultProtocol(t *testing.T) {
 				if !strings.Contains(line, `{"accepted"`) {
 					continue
 				}
-				r, err := contract.ParseWithPolicy(line, kind, false, 1, j.Budget.MaxIntents, contract.Policy{Version: version, GraphRPC: rpc})
+				r, err := contract.ParseWithPolicy(line, kind, false, contract.Policy{Version: version, GraphRPC: rpc})
 				if err != nil {
 					t.Fatalf("model-facing example violates registered protocol: %v\n%s", err, line)
 				}
@@ -62,7 +62,7 @@ func TestExploreKeepsRootCoverageAndAssignedDeliverableBoundary(t *testing.T) {
 		Intent: &board.Intent{ID: "i001", Description: "Verify the assigned control and publish supporting evidence."},
 	}
 	job.Graph.Intents = []board.Intent{*job.Intent}
-	prompt, err := Prompt(job, false, t.TempDir())
+	prompt, err := Prompt(job, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +139,11 @@ func TestPhaseInstructionsDoNotCopyTaskInputOrScenario(t *testing.T) {
 	for _, scenario := range []string{"pentest", "ctf"} {
 		t.Run(fmt.Sprintf("v%d/%s/%s", version, kind, scenario), func(t *testing.T) {
 			j := Job{Kind: kind, ResultContractVersion: version, Graph: board.Graph{Project: board.Project{Scenario: scenario}}}
-			original, err := Prompt(j, false, t.TempDir())
+			original, err := Prompt(j, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			conclusion, err := Prompt(j, true, t.TempDir())
+			conclusion, err := Prompt(j, true)
 			if err != nil {
 				t.Fatal(err)
 			}

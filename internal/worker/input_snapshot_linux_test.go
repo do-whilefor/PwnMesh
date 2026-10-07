@@ -75,7 +75,7 @@ func TestSnapshotExecutePromptUsesReadToolsWithoutGraphExport(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			job, _ := snapshotRuntimeFixture(t, kind)
 			dir := t.TempDir()
-			prompt, err := Prompt(job, false, dir)
+			prompt, err := Prompt(job, false)
 			if err != nil {
 				t.Fatal(err)
 			}

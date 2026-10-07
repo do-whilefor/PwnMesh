@@ -43,7 +43,7 @@ type artifactSnapshot struct {
 // conclusionInputWithEvidence reads only outputs already listed inside this
 // execution's directory. It is created once at the boundary and persisted verbatim.
 func conclusionInputWithEvidence(ctx context.Context, j Job, runDir string, collectArtifacts bool) (string, []board.EvidenceRef, error) {
-	prompt, err := Prompt(j, true, runDir)
+	prompt, err := Prompt(j, true)
 	if err != nil {
 		return "", nil, err
 	}

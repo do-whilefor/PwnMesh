@@ -24,7 +24,7 @@ func TestInitialPromptDescribesActualWorkspaceAndDeclaredEnvironment(t *testing.
 							Facts:   []board.Fact{{ID: "origin", Description: "Prior bash, nuclei and ffuf observations"}},
 						},
 					}
-					prompt, err := Prompt(job, false, t.TempDir())
+					prompt, err := Prompt(job, false)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -62,11 +62,11 @@ func TestPhaseInstructionsDoNotRepeatEnvironment(t *testing.T) {
 	for _, kind := range []string{"explore"} {
 		t.Run(kind, func(t *testing.T) {
 			job := Job{Kind: kind, Workspace: "/workspace/shared", ResultContractVersion: 2}
-			initial, err := Prompt(job, false, t.TempDir())
+			initial, err := Prompt(job, false)
 			if err != nil {
 				t.Fatal(err)
 			}
-			conclusion, err := Prompt(job, true, t.TempDir())
+			conclusion, err := Prompt(job, true)
 			if err != nil {
 				t.Fatal(err)
 			}
