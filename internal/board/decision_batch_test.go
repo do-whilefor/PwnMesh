@@ -155,32 +155,33 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 		}
 		batch.Actions = batch.Actions[:1]
 		batch.Actions = append(batch.Actions, DecisionAction{Op: "goal", Ref: "same", Payload: batch.Actions[0].Payload})
+		batch.Actions = append(batch.Actions, DecisionAction{Op: "step", Payload: json.RawMessage(`{"action":"add","goal_id":"$temporary","from":["origin"],"description":"Investigate the temporary condition"}`)})
 		preview, err := tx.PreviewDecision(g.Project.ID, fence, batch)
 		if err != nil {
 			return err
 		}
-		if preview.Committed || preview.ChangedActions != 1 || len(preview.Results) != 2 || !preview.Results[1].Unchanged {
+		if preview.Committed || preview.ChangedActions != 2 || len(preview.Results) != 3 || !preview.Results[1].Unchanged {
 			t.Fatalf("preview changed-action count includes a duplicate: %+v", preview)
 		}
 		current, err = tx.State(g.Project.ID)
 		if err != nil {
 			return err
 		}
-		if current.Revision != state.Revision || len(current.Goals) != 1 {
-			t.Fatal("preview left staged goals or events")
+		if current.Revision != state.Revision || len(current.Goals) != 1 || len(current.Steps) != 0 {
+			t.Fatal("preview left staged goals, steps or events")
 		}
 		result, err := tx.CommitDecision(g.Project.ID, fence, batch)
 		if err != nil {
 			return err
 		}
-		if !result.Committed || result.IDs["temporary"] != "g001" || result.ChangedActions != 1 {
+		if !result.Committed || result.IDs["temporary"] != "g001" || result.ChangedActions != 2 {
 			t.Fatalf("rollback consumed alias ID allocation: %+v", result)
 		}
 		saved, err := tx.DecisionReceipt(g.Project.ID, fence)
 		if err != nil {
 			return err
 		}
-		if !saved.Committed || saved.ChangedActions != result.ChangedActions || len(saved.Results) != 2 {
+		if !saved.Committed || saved.ChangedActions != result.ChangedActions || len(saved.Results) != 3 {
 			t.Fatalf("durable receipt lost changed-action count: %+v", saved)
 		}
 		return nil

@@ -82,7 +82,7 @@ func TestEmptyDecisionRequiresExecutableWork(t *testing.T) {
 						continue
 					}
 					var api *APIError
-					if !errors.As(err, &api) || api.Status != 422 || !strings.Contains(err.Error(), "empty decision would leave the project idle") || receipt.Committed {
+					if !errors.As(err, &api) || api.Status != 422 || !strings.Contains(err.Error(), "decision would leave the project idle") || receipt.Committed {
 						t.Fatalf("idle empty batch was accepted: commit=%v receipt=%+v err=%v", commit, receipt, err)
 					}
 					current, err := tx.State("proj_001")

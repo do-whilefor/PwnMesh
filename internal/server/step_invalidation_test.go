@@ -44,6 +44,23 @@ func (f *stepInvalidationFixture) refute() {
 	})
 }
 
+func (f *stepInvalidationFixture) abandonWithReplacement(reason string) {
+	f.t.Helper()
+	planner := *f.decider
+	planner.kind, planner.intent = "reason", ""
+	planner.run = "fixture-abandon-" + f.intent
+	planner.lease = "planner@" + planner.run
+	_, job := prepareSnapshot(f.t, &planner, snapshotTemplate(&planner, "reason"))
+	abandon, _ := json.Marshal(map[string]string{"action": "abandon", "id": f.intent, "reason": reason})
+	replacement, _ := json.Marshal(map[string]any{"action": "add", "from": []string{f.correction}, "description": "Check the remaining requirement using the corrected observation"})
+	batch := planner.batch(board.DecisionAction{Op: "step", Payload: abandon}, board.DecisionAction{Op: "step", Payload: replacement})
+	if job.Decision.ClosureProtocol == 1 {
+		batch.Assessment = &board.RootAssessment{Status: "missing", Description: "The invalid direction is replaced by a check using the corrected observation", Gaps: []board.RequirementGap{{ID: "fixture", InputIDs: []string{"goal"}, Description: "Verify the outstanding fixture condition"}}}
+		batch.Actions[1].GapID = "fixture"
+	}
+	planner.decision("commit", batch, http.StatusOK)
+}
+
 func (f *stepInvalidationFixture) claim(want int) string {
 	f.t.Helper()
 	return f.request("POST", f.base()+"/intents/"+f.intent+"/heartbeat", map[string]string{"worker": f.lease}, false, want, nil)
@@ -185,7 +202,7 @@ func TestStepInvalidationKeepsRunningObservationUntilHTTPAbandon(t *testing.T) {
 		}},
 	}
 	observed := f.action("fact", "independent-observation", payload)
-	f.decider.planAction("step", "abandon-direction", map[string]string{"action": "abandon", "id": f.intent, "reason": "The corrected premise makes further work unnecessary"})
+	f.abandonWithReplacement("The corrected premise makes further work on this direction unnecessary")
 	for _, key := range []string{"late-observation", "independent-observation"} {
 		f.request("POST", f.base()+"/state/actions", map[string]any{"op": "fact", "idempotency_key": key, "payload": payload}, true, http.StatusConflict, nil)
 	}

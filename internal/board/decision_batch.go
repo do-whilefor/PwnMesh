@@ -345,10 +345,12 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 			out.IDs[action.Ref] = result.ID
 		}
 	}
-	if len(actions) == 0 && !slices.ContainsFunc(state.Steps, func(step Step) bool {
-		return (step.Status == "open" || step.Status == "running") && len(step.InvalidSources) == 0
-	}) {
-		return out, Err(422, "empty decision would leave the project idle: add an executable Step or propose complete with supporting facts and proof; draft unchanged")
+	progress, err := t.decisionCanProgress(state, e.Namespace)
+	if err != nil {
+		return out, err
+	}
+	if !progress {
+		return out, Err(422, "decision would leave the project idle: add an executable Step, request actionable curation or propose complete with supporting facts and proof; draft unchanged")
 	}
 	out.StateVersion = DecisionStateVersion(state)
 	if !commit {
@@ -381,6 +383,43 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	}
 	keep = true
 	return out, nil
+}
+
+// A nonempty plan can still strand the project (for example, adding only a
+// Goal or abandoning the last Step). Validate the resulting work, not the
+// number of actions, before acknowledging this decision's input as handled.
+func (t *Tx) decisionCanProgress(state State, namespace string) (bool, error) {
+	if state.Graph.Project.Status == "completed" || slices.ContainsFunc(state.Steps, func(step Step) bool {
+		return (step.Status == "open" || step.Status == "running" && step.Worker != nil) && len(step.InvalidSources) == 0 && len(step.BlockedBy) == 0
+	}) {
+		return true, nil
+	}
+	for _, step := range state.Steps {
+		if step.Status != "running" || step.Worker == nil || len(step.BlockedBy) != 0 {
+			continue
+		}
+		// A corrected From premise prevents new execution, but a registered
+		// running owner may still retain independent observations. Use the same
+		// lease and readiness rules as its heartbeat, not the claim rules.
+		err := t.CheckExecution(state.Graph, ExecutionFence{Run: *step.Worker, Lease: "explore", Intent: step.ID})
+		if err == nil {
+			err = t.StepHeartbeatReady(state.Graph.Project.ID, step.ID, *step.Worker)
+		}
+		if err == nil {
+			return true, nil
+		}
+		var api *APIError
+		if !errors.As(err, &api) {
+			return false, err
+		}
+	}
+	needed, err := t.curationNeeded(state)
+	if err != nil || !needed {
+		return false, err
+	}
+	check, err := t.CheckExecutions(ExecutionCheckQuery{ProjectID: state.Graph.Project.ID, Namespace: namespace,
+		Generation: state.Graph.Project.Generation, Kind: "curate", RetryKey: CurationRetryKey(state)})
+	return check.Pending || !check.Blocked || check.AutomaticRetryID != "", err
 }
 
 func (t *Tx) CompleteProject(project string, fence ExecutionFence, from []string, description string) (Intent, error) {
