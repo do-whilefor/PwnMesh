@@ -325,7 +325,7 @@ func orchestrationSuccessfulRun(project board.Project, step board.Step, workerID
 	if !exists || resultFact.Status != "valid" || resultFact.SupportInvalid || resultFact.Legacy || resultFact.SourceStepID != step.ID || resultFact.RunID != workerID || len(resultFact.Evidence) == 0 {
 		return job, false
 	}
-	parsed, err := contract.ParseWithPolicy(session.Result.Text, job.Kind, session.Result.Conclude, 0, job.Budget.MaxIntents, contract.Policy{Version: job.ResultContractVersion, GraphRPC: job.GraphRPC})
+	parsed, err := contract.ParseWithPolicy(session.Result.Text, job.Kind, session.Result.Conclude, contract.Policy{Version: job.ResultContractVersion, GraphRPC: job.GraphRPC})
 	if err != nil || parsed.Kind != "fact" || parsed.Outcome != "completed" {
 		return job, false
 	}
