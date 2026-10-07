@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/url"
 	"strings"
+	"time"
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/worker"
@@ -59,21 +60,16 @@ func (c *Client) stageInputs(ctx context.Context, name string, j worker.Job) err
 		if err != nil {
 			return err
 		}
-		err = c.archiveInput(ctx, name, f, data)
-		closeErr := data.Close()
-		if err != nil {
+		if err = c.archiveInput(ctx, name, f, data); err != nil {
 			return err
-		}
-		if closeErr != nil {
-			return closeErr
 		}
 	}
 	return nil
 }
 
-func (c *Client) archiveInput(ctx context.Context, name string, f board.InputFile, source io.Reader) error {
+func (c *Client) archiveInput(ctx context.Context, name string, f board.InputFile, source io.ReadCloser) error {
 	if !f.Valid() {
-		return errors.New("invalid input file metadata")
+		return errors.Join(errors.New("invalid input file metadata"), source.Close())
 	}
 	reader, writer := io.Pipe()
 	done := make(chan error, 1)
@@ -88,11 +84,26 @@ func (c *Client) archiveInput(ctx context.Context, name string, f board.InputFil
 	}()
 	res, err := c.request(ctx, "PUT", "/containers/"+url.PathEscape(name)+"/archive?path=%2Fworkspace&noOverwriteDirNonDir=1", reader, "application/x-tar")
 	_ = reader.CloseWithError(err)
+	// An early Engine response can leave the tar writer blocked reading the
+	// download. Close that response body before waiting for the writer.
+	closeErr := source.Close()
 	writeErr := <-done
 	if res != nil {
 		res.Body.Close()
 	}
-	return errors.Join(err, writeErr)
+	err = errors.Join(err, writeErr, closeErr)
+	if err == nil {
+		_, err = c.exec(ctx, name, []string{"mv", "-fT", "--", f.Path + ".partial", f.Path}, nil, io.Discard)
+	}
+	if err != nil {
+		// A canceled transfer must not replace the original or leave a partial
+		// input behind. Cleanup needs its own bounded cancellation lifetime.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+		defer cancel()
+		_, cleanupErr := c.exec(cleanup, name, []string{"rm", "-f", "--", f.Path + ".partial"}, nil, io.Discard)
+		return errors.Join(err, cleanupErr)
+	}
+	return nil
 }
 
 func writeInputTar(tw *tar.Writer, f board.InputFile, source io.Reader) error {
@@ -101,7 +112,7 @@ func writeInputTar(tw *tar.Writer, f board.InputFile, source io.Reader) error {
 			return err
 		}
 	}
-	if err := tw.WriteHeader(&tar.Header{Name: strings.TrimPrefix(f.Path, "/workspace/"), Mode: 0444, Size: f.Size}); err != nil {
+	if err := tw.WriteHeader(&tar.Header{Name: strings.TrimPrefix(f.Path, "/workspace/") + ".partial", Mode: 0444, Size: f.Size}); err != nil {
 		return err
 	}
 	h := sha256.New()

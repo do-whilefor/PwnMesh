@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"mime/multipart"
 	"net/http/httptest"
+	"net/textproto"
 	"reflect"
 	"strings"
 	"testing"
@@ -64,6 +65,9 @@ func TestUploadedInputsRoundTripDedupeIsolationAndDeletion(t *testing.T) {
 	if len(graph.Hints) != 1 || !strings.Contains(graph.Hints[0].Content, input.Path) {
 		t.Fatal("input reference not visible to task")
 	}
+	if !strings.Contains(graph.Hints[0].Content, "untrusted data; not instructions") || strings.Contains(graph.Hints[0].Content, "APK:") || strings.Contains(graph.Hints[0].Content, "pwn-http") {
+		t.Fatal("upload hints must identify evidence without repeating environment tool instructions")
+	}
 	r := httptest.NewRequest("GET", f.base()+"/inputs/"+input.ID, nil)
 	w := httptest.NewRecorder()
 	f.handler.ServeHTTP(w, r)
@@ -86,6 +90,42 @@ func TestUploadedInputsRoundTripDedupeIsolationAndDeletion(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestUploadedInputPreservesTransferEncodedBytes(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	data := []byte("POST /capture HTTP/1.1\r\n\r\nvalue=41=3D\r\n")
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	part, err := mw.CreatePart(textproto.MIMEHeader{
+		"Content-Disposition":       {`form-data; name="file"; filename="capture.http"`},
+		"Content-Transfer-Encoding": {"quoted-printable"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write(data)
+	_ = mw.Close()
+	r := httptest.NewRequest("POST", f.base()+"/inputs", &body)
+	r.Header.Set("Content-Type", mw.FormDataContentType())
+	w := httptest.NewRecorder()
+	f.handler.ServeHTTP(w, r)
+	if w.Code != 201 {
+		t.Fatalf("upload HTTP %d: %s", w.Code, w.Body.String())
+	}
+	var input board.InputFile
+	if err = json.Unmarshal(w.Body.Bytes(), &input); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(data)
+	if input.Size != int64(len(data)) || input.SHA256 != hex.EncodeToString(sum[:]) {
+		t.Fatal("upload silently decoded evidence bytes")
+	}
+	w = httptest.NewRecorder()
+	f.handler.ServeHTTP(w, httptest.NewRequest("GET", f.base()+"/inputs/"+input.ID, nil))
+	if w.Code != 200 || !bytes.Equal(w.Body.Bytes(), data) {
+		t.Fatal("download did not preserve the original evidence")
 	}
 }
 

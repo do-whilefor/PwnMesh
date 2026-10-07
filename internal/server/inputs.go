@@ -33,7 +33,9 @@ func (s *Server) uploadInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, b.Err(422, "Expected multipart form with one file"))
 		return
 	}
-	part, err := mr.NextPart()
+	// Uploaded evidence must retain its exact bytes; NextPart silently decodes
+	// quoted-printable Content-Transfer-Encoding.
+	part, err := mr.NextRawPart()
 	if err != nil {
 		writeError(w, r, b.Err(422, "Expected one file"))
 		return
@@ -55,7 +57,7 @@ func (s *Server) uploadInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, b.Err(422, "Incomplete input upload"))
 		return
 	}
-	if _, err = mr.NextPart(); err != io.EOF {
+	if _, err = mr.NextRawPart(); err != io.EOF {
 		writeError(w, r, b.Err(422, "Upload exactly one file per request"))
 		return
 	}

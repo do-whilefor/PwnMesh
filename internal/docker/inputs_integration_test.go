@@ -164,6 +164,17 @@ func TestDockerUploadedInputsRoundTrip(t *testing.T) {
 	if downloads.Load() != 2 || !bytes.Equal(readStaged(), payload) {
 		t.Fatal("staging did not redownload and repair the changed local copy")
 	}
+	for _, bad := range [][]byte{payload[:2], append(append([]byte{}, payload...), 1), bytes.Repeat([]byte{'x'}, len(payload))} {
+		if err = c.archiveInput(ctx, name, input, io.NopCloser(bytes.NewReader(bad))); err == nil {
+			t.Fatal("corrupt download was installed")
+		}
+		if !bytes.Equal(readStaged(), payload) {
+			t.Fatal("failed download replaced the original input")
+		}
+		if _, err = c.exec(ctx, name, []string{"sh", "-c", `test ! -e "$1" && test ! -L "$1"`, "input-test", input.Path + ".partial"}, nil, io.Discard); err != nil {
+			t.Fatalf("failed download left a partial input: %v", err)
+		}
+	}
 	var files []board.InputFile
 	if err = boardClient.Do(ctx, http.MethodGet, base+"/inputs", nil, &files, nil); err != nil {
 		t.Fatal(err)
