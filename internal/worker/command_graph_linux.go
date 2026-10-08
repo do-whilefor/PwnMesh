@@ -189,6 +189,15 @@ func validateCommandGraph(spec *commandGraphSpec) error {
 			if !slices.Contains([]string{"succeeded", "failed", "skipped"}, n.When.Status) || len(n.When.Contains) > 256 || !slices.ContainsFunc(n.DependsOn, func(d workergraph.Dependency) bool { return d.ID == n.When.Node }) || (n.When.Status != "succeeded" && n.When.Contains != "") {
 				return errors.New("when requires a direct dependency, a terminal status and optional successful-output contains text")
 			}
+			// A required edge blocks before When can observe failure or a skip.
+			// A required node failure stops the entire graph even with an optional
+			// edge. Reject these unreachable routes before any source side effect.
+			if n.When.Status != "succeeded" && !slices.ContainsFunc(n.DependsOn, func(d workergraph.Dependency) bool { return d.ID == n.When.Node && d.Optional }) {
+				return errors.New("when failed/skipped requires an optional dependency")
+			}
+			if n.When.Status == "failed" && !byID[n.When.Node].Optional {
+				return errors.New("when failed requires an optional source node; required failure stops the graph")
+			}
 		}
 		visiting[id], ancestors[id] = false, a
 		return nil

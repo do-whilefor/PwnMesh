@@ -297,6 +297,56 @@ func TestCommandGraphConditionsAndOptionalFailureJoin(t *testing.T) {
 	}
 }
 
+func TestCommandGraphRejectsUnreachableFailureRoutesBeforeExecution(t *testing.T) {
+	for _, test := range []struct {
+		name, status               string
+		optionalNode, optionalEdge bool
+	}{
+		{name: "failed-required-edge", status: "failed", optionalNode: true},
+		{name: "skipped-required-edge", status: "skipped", optionalNode: true},
+		{name: "failed-required-node", status: "failed", optionalEdge: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			job, dir := graphWrapperJob(t), t.TempDir()
+			spec := commandGraphSpec{Key: "unreachable", Nodes: []commandGraphNode{
+				{ID: "source", Command: `touch started; exit 7`, Resources: []string{}, Optional: test.optionalNode},
+				{ID: "route", Command: `touch forbidden`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source", Optional: test.optionalEdge}}, When: &commandGraphWhen{Node: "source", Status: test.status}},
+			}}
+			if test.status == "skipped" {
+				spec.Nodes[0].DependsOn = []workergraph.Dependency{{ID: "seed"}}
+				spec.Nodes[0].When = &commandGraphWhen{Node: "seed", Contains: "absent"}
+				spec.Nodes = append(spec.Nodes, commandGraphNode{ID: "seed", Command: "printf skip", Resources: []string{}})
+			}
+			if _, err := commandGraphCall(t, context.Background(), job, dir, spec); err == nil || !strings.Contains(err.Error(), "when") {
+				t.Fatalf("unreachable route was not rejected during preflight: %v", err)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "graph-tools", spec.Key)); !os.IsNotExist(err) {
+				t.Fatalf("invalid route created a graph or executed its source: %v", err)
+			}
+		})
+	}
+}
+
+func TestCommandGraphSkippedRouteDoesNotRequireOptionalSource(t *testing.T) {
+	job, dir := graphWrapperJob(t), t.TempDir()
+	spec := commandGraphSpec{Key: "skip-route", Nodes: []commandGraphNode{
+		{ID: "seed", Command: "printf skip", Resources: []string{}},
+		{ID: "source", Command: "exit 99", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "seed"}}, When: &commandGraphWhen{Node: "seed", Contains: "absent"}},
+		{ID: "route", Command: "printf routed", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source", Optional: true}}, When: &commandGraphWhen{Node: "source", Status: "skipped"}},
+	}}
+	for range 2 {
+		checkpoint, err := commandGraphCall(t, context.Background(), job, dir, spec)
+		if err != nil || checkpoint.Status != "succeeded" {
+			t.Fatalf("reachable skip route was rejected: %+v %v", checkpoint, err)
+		}
+		source, _ := commandNodeValue(t, checkpoint, "source")
+		route, output := commandNodeValue(t, checkpoint, "route")
+		if source.Status != "skipped" || source.Attempt != 0 || route.Status != "succeeded" || route.Attempt != 1 || output.Stdout != "routed" {
+			t.Fatalf("skip route did not retain its successful single execution: %+v", checkpoint)
+		}
+	}
+}
+
 func TestCommandGraphContainsUsesCompleteRetainedOutput(t *testing.T) {
 	for _, test := range []struct {
 		name, command, contains, status string
