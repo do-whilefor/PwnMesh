@@ -83,17 +83,22 @@ func TestCommandGraphJSONArtifactAndStdoutExcludeStderr(t *testing.T) {
 			t.Fatalf("missing dependency container type or name lookup guidance %q", required)
 		}
 	}
-	for _, required := range []string{"output_path and stderr_path name the separate full logs", "declare structured results as JSON artifacts", `json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))`, "artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there"} {
+	for _, required := range []string{"output.value.output_path and output.value.stderr_path name the separate full logs", "logs are not in output.files", "declare structured results as JSON artifacts", `json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))`, "artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there"} {
 		if !strings.Contains(description, required) {
 			t.Fatalf("missing output contract guidance %q", required)
 		}
 	}
 	spec := commandGraphSpec{Key: "json-artifact", Nodes: []commandGraphNode{
 		{ID: "left", Command: `printf '{"ok":true}\n' > result.json; cat result.json; printf 'warning\n' >&2`, Resources: []string{}, Artifacts: []string{"result.json"}},
+		{ID: "consume-logs", Command: `python3 -c 'import json, os; deps=json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); assert len(deps)==1 and deps[0]["id"]=="left"; output=deps[0]["output"]; assert "stdout.log" not in output.get("files", {}) and "stderr.log" not in output.get("files", {}); assert json.load(open(output["value"]["output_path"]))=={"ok":True}; assert open(output["value"]["stderr_path"]).read()=="warning\n"; print("consumed separate logs")'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "left"}}},
 	}}
 	checkpoint, err := commandGraphCall(t, context.Background(), graphWrapperJob(t), t.TempDir(), spec)
 	if err != nil || checkpoint.Status != "succeeded" {
 		t.Fatalf("JSON producer failed: %+v %v", checkpoint, err)
+	}
+	consumer, consumed := commandNodeValue(t, checkpoint, "consume-logs")
+	if consumer.Status != "succeeded" || consumed.Stdout != "consumed separate logs\n" {
+		t.Fatalf("dependency full-log paths were not consumed: %+v %+v", consumer, consumed)
 	}
 	node, value := commandNodeValue(t, checkpoint, "left")
 	log, err := os.ReadFile(value.OutputPath)
