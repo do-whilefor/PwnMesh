@@ -9,7 +9,7 @@ services:
   server:
     build: .
     image: pwnmesh:dev
-    command: ["serve", "--host", "0.0.0.0", "--db-path", "${PWNMESH_DB_PATH:-/data/pwnmesh.db}"]
+    command: ["serve", "--host", "0.0.0.0", "--allow-host", "server", "--db-path", "${PWNMESH_DB_PATH:-/data/pwnmesh.db}"]
     ports:
       - "127.0.0.1:${PWNMESH_PORT:-8000}:8000"
     volumes:

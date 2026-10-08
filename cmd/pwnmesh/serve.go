@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"pwnmesh/internal/board"
@@ -23,6 +24,13 @@ func serve(ctx context.Context, args []string, errOut io.Writer) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	host := fs.String("host", "127.0.0.1", "HTTP bind address")
+	var allowedHosts []string
+	fs.Func("allow-host", "Additional trusted HTTP hostname without a port (repeatable or comma-separated)", func(value string) error {
+		for _, name := range strings.Split(value, ",") {
+			allowedHosts = append(allowedHosts, strings.TrimSpace(name))
+		}
+		return nil
+	})
 	port := fs.Int("port", 8000, "HTTP port")
 	home, _ := os.UserHomeDir()
 	db := fs.String("db-path", filepath.Join(home, ".local", "share", "pwnmesh", "pwnmesh.db"), "SQLite database path")
@@ -35,6 +43,13 @@ func serve(ctx context.Context, args []string, errOut io.Writer) error {
 	if *db == "" {
 		return errors.New("db-path must not be empty")
 	}
+	if *host != "" {
+		allowedHosts = append(allowedHosts, *host)
+	}
+	guard, err := server.HostGuard(allowedHosts...)
+	if err != nil {
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -44,7 +59,7 @@ func serve(ctx context.Context, args []string, errOut io.Writer) error {
 	}
 	defer store.Close()
 	srv := &http.Server{
-		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)), Handler: server.New(store),
+		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)), Handler: guard(server.New(store)),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second,
 	}

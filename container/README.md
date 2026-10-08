@@ -25,6 +25,11 @@ docker build -f container/Dockerfile -t pwnmesh-worker:dev .
 docker compose --profile images build worker-image
 ```
 
+控制服务默认只接受 `localhost`、IP 地址及 `--host` 显式绑定的主机名作为 HTTP Host，
+拒绝未知域名，避免 DNS rebinding。Compose 已通过 `--allow-host server` 允许内部调度器访问。
+反向代理保留外部 Host 时，启动服务需显式添加 `--allow-host pwn.example.com`；
+可重复传入或以逗号分隔，填写精确主机名，不带协议、端口或通配符。不会信任 `X-Forwarded-Host`。
+
 ### 工具版本
 
 | 构建参数 | 默认值 |
