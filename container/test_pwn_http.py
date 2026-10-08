@@ -73,6 +73,9 @@ class CaptureTests(unittest.TestCase):
 
             do_POST = do_GET
             do_HEAD = do_GET
+            do_DELETE = do_GET
+            do_PROPFIND = do_GET
+            do_REPORT = do_GET
 
             def log_message(self, *args):
                 pass
@@ -170,6 +173,38 @@ class CaptureTests(unittest.TestCase):
     def test_original_cookie_header_wins_over_har_cookie_list(self):
         request = http.har_request(self.entry(headers=[{"name": "Cookie", "value": "sid=original"}], cookies=[{"name": "sid", "value": "different"}]))
         self.assertEqual(http.values(request["headers"], "Cookie"), ["sid=original"])
+
+    def test_delete_webdav_and_extension_methods_reject_unknown_har_bodies(self):
+        for method in ("DELETE", "PROPFIND", "REPORT", "CUSTOM"):
+            for metadata in ({}, {"bodySize": -1}):
+                with self.subTest(method=method, metadata=metadata):
+                    path = self.capture(self.entry(method=method, **metadata))
+                    code, out, err = self.call("inspect", path)
+                    self.assertEqual((code, err), (0, ""))
+                    inspected = json.loads(out)[0]
+                    self.assertFalse(inspected["replayable"])
+                    self.assertIn("body information", inspected["error"])
+                    self.assertEqual(self.call("replay", path, "--index", "1", "--output", str(self.root / "never"))[0], 1)
+        self.assertFalse(self.received)
+        self.assertFalse((self.root / "never").exists())
+
+    def test_delete_and_webdav_preserve_confirmed_empty_and_complete_har_bodies(self):
+        cases = [
+            ({"bodySize": 0}, b""),
+            ({"headers": [{"name": "Content-Length", "value": "0"}]}, b""),
+            ({"postData": {"mimeType": "application/json", "text": '{"id":7}'}}, b'{"id":7}'),
+            ({"postData": {"mimeType": "application/octet-stream", "text": "AP8=", "encoding": "base64"}, "bodySize": 2}, b"\x00\xff"),
+        ]
+        for method in ("DELETE", "PROPFIND", "REPORT"):
+            for index, (metadata, body) in enumerate(cases):
+                with self.subTest(method=method, metadata=metadata):
+                    path = self.capture(self.entry(method=method, **metadata))
+                    output = self.root / (method + "-" + str(index))
+                    code, _, err = self.call("replay", path, "--index", "1", "--output", str(output))
+                    self.assertEqual((code, err), (0, ""))
+                    self.assertEqual((self.received[-1][0], self.received[-1][3]), (method, body))
+                    self.assertEqual((output / "request.body").read_bytes(), body)
+        self.assertEqual(len(self.received), 12)
 
     def test_utf8_and_base64_har_bodies(self):
         cases = [

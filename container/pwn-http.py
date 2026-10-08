@@ -142,7 +142,9 @@ def har_request(entry):
         raise CaptureError("invalid HAR bodySize")
     if body_size >= 0 and body_size != len(body):
         raise CaptureError("HAR bodySize does not match captured body bytes")
-    if post is None and body_size == -1 and str(req.get("method", "")).upper() in ("POST", "PUT", "PATCH") and not values(headers, "Content-Length"):
+    # DELETE, WebDAV and extension methods can carry bodies too. An absent
+    # export is not a confirmed empty body for these methods.
+    if post is None and body_size == -1 and str(req.get("method", "")).upper() not in ("GET", "HEAD", "OPTIONS", "TRACE") and not values(headers, "Content-Length"):
         raise CaptureError("HAR omits request body information; export postData or a confirmed zero bodySize")
     if not values(headers, "Cookie") and req.get("cookies"):
         cookies = req["cookies"]
