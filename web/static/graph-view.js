@@ -52,6 +52,7 @@
       const blocked = targetNode.raw?.blocked_by?.includes(sourceNode.id);
       let status = 'pending', statusLabel = '等待前置步骤';
       if (sourceNode.supportValid === true && !blocked) { status = 'done'; statusLabel = '依赖已满足'; }
+      else if (sourceNode.status === 'completed' && blocked) { status = 'invalid'; statusLabel = '前置结果需复核'; }
       else if (visualStatus(sourceNode) === 'invalid') { status = 'invalid'; statusLabel = '前置步骤需处理'; }
       else if (sourceNode.status === 'running') { status = 'running'; statusLabel = '前置步骤运行中'; }
       else if (sourceNode.status === 'paused') { status = 'paused'; statusLabel = '前置步骤已暂停'; }

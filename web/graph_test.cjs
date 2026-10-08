@@ -53,12 +53,14 @@ test('step dependencies preserve explicit direction and factual provenance witho
 test('dependency details use upstream readiness, including blocked and unsupported completed steps', () => {
   const cases = [
     [{status:'completed',support_valid:true}, [], 'done', '依赖已满足'],
-    [{status:'completed',support_valid:true}, ['first'], 'pending', '等待有效完成结果'],
-    [{status:'completed'}, ['first'], 'pending', '等待有效完成结果'],
-    [{status:'completed',support_valid:false}, ['first'], 'pending', '等待有效完成结果'],
+    [{status:'completed',support_valid:true}, ['first'], 'invalid', '前置结果需复核'],
+    [{status:'completed'}, ['first'], 'invalid', '前置结果需复核'],
+    [{status:'completed',support_valid:false}, ['first'], 'invalid', '前置结果需复核'],
+    [{status:'completed'}, [], 'pending', '等待有效完成结果'],
+    [{status:'completed',support_valid:false}, ['another'], 'pending', '等待有效完成结果'],
     [{status:'running'}, ['first'], 'running', '前置步骤运行中'],
     [{status:'failed'}, ['first'], 'invalid', '前置步骤需处理'],
-    [{status:'completed',invalid_sources:['old']}, ['first'], 'invalid', '前置步骤需处理'],
+    [{status:'completed',invalid_sources:['old']}, ['first'], 'invalid', '前置结果需复核'],
     [{status:'paused'}, ['first'], 'paused', '前置步骤已暂停'],
     [{status:'blocked'}, ['first'], 'pending', '等待前置步骤']
   ];
