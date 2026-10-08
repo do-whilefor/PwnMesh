@@ -234,7 +234,7 @@ func prepareEvidence(ctx context.Context, j Job, runDir string, action board.Sta
 	for i, ref := range refs {
 		if !currentEvidence(ref.RunID, j.RunID) {
 			if action.Op != "finding" && action.Op != "candidate" {
-				return action, errors.New("new fact evidence must belong to this run")
+				return action, errors.New("new fact evidence cannot reuse another run_id; omit run_id and excerpt and select the original local path/lines so the runtime captures evidence for this run")
 			}
 			// Existing references must match a cited Fact at the server. Never
 			// relabel another run's observation as freshly captured evidence.

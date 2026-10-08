@@ -188,3 +188,50 @@ func TestGraphActionSchemaPreservesFrozenAndHistoricalEvidence(t *testing.T) {
 		t.Fatalf("historical reference changed: %+v", historical)
 	}
 }
+
+func TestGraphActionFactRejectsHistoricalEvidenceWithCorrectionGuidance(t *testing.T) {
+	job := Job{Kind: "explore", RunID: "consumer", GraphRPC: true, Workspace: t.TempDir()}
+	opts := Options{Tools: []agent.Tool{}, RunDir: t.TempDir()}
+	const original = "independently observed producer bytes\n"
+	source := filepath.Join(job.Workspace, "producer.txt")
+	if err := os.WriteFile(source, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var submissions []json.RawMessage
+	opts.Output = &draftTestBridge{dir: opts.RunDir, handle: func(request GraphRequest) (any, error) {
+		submissions = append(submissions, request.Action.Payload)
+		return board.StateActionResult{ID: "fact001"}, nil
+	}}
+	if err := ConfigureRuntimeTools(job, &opts); err != nil {
+		t.Fatal(err)
+	}
+	action := opts.Tools[1]
+	invalid := json.RawMessage(`{"op":"fact","idempotency_key":"observation","payload":{"description":"Checked original bytes","scope":"fixture","observed_at":"2026-10-08T10:00:00Z","evidence":[{"path":"producer.txt","run_id":"producer","excerpt":"independently observed producer bytes\n"}]}}`)
+	if err := agent.ValidateArguments(action.Schema, invalid); err != nil {
+		t.Fatal(err)
+	}
+	_, err := action.Execute(context.Background(), invalid)
+	const want = "new fact evidence cannot reuse another run_id; omit run_id and excerpt and select the original local path/lines so the runtime captures evidence for this run"
+	if err == nil || err.Error() != want || len(submissions) != 0 {
+		t.Fatalf("historical fact reference was submitted or lacked correction guidance: calls=%d err=%v", len(submissions), err)
+	}
+	// Following the error can reuse this key: rejection did not freeze a
+	// manifest, and the runtime captures the same source under the current run.
+	corrected := json.RawMessage(`{"op":"fact","idempotency_key":"observation","payload":{"description":"Checked original bytes","scope":"fixture","observed_at":"2026-10-08T10:00:00Z","evidence":[{"path":"producer.txt"}]}}`)
+	if _, err := action.Execute(context.Background(), corrected); err != nil || len(submissions) != 1 {
+		t.Fatalf("corrected selection could not be submitted: calls=%d err=%v", len(submissions), err)
+	}
+	var payload struct {
+		Evidence []board.EvidenceRef `json:"evidence"`
+	}
+	if err := json.Unmarshal(submissions[0], &payload); err != nil || len(payload.Evidence) != 1 {
+		t.Fatalf("invalid prepared observation: %s %v", submissions[0], err)
+	}
+	ref := payload.Evidence[0]
+	if ref.RunID != job.RunID || ref.Excerpt != original || ref.Path == source {
+		t.Fatalf("runtime did not capture fresh evidence: %+v", ref)
+	}
+	if retained, err := os.ReadFile(ref.Path); err != nil || string(retained) != original {
+		t.Fatalf("captured evidence changed original bytes: %q %v", retained, err)
+	}
+}
