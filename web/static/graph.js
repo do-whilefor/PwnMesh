@@ -28,7 +28,7 @@
       this.drag = null; this.filter = 'all'; this.statusFilter = 'all'; this.direction = 'upstream'; this.destroyed = false;
       this.panFrame = null; this.panTime = null; this.fitFrame = null; this.drawFrame = null; this.clickTimer = null;
       this.viewport = this.el('div', 'graph-viewport'); this.viewport.tabIndex = 0;
-      this.viewport.setAttribute('role', 'group'); this.viewport.setAttribute('aria-label', '任务图。点击节点追踪上游，方向键移动节点，加减号缩放，0 适应画布，Escape 清除选择。');
+      this.viewport.setAttribute('role', 'group'); this.viewport.setAttribute('aria-label', '项目业务与步骤依赖图。点击节点追踪上游，方向键移动节点，加减号缩放，0 适应画布，Escape 清除选择。');
       this.world = this.el('div', 'graph-world'); this.nodeHost = this.el('div', 'graph-nodes'); this.svg = this.svgEl('svg', {class: 'graph-edges', tabindex: -1});
       this.defs = this.svgEl('defs');
       for (const [name, color] of Object.entries(COLORS)) {
@@ -80,7 +80,7 @@
     setState(state) {
       if (this.destroyed) return;
       const mapped = mapState(state), key = this.cacheKey(mapped), changed = key !== this.cacheKey();
-      const previousNode = this.project?.nodeIndex.get(this.selected), previousEdge = this.project?.edgeIndex.get(this.selectedEdge);
+      const previousNode = this.project?.nodeIndex.get(this.selected), previousEdge = describeEdge(this.project, this.selectedEdge);
       this.saveView();
       if (changed) { this.cancelDrag(); this.cancelPendingFit(); this.statusFilter = 'all'; }
       // New generations invalidate previous-round coordinates and camera.
@@ -112,7 +112,7 @@
       else if (firstNodes) this.scheduleFit();
       const selected = mapped.nodeIndex.get(this.selected), selectedEdge = mapped.edgeIndex.get(this.selectedEdge);
       if (previousNode || selected) { if (changed || JSON.stringify(previousNode) !== JSON.stringify(selected)) this.onSelect(clone(selected)); }
-      if (previousEdge || selectedEdge) { if (changed || JSON.stringify(previousEdge) !== JSON.stringify(selectedEdge)) this.onSelectEdge(clone(selectedEdge)); }
+      if (previousEdge || selectedEdge) { if (changed || JSON.stringify(previousEdge) !== JSON.stringify(describeEdge(mapped, selectedEdge))) this.onSelectEdge(clone(selectedEdge)); }
     }
     renderCards(endKey) {
       for (const [key, card] of this.cards) if (!this.project.nodeIndex.has(key)) { card.remove(); this.cards.delete(key); }

@@ -6,6 +6,7 @@ const vm = require('node:vm');
 const {Client, RequestScope} = require('./static/api.js');
 const data = require('./static/data.js');
 const {mapState} = require('./static/graph-data.js');
+const {describeEdge} = require('./static/graph-view.js');
 const html = fs.readFileSync(path.join(__dirname, 'static/index.html'), 'utf8');
 const app = fs.readFileSync(path.join(__dirname, 'static/app.js'), 'utf8');
 const now = '2026-09-24T00:00:00Z';
@@ -78,7 +79,9 @@ function harness(handler, selected = 'A', markup = html, stored = {}) {
     getStatusFilter() { return this.statusFilter; }
     setStatusFilter(status) { this.statusFilter = status; }
     selectNode(ref) { const node = ref && this.getNodes().find(node => node.key === (ref.type + ':' + ref.id)); this.selected = node?.key; this.options.onSelect(node || null); }
-    getEdgeDetails() { return null; }
+    focusNode(ref) { this.focused = ref; }
+    getEdgeDetails(edge) { return describeEdge(mapState(this.state), edge); }
+    selectEdge(edge) { this.selected = null; this.options.onSelectEdge(edge); }
     destroy() {}
   }
   const window = {PwnMeshAPI:{Client:FakeClient,RequestScope},PwnMeshGraph:FakeGraph,PwnMeshData:{...data,buildLogs(state,events,runs) { projections.push({state,events,runs}); return data.buildLogs(state,events,runs); }},addEventListener() {}};
@@ -290,6 +293,25 @@ test('refreshing the selected node never switches the user away from the result 
   await h.elements.get('tab-result').click(); assert.equal(h.elements.get('tab-result').attributes['aria-selected'],'true');
   states.A.fact_records[0].description = 'updated'; await h.fireTimer(2500);
   assert.equal(h.elements.get('tab-result').attributes['aria-selected'],'true'); assert.match(h.elements.get('node-inspector').textContent,/updated/);
+});
+
+test('dependency inspector identifies prerequisite steps and disables missing-reference links', async () => {
+  const states = {A:snapshot('A')};
+  states.A.steps = [{id:'first',description:'获取输入',status:'running'}, {id:'next',description:'验证结果',status:'blocked',depends_on:['first','missing'],blocked_by:['first','missing']}];
+  const h = harness(url => standard(url,states)); await settle();
+  h.graph.selectNode({type:'step',id:'next'});
+  const inspector = h.elements.get('node-inspector');
+  assert.match(inspector.textContent, /等待依赖/); assert.match(inspector.textContent, /等待前置步骤：first、missing/);
+  const references = inspector.children.find(child => child.className === 'evidence-links').children;
+  assert.equal(references[0].disabled, false); assert.equal(references[1].disabled, true);
+  await references[0].click(); assert.equal(h.graph.selected, 'step:first');
+  const edge = mapState(states.A).edges.find(item => item.kind === 'step_dependency'); h.graph.selectEdge(edge);
+  assert.match(inspector.textContent, /执行依赖.*前置步骤运行中/);
+  const endpoints = inspector.children.find(child => child.className === 'edge-endpoints').children;
+  assert.equal(endpoints[0].children[0].textContent, '前置步骤'); assert.equal(endpoints[1].children[0].textContent, '后续步骤');
+  assert.equal(endpoints[0].children[1].textContent, '获取输入'); assert.equal(endpoints[1].children[1].textContent, '验证结果');
+  assert.ok(!inspector.children.some(child => child.className === 'evidence-warning'), 'a waiting dependency is not invalid evidence');
+  await endpoints[1].children[1].click(); assert.equal(h.graph.selected, 'step:next');
 });
 
 test('restart conflict refreshes the round and requires a new confirmation before any retry', async () => {

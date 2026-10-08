@@ -63,6 +63,7 @@
         if (node.status === 'achieved') node.sources.forEach(id => addEdge('goal_support', keyOf('fact', id), node.key, '支持目标', null, node.supportValid));
       } else if (node.type === 'step') {
         if (text(raw.goal_id)) addEdge('goal_step', keyOf('goal', raw.goal_id), node.key, '任务归属', null);
+        strings(raw.depends_on).forEach(id => addEdge('step_dependency', keyOf('step', id), node.key, '执行依赖', null));
         strings(raw.from).forEach(id => addEdge('step_input', keyOf('fact', id), node.key, '依据', null, strings(raw.invalid_sources).includes(id) ? false : null));
         if (text(raw.result)) addEdge('step_result', node.key, keyOf('fact', raw.result), '产生', null);
       } else if (node.type === 'finding') {

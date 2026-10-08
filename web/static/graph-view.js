@@ -5,7 +5,7 @@
   else root.PwnMeshGraphView = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
-  const STATES = {open: '待执行', pending: '待执行', running: '运行中', completed: '已完成', failed: '失败', abandoned: '已放弃', achieved: '已达成', withdrawn: '已撤回', valid: '有效', input: '输入', superseded: '被取代', refuted: '被反驳', narrowed: '已收窄', candidate: '待验证', verified: '已验证', paused: '已暂停', needs_review: '待复核', unknown: '未标明状态'};
+  const STATES = {open: '待执行', pending: '待执行', blocked: '等待依赖', running: '运行中', completed: '已完成', failed: '失败', abandoned: '已放弃', achieved: '已达成', withdrawn: '已撤回', valid: '有效', input: '输入', superseded: '被取代', refuted: '被反驳', narrowed: '已收窄', candidate: '待验证', verified: '已验证', paused: '已暂停', needs_review: '待复核', unknown: '未标明状态'};
   const KINDS = {start: '起点', task: '任务', fact: '事实', goal: '终点', subgoal: '子目标', finding: '发现'};
   const edgeKey = edge => typeof edge === 'string' ? edge : edge?.id || 'edge:' + JSON.stringify([edge.kind, edge.source, edge.target]);
   function supportProblem(node) {
@@ -46,6 +46,18 @@
     const sourceNode = project.nodeIndex?.get(record.source) || project.nodes.find(node => node.key === record.source);
     const targetNode = project.nodeIndex?.get(record.target) || project.nodes.find(node => node.key === record.target);
     if (!sourceNode || !targetNode) return null;
+    if (record.kind === 'step_dependency') {
+      // Completion alone is not readiness: the server validates the retained
+      // result and its transitive supports before setting support_valid.
+      const blocked = targetNode.raw?.blocked_by?.includes(sourceNode.id);
+      let status = 'pending', statusLabel = '等待前置步骤';
+      if (sourceNode.supportValid === true && !blocked) { status = 'done'; statusLabel = '依赖已满足'; }
+      else if (visualStatus(sourceNode) === 'invalid') { status = 'invalid'; statusLabel = '前置步骤需处理'; }
+      else if (sourceNode.status === 'running') { status = 'running'; statusLabel = '前置步骤运行中'; }
+      else if (sourceNode.status === 'paused') { status = 'paused'; statusLabel = '前置步骤已暂停'; }
+      else if (sourceNode.status === 'completed') statusLabel = '等待有效完成结果';
+      return {...record, sourceNode, targetNode, status, statusLabel, description: `${targetNode.label || targetNode.id} 依赖 ${sourceNode.label || sourceNode.id} 的有效完成结果。${statusLabel}。`};
+    }
     const correction = ['refutes', 'supersedes', 'narrows'].includes(record.kind);
     const invalid = record.supportValid === false || (['goal_support', 'finding_support', 'step_input'].includes(record.kind) && ['refuted', 'superseded', 'narrowed'].includes(sourceNode.status));
     const step = record.kind === 'step_input' ? targetNode : record.kind === 'step_result' ? sourceNode : null;

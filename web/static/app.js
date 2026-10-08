@@ -97,7 +97,7 @@
     const box = el('div', 'evidence-links'), keys = new Set(graph.getNodes().map(nodeKey));
     for (const ref of references || []) {
       const button = el('button', 'entry-node', data.nodeTypeName(ref.type) + ' · ' + ref.id); button.type = 'button'; button.disabled = !keys.has(nodeKey(ref));
-      button.title = button.disabled ? '当前图中没有此节点' : '查看关联证据'; button.addEventListener('click', () => revealNode(ref)); box.append(button);
+      button.title = button.disabled ? '当前图中没有此节点' : '查看关联节点'; button.addEventListener('click', () => revealNode(ref)); box.append(button);
     }
     return box;
   }
@@ -114,8 +114,8 @@
     host.replaceChildren(); host.hidden = !node && !edge; host.dataset.selection = edge ? 'edge' : node ? 'node' : ''; if (!node && !edge) return;
     const close = el('button', 'icon-button'); close.setAttribute('aria-label', '清除节点或连线筛选'); close.append(icon('close')); close.addEventListener('click', () => { selectedNode = null; selectedEdge = null; graph.selectNode(null); renderActivity(); }); host.append(close);
     if (edge) {
-      host.append(el('h3', '', edge.label || edge.kind), el('small', 'inspector-status', edge.kind + (edge.statusLabel ? ' / ' + edge.statusLabel : ''))); const endpoints = el('div', 'edge-endpoints');
-      for (const [label, endpoint] of [['来源', edge.sourceNode], ['去向', edge.targetNode]]) {
+      host.append(el('h3', '', edge.label || edge.kind), el('small', 'inspector-status', (edge.label || edge.kind) + (edge.statusLabel ? ' / ' + edge.statusLabel : ''))); const endpoints = el('div', 'edge-endpoints');
+      for (const [label, endpoint] of [[edge.kind === 'step_dependency' ? '前置步骤' : '来源', edge.sourceNode], [edge.kind === 'step_dependency' ? '后续步骤' : '去向', edge.targetNode]]) {
         if (!endpoint) continue; const row = el('div', 'edge-endpoint'), button = el('button', 'inspector-node-link', endpoint.title || endpoint.label || endpoint.id);
         button.type = 'button'; button.addEventListener('click', () => revealNode(endpoint)); row.append(el('span', '', label), button); endpoints.append(row);
       }
@@ -123,6 +123,10 @@
     } else {
       host.append(el('h3', '', node.title || node.label || node.id), el('p', '', node.description || ''), el('small', '', data.nodeTypeName(node.type) + ' / ' + data.statusName(node.status)));
       if (node.raw?.invalid_sources?.length) host.append(el('p', 'evidence-warning', '无效证据：' + node.raw.invalid_sources.join('、')));
+      if (node.type === 'step' && node.raw?.depends_on?.length) {
+        host.append(el('p', '', '前置步骤'), evidenceButtons(node.raw.depends_on.map(id => ({type:'step',id}))));
+        if (node.raw.blocked_by?.length) host.append(el('p', '', '等待前置步骤：' + node.raw.blocked_by.join('、')));
+      }
     }
   }
   function logContent(source, id, parts) {

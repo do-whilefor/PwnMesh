@@ -39,3 +39,5 @@
 .graph-edge-label.invalid{fill:#92743f}
 .graph-edge.invalid.selected{stroke:#bc6043}
 .graph-node.invalid.selected{border-color:#bc6043}
+.canvas-caption .graph-scope{pointer-events:auto;cursor:help}
+.graph-scope:focus-visible{outline:2px solid #bc6043;outline-offset:3px}

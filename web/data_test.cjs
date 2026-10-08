@@ -34,6 +34,7 @@ test('task progress counts unique steps, including failed and review work, separ
   state.graph.project.status = 'stopped';
   assert.equal(data.taskProgress(state).running,0);
   assert.equal(data.statusName('needs_review'),'需要复核');
+  assert.equal(data.statusName('blocked'),'等待依赖');
 });
 
 test('only persisted completion with valid root support becomes a project result', () => {

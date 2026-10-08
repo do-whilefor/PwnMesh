@@ -12,7 +12,7 @@
   ]);
   const NAMES = Object.freeze({
     active:'进行中', running:'进行中', paused:'已暂停', stopped:'已暂停', completed:'已完成', terminated:'已终止',
-    open:'待执行', achieved:'已达成', withdrawn:'已撤回', abandoned:'已放弃',
+    open:'待执行', blocked:'等待依赖', achieved:'已达成', withdrawn:'已撤回', abandoned:'已放弃',
     valid:'有效', input:'项目输入', superseded:'已被替代', refuted:'已反驳', narrowed:'范围已收窄',
     candidate:'待验证', verified:'已验证', failed:'执行失败', rejected:'结果被拒绝', cancelled:'已取消',
     prepared:'等待执行', retryable:'等待恢复', result_pending:'结果待写回', succeeded:'执行完成',

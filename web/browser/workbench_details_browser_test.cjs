@@ -24,9 +24,9 @@ function fixture() {
     {id:'short',description:'简短的证据记录',status:'valid'},
   ];
   const steps = [
-    {id:'done',description:'已经完成的任务',status:'completed',from:['origin'],result:'long'},
-    {id:'running',description:'正在运行的任务',status:'running',from:['long']},
-    {id:'pending',description:'等待执行的任务',status:'open',from:['short']},
+    {id:'done',description:'已经完成的任务',status:'completed',from:['origin'],result:'long',support_valid:true},
+    {id:'running',description:'正在运行的任务',status:'running',from:['long'],depends_on:['done']},
+    {id:'pending',description:'等待执行的任务',status:'blocked',from:['short'],depends_on:['running'],blocked_by:['running']},
     {id:'failed',description:'失败的任务',status:'failed',from:['origin']},
   ].map(step => ({...step,goal_id:'goal',created_at:created}));
   const state = {
@@ -211,6 +211,25 @@ test('workbench collapses long logs and filters cards without losing the canvas 
       assert.equal(await systemLog().locator('.log-toggle').getAttribute('aria-expanded'),'true');
       await systemLog().locator('.log-toggle').click();
       assert.ok(!(await systemLog().innerText()).includes(systemTail));
+    });
+
+    await t.test('project dependencies show readiness and navigable prerequisite details', async () => {
+      await page.locator('#tab-board').click();
+      const scope = page.locator('.graph-scope');
+      assert.equal(await scope.innerText(), '项目关系图'); assert.match(await scope.getAttribute('title'), /不包含 Worker/);
+      const dependency = page.locator('.graph-edge-hit[aria-label="执行依赖：已经完成的任务 → 正在运行的任务，依赖已满足"]');
+      assert.equal(await dependency.count(), 1);
+      await dependency.dispatchEvent('click'); await waitPaint();
+      const inspector = page.locator('#node-inspector');
+      assert.match(await inspector.innerText(), /前置步骤/); assert.match(await inspector.innerText(), /后续步骤/);
+      assert.match(await inspector.innerText(), /有效完成结果/);
+      await inspector.getByRole('button', {name:'正在运行的任务',exact:true}).click();
+      await inspector.getByRole('button', {name:'任务 · done',exact:true}).click();
+      assert.equal(await page.locator('[data-node-key="step:done"]').getAttribute('aria-pressed'), 'true');
+      await page.locator('#fit-graph').click(); await waitPaint();
+      await page.locator('[data-node-key="step:pending"]').click();
+      assert.match(await inspector.innerText(), /等待依赖/); assert.match(await inspector.innerText(), /等待前置步骤：running/);
+      await inspector.getByRole('button', {name:'清除节点或连线筛选'}).click(); await waitPaint();
     });
 
     await t.test('legend filters show matching cards and restore all cards without changing positions or camera', async () => {

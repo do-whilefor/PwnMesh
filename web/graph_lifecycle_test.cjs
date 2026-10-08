@@ -73,6 +73,30 @@ test('updated text invalidates no geometry but refreshes cached-edge labels, det
   graph.project.edgeIndex.get(edge.id).label = 'updated relation'; graph.scheduleDraw(); h.flush(); assert.equal(graph.edgeElements.get(edge.id).label.textContent, 'updated relation');
   graph.destroy();
 });
+test('dependency readiness refreshes selected details without replacing routes and respects endpoint filters', () => {
+  const selected = [], h = harness({onSelectEdge:edge => selected.push(edge)}), graph = h.graph, value = state();
+  value.steps = [{id:'first',description:'前置任务',status:'running'}, {id:'next',description:'后续任务',status:'blocked',depends_on:['first'],blocked_by:['first']}];
+  graph.setState(value); h.flush();
+  const edge = graph.edges.find(edge => edge.kind === 'step_dependency'), entry = graph.edgeElements.get(edge.id);
+  const cache = graph.edgeRouteCache, positions = [...graph.positions], camera = [graph.scale,graph.tx,graph.ty];
+  graph.selectEdge(edge); h.flush();
+  assert.match(entry.hit.getAttribute('aria-label'), /执行依赖：前置任务 → 后续任务，前置步骤运行中/);
+  value.steps[0].status = 'completed'; value.steps[0].support_valid = true;
+  value.steps[1].status = 'open'; value.steps[1].blocked_by = [];
+  graph.setState(value); h.flush();
+  assert.equal(selected.length, 2, 'an unchanged edge definition still refreshes after endpoint readiness changes');
+  assert.equal(graph.edgeRouteCache, cache); assert.equal(graph.edgeElements.get(edge.id), entry);
+  assert.equal(graph.getEdgeDetails(edge).status, 'done'); assert.match(entry.title.textContent, /依赖已满足/);
+  graph.setStatusFilter('pending'); h.flush();
+  assert.equal(graph.cards.get('step:next').hidden, false); assert.equal(graph.cards.get('step:first').hidden, true);
+  assert.equal(entry.group.style.display, 'none'); assert.equal(graph.selectedEdge, null); assert.equal(selected.at(-1), null);
+  graph.setStatusFilter('all'); h.flush(); assert.equal(entry.group.style.display, '');
+  assert.deepEqual(graph.positions, new Map(positions)); assert.deepEqual([graph.scale,graph.tx,graph.ty], camera);
+  graph.selectEdge(edge); value.steps = value.steps.slice(1); graph.setState(value); h.flush();
+  assert.equal(graph.edgeElements.has(edge.id), false); assert.equal(graph.selectedEdge, null);
+  assert.equal(graph.diagnostics[0].relation, 'step_dependency'); assert.equal(graph.warning.hidden, false);
+  graph.destroy();
+});
 test('deleted selection and active drag release capture, stop edge-pan and notify application', () => {
   const selection = [], edges = [], h = harness({onSelect: node => selection.push(node), onSelectEdge: edge => edges.push(edge)}), graph = h.graph, value = state(); graph.setState(value); h.flush();
   graph.selectEdge(graph.edges.find(edge => edge.kind === 'refutes')); h.flush();

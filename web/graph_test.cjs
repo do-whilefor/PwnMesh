@@ -29,6 +29,49 @@ test('missing references are diagnostic only and never synthesize graph nodes', 
   assert.ok(!mapped.nodes.some(node => node.id === 'missing')); assert.ok(!mapped.edges.some(edge => edge.source === 'fact:missing'));
   assert.deepEqual(mapState(null).nodes, []);
 });
+test('step dependencies preserve explicit direction and factual provenance without inventing missing steps', () => {
+  const state = {steps: [
+    {id:'first', status:'completed', result:'first', support_valid:true},
+    {id:'next', status:'blocked', from:['first'], depends_on:['first','first','missing'], blocked_by:['missing']}
+  ], fact_records:[{id:'first',status:'valid'}]};
+  const mapped = mapState(state), dependencies = mapped.edges.filter(edge => edge.kind === 'step_dependency');
+  assert.deepEqual(dependencies.map(({source,target}) => [source,target]), [['step:first','step:next']]);
+  assert.equal(dependencies[0].label, '执行依赖');
+  assert.ok(mapped.edges.some(edge => edge.kind === 'step_result' && edge.source === 'step:first' && edge.target === 'fact:first'));
+  assert.ok(mapped.edges.some(edge => edge.kind === 'step_input' && edge.source === 'fact:first' && edge.target === 'step:next'));
+  assert.deepEqual(mapped.diagnostics, [{kind:'missing_reference',relation:'step_dependency',source:'step:missing',target:'step:next',missing:['step:missing']}]);
+  assert.ok(!mapped.nodes.some(node => node.id === 'missing'));
+  const reordered = mapState({...state,steps:[...state.steps].reverse()});
+  assert.deepEqual(reordered.edges, mapped.edges);
+  const selection = collectSelection(mapped, 'step:next', null);
+  assert.deepEqual(selection.nodeIds, new Set(['step:next','step:first','fact:first']));
+  assert.equal(selection.edgeKeys.size, 3);
+  const positions = layout(mapped.nodes, mapped.edges, {seed:'dependencies'}).positions;
+  assert.equal(routeEdges(mapped.edges, positions).size, 3);
+  assert.equal(new Set([...routeEdges(mapped.edges, positions).values()].map(route => route.d)).size, 3);
+});
+test('dependency details use upstream readiness, including blocked and unsupported completed steps', () => {
+  const cases = [
+    [{status:'completed',support_valid:true}, [], 'done', '依赖已满足'],
+    [{status:'completed',support_valid:true}, ['first'], 'pending', '等待有效完成结果'],
+    [{status:'completed'}, ['first'], 'pending', '等待有效完成结果'],
+    [{status:'completed',support_valid:false}, ['first'], 'pending', '等待有效完成结果'],
+    [{status:'running'}, ['first'], 'running', '前置步骤运行中'],
+    [{status:'failed'}, ['first'], 'invalid', '前置步骤需处理'],
+    [{status:'completed',invalid_sources:['old']}, ['first'], 'invalid', '前置步骤需处理'],
+    [{status:'paused'}, ['first'], 'paused', '前置步骤已暂停'],
+    [{status:'blocked'}, ['first'], 'pending', '等待前置步骤']
+  ];
+  for (const [source,blocked,status,label] of cases) {
+    const mapped = mapState({steps:[{id:'first',description:'核验输入',...source},{id:'next',description:'综合结果',status:'completed',depends_on:['first'],blocked_by:blocked}]});
+    const detail = describeEdge(mapped, mapped.edges[0]);
+    assert.equal(detail.status, status); assert.equal(detail.statusLabel, label);
+    assert.match(detail.description, /综合结果 依赖 核验输入 的有效完成结果/);
+  }
+  const node = mapState({steps:[{id:'waiting',status:'blocked'}]}).nodes[0];
+  assert.equal(visualStatus(node), 'pending');
+  assert.equal(nodePresentation(node, null).statusLabel, '等待依赖');
+});
 test('root goal is terminal anchor; goal input never becomes an inferred answer', () => {
   const mapped = mapState(fixture()); assert.equal(anchors(mapped.nodes).endKey, 'goal:goal');
   assert.equal(anchors(mapped.nodes.filter(node => node.type !== 'goal')).endKey, null);
