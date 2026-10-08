@@ -30,6 +30,13 @@ docker compose --profile images build worker-image
 反向代理保留外部 Host 时，启动服务需显式添加 `--allow-host pwn.example.com`；
 可重复传入或以逗号分隔，填写精确主机名，不带协议、端口或通配符。不会信任 `X-Forwarded-Host`。
 
+模型配置和凭据只保留在 Dispatcher。Worker 镜像和容器不得设置非空的 `ANTHROPIC_*` 环境变量。
+主 Agent、子 Agent 和上下文摘要均通过 Dispatcher 调用模型；模型回复经完整检查后交付，文本增量不会实时抵达 Worker。
+升级需同时重建控制镜像和 Worker 镜像，不能混用新旧二进制。
+升级后，缺少 `pwnmesh.model-boundary=dispatcher-v1` 标签的旧项目容器会被拒绝复用，
+不会自动删除：先保全并检查工作区，再迁移到新建容器；不要给旧容器补标签绕过检查。
+旧进程、日志或工件中已有的凭据不会因升级消失；确认曾暴露时应轮换凭据。
+
 ### 工具版本
 
 | 构建参数 | 默认值 |

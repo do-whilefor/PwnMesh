@@ -24,6 +24,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/modelrpc"
 	"pwnmesh/internal/worker"
 )
 
@@ -91,14 +92,25 @@ func (c *Client) json(ctx context.Context, method, route string, input, output a
 	return err
 }
 func status(err error, code int) bool { var e *APIError; return errors.As(err, &e) && e.Status == code }
-func (c *Client) ensure(ctx context.Context, id string) (string, error) {
+func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (string, error) {
 	unlock := c.lock(id)
 	defer unlock()
 	name := c.name(id)
+	const modelBoundary = "dispatcher-v1"
+	hasModelEnvironment := func(env []string) bool {
+		for _, entry := range env {
+			key, value, _ := strings.Cut(entry, "=")
+			if (strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") && value != "") || containsModelCredential(entry, secrets...) {
+				return true
+			}
+		}
+		return false
+	}
 	var info struct {
 		Image  string `json:"Image"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
+			Env    []string          `json:"Env"`
 		} `json:"Config"`
 		State struct {
 			Running bool `json:"Running"`
@@ -116,10 +128,27 @@ func (c *Client) ensure(ctx context.Context, id string) (string, error) {
 	if err != nil && !missing {
 		return "", err
 	}
+	checkBoundary := func() error {
+		if info.Config.Labels["pwnmesh.model-boundary"] != modelBoundary {
+			return fmt.Errorf("project %s container predates or differs from the dispatcher model boundary; preserve and migrate its workspace before recreating the container", id)
+		}
+		if hasModelEnvironment(info.Config.Env) {
+			return fmt.Errorf("project %s container contains model provider environment; preserve and migrate its workspace before recreating the container without ANTHROPIC_ environment", id)
+		}
+		return nil
+	}
+	if !missing {
+		if err := checkBoundary(); err != nil {
+			return "", err
+		}
+	}
 	// A mutable tag may now name a different binary or runtime. Resolve it on
 	// every launch and compare immutable IDs before touching a saved workspace.
 	var desired struct {
-		ID string `json:"Id"`
+		ID     string `json:"Id"`
+		Config struct {
+			Env []string `json:"Env"`
+		} `json:"Config"`
 	}
 	if err = c.json(ctx, "GET", "/images/"+url.PathEscape(c.Config.Image)+"/json", nil, &desired); err != nil {
 		return "", fmt.Errorf("resolve configured worker image %q locally: %w", c.Config.Image, err)
@@ -127,14 +156,20 @@ func (c *Client) ensure(ctx context.Context, id string) (string, error) {
 	if desired.ID == "" {
 		return "", errors.New("Docker returned an empty ID for the configured worker image")
 	}
+	if hasModelEnvironment(desired.Config.Env) {
+		return "", errors.New("worker image contains model provider environment; rebuild it without ANTHROPIC_ environment and keep model configuration in the dispatcher")
+	}
 	if missing {
-		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": map[string]string{"pwnmesh.namespace": c.Config.Namespace, "pwnmesh.project": id}, "HostConfig": map[string]any{"NetworkMode": c.Config.Network, "CapAdd": c.Config.CapAdd, "Init": true}}
+		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": map[string]string{"pwnmesh.namespace": c.Config.Namespace, "pwnmesh.project": id, "pwnmesh.model-boundary": modelBoundary}, "HostConfig": map[string]any{"NetworkMode": c.Config.Network, "CapAdd": c.Config.CapAdd, "Init": true}}
 		err = c.json(ctx, "POST", "/containers/create?name="+url.QueryEscape(name), input, nil)
 		if status(err, 409) {
 			missing = false
 			err = c.json(ctx, "GET", "/containers/"+url.PathEscape(name)+"/json", nil, &info)
 			if err == nil && (info.Config.Labels["pwnmesh.namespace"] != c.Config.Namespace || info.Config.Labels["pwnmesh.project"] != id) {
 				return "", errors.New("container creation raced with a different project or dispatcher namespace")
+			}
+			if err == nil {
+				err = checkBoundary()
 			}
 		}
 	}
@@ -277,10 +312,12 @@ func (c *Client) exec(ctx context.Context, name string, argv, env []string, out 
 }
 
 type resultSink struct {
-	pending []byte
-	result  worker.Result
-	found   bool
-	graph   func(worker.GraphRequest) error
+	pending     []byte
+	result      worker.Result
+	found       bool
+	graph       func(worker.GraphRequest) error
+	model       func(modelrpc.Request) error
+	cancelModel func(string) error
 }
 
 func (s *resultSink) Write(p []byte) (int, error) {
@@ -302,6 +339,28 @@ func (s *resultSink) Write(p []byte) (int, error) {
 		}
 		_ = json.Unmarshal(s.pending, &envelope)
 		switch envelope.Type {
+		case "model_request":
+			var event modelrpc.RequestEvent
+			if err := json.Unmarshal(s.pending, &event); err != nil {
+				return 0, err
+			}
+			if s.model == nil {
+				return 0, errors.New("worker requested an unavailable model bridge")
+			}
+			if err := s.model(event.Request); err != nil {
+				return 0, err
+			}
+		case "model_cancel":
+			var event modelrpc.CancelEvent
+			if err := json.Unmarshal(s.pending, &event); err != nil {
+				return 0, err
+			}
+			if s.cancelModel == nil {
+				return 0, errors.New("model bridge is unavailable")
+			}
+			if err := s.cancelModel(event.RequestID); err != nil {
+				return 0, err
+			}
 		case "graph_request":
 			if len(s.pending) > worker.MaxGraphRPCBytes {
 				return 0, errors.New("graph request exceeds 128 KiB")
@@ -348,7 +407,15 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 			return worker.Result{}, errors.New("invalid run ID")
 		}
 	}
-	name, err := c.ensure(ctx, j.Graph.Project.ID)
+	p, err := configuredModel(w, j)
+	if err != nil {
+		return worker.Result{}, err
+	}
+	env, err := modelWorkerEnv(w, p.Token)
+	if err != nil {
+		return worker.Result{}, err
+	}
+	name, err := c.ensure(ctx, j.Graph.Project.ID, p.Token)
 	if err != nil {
 		return worker.Result{}, err
 	}
@@ -360,7 +427,17 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	if err != nil {
 		return worker.Result{}, err
 	}
+	if jsonContainsModelCredential(raw, p.Token) {
+		return worker.Result{}, errors.New("model credential must not be included in a worker job")
+	}
 	if err = c.archive(ctx, name, target, raw); err != nil {
+		return worker.Result{}, err
+	}
+	settings, err := json.Marshal(publicModelSettings(p))
+	if err != nil || jsonContainsModelCredential(settings, p.Token) {
+		return worker.Result{}, errors.New("invalid public model settings")
+	}
+	if err = c.archive(ctx, name, path.Join(path.Dir(target), "model-settings.json"), settings); err != nil {
 		return worker.Result{}, err
 	}
 	launch := make([]byte, 16)
@@ -371,17 +448,17 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	if err = c.archive(ctx, name, path.Join(path.Dir(target), "launch-token"), []byte(launchToken)); err != nil {
 		return worker.Result{}, err
 	}
-	env := []string{}
-	for k, v := range w.Env {
-		if k == "PWNMESH_LAUNCH_TOKEN" {
-			continue
-		}
-		env = append(env, k+"="+v)
-	}
 	env = append(env, "PWNMESH_LAUNCH_TOKEN="+launchToken)
 	sort.Strings(env)
-	sink := &resultSink{graph: c.graphBridge(ctx, name, path.Dir(target), j)}
-	_, err = c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--job", target}, env, sink)
+	bridgeCtx, abortBridge := context.WithCancelCause(ctx)
+	defer abortBridge(nil)
+	bridge := newModelBridge(bridgeCtx, p, j, c.modelDelivery(name, path.Dir(target)), abortBridge)
+	defer bridge.close()
+	sink := &resultSink{graph: c.graphBridge(bridgeCtx, name, path.Dir(target), j), model: bridge.start, cancelModel: bridge.stop}
+	_, err = c.exec(bridgeCtx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--job", target}, env, sink)
+	if bridgeCtx.Err() != nil && ctx.Err() == nil {
+		err = context.Cause(bridgeCtx)
+	}
 	if err == nil && ctx.Err() == nil {
 		if len(sink.pending) > 0 {
 			_, err = sink.Write([]byte{'\n'})

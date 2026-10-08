@@ -20,7 +20,7 @@ import (
 )
 
 // A child session is local to an authorized parent Run. It has no lease,
-// bridge, completion tool or recursive graph tool. Its checkpoint records the
+// shared-graph tools, completion tool or recursive graph tool. Its checkpoint records the
 // original Loop state; uncertain side effects are never automatically replayed.
 type graphAgentSession struct {
 	RunID      string                   `json:"run_id"`
@@ -60,12 +60,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	if o.graphProvider != nil {
 		provider, err = o.graphProvider(spec.ID)
 	} else {
-		p, modelErr := modelForJob(j)
-		err = modelErr
-		if err == nil {
-			p.SessionID = j.RunID + ":" + key + ":" + spec.ID
-			provider = p
-		}
+		provider, err = modelForJob(j, o, j.RunID+":"+key+":"+spec.ID)
 	}
 	if err != nil {
 		return workergraph.Output{}, err

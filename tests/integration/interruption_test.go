@@ -194,7 +194,7 @@ func testDockerRunResumesWithoutRepeatingSideEffects(t *testing.T, hardCrash boo
 	}
 	// Recreate a Docker exec that starts only after its original launch was
 	// interrupted. It must fail before touching history or making a model call.
-	if _, err := dockerExec(ctx, container, []string{"env", "PWNMESH_LAUNCH_TOKEN=" + launchToken, "/usr/local/bin/pwnmesh", "worker", "--job", runDir + "/job.json"}); err == nil || !strings.Contains(err.Error(), "interrupted or superseded") {
+	if _, err := dockerExec(ctx, container, []string{"env", "PWNMESH_MODEL_BRIDGE=dispatcher-v1", "PWNMESH_LAUNCH_TOKEN=" + launchToken, "/usr/local/bin/pwnmesh", "worker", "--job", runDir + "/job.json"}); err == nil || !strings.Contains(err.Error(), "interrupted or superseded") {
 		t.Fatalf("late interrupted launch was not rejected: %v", err)
 	}
 	result, err := runner.Run(ctx, backend, job)

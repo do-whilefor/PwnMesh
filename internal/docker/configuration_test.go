@@ -35,7 +35,7 @@ func TestEnsureChecksRuntimeConfigBeforeReusingWorkspace(t *testing.T) {
 					case r.Method == http.MethodGet && r.URL.Path == "/containers/test-dispatch-p/json":
 						_ = json.NewEncoder(w).Encode(map[string]any{
 							"Image":      "sha256:same",
-							"Config":     map[string]any{"Labels": map[string]string{"pwnmesh.namespace": "test", "pwnmesh.project": "p"}},
+							"Config":     map[string]any{"Labels": map[string]string{"pwnmesh.namespace": "test", "pwnmesh.project": "p", "pwnmesh.model-boundary": "dispatcher-v1"}},
 							"State":      map[string]bool{"Running": running},
 							"HostConfig": map[string]any{"NetworkMode": tc.actualNetwork, "CapAdd": tc.actualCaps},
 						})
@@ -81,7 +81,7 @@ func TestEnsureChecksRuntimeConfigAfterCreateRace(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"Image":      "sha256:same",
-				"Config":     map[string]any{"Labels": map[string]string{"pwnmesh.namespace": "test", "pwnmesh.project": "p"}},
+				"Config":     map[string]any{"Labels": map[string]string{"pwnmesh.namespace": "test", "pwnmesh.project": "p", "pwnmesh.model-boundary": "dispatcher-v1"}},
 				"State":      map[string]bool{"Running": false},
 				"HostConfig": map[string]any{"NetworkMode": "bridge"},
 			})

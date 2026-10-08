@@ -28,7 +28,7 @@ func TestRunCrashConfirmsInterruptionBeforeSameRunRecovery(t *testing.T) {
 			engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.URL.Path == "/containers/test-dispatch-p/json":
-					io.WriteString(w, `{"Image":"sha256:worker","Config":{"Labels":{"pwnmesh.namespace":"test","pwnmesh.project":"p"}},"State":{"Running":true},"HostConfig":{"NetworkMode":"bridge"}}`)
+					io.WriteString(w, `{"Image":"sha256:worker","Config":{"Labels":{"pwnmesh.namespace":"test","pwnmesh.project":"p","pwnmesh.model-boundary":"dispatcher-v1"}},"State":{"Running":true},"HostConfig":{"NetworkMode":"bridge"}}`)
 				case r.URL.Path == "/images/worker/json":
 					io.WriteString(w, `{"Id":"sha256:worker"}`)
 				case strings.HasSuffix(r.URL.Path, "/archive"):
@@ -99,11 +99,12 @@ func TestRunCrashConfirmsInterruptionBeforeSameRunRecovery(t *testing.T) {
 			defer engine.Close()
 			client := &Client{Config: config.Container{Namespace: "test", Image: "worker"}, http: &http.Client{Transport: graphBridgeTestTransport{base: http.DefaultTransport, endpoint: engine.URL}}}
 			job := worker.Job{RunID: "same-run", Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}
-			result, err := client.Run(context.Background(), config.Worker{}, job)
+			backend := config.Worker{Env: map[string]string{"ANTHROPIC_AUTH_TOKEN": "fixture-model-auth", "ANTHROPIC_MODEL": "fixture-model"}}
+			result, err := client.Run(context.Background(), backend, job)
 			if err == nil || result.Status != "" || !reflect.DeepEqual(order, []string{"worker", "interrupt"}) {
 				t.Fatalf("failed worker was accepted or did not settle: result=%+v err=%v order=%v", result, err, order)
 			}
-			result, err = client.Run(context.Background(), config.Worker{}, job)
+			result, err = client.Run(context.Background(), backend, job)
 			if err != nil || result.Status != "success" || !reflect.DeepEqual(order, []string{"worker", "interrupt", "worker"}) {
 				t.Fatalf("same-run recovery failed: %+v %v %v", result, err, order)
 			}

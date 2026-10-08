@@ -15,6 +15,7 @@ import (
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/process"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -41,6 +42,15 @@ type Options struct {
 }
 
 func Execute(ctx context.Context, jobPath string, output io.Writer) error {
+	if os.Getenv("PWNMESH_MODEL_BRIDGE") != "dispatcher-v1" {
+		return errors.New("worker requires the dispatcher model bridge")
+	}
+	for _, entry := range os.Environ() {
+		key, value, _ := strings.Cut(entry, "=")
+		if value != "" && strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") {
+			return errors.New("worker must not receive provider environment settings")
+		}
+	}
 	raw, err := os.ReadFile(jobPath)
 	if err != nil {
 		return err
@@ -363,7 +373,7 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 		return Result{}, err
 	}
 	if o.Provider == nil {
-		p, err := modelForJob(j)
+		p, err := modelForJob(j, o, j.RunID)
 		if err != nil {
 			return Result{}, err
 		}
