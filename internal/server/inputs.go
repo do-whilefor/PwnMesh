@@ -27,6 +27,12 @@ func (s *Server) uploadInput(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, b.Err(403, "Input upload is a project-management operation"))
 		return
 	}
+	// Large APKs share the browser's five-minute upload budget. Keep ordinary
+	// API deadlines short, but allow both receiving and acknowledging this body.
+	deadline := time.Now().Add(5 * time.Minute)
+	controller := http.NewResponseController(w)
+	_ = controller.SetReadDeadline(deadline)
+	_ = controller.SetWriteDeadline(deadline)
 	r.Body = http.MaxBytesReader(w, r.Body, b.MaxInputBytes+(1<<20))
 	mr, err := r.MultipartReader()
 	if err != nil {

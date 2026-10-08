@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -8,15 +9,75 @@ import (
 	"encoding/json"
 	"fmt"
 	"mime/multipart"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"net/textproto"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/worker"
 )
+
+func TestInputUploadOutlivesOrdinaryRequestDeadlines(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	srv := httptest.NewUnstartedServer(f.handler)
+	srv.Config.ReadTimeout = 100 * time.Millisecond
+	srv.Config.WriteTimeout = 200 * time.Millisecond
+	srv.Start()
+	defer srv.Close()
+
+	var body bytes.Buffer
+	form := multipart.NewWriter(&body)
+	part, err := form.CreateFormFile("file", "slow.apk")
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := body.Len()
+	payload := []byte("PK\x00\x01retained APK bytes")
+	_, _ = part.Write(payload)
+	_ = form.Close()
+
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	_, err = fmt.Fprintf(conn, "POST %s/inputs HTTP/1.1\r\nHost: %s\r\nContent-Type: %s\r\nContent-Length: %d\r\nConnection: close\r\n\r\n", f.base(), srv.Listener.Addr(), form.FormDataContentType(), body.Len())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Write(body.Bytes()[:prefix]); err != nil {
+		t.Fatal(err)
+	}
+	// Cross both ordinary request deadlines while an upload is in progress.
+	// ReadTimeout rejects the body; WriteTimeout can hide a committed upload.
+	time.Sleep(400 * time.Millisecond)
+	if _, err = conn.Write(body.Bytes()[prefix:]); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodPost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("slow upload returned HTTP %d", response.StatusCode)
+	}
+	var input board.InputFile
+	if err = json.NewDecoder(response.Body).Decode(&input); err != nil {
+		t.Fatal(err)
+	}
+	download := httptest.NewRecorder()
+	f.handler.ServeHTTP(download, httptest.NewRequest(http.MethodGet, f.base()+"/inputs/"+input.ID, nil))
+	if download.Code != http.StatusOK || !bytes.Equal(download.Body.Bytes(), payload) {
+		t.Fatal("slow upload did not retain its complete original bytes")
+	}
+}
 
 func uploadFixture(t *testing.T, f *executionProtocolFixture, name string, data []byte, status int) board.InputFile {
 	t.Helper()
