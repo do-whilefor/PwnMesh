@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -12,21 +11,15 @@ import (
 // Authorize retained process reads using the caller's current execution lease.
 // Paths and source identities come from registered Jobs, never model arguments.
 func (s *Server) executionTraces(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	raw, err := json.Marshal(q.fields)
-	if err != nil {
-		return 0, nil, err
-	}
 	var read worker.GraphRequest
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&read); err != nil || read.Op != "read_trace_runs" {
+	if err := decodeStrictFields(q, &read); err != nil || read.Op != "read_trace_runs" {
 		return 0, nil, b.Err(422, "expected a read_trace_runs request")
 	}
 	e, err := t.Execution(r.PathValue("pid"), r.PathValue("rid"))
 	if err != nil {
 		return 0, nil, err
 	}
-	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
+	if decisionFence(r) != e.Fence() {
 		return 0, nil, b.Err(403, "Trace read requires its execution lease")
 	}
 	if e.Kind != "explore" || e.Intent == "" || !e.Pending() || e.Status == "result_pending" {

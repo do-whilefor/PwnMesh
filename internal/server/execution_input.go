@@ -80,7 +80,7 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	if len(j.InputFiles) != 0 {
 		return 0, nil, b.Err(422, "input_files are assigned by the server")
 	}
-	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
+	if decisionFence(r) != e.Fence() {
 		return 0, nil, b.Err(403, "Execution preparation requires its lease")
 	}
 	canonical, err := json.Marshal(e)
@@ -245,7 +245,7 @@ func preparedDecisionTriggers(state b.State, previous *b.ExecutionSummary, trigg
 
 func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	var read worker.GraphRequest
-	if err := decodeFields(q, &read); err != nil || read.Op != "read_snapshot" {
+	if err := decodeStrictFields(q, &read); err != nil || read.Op != "read_snapshot" {
 		return 0, nil, b.Err(422, "expected a read_snapshot request")
 	}
 	if err := worker.ValidateGraphRequest(worker.Job{}, read); err != nil {
@@ -255,7 +255,7 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 	if err != nil {
 		return 0, nil, err
 	}
-	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
+	if decisionFence(r) != e.Fence() {
 		return 0, nil, b.Err(403, "Snapshot read requires its execution lease")
 	}
 	current, err := t.Load(e.ProjectID)

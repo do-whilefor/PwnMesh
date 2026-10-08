@@ -1,8 +1,6 @@
 package server
 
 import (
-	"bytes"
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -13,17 +11,11 @@ import (
 // Apply continuation boundaries before sending the current FGS over HTTP.
 // This keeps one oversized Fact from preventing all live graph reads.
 func (s *Server) graphRead(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	raw, err := json.Marshal(q.fields)
-	if err != nil {
-		return 0, nil, err
-	}
 	var read worker.GraphRequest
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&read); err != nil || read.Op != "read_graph" {
+	if err := decodeStrictFields(q, &read); err != nil || read.Op != "read_graph" {
 		return 0, nil, b.Err(422, "expected a read_graph request")
 	}
-	if err = worker.ValidateGraphRequest(worker.Job{}, read); err != nil {
+	if err := worker.ValidateGraphRequest(worker.Job{}, read); err != nil {
 		return 0, nil, b.Err(422, err.Error())
 	}
 	state, err := t.State(r.PathValue("pid"))

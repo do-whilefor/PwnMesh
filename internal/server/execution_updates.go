@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 
@@ -12,21 +11,15 @@ import (
 // Reads and filters under one transaction: event boundaries and node versions
 // cannot come from different revisions. The HTTP body supplies no source IDs.
 func (s *Server) executionUpdates(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	raw, err := json.Marshal(q.fields)
-	if err != nil {
-		return 0, nil, err
-	}
 	var read worker.GraphRequest
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&read); err != nil || read.Op != "read_updates" {
+	if err := decodeStrictFields(q, &read); err != nil || read.Op != "read_updates" {
 		return 0, nil, b.Err(422, "expected a read_updates request")
 	}
 	e, err := t.Execution(r.PathValue("pid"), r.PathValue("rid"))
 	if err != nil {
 		return 0, nil, err
 	}
-	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
+	if decisionFence(r) != e.Fence() {
 		return 0, nil, b.Err(403, "Updates read requires its execution lease")
 	}
 	if e.Kind == "reason" || e.Intent == "" || !e.Pending() || e.Status == "result_pending" {

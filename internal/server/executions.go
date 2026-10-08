@@ -103,7 +103,7 @@ func (s *Server) registerExecution(t *b.Tx, e b.Execution, r *http.Request) (int
 	if (control && (e.Intent != "" || job.Intent != nil)) || (!control && (job.Intent == nil || job.Intent.ID != e.Intent)) {
 		return 0, nil, b.Err(422, "Invalid execution step")
 	}
-	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
+	if decisionFence(r) != e.Fence() {
 		return 0, nil, b.Err(403, "Execution registration requires its lease")
 	}
 	if err := t.RegisterExecution(e); err != nil {
@@ -166,7 +166,7 @@ func (s *Server) executionAction(t *b.Tx, q *request, r *http.Request) (int, any
 		}
 		return 200, map[string]string{"previous_run_id": e.ID}, t.ExecutionStatus(e, "retry_requested", e.Result)
 	}
-	if r.Header.Get("X-PwnMesh-Run") != e.Lease || r.Header.Get("X-PwnMesh-Lease") != e.Kind || r.Header.Get("X-PwnMesh-Intent") != e.Intent {
+	if decisionFence(r) != e.Fence() {
 		return 0, nil, b.Err(403, "Execution lease mismatch")
 	}
 	if op == "resume" {

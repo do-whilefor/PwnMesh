@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -25,13 +24,7 @@ func decisionFence(r *http.Request) b.ExecutionFence {
 }
 func decodeDecisionBatch(q *request) (b.DecisionBatch, error) {
 	var batch b.DecisionBatch
-	raw, err := json.Marshal(q.fields)
-	if err != nil {
-		return batch, err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(raw))
-	decoder.DisallowUnknownFields()
-	if err = decoder.Decode(&batch); err != nil {
+	if err := decodeStrictFields(q, &batch); err != nil {
 		return batch, b.Err(422, "Invalid decision batch: "+err.Error())
 	}
 	if batch.Actions == nil {
@@ -91,7 +84,7 @@ func (s *Server) stateAction(t *b.Tx, q *request, r *http.Request) (int, any, er
 	if err != nil {
 		return 0, nil, err
 	}
-	result, err := t.StateAction(r.PathValue("pid"), b.ExecutionFence{Run: r.Header.Get("X-PwnMesh-Run"), Lease: r.Header.Get("X-PwnMesh-Lease"), Intent: r.Header.Get("X-PwnMesh-Intent")}, b.StateAction{Op: op, IdempotencyKey: key, Payload: raw, ExpectedVersion: expected})
+	result, err := t.StateAction(r.PathValue("pid"), decisionFence(r), b.StateAction{Op: op, IdempotencyKey: key, Payload: raw, ExpectedVersion: expected})
 	return 200, result, err
 }
 func (s *Server) stateEvents(t *b.Tx, _ *request, r *http.Request) (int, any, error) {

@@ -27,6 +27,16 @@ type request struct {
 }
 type action func(*b.Tx, *request, *http.Request) (int, any, error)
 
+func decodeStrictFields(q *request, v any) error {
+	raw, err := json.Marshal(q.fields)
+	if err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(v)
+}
+
 func New(store *b.Store) http.Handler {
 	s := &Server{store}
 	m := http.NewServeMux()
