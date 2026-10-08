@@ -146,6 +146,7 @@ func (t *Tx) addCandidate(s State, d *stateData, fence ExecutionFence, raw json.
 		Sources    []string      `json:"sources"`
 		Evidence   []EvidenceRef `json:"evidence"`
 		Reason     string        `json:"reason"`
+		Assets     []AssetSpec   `json:"assets"`
 	}
 	if err := decodeAction(raw, &input); err != nil {
 		return "", nil, err
@@ -185,13 +186,17 @@ func (t *Tx) addCandidate(s State, d *stateData, fence ExecutionFence, raw json.
 	if input.Status != "candidate" && len(allowed)+len(input.Evidence) == 0 {
 		return "", nil, Err(422, "candidate judgment requires retained evidence")
 	}
+	assets, err := normalizeActionAssets(input.Assets)
+	if err != nil {
+		return "", nil, err
+	}
 	id, err := t.stateID(s.Graph.Project.ID, "candidate", "c")
 	if err != nil {
 		return "", nil, err
 	}
 	c := Candidate{ID: id, Claim: strings.Join(strings.Fields(input.Claim), " "), Scope: strings.TrimSpace(input.Scope), Status: input.Status, Supersedes: input.Supersedes, Sources: append([]string{}, input.Sources...), Evidence: append([]EvidenceRef{}, input.Evidence...), Reason: input.Reason, RunID: fence.Run, SourceStepID: fence.Intent, Generation: s.Graph.Project.Generation, Revision: s.Revision + 1, CreatedAt: t.Now}
 	d.Candidates = append(d.Candidates, c)
-	return id, c, nil
+	return id, c, t.addAssetAnchors(s.Graph.Project.ID, s.Graph.Project.Generation, "candidate", id, assets)
 }
 
 func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMessage) (string, any, error) {

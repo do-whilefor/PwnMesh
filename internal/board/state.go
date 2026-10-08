@@ -35,6 +35,8 @@ type State struct {
 	Candidates       []Candidate      `json:"candidates,omitempty"`
 	Disputes         []Dispute        `json:"disputes,omitempty"`
 	Curation         CurationProgress `json:"curation,omitempty"`
+	Assets           []Asset          `json:"assets,omitempty"`
+	AssetAnchors     []AssetAnchor    `json:"asset_anchors,omitempty"`
 }
 
 // Omit the new zero-value curation view from legacy wire snapshots, preserving
@@ -139,6 +141,7 @@ type StateActionResult struct {
 	StateVersion string          `json:"state_version,omitempty"`
 	Unchanged    bool            `json:"unchanged,omitempty"`
 	Committed    bool            `json:"committed,omitempty"`
+	AssetIDs     []string        `json:"asset_ids,omitempty"`
 }
 type StateEvent struct {
 	Revision  int64           `json:"revision"`
@@ -350,6 +353,9 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 	if g.Project.OrchestrationVersion == 1 {
 		s.projectStepSupport(latest, currentRuns)
 	}
+	if err := t.projectAssets(&s); err != nil {
+		return State{}, err
+	}
 	return s, nil
 }
 
@@ -509,12 +515,25 @@ func validateEvidence(refs []EvidenceRef, run string, allowed []EvidenceRef, req
 	return nil
 }
 
-func (t *Tx) StateAction(project string, fence ExecutionFence, action StateAction) (StateActionResult, error) {
+func (t *Tx) StateAction(project string, fence ExecutionFence, action StateAction) (out StateActionResult, err error) {
 	if !t.inDecisionBatch {
 		if err := t.CheckDirectDecisionWrite(project, fence); err != nil {
 			return StateActionResult{}, err
 		}
 	}
+	// The record, its asset anchors and the receipt form one write. Preserve
+	// this boundary even when an outer caller handles a failed action itself.
+	if _, err = t.Exec("SAVEPOINT xloom_state_action"); err != nil {
+		return out, err
+	}
+	defer func() {
+		if err != nil {
+			_, rollbackErr := t.Exec("ROLLBACK TO xloom_state_action")
+			err = errors.Join(err, rollbackErr)
+		}
+		_, releaseErr := t.Exec("RELEASE xloom_state_action")
+		err = errors.Join(err, releaseErr)
+	}()
 	s, err := t.State(project)
 	if err != nil {
 		return StateActionResult{}, err
@@ -686,6 +705,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		}
 	}
 	out := StateActionResult{Op: action.Op, ID: id, Revision: s.Revision, Result: resultJSON, StateVersion: DecisionStateVersion(current), Unchanged: !changed}
+	out.AssetIDs = current.AssetIDs(action.Op, id)
 	out.Committed = action.Op == "curate"
 	response, _ := json.Marshal(out)
 	if _, err = t.Exec("INSERT INTO xloom_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
@@ -709,6 +729,7 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 		Scope       string        `json:"scope"`
 		ObservedAt  string        `json:"observed_at"`
 		Evidence    []EvidenceRef `json:"evidence"`
+		Assets      []AssetSpec   `json:"assets"`
 	}
 	if err := decodeAction(raw, &input); err != nil {
 		return "", nil, err
@@ -727,6 +748,10 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 	if err = validateEvidence(input.Evidence, fence.Run, nil, true); err != nil {
 		return "", nil, err
 	}
+	assets, err := normalizeActionAssets(input.Assets)
+	if err != nil {
+		return "", nil, err
+	}
 	id, err := t.Next(s.Graph.Project.ID, "fact")
 	if err != nil {
 		return "", nil, err
@@ -735,6 +760,9 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 	d.Facts = append(d.Facts, f)
 	s.Graph.Facts = append(s.Graph.Facts, Fact{ID: id, Description: f.Description})
 	_, err = t.Exec("INSERT OR IGNORE INTO facts(id,project_id,description) VALUES(?,?,?)", id, s.Graph.Project.ID, f.Description)
+	if err == nil {
+		err = t.addAssetAnchors(s.Graph.Project.ID, s.Graph.Project.Generation, "fact", id, assets)
+	}
 	return id, f, err
 }
 
@@ -1000,6 +1028,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		WritePaths  []string            `json:"write_paths"`
 		LatestRunID string              `json:"latest_run_id"`
 		Repair      *artifactcheck.Spec `json:"repair"`
+		Assets      []AssetSpec         `json:"assets"`
 	}
 	if err := decodeAction(raw, &input); err != nil {
 		return "", nil, false, err
@@ -1008,6 +1037,10 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		return "", nil, false, Err(422, "step priority must be between 0 and 1000000")
 	}
 	if input.Action == "add" {
+		assets, err := normalizeActionAssets(input.Assets)
+		if err != nil {
+			return "", nil, false, err
+		}
 		if input.Repair != nil {
 			if s.Graph.Project.OrchestrationVersion != 1 || input.DisputeID != "" {
 				return "", nil, false, Err(422, "repair requires orchestration version 1 and cannot be an independent dispute review")
@@ -1044,7 +1077,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 				return "", nil, false, err
 			}
 		}
-		if existing, ok := s.matchingRepairStep(input.GoalID, input.From, input.Description, input.DependsOn, input.Repair, writePaths); ok {
+		if existing, ok := s.matchingRepairStep(input.GoalID, input.From, input.Description, input.DependsOn, input.Repair, writePaths, assetIDs(assets)); ok {
 			if existing.DisputeID != input.DisputeID {
 				return "", nil, false, Err(409, "matching task has a different dispute binding")
 			}
@@ -1070,7 +1103,14 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		d.Steps = append(d.Steps, stepMetadataFrom(step))
 		intent := Intent{ID: id, From: input.From, Description: step.Description, Creator: fence.Run, CreatedAt: t.Now}
 		s.Graph.Intents = append(s.Graph.Intents, intent)
-		return id, step, true, t.saveIntent(s.Graph.Project.ID, intent)
+		err = t.saveIntent(s.Graph.Project.ID, intent)
+		if err == nil {
+			err = t.addAssetAnchors(s.Graph.Project.ID, s.Graph.Project.Generation, "step", id, assets)
+		}
+		return id, step, true, err
+	}
+	if input.Assets != nil {
+		return "", nil, false, Err(422, "assets is an immutable step add contract")
 	}
 	if input.Repair != nil {
 		return "", nil, false, Err(422, "repair is an immutable step add contract")

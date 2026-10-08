@@ -73,7 +73,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	defer migration.Rollback()
-	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema); err != nil {
+	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema); err != nil {
 		migration.Rollback()
 		db.Close()
 		return nil, err

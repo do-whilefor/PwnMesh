@@ -16,10 +16,10 @@ func (s State) MatchingStep(goal string, from []string, description string, depe
 	if len(dependencies) != 0 {
 		ids = dependencies[0]
 	}
-	return s.matchingRepairStep(goal, from, description, ids, nil, nil)
+	return s.matchingRepairStep(goal, from, description, ids, nil, nil, nil)
 }
 
-func (s State) matchingRepairStep(goal string, from []string, description string, dependencies []string, repair *artifactcheck.Spec, writePaths []string) (Step, bool) {
+func (s State) matchingRepairStep(goal string, from []string, description string, dependencies []string, repair *artifactcheck.Spec, writePaths, assets []string) (Step, bool) {
 	if goal == "" {
 		goal = "goal"
 	}
@@ -37,6 +37,9 @@ func (s State) matchingRepairStep(goal string, from []string, description string
 		return Step{}, false
 	}
 	for _, step := range s.Steps {
+		if !sameSupportSet(s.AssetIDs("step", step.ID), assets) {
+			continue
+		}
 		existingWrites, err := normalizeStepWritePaths(step.WritePaths, step.Repair)
 		if err != nil || !slices.Equal(writePaths, existingWrites) {
 			continue
