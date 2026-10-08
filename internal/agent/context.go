@@ -129,23 +129,28 @@ func (l *Loop) tokenEstimate(messages []Message, size int, cutoff uint64) (int, 
 	return (size + 2) / 3, "request_bytes_div_3_estimate"
 }
 
-func (l *Loop) compact(ctx context.Context) error       { return l.compactContext(ctx, false) }
-func (l *Loop) compactForced(ctx context.Context) error { return l.compactContext(ctx, true) }
 func budgetError(message string) error {
 	return &ModelError{Kind: ErrorBudget, Err: errors.New(message)}
 }
 
-func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error) {
+func (l *Loop) compact(ctx context.Context) error {
+	_, err := l.compactRequest(ctx, false)
+	return err
+}
+
+// The size belongs only to this prepared request. Reuse it for observation in
+// the same turn, avoiding a second full serialization without caching history.
+func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, resultErr error) {
 	if !force && l.ContextBytes <= 0 && l.ContextTokens <= 0 {
-		return nil
+		return -1, nil
 	}
 	if err := l.initCheckpoint(); err != nil {
-		return err
+		return -1, err
 	}
 	defs := l.definitions()
 	before, err := l.inputBytes(l.History, defs)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	var cutoff uint64
 	if l.Checkpoint.LastCompaction != nil {
@@ -153,7 +158,7 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 	}
 	beforeTokens, basis := l.tokenEstimate(l.History, before, cutoff)
 	if !force && (l.ContextBytes <= 0 || before <= l.ContextBytes) && (l.ContextTokens <= 0 || beforeTokens <= l.ContextTokens) {
-		return nil
+		return before, nil
 	}
 	if l.TaskPrompt == "" && len(l.History) > 0 {
 		l.TaskPrompt = l.History[0].Text()
@@ -181,7 +186,7 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 		}
 	}
 	if target <= 0 {
-		return budgetError("input budget is too small for pinned instructions")
+		return -1, budgetError("input budget is too small for pinned instructions")
 	}
 	// Runtime task data remains verbatim too. Exclude exact copies from the
 	// summary and tail, and charge the retained data to the same hard budget.
@@ -221,11 +226,11 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 	}
 	fixed, err := l.inputBytes(view("", nil), defs)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	available := target - fixed
 	if available < 64 {
-		return budgetError("pinned task, runtime data, phase instructions and tool definitions exceed the input budget")
+		return -1, budgetError("pinned task, runtime data, phase instructions and tool definitions exceed the input budget")
 	}
 	summaryBudget := l.SummaryBytes
 	if summaryBudget <= 0 {
@@ -235,7 +240,7 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 		}
 	}
 	if summaryBudget > available {
-		return budgetError("summary allowance exceeds remaining input budget")
+		return -1, budgetError("summary allowance exceeds remaining input budget")
 	}
 	recentBudget := l.RecentBytes
 	if recentBudget <= 0 {
@@ -252,23 +257,9 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 	}
 	// Choose a suffix of whole messages/tool groups by bytes. A single huge
 	// tool group may be summarized in full instead of defeating compaction.
-	cut := len(body)
-	for cut > 0 {
-		start := cut - 1
-		if hasResults(body[start]) {
-			start--
-			if start < 0 {
-				return errors.New("orphaned result during compaction")
-			}
-		}
-		raw, marshalErr := json.Marshal(WireHistory(body[start:]))
-		if marshalErr != nil {
-			return marshalErr
-		}
-		if len(raw) > recentBudget {
-			break
-		}
-		cut = start
+	cut, err := recentHistoryStart(body, recentBudget)
+	if err != nil {
+		return -1, err
 	}
 	if cut == 0 && len(body) > 0 {
 		cut = 1
@@ -277,7 +268,7 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 		}
 	}
 	if cut == 0 {
-		return budgetError("no history can be compacted without changing pinned instructions")
+		return -1, budgetError("no history can be compacted without changing pinned instructions")
 	}
 	sourceStart, sourceEnd := uint64(0), uint64(0)
 	previousID := uint64(0)
@@ -307,7 +298,7 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 	}()
 	summaryInput, sources, err := l.summaryRequest(body[:cut], inputLimit, summaryBudget)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	maxTokens := l.SummaryMaxTokens
 	if maxTokens <= 0 {
@@ -316,28 +307,28 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 	summary, err := l.generate(ctx, summaryInput, nil, maxTokens)
 	attemptRecord.Usage = summary.Usage
 	if err != nil {
-		return fmt.Errorf("context summary: %w", err)
+		return -1, fmt.Errorf("context summary: %w", err)
 	}
 	if summary.Role != "assistant" || summary.StopReason == "max_tokens" || summary.StopReason == "length" {
-		return budgetError("context summary was invalid or truncated")
+		return -1, budgetError("context summary was invalid or truncated")
 	}
 	for _, b := range summary.Content {
 		if b.Type == "tool_use" {
-			return budgetError("context summary attempted to call a tool")
+			return -1, budgetError("context summary attempted to call a tool")
 		}
 	}
 	text, quotes, err := resolveSummary(summary.Text(), sources, summaryBudget)
 	if err != nil {
-		return budgetError("context summary: " + err.Error())
+		return -1, budgetError("context summary: " + err.Error())
 	}
 	candidate := view(text, body[cut:])
 	after, err := l.inputBytes(candidate, defs)
 	if err != nil {
-		return err
+		return -1, err
 	}
 	afterTokens, afterBasis := l.tokenEstimate(candidate, after, l.Checkpoint.LastSequence)
 	if after >= before || after > target || (targetTokens > 0 && afterTokens > targetTokens) {
-		return budgetError("compaction did not produce a smaller request within the input budget")
+		return -1, budgetError("compaction did not produce a smaller request within the input budget")
 	}
 	record := &CompactionRecord{CompactionCheckpoint: CompactionCheckpoint{Version: 1, ID: l.Checkpoint.CompactionCount + 1, PreviousID: previousID, SourceStart: sourceStart, SourceEnd: sourceEnd, AtSequence: l.Checkpoint.LastSequence, Summary: text, BeforeBytes: before, AfterBytes: after, BeforeTokensEstimate: beforeTokens, AfterTokensEstimate: afterTokens, TokenBasis: basis + " -> " + afterBasis, Usage: summary.Usage, Reason: "threshold", Status: "committed"}, View: candidate}
 	record.Quotes = quotes
@@ -361,8 +352,37 @@ func (l *Loop) compactContext(ctx context.Context, force bool) (resultErr error)
 	l.History, l.Checkpoint = candidate, &copyCheckpoint
 	if err := l.saveState(); err != nil {
 		l.History, l.Checkpoint = oldHistory, oldCheckpoint
-		return err
+		return -1, err
 	}
 	l.emit(Event{Type: "context_compacted", Compaction: record})
-	return nil
+	return after, nil
+}
+
+// Count each complete message/tool group once. Joining nonempty JSON arrays
+// replaces their adjacent brackets with a comma; escaping and wire metadata
+// filtering therefore remain identical to marshaling the full suffix.
+func recentHistoryStart(messages []Message, budget int) (int, error) {
+	cut, size := len(messages), 2
+	for cut > 0 {
+		start := cut - 1
+		if hasResults(messages[start]) {
+			start--
+			if start < 0 {
+				return 0, errors.New("orphaned result during compaction")
+			}
+		}
+		raw, err := json.Marshal(WireHistory(messages[start:cut]))
+		if err != nil {
+			return 0, err
+		}
+		next := size + len(raw) - 2
+		if cut < len(messages) {
+			next++
+		}
+		if next > budget {
+			break
+		}
+		cut, size = start, next
+	}
+	return cut, nil
 }

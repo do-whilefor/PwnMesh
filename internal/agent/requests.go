@@ -17,6 +17,10 @@ type RequestObservation struct {
 }
 
 func (l *Loop) generate(ctx context.Context, messages []Message, defs []Definition, summaryTokens int) (Message, error) {
+	return l.generateMeasured(ctx, messages, defs, summaryTokens, -1)
+}
+
+func (l *Loop) generateMeasured(ctx context.Context, messages []Message, defs []Definition, summaryTokens, inputBytes int) (Message, error) {
 	// Providers may retain request buffers or reuse response storage. Neither
 	// may become mutable transcript storage shared with this or another Loop.
 	messages, defs = cloneMessages(messages), cloneDefinitions(defs)
@@ -25,7 +29,10 @@ func (l *Loop) generate(ctx context.Context, messages []Message, defs []Definiti
 		observation.Kind = "summary"
 	}
 	if l.ObserveRequests {
-		observation.InputBytes, _ = l.inputBytes(messages, defs)
+		observation.InputBytes = inputBytes
+		if inputBytes < 0 {
+			observation.InputBytes, _ = l.inputBytes(messages, defs)
+		}
 		observation.InputBasis = "wire_history_and_tools"
 		if _, ok := l.Provider.(RequestSizer); ok {
 			observation.InputBasis = "provider_request"

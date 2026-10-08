@@ -174,12 +174,13 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 					ctx = next
 				}
 			}
-			if err := l.compact(ctx); err != nil {
+			inputBytes, err := l.compactRequest(ctx, false)
+			if err != nil {
 				return last, err
 			}
 			defs := l.definitions()
 			l.emit(Event{Type: "turn_start"})
-			m, err := l.generate(ctx, l.History, defs, 0)
+			m, err := l.generateMeasured(ctx, l.History, defs, 0, inputBytes)
 			if err != nil {
 				var modelErr *ModelError
 				if errors.As(err, &modelErr) && modelErr.Kind == ErrorContextOverflow && l.Checkpoint.OverflowRetries < 1 {
@@ -189,10 +190,11 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 					if saveErr := l.saveState(); saveErr != nil {
 						return last, saveErr
 					}
-					if compactErr := l.compactForced(ctx); compactErr != nil {
+					inputBytes, compactErr := l.compactRequest(ctx, true)
+					if compactErr != nil {
 						return last, compactErr
 					}
-					m, err = l.generate(ctx, l.History, defs, 0)
+					m, err = l.generateMeasured(ctx, l.History, defs, 0, inputBytes)
 				}
 			}
 			if err != nil {
