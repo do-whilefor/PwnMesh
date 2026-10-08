@@ -504,6 +504,92 @@ func TestWorkerTraceRedactsCredentialsWithoutChangingJournal(t *testing.T) {
 	}
 }
 
+func TestWorkerTraceRedactsEscapedCredentialValuesInSearchAndDetail(t *testing.T) {
+	for _, text := range []string{
+		`{"password":"prefix\"private-suffix","status":200}`,
+		`{"api_key":"prefix\\\"private-suffix","status":200}`,
+		`secret='prefix\'private-suffix'`,
+	} {
+		f := newTraceFixture(t, text)
+		tool := f.tool(t)
+		var page struct {
+			TraceVersion string             `json:"trace_version"`
+			Items        []traceObservation `json:"items"`
+		}
+		search := traceCall(t, tool, traceReadRequest{RunID: f.run.RunID})
+		if err := json.Unmarshal([]byte(search), &page); err != nil || len(page.Items) != 1 {
+			t.Fatalf("invalid trace search: %s, %v", search, err)
+		}
+		detail := traceCall(t, tool, traceReadRequest{RunID: f.run.RunID, Record: page.Items[0].Record, TraceVersion: page.TraceVersion})
+		for _, response := range []string{search, detail} {
+			if strings.Contains(response, "private-suffix") || !strings.Contains(response, `"redacted":true`) {
+				t.Fatalf("escaped credential escaped redaction: %s", response)
+			}
+		}
+		retained, err := os.ReadFile(filepath.Join(f.dir, "events.jsonl"))
+		if err != nil || string(retained) != string(f.raw) {
+			t.Fatalf("projection changed retained journal: %v", err)
+		}
+	}
+}
+
+func TestWorkerTraceDetailRetainsObservationProvenance(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		f := newTraceFixture(t, "a long unpublished tool observation")
+		if failed {
+			// Keep the checkpoint bound to the changed journal just as a source
+			// Worker would when committing a failed tool result.
+			f.raw = []byte(strings.Replace(string(f.raw), `"type":"tool_result"`, `"type":"tool_result","is_error":true`, 1))
+			if err := os.WriteFile(filepath.Join(f.dir, "events.jsonl"), f.raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(filepath.Join(f.dir, "session.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved session
+			if err := json.Unmarshal(raw, &saved); err != nil {
+				t.Fatal(err)
+			}
+			saved.Log = journalCheckpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}
+			raw, _ = json.Marshal(saved)
+			if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		tool := f.tool(t)
+		var search struct {
+			TraceVersion string             `json:"trace_version"`
+			Items        []traceObservation `json:"items"`
+		}
+		if err := json.Unmarshal([]byte(traceCall(t, tool, traceReadRequest{RunID: f.run.RunID})), &search); err != nil || len(search.Items) != 1 {
+			t.Fatalf("invalid trace search: %+v, %v", search, err)
+		}
+		for offset := 0; ; {
+			var detail struct {
+				RunID          string `json:"run_id"`
+				StepID         string `json:"step_id"`
+				Sequence       uint64 `json:"sequence"`
+				Tool           string `json:"tool"`
+				IsError        *bool  `json:"is_error"`
+				Projection     bool   `json:"projection"`
+				NextByteOffset *int   `json:"next_byte_offset"`
+			}
+			raw := traceCall(t, tool, traceReadRequest{RunID: f.run.RunID, Record: search.Items[0].Record, TraceVersion: search.TraceVersion, ByteOffset: offset, ByteLimit: 8})
+			if err := json.Unmarshal([]byte(raw), &detail); err != nil {
+				t.Fatal(err)
+			}
+			if detail.RunID != f.run.RunID || detail.StepID != f.run.StepID || detail.Tool != search.Items[0].Tool || detail.Sequence != search.Items[0].Sequence || detail.IsError == nil || *detail.IsError != failed || !detail.Projection {
+				t.Fatalf("trace detail lost observation provenance: %s", raw)
+			}
+			if detail.NextByteOffset == nil {
+				break
+			}
+			offset = *detail.NextByteOffset
+		}
+	}
+}
+
 func TestWorkerTraceSearchOutputHasByteBound(t *testing.T) {
 	contents := make([]string, 50)
 	for i := range contents {

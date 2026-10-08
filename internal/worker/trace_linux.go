@@ -221,13 +221,16 @@ func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceRead
 					StepID         string `json:"step_id"`
 					TraceVersion   string `json:"trace_version"`
 					Record         string `json:"record"`
+					Sequence       uint64 `json:"sequence"`
+					Tool           string `json:"tool"`
+					IsError        bool   `json:"is_error"`
 					ByteOffset     int    `json:"byte_offset"`
 					TotalBytes     int    `json:"total_bytes"`
 					NextByteOffset *int   `json:"next_byte_offset,omitempty"`
 					Content        string `json:"content"`
 					Redacted       bool   `json:"redacted"`
 					Projection     bool   `json:"projection"`
-				}{run.RunID, run.StepID, version, item.Record, r.ByteOffset, len(content), next, string(content[r.ByteOffset:end]), item.Redacted, true})
+				}{run.RunID, run.StepID, version, item.Record, item.Sequence, item.Tool, item.IsError, r.ByteOffset, len(content), next, string(content[r.ByteOffset:end]), item.Redacted, true})
 			}
 			out, err := marshalDetail()
 			// The content byte allowance is an upper bound. JSON escaping and
@@ -470,7 +473,7 @@ func traceResultText(raw json.RawMessage) (string, bool) {
 	return strings.Join(lines, "\n"), len(lines) > 0
 }
 
-var traceCredentialFields = regexp.MustCompile(`(?im)(["']?(?:authorization|proxy-authorization|cookie|set-cookie|[a-z0-9_]*(?:password|passwd|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|secret)[a-z0-9_]*)["']?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\r\n,}]+)`)
+var traceCredentialFields = regexp.MustCompile(`(?im)(["']?(?:authorization|proxy-authorization|cookie|set-cookie|[a-z0-9_]*(?:password|passwd|api[_-]?key|auth[_-]?token|access[_-]?token|refresh[_-]?token|secret)[a-z0-9_]*)["']?\s*[:=]\s*)(?:"(?:\\[^\r\n]|[^"\\\r\n])*"|'(?:\\[^\r\n]|[^'\\\r\n])*'|[^\r\n,}]+)`)
 var traceBearer = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/-]+=*`)
 var traceAPIKey = regexp.MustCompile(`\bsk-[A-Za-z0-9_-]{12,}\b`)
 var traceURLCredentials = regexp.MustCompile(`(?i)(https?://)[^/\s:@]+:[^/\s@]+@`)
