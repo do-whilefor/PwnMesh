@@ -20,11 +20,10 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/process"
-	"pwnmesh/internal/workergraph"
 )
 
 // Run executes each role with the shared Agent Loop and records Execute
-// acceptance in a durable outer graph.
+// acceptance in a durable receipt after the session and its evidence are verified.
 func Run(ctx context.Context, j Job, o Options) (Result, error) {
 	if err := validateWorkerProtocol(j); err != nil {
 		return Result{}, err
@@ -32,11 +31,12 @@ func Run(ctx context.Context, j Job, o Options) (Result, error) {
 	if j.Kind != "explore" || o.RunDir == "" || j.Workspace == "" {
 		return runSession(ctx, j, o)
 	}
-	return runWorkerGraph(ctx, j, o, runSession)
+	return runWorkerAcceptance(ctx, j, o, runSession)
 }
 
-// Keep the graph boundary testable without replacing the shared Agent Loop.
-func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(context.Context, Job, Options) (Result, error)) (Result, error) {
+// Keep acceptance testable without replacing the shared Agent Loop. The session
+// owns same-run recovery; this boundary never schedules or replays tool calls.
+func runWorkerAcceptance(ctx context.Context, j Job, o Options, sessionRun func(context.Context, Job, Options) (Result, error)) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
@@ -88,7 +88,7 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 		return Result{}, err
 	}
 	// Session emits live tool/Agent events, but its terminal result is only a
-	// candidate until the outer graph has durably accepted it.
+	// candidate until its receipt has been durably accepted.
 	output := &graphResultWriter{writer: o.Output}
 	o.Output = output
 	publish := func(r Result) (Result, error) {
@@ -99,7 +99,7 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 		return r, output.finish(r)
 	}
 	var result Result
-	verify := func(ctx context.Context, _ workergraph.Input, out workergraph.Output) error {
+	verify := func(ctx context.Context, out acceptanceOutput) error {
 		if err := checkActive(ctx); err != nil {
 			return err
 		}
@@ -145,20 +145,20 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 		}
 		return nil
 	}
-	call := func(ctx context.Context, _ workergraph.Input) (workergraph.Output, error) {
+	call := func(ctx context.Context) (acceptanceOutput, error) {
 		r, err := sessionRun(ctx, j, o)
 		result = r
 		if err != nil {
-			return workergraph.Output{}, errors.Join(workergraph.ErrInterrupted, err)
+			return acceptanceOutput{}, errors.Join(ErrInterrupted, err)
 		}
 		if r.Retryable {
-			return workergraph.Output{}, errors.Join(workergraph.ErrInterrupted, errors.New(r.Error))
+			return acceptanceOutput{}, errors.Join(ErrInterrupted, errors.New(r.Error))
 		}
 		raw, err := json.Marshal(r)
 		if err != nil {
-			return workergraph.Output{}, err
+			return acceptanceOutput{}, err
 		}
-		out := workergraph.Output{Value: raw}
+		out := acceptanceOutput{Value: raw}
 		// Session bytes and final retained evidence are immutable once accepted.
 		sessionPath := filepath.Join(o.RunDir, "session.json")
 		sessionBytes, err := readEvidenceFile(ctx, sessionPath, 32<<20)
@@ -166,10 +166,10 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 			return out, err
 		}
 		sessionDigest := sha256.Sum256(sessionBytes)
-		out.Artifacts = append(out.Artifacts, workergraph.Artifact{Path: sessionPath, SHA256: hex.EncodeToString(sessionDigest[:])})
-		var artifacts []workergraph.Artifact
+		out.Artifacts = append(out.Artifacts, acceptanceArtifact{Path: sessionPath, SHA256: hex.EncodeToString(sessionDigest[:])})
+		var artifacts []acceptanceArtifact
 		if r.Status == "success" && r.RepairCheck != nil {
-			artifacts = append(artifacts, workergraph.Artifact{Path: filepath.Join(o.RunDir, "evidence", r.RepairCheck.SHA256+".raw"), SHA256: r.RepairCheck.SHA256})
+			artifacts = append(artifacts, acceptanceArtifact{Path: filepath.Join(o.RunDir, "evidence", r.RepairCheck.SHA256+".raw"), SHA256: r.RepairCheck.SHA256})
 		}
 		if r.Status == "success" {
 			parsed, err := parseOutput(j, r.Conclude, r.Text)
@@ -182,7 +182,7 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 					return out, err
 				}
 				for _, ref := range refs {
-					artifacts = append(artifacts, workergraph.Artifact{Path: ref.Path, SHA256: strings.TrimSuffix(filepath.Base(ref.Path), ".raw")})
+					artifacts = append(artifacts, acceptanceArtifact{Path: ref.Path, SHA256: strings.TrimSuffix(filepath.Base(ref.Path), ".raw")})
 				}
 			}
 			if parsed.FactID != "" {
@@ -191,7 +191,7 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 					return out, err
 				}
 				for _, ref := range refs {
-					artifacts = append(artifacts, workergraph.Artifact{Path: ref.Path, SHA256: strings.TrimSuffix(filepath.Base(ref.Path), ".raw")})
+					artifacts = append(artifacts, acceptanceArtifact{Path: ref.Path, SHA256: strings.TrimSuffix(filepath.Base(ref.Path), ".raw")})
 				}
 			}
 		}
@@ -207,28 +207,12 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 		}
 		return out, nil
 	}
-	prepare := func(ctx context.Context, _ workergraph.Input) (workergraph.Output, error) {
-		return workergraph.Output{}, checkActive(ctx)
-	}
-	definition := workergraph.Definition{Version: "execute-v1", Nodes: []workergraph.Node{
-		{ID: "prepare", Kind: "function", Run: prepare, Verify: verify, Reconcile: func(ctx context.Context, in workergraph.Input, _ workergraph.NodeState) (workergraph.Output, error) {
-			return prepare(ctx, in)
-		}},
-		{ID: "agent", Kind: "agent", DependsOn: []workergraph.Dependency{{ID: "prepare"}}, Run: call, Verify: verify, Reconcile: func(ctx context.Context, in workergraph.Input, _ workergraph.NodeState) (workergraph.Output, error) {
-			return call(ctx, in)
-		}},
-		{ID: "accept", Kind: "function", DependsOn: []workergraph.Dependency{{ID: "agent"}}, Run: func(_ context.Context, in workergraph.Input) (workergraph.Output, error) {
-			return in.Dependencies[0].Output, nil
-		}, Verify: verify, Reconcile: func(_ context.Context, in workergraph.Input, _ workergraph.NodeState) (workergraph.Output, error) {
-			return in.Dependencies[0].Output, nil
-		}},
-	}}
-	checkpoint, err := workergraph.Run(ctx, definition, workergraph.Options{RunID: j.RunID, Input: input, Dir: dir, Parallelism: 1})
+	accepted, err := acceptWorkerSession(ctx, j.RunID, input, dir, call, verify)
 	if err != nil {
 		if activeErr := checkActive(ctx); activeErr != nil {
 			return Result{}, activeErr
 		}
-		if errors.Is(err, workergraph.ErrInterrupted) {
+		if errors.Is(err, ErrInterrupted) {
 			if result.Retryable {
 				return publish(result)
 			}
@@ -237,20 +221,8 @@ func runWorkerGraph(ctx context.Context, j Job, o Options, sessionRun func(conte
 		result = Result{Type: "result", Status: "failed", FailureKind: "graph_checkpoint", Error: err.Error()}
 		return publish(result)
 	}
-	accepted := false
-	for _, node := range checkpoint.Nodes {
-		if node.ID == "accept" {
-			if node.Status != "succeeded" || checkpoint.Status != "succeeded" {
-				return Result{}, errors.New("graph has no durable accepted result")
-			}
-			if err := json.Unmarshal(node.Output.Value, &result); err != nil {
-				return Result{}, err
-			}
-			accepted = true
-		}
-	}
-	if !accepted {
-		return Result{}, errors.New("graph has no acceptance node")
+	if err := json.Unmarshal(accepted.Value, &result); err != nil {
+		return Result{}, err
 	}
 	return publish(result)
 }

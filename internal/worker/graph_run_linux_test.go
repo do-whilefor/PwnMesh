@@ -110,7 +110,7 @@ func TestGraphWrapperVerificationFailurePublishesOnlyFailedResult(t *testing.T) 
 		// The graph verifier must reject it before any result reaches Docker.
 		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput("explore")})
 	}
-	r, err := runWorkerGraph(context.Background(), j, Options{RunDir: dir, Output: &output}, sessionRun)
+	r, err := runWorkerAcceptance(context.Background(), j, Options{RunDir: dir, Output: &output}, sessionRun)
 	results := graphOutputResults(t, output.Bytes())
 	if err != nil || r.Status != "failed" || r.FailureKind != "graph_checkpoint" || !strings.Contains(r.Error, "repair target changed") || len(results) != 1 || results[0].Status != "failed" {
 		t.Fatalf("unaccepted success leaked: %+v %v output=%s", r, err, &output)
@@ -136,7 +136,7 @@ func TestGraphWrapperBridgeRequestsRemainLive(t *testing.T) {
 		}
 		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput("explore")})
 	}
-	r, err := runWorkerGraph(context.Background(), j, Options{RunDir: dir, Output: stream}, sessionRun)
+	r, err := runWorkerAcceptance(context.Background(), j, Options{RunDir: dir, Output: stream}, sessionRun)
 	if err != nil || r.Status != "success" || len(graphOutputResults(t, output.Bytes())) != 1 {
 		t.Fatalf("bridge failed: %+v %v %s", r, err, &output)
 	}
@@ -154,22 +154,19 @@ func TestGraphWrapperActualLoopAcceptsAndReplaysOneResult(t *testing.T) {
 	if err != nil || first.Status != "success" || len(graphOutputResults(t, output.Bytes())) != 1 {
 		t.Fatalf("first run: %+v %v %s", first, err, &output)
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "graph", "graph.json"))
+	raw, err := os.ReadFile(filepath.Join(dir, "graph", "acceptance.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var checkpoint workergraph.Checkpoint
+	var checkpoint acceptanceReceipt
 	if err = json.Unmarshal(raw, &checkpoint); err != nil {
 		t.Fatal(err)
 	}
-	accepted := false
-	for _, node := range checkpoint.Nodes {
-		if node.ID == "accept" {
-			accepted = node.Status == "succeeded" && len(node.Output.Value) > 0 && len(node.Output.Artifacts) > 0
-		}
-	}
-	if checkpoint.Status != "succeeded" || !accepted {
+	if checkpoint.Status != "accepted" || len(checkpoint.Output.Value) == 0 || len(checkpoint.Output.Artifacts) == 0 {
 		t.Fatalf("acceptance was not durable: %+v", checkpoint)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "graph", "graph.json")); !os.IsNotExist(err) {
+		t.Fatal("new Worker execution created the legacy DAG")
 	}
 	output.Reset()
 	second, err := runTestWorker(context.Background(), j, opts)
@@ -224,12 +221,12 @@ func TestGraphWrapperRetryableResultIsEmittedOnceAndReconciled(t *testing.T) {
 		return graphSessionFixture(ctx, job, o, result)
 	}
 	opts := Options{RunDir: dir, Output: &output}
-	first, err := runWorkerGraph(context.Background(), j, opts, sessionRun)
+	first, err := runWorkerAcceptance(context.Background(), j, opts, sessionRun)
 	if err != nil || !first.Retryable || len(graphOutputResults(t, output.Bytes())) != 1 {
 		t.Fatalf("retryable terminal framing: %+v %v %s", first, err, &output)
 	}
 	output.Reset()
-	second, err := runWorkerGraph(context.Background(), j, opts, sessionRun)
+	second, err := runWorkerAcceptance(context.Background(), j, opts, sessionRun)
 	if err != nil || second.Status != "success" || calls != 2 || len(graphOutputResults(t, output.Bytes())) != 1 {
 		t.Fatalf("graph did not reconcile retryable session: %+v %v %s", second, err, &output)
 	}
@@ -309,7 +306,7 @@ func TestGraphWrapperPublishedFactEvidenceAndCompactedHistory(t *testing.T) {
 				return result, json.NewEncoder(o.Output).Encode(result)
 			}
 			opts := Options{RunDir: dir, Output: &output}
-			result, err := runWorkerGraph(context.Background(), j, opts, sessionRun)
+			result, err := runWorkerAcceptance(context.Background(), j, opts, sessionRun)
 			wantSuccess := test == "receipt" || test == "compacted" || test == "uncommitted_tail"
 			if err != nil || (result.Status == "success") != wantSuccess || len(graphOutputResults(t, output.Bytes())) != 1 {
 				t.Fatalf("published evidence binding: %+v %v output=%s", result, err, &output)
@@ -320,18 +317,14 @@ func TestGraphWrapperPublishedFactEvidenceAndCompactedHistory(t *testing.T) {
 				}
 				return
 			}
-			var checkpoint workergraph.Checkpoint
-			raw, err := os.ReadFile(filepath.Join(dir, "graph", "graph.json"))
+			var checkpoint acceptanceReceipt
+			raw, err := os.ReadFile(filepath.Join(dir, "graph", "acceptance.json"))
 			if err != nil || json.Unmarshal(raw, &checkpoint) != nil {
 				t.Fatal("missing graph checkpoint")
 			}
 			bound := false
-			for _, node := range checkpoint.Nodes {
-				if node.ID == "accept" {
-					for _, artifact := range node.Output.Artifacts {
-						bound = bound || artifact.Path == evidencePath
-					}
-				}
+			for _, artifact := range checkpoint.Output.Artifacts {
+				bound = bound || artifact.Path == evidencePath
 			}
 			if !bound {
 				t.Fatal("published fact evidence was not bound to the accepted graph output")
@@ -343,7 +336,7 @@ func TestGraphWrapperPublishedFactEvidenceAndCompactedHistory(t *testing.T) {
 				t.Fatal(err)
 			}
 			output.Reset()
-			result, err = runWorkerGraph(context.Background(), j, opts, sessionRun)
+			result, err = runWorkerAcceptance(context.Background(), j, opts, sessionRun)
 			if err != nil || result.Status != "failed" || !strings.Contains(result.Error, "SHA-256 changed") || calls != 1 || len(graphOutputResults(t, output.Bytes())) != 1 {
 				t.Fatalf("tampered evidence reused: %+v %v calls=%d", result, err, calls)
 			}
@@ -399,7 +392,7 @@ func TestGraphWrapperInlineFactVerifiesRetainedEvidenceBeforeAcceptance(t *testi
 				return graphRawSessionFixture(o, Result{Type: "result", Status: "success", Text: string(raw)})
 			}
 			opts := Options{RunDir: dir, Output: &output}
-			result, err := runWorkerGraph(context.Background(), j, opts, sessionRun)
+			result, err := runWorkerAcceptance(context.Background(), j, opts, sessionRun)
 			results := graphOutputResults(t, output.Bytes())
 			if err != nil || len(results) != 1 || (result.Status == "success") != (test == "valid") {
 				t.Fatalf("inline evidence acceptance: %+v %v output=%s", result, err, &output)
@@ -411,7 +404,7 @@ func TestGraphWrapperInlineFactVerifiesRetainedEvidenceBeforeAcceptance(t *testi
 				return
 			}
 			output.Reset()
-			again, err := runWorkerGraph(context.Background(), j, opts, sessionRun)
+			again, err := runWorkerAcceptance(context.Background(), j, opts, sessionRun)
 			if err != nil || again.Status != "success" || again.Text != result.Text || calls != 1 || len(graphOutputResults(t, output.Bytes())) != 1 {
 				t.Fatalf("valid inline evidence was not reused: %+v %v calls=%d", again, err, calls)
 			}
@@ -450,6 +443,15 @@ func TestGraphWrapperActualLoopRejectsPreviouslyRehashedInlineSnapshot(t *testin
 		t.Fatal(err)
 	}
 	path := filepath.Join(dir, "graph", "graph.json")
+	var receipt acceptanceReceipt
+	accepted, err := os.ReadFile(filepath.Join(dir, "graph", "acceptance.json"))
+	if err != nil || json.Unmarshal(accepted, &receipt) != nil {
+		t.Fatal("cannot read acceptance receipt")
+	}
+	writeLegacyAcceptanceFixture(t, j, dir, receipt.Output, "accepted")
+	if err := os.Remove(filepath.Join(dir, "graph", "acceptance.json")); err != nil {
+		t.Fatal(err)
+	}
 	raw, err := os.ReadFile(path)
 	var checkpoint workergraph.Checkpoint
 	if err != nil || json.Unmarshal(raw, &checkpoint) != nil {
