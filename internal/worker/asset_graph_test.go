@@ -99,6 +99,81 @@ func TestAssetGraphFrozenViewsBindCatalogueAndAnchors(t *testing.T) {
 	}
 }
 
+func TestAssetGraphOverviewCountsMatchVersionedSections(t *testing.T) {
+	live := assetGraphFixture(t)
+	live.Steps = append(live.Steps, board.Step{ID: "retired", Status: "abandoned"})
+	live.AssetAnchors = append(live.AssetAnchors, board.AssetAnchor{AssetID: live.Assets[0].ID, NodeKind: "step", NodeID: "retired"})
+	raw, err := json.Marshal(live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var frozen board.State
+	if err := json.Unmarshal(raw, &frozen); err != nil {
+		t.Fatal(err)
+	}
+	asset, err := board.NormalizeAsset(board.AssetSpec{Kind: "host", Value: "later.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.Assets = append(live.Assets, asset)
+	live.Steps = append(live.Steps, board.Step{ID: "later-retired", Status: "abandoned"})
+	live.AssetAnchors = append(live.AssetAnchors, board.AssetAnchor{AssetID: asset.ID, NodeKind: "step", NodeID: "later-retired"})
+	for _, tc := range []struct {
+		name   string
+		op     string
+		state  board.State
+		counts map[string]int
+	}{
+		{"frozen", "read_snapshot", frozen, map[string]int{"assets": 2, "anchors": 5, "history": 1}},
+		{"live", "read_graph", live, map[string]int{"assets": 3, "anchors": 6, "history": 2}},
+		{"legacy-empty", "read_graph", board.State{Graph: board.Graph{Project: board.Project{ID: "legacy"}}}, map[string]int{"assets": 0, "anchors": 0, "history": 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			version := board.DecisionStateVersion(tc.state)
+			value, err := GraphPage(tc.state, GraphRequest{Op: tc.op, Section: "overview", ExpectedVersion: version})
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var overview struct {
+				StateVersion string         `json:"state_version"`
+				Counts       map[string]int `json:"counts"`
+			}
+			if err := json.Unmarshal(raw, &overview); err != nil || overview.StateVersion != version {
+				t.Fatalf("overview lost its version: %s, %v", raw, err)
+			}
+			for section, want := range tc.counts {
+				count, exists := overview.Counts[section]
+				if !exists || count != want {
+					t.Fatalf("overview %s count=%d present=%v, want %d", section, count, exists, want)
+				}
+				request := GraphRequest{Op: tc.op, Section: section, ExpectedVersion: version, Limit: 1}
+				collected := 0
+				for {
+					page := checkedGraphPage(t, tc.state, request)
+					if page.Total != count {
+						t.Fatalf("%s total=%d differs from overview count=%d", section, page.Total, count)
+					}
+					collected += len(page.Items)
+					if page.NextOffset == nil {
+						break
+					}
+					request.Offset = *page.NextOffset
+				}
+				if collected != count {
+					t.Fatalf("%s yielded %d records, want %d", section, collected, count)
+				}
+			}
+		})
+	}
+	if _, err := GraphPage(live, GraphRequest{Section: "overview", ExpectedVersion: board.DecisionStateVersion(frozen)}); err == nil || !strings.HasPrefix(err.Error(), "state_changed:") {
+		t.Fatalf("overview accepted the previous asset/history version: %v", err)
+	}
+}
+
 func TestAssetGraphRejectsFiltersOnUnrelatedOperations(t *testing.T) {
 	for _, r := range []GraphRequest{
 		{Op: "read_graph", Section: "overview", AssetIDs: []string{"a"}},

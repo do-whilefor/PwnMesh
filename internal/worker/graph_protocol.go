@@ -167,7 +167,12 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 			StateVersion     string         `json:"state_version"`
 			Counts           map[string]int `json:"counts"`
 			Curation         any            `json:"curation,omitempty"`
-		}{s.Graph.Project, inputs, s.Revision, s.DecisionRevision, version, map[string]int{"facts": len(s.FactRecords), "goals": len(s.Goals), "steps": len(s.Steps), "findings": len(s.Findings), "relations": len(s.FactRelations), "hints": len(s.Graph.Hints), "candidates": len(s.Candidates), "disputes": len(s.Disputes)}, s.Curation}
+		}{s.Graph.Project, inputs, s.Revision, s.DecisionRevision, version, map[string]int{
+			"facts": len(s.FactRecords), "goals": len(s.Goals), "steps": len(s.Steps),
+			"findings": len(s.Findings), "relations": len(s.FactRelations), "hints": len(s.Graph.Hints),
+			"candidates": len(s.Candidates), "disputes": len(s.Disputes),
+			"assets": len(s.Assets), "anchors": len(s.AssetAnchors), "history": len(s.History()),
+		}, s.Curation}
 	} else {
 		if r.Section == "evidence" || r.Section == "sources" {
 			items, found, err := graphDetails(s, r)
