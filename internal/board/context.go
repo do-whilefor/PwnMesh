@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"unicode/utf8"
 )
@@ -208,7 +209,7 @@ func contextView(state State, stepID string, maxBytes int, curate bool) (json.Ra
 		// Keep a smaller discovery index so large collections cannot hide them.
 		overviewBudget = maxBytes / 8
 	}
-	overview, err := buildContextOverview(state, min(overviewBudget, maxBytes-len(base)-16), curationCandidates)
+	overview, err := buildContextOverview(state, min(overviewBudget, maxBytes-len(base)-16), curationCandidates, stepID, relevant)
 	if err != nil {
 		return nil, err
 	}
@@ -422,34 +423,39 @@ type contextOverviewSection struct {
 	Offset  int                   `json:"offset"`
 	Limit   int                   `json:"limit"`
 	Items   []contextOverviewNode `json:"items"`
+	Folded  int                   `json:"folded,omitempty"`
 }
 
 type contextOverviewNode struct {
-	ID                    string   `json:"id,omitempty"`
-	Excerpt               string   `json:"excerpt,omitempty"`
-	TextTruncated         bool     `json:"text_truncated,omitempty"`
-	Status                string   `json:"status,omitempty"`
-	GoalID                string   `json:"goal_id,omitempty"`
-	ParentID              string   `json:"parent_id,omitempty"`
-	Sources               []string `json:"sources,omitempty"`
-	SourcesOmitted        int      `json:"sources_omitted,omitempty"`
-	InvalidSources        []string `json:"invalid_sources,omitempty"`
-	InvalidSourcesOmitted int      `json:"invalid_sources_omitted,omitempty"`
-	BlockedBy             []string `json:"blocked_by,omitempty"`
-	BlockedByOmitted      int      `json:"blocked_by_omitted,omitempty"`
-	SupportValid          *bool    `json:"support_valid,omitempty"`
-	SupportInvalid        bool     `json:"support_invalid,omitempty"`
-	Kind                  string   `json:"kind,omitempty"`
-	Source                string   `json:"source,omitempty"`
-	Target                string   `json:"target,omitempty"`
-	DisputeID             string   `json:"dispute_id,omitempty"`
-	LatestRunID           string   `json:"latest_run_id,omitempty"`
-	GroupKey              string   `json:"group_key,omitempty"`
-	Supersedes            string   `json:"supersedes,omitempty"`
-	Superseded            bool     `json:"superseded,omitempty"`
+	ID                    string          `json:"id,omitempty"`
+	Excerpt               string          `json:"excerpt,omitempty"`
+	TextTruncated         bool            `json:"text_truncated,omitempty"`
+	Status                string          `json:"status,omitempty"`
+	GoalID                string          `json:"goal_id,omitempty"`
+	ParentID              string          `json:"parent_id,omitempty"`
+	Sources               []string        `json:"sources,omitempty"`
+	SourcesOmitted        int             `json:"sources_omitted,omitempty"`
+	InvalidSources        []string        `json:"invalid_sources,omitempty"`
+	InvalidSourcesOmitted int             `json:"invalid_sources_omitted,omitempty"`
+	BlockedBy             []string        `json:"blocked_by,omitempty"`
+	BlockedByOmitted      int             `json:"blocked_by_omitted,omitempty"`
+	SupportValid          *bool           `json:"support_valid,omitempty"`
+	SupportInvalid        bool            `json:"support_invalid,omitempty"`
+	Kind                  string          `json:"kind,omitempty"`
+	Source                string          `json:"source,omitempty"`
+	Target                string          `json:"target,omitempty"`
+	DisputeID             string          `json:"dispute_id,omitempty"`
+	LatestRunID           string          `json:"latest_run_id,omitempty"`
+	GroupKey              string          `json:"group_key,omitempty"`
+	Supersedes            string          `json:"supersedes,omitempty"`
+	Superseded            bool            `json:"superseded,omitempty"`
+	AssetIDs              []string        `json:"asset_ids,omitempty"`
+	AssetIDsOmitted       int             `json:"asset_ids_omitted,omitempty"`
+	Members               []HistoryMember `json:"members,omitempty"`
+	MembersOmitted        int             `json:"members_omitted,omitempty"`
 }
 
-func buildContextOverview(state State, maxBytes int, curationCandidates map[string]bool) (*contextOverview, error) {
+func buildContextOverview(state State, maxBytes int, curationCandidates map[string]bool, stepID string, relevant map[string]bool) (*contextOverview, error) {
 	view := &contextOverview{ReadMore: "Excerpts are discovery aids; use supplied full records and evidence, reading only missing details. Omission is not absence. Use read_graph with section and ids, or scan the section from offset 0 with limit 20 and follow next_offset; the runtime pins reads to state_version."}
 	for i, section := range []string{"goals", "steps", "facts", "findings", "relations"} {
 		total := []int{len(state.Goals), len(state.Steps), len(state.FactRecords), len(state.Findings), len(state.FactRelations)}[i]
@@ -457,6 +463,58 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 	}
 	if state.Graph.Project.OrchestrationVersion == 1 {
 		view.Sections = append(view.Sections, contextOverviewSection{Section: "candidates", Total: len(state.Candidates), Omitted: len(state.Candidates), Limit: 20, Items: []contextOverviewNode{}}, contextOverviewSection{Section: "disputes", Total: len(state.Disputes), Omitted: len(state.Disputes), Limit: 20, Items: []contextOverviewNode{}})
+	}
+	history := state.History()
+	historySection := -1
+	assetSection := -1
+	cold := map[historyNodeKey]bool{}
+	// New discovery aids use the same allowance. If even their empty indexes
+	// cannot fit, retain the existing graph index instead of displacing inputs.
+	addSections := func(sections []contextOverviewSection, hint string) bool {
+		originalCount, originalHint := len(view.Sections), view.ReadMore
+		view.Sections = append(view.Sections, sections...)
+		view.ReadMore += hint
+		raw, err := json.Marshal(view)
+		if err != nil || len(raw) > maxBytes {
+			view.Sections, view.ReadMore = view.Sections[:originalCount], originalHint
+			return false
+		}
+		return true
+	}
+	if len(history) > 0 {
+		for _, entry := range history {
+			for _, member := range entry.Members {
+				// A replay can explicitly inspect terminal work. Its own Step
+				// and requested support remain individually visible.
+				if member.Kind == "step" && member.ID == stepID || member.Kind == "fact" && relevant[member.ID] {
+					continue
+				}
+				cold[historyNodeKey{Kind: member.Kind, ID: member.ID}] = true
+			}
+		}
+		for member := range cold {
+			section := 1
+			if member.Kind == "fact" {
+				section = 2
+			}
+			view.Sections[section].Folded++
+		}
+		index := len(view.Sections)
+		if addSections([]contextOverviewSection{{Section: "history", Total: len(history), Omitted: len(history), Limit: 20, Items: []contextOverviewNode{}}}, " History folds terminal work only for reading; expand members by kind/ID through steps or facts. Original records and evidence remain unchanged.") {
+			historySection = index
+		} else {
+			cold = map[historyNodeKey]bool{}
+			view.Sections[1].Folded, view.Sections[2].Folded = 0, 0
+		}
+	}
+	if len(state.Assets) > 0 {
+		index := len(view.Sections)
+		if addSections([]contextOverviewSection{
+			{Section: "assets", Total: len(state.Assets), Omitted: len(state.Assets), Limit: 20, Items: []contextOverviewNode{}},
+			{Section: "anchors", Total: len(state.AssetAnchors), Omitted: len(state.AssetAnchors), Limit: 20, Items: []contextOverviewNode{}},
+		}, " Read assets/anchors or filter read_graph by asset_ids to discover related work; an asset association is not evidence or test coverage.") {
+			assetSection = index
+		}
 	}
 	base, err := json.Marshal(view)
 	if err != nil {
@@ -470,10 +528,20 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		node                       contextOverviewNode
 	}
 	items := []candidate{}
+	assets := state.historyAssetIndex()
+	assetKinds := map[int]string{1: "step", 2: "fact", 3: "finding"}
+	if state.Graph.Project.OrchestrationVersion == 1 {
+		assetKinds[5] = "candidate"
+	}
 	add := func(section, priority, ordinal int, node contextOverviewNode, description string, sources []string) {
 		node.Excerpt, node.TextTruncated = contextExcerpt(description, 240)
 		node.Sources = append([]string(nil), sources[:min(len(sources), 16)]...)
 		node.SourcesOmitted = len(sources) - len(node.Sources)
+		if kind := assetKinds[section]; kind != "" {
+			ids := assets[historyNodeKey{Kind: kind, ID: node.ID}]
+			node.AssetIDs = append([]string(nil), ids[:min(len(ids), 8)]...)
+			node.AssetIDsOmitted = len(ids) - len(node.AssetIDs)
+		}
 		items = append(items, candidate{section, priority, ordinal, node})
 	}
 	corrected := map[string]bool{}
@@ -490,6 +558,9 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		add(0, priority, i, contextOverviewNode{ID: goal.ID, Status: goal.Status, ParentID: goal.ParentID, SupportValid: &supportValid}, goal.Condition, goal.Sources)
 	}
 	for i, step := range state.Steps {
+		if cold[historyNodeKey{Kind: "step", ID: step.ID}] {
+			continue
+		}
 		priority := 5
 		if contextActiveStep(step.Status) {
 			priority = 0
@@ -504,6 +575,9 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		add(1, priority, i, contextOverviewNode{ID: step.ID, Status: step.Status, GoalID: step.GoalID, InvalidSources: invalid, InvalidSourcesOmitted: len(step.InvalidSources) - len(invalid), BlockedBy: blocked, BlockedByOmitted: len(step.BlockedBy) - len(blocked), SupportValid: support, LatestRunID: step.LatestRunID}, step.Description, step.From)
 	}
 	for i, fact := range state.FactRecords {
+		if cold[historyNodeKey{Kind: "fact", ID: fact.ID}] {
+			continue
+		}
 		priority := 3
 		if corrected[fact.ID] {
 			priority = 1
@@ -536,6 +610,59 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		}
 		for i, d := range state.Disputes {
 			add(6, 0, i, contextOverviewNode{ID: d.ID, Status: d.Status, DisputeID: d.ID}, d.Question, d.CandidateIDs)
+		}
+	}
+	if historySection >= 0 {
+		for i, entry := range history {
+			node := contextOverviewNode{ID: entry.ID, Status: entry.Status, Members: entry.Members[:min(len(entry.Members), 4)], AssetIDs: entry.AssetIDs[:min(len(entry.AssetIDs), 8)]}
+			node.MembersOmitted, node.AssetIDsOmitted = len(entry.Members)-len(node.Members), len(entry.AssetIDs)-len(node.AssetIDs)
+			add(historySection, 5, i, node, entry.Summary, nil)
+			items[len(items)-1].node.TextTruncated = entry.TextTruncated
+		}
+	}
+	if assetSection >= 0 {
+		relatedAssets := map[string]bool{}
+		selectAssets := func(kind, id string) {
+			for _, assetID := range assets[historyNodeKey{Kind: kind, ID: id}] {
+				relatedAssets[assetID] = true
+			}
+		}
+		if stepID != "" {
+			selectAssets("step", stepID)
+		} else {
+			for _, step := range state.Steps {
+				if contextActiveStep(step.Status) {
+					selectAssets("step", step.ID)
+				}
+			}
+			for _, candidate := range state.ActiveCandidates() {
+				selectAssets("candidate", candidate.ID)
+			}
+		}
+		for id := range relevant {
+			selectAssets("fact", id)
+		}
+		// Show a bounded sample of relevant identities, never the full catalog.
+		assetItems := append([]Asset(nil), state.Assets...)
+		slices.SortStableFunc(assetItems, func(a, b Asset) int {
+			if relatedAssets[a.ID] != relatedAssets[b.ID] {
+				if relatedAssets[a.ID] {
+					return -1
+				}
+				return 1
+			}
+			return 0
+		})
+		for i, asset := range assetItems[:min(len(assetItems), 8)] {
+			priority := 6
+			if relatedAssets[asset.ID] {
+				priority = 3
+			}
+			description := asset.Value
+			if asset.Method != "" {
+				description = asset.Method + " " + description
+			}
+			add(assetSection, priority, i, contextOverviewNode{ID: asset.ID, Kind: asset.Kind}, description, nil)
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
