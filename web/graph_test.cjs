@@ -23,6 +23,31 @@ test('mapping preserves typed identities, exact relationships, evidence validity
   assert.equal(relation.id, 'edge:' + JSON.stringify(['refutes', 'fact:same', 'fact:result']));
   mapped.nodes[0].raw.description = 'changed'; assert.notEqual(input.fact_records[0].description, 'changed');
 });
+test('graph indexes share the displayed records and exclude duplicate or missing relationships', () => {
+  const input = fixture();
+  input.fact_records.push({...input.fact_records[0], description: 'duplicate origin'});
+  input.fact_relations.push({...input.fact_relations[0]}, {kind: 'refutes', source: 'missing', target: 'result'});
+  const mapped = mapState(input);
+  assert.equal(mapped.nodeIndex.size, mapped.nodes.length); assert.equal(mapped.edgeIndex.size, mapped.edges.length);
+  for (const node of mapped.nodes) {
+    assert.equal(mapped.nodeIndex.get(node.key), node);
+    assert.deepEqual(mapped.incoming.get(node.key), mapped.edges.filter(edge => edge.target === node.key));
+    assert.deepEqual(mapped.outgoing.get(node.key), mapped.edges.filter(edge => edge.source === node.key));
+  }
+  for (const edge of mapped.edges) {
+    assert.equal(mapped.edgeIndex.get(edge.id), edge);
+    assert.equal(mapped.incoming.get(edge.target).find(item => item.id === edge.id), edge);
+    assert.equal(mapped.outgoing.get(edge.source).find(item => item.id === edge.id), edge);
+  }
+  assert.equal(mapped.nodeIndex.get('fact:origin').label, '原始输入');
+  assert.equal(mapped.nodeIndex.has('fact:missing'), false);
+  assert.equal(mapped.incoming.has('fact:missing'), false); assert.equal(mapped.outgoing.has('fact:missing'), false);
+  const edge = mapped.edges.find(item => item.kind === 'refutes');
+  mapped.nodeIndex.get(edge.source).label = 'updated source'; edge.raw.reason = 'updated relation';
+  const detail = describeEdge(mapped, edge.id);
+  assert.equal(detail.sourceNode, mapped.nodeIndex.get(edge.source)); assert.equal(detail.sourceNode.label, 'updated source');
+  assert.equal(detail.description, 'updated relation'); assert.equal(input.fact_relations[0].reason, '证据矛盾');
+});
 test('missing references are diagnostic only and never synthesize graph nodes', () => {
   const state = fixture(); state.fact_relations.push({kind: 'refutes', source: 'missing', target: 'result'}); state.steps.push({id: 'bad', from: ['unknown']});
   const mapped = mapState(state); assert.equal(mapped.diagnostics.filter(item => item.kind === 'missing_reference').length, 2);
@@ -122,10 +147,22 @@ test('parallel and reverse relations keep independently selectable cubic routes;
   for (const route of routes.values()) { assert.match(route.d, /^M .* C /); assert.ok(route.points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y))); }
 });
 test('selection tracks upstream/downstream cycles and distinguishes same-endpoint edge IDs', () => {
-  const project = {nodes: ['a', 'b', 'c'].map(key => ({key})), edges: [{id: 'one', source: 'a', target: 'b'}, {id: 'two', source: 'a', target: 'b'}, {id: 'back', source: 'b', target: 'a'}, {id: 'out', source: 'b', target: 'c'}]};
-  assert.deepEqual([...collectSelection(project, null, 'one').edgeKeys], ['one']);
-  assert.deepEqual(new Set(collectSelection(project, 'b', null).nodeIds), new Set(['a', 'b']));
-  assert.deepEqual(new Set(collectSelection(project, 'a', null, 'downstream').nodeIds), new Set(['a', 'b', 'c']));
+  const project = mapState({fact_records: ['a', 'b', 'c'].map(id => ({id})), fact_relations: [
+    {kind: 'refutes', source: 'a', target: 'b'}, {kind: 'narrows', source: 'a', target: 'b'},
+    {kind: 'refutes', source: 'b', target: 'a'}, {kind: 'refutes', source: 'b', target: 'c'}
+  ]});
+  const parallel = project.outgoing.get('fact:a'); assert.equal(parallel.length, 2);
+  for (const edge of parallel) {
+    assert.deepEqual(collectSelection(project, null, edge.id).edgeKeys, new Set([edge.id]));
+    assert.deepEqual(collectSelection(project, null, edge).nodeIds, new Set(['fact:a', 'fact:b']));
+  }
+  const upstream = collectSelection(project, 'fact:b', null), downstream = collectSelection(project, 'fact:a', null, 'downstream');
+  assert.deepEqual(upstream.nodeIds, new Set(['fact:a', 'fact:b']));
+  assert.deepEqual(upstream.edgeKeys, new Set(project.edges.filter(edge => edge.target !== 'fact:c').map(edge => edge.id)));
+  assert.deepEqual(downstream.nodeIds, new Set(['fact:a', 'fact:b', 'fact:c']));
+  assert.deepEqual(downstream.edgeKeys, new Set(project.edges.map(edge => edge.id)));
+  assert.equal(collectSelection(project, 'fact:missing', null).active, false);
+  assert.equal(collectSelection(project, null, 'missing-edge').active, false);
 });
 test('edge details use exact relationship, source record and latest text, not a successful target inference', () => {
   const mapped = mapState(fixture()), edge = mapped.edges.find(item => item.kind === 'refutes');

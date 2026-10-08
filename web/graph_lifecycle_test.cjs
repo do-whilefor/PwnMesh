@@ -99,13 +99,22 @@ test('dependency readiness refreshes selected details without replacing routes a
 });
 test('deleted selection and active drag release capture, stop edge-pan and notify application', () => {
   const selection = [], edges = [], h = harness({onSelect: node => selection.push(node), onSelectEdge: edge => edges.push(edge)}), graph = h.graph, value = state(); graph.setState(value); h.flush();
-  graph.selectEdge(graph.edges.find(edge => edge.kind === 'refutes')); h.flush();
+  const previous = graph.project, removed = graph.edges.find(edge => edge.kind === 'refutes');
+  graph.selectEdge(removed); h.flush();
   value.fact_relations = []; graph.setState(value); h.flush(); assert.equal(edges.at(-1), null); assert.equal(graph.selectedEdge, null);
+  assert.equal(graph.getEdgeDetails(removed), null); assert.equal(graph.project.edgeIndex.has(removed.id), false);
+  assert.equal(graph.project.incoming.get(removed.target).some(edge => edge.id === removed.id), false);
+  assert.equal(graph.project.outgoing.get(removed.source).some(edge => edge.id === removed.id), false);
+  assert.equal(previous.edgeIndex.get(removed.id), removed, 'refresh must not rewrite the preceding snapshot');
   graph.selectNode('fact:old'); const card = graph.cards.get('fact:old');
   graph.pointerDown({button: 0, target: card, pointerId: 7, clientX: 600, clientY: 300}); graph.pointerMove({pointerId: 7, clientX: 799, clientY: 300});
   assert.ok(graph.viewport.hasPointerCapture(7)); assert.notEqual(graph.panFrame, null);
   value.fact_records = value.fact_records.filter(fact => fact.id !== 'old'); value.steps = [];
   graph.setState(value); h.flush(); assert.equal(selection.at(-1), null); assert.equal(graph.drag, null); assert.equal(graph.panFrame, null); assert.ok(!graph.viewport.hasPointerCapture(7));
+  for (const name of ['nodeIndex', 'incoming', 'outgoing']) assert.equal(graph.project[name].has('fact:old'), false);
+  assert.equal(graph.project.edgeIndex.size, 0); assert.deepEqual(graph.project.outgoing.get('fact:origin'), []);
+  graph.setState(null); h.flush();
+  for (const name of ['nodeIndex', 'edgeIndex', 'incoming', 'outgoing']) assert.equal(graph.project[name].size, 0);
   graph.destroy();
 });
 test('zoom during drag preserves world grab offset; resizing preserves camera center', () => {

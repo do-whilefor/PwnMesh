@@ -93,9 +93,6 @@
       this.projectLayouts.set(key, saved); this.positions = saved.positions;
       this.project = mapped; this.projectId = mapped.projectId; this.generation = mapped.generation;
       this.nodes = mapped.nodes; this.edges = mapped.edges; this.diagnostics = mapped.diagnostics;
-      mapped.nodeIndex = new Map(mapped.nodes.map(node => [node.key, node])); mapped.edgeIndex = new Map(mapped.edges.map(edge => [edge.id, edge]));
-      mapped.incoming = new Map(mapped.nodes.map(node => [node.key, []])); mapped.outgoing = new Map(mapped.nodes.map(node => [node.key, []]));
-      for (const edge of mapped.edges) { mapped.incoming.get(edge.target)?.push(edge); mapped.outgoing.get(edge.source)?.push(edge); }
       if (this.drag?.id && !mapped.nodeIndex.has(this.drag.id)) this.cancelDrag();
       if (changed || !mapped.nodeIndex.has(this.selected)) this.selected = null;
       if (changed || !mapped.edgeIndex.has(this.selectedEdge)) this.selectedEdge = null;

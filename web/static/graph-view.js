@@ -41,10 +41,9 @@
   }
   function describeEdge(project, edge) {
     if (!project || !edge) return null;
-    const record = project.edgeIndex?.get(edgeKey(edge)) || project.edges.find(item => edgeKey(item) === edgeKey(edge));
+    const record = project.edgeIndex.get(edgeKey(edge));
     if (!record) return null;
-    const sourceNode = project.nodeIndex?.get(record.source) || project.nodes.find(node => node.key === record.source);
-    const targetNode = project.nodeIndex?.get(record.target) || project.nodes.find(node => node.key === record.target);
+    const sourceNode = project.nodeIndex.get(record.source), targetNode = project.nodeIndex.get(record.target);
     if (!sourceNode || !targetNode) return null;
     if (record.kind === 'step_dependency') {
       // Completion alone is not readiness: the server validates the retained
@@ -71,18 +70,16 @@
     const nodeIds = new Set(), edgeKeys = new Set();
     if (!project) return {active: false, nodeIds, edgeKeys};
     if (selectedEdge) {
-      const edge = project.edgeIndex?.get(edgeKey(selectedEdge)) || project.edges.find(candidate => edgeKey(candidate) === edgeKey(selectedEdge));
+      const edge = project.edgeIndex.get(edgeKey(selectedEdge));
       if (edge) { nodeIds.add(edge.source); nodeIds.add(edge.target); edgeKeys.add(edgeKey(edge)); }
-    } else if (project.nodeIndex?.has(nodeId) || project.nodes.some(node => node.key === nodeId)) {
+    } else if (project.nodeIndex.has(nodeId)) {
       const adjacency = direction === 'downstream' ? project.outgoing : project.incoming;
-      const indexed = adjacency || new Map(project.nodes.map(node => [node.key, []]));
-      if (!adjacency) for (const edge of project.edges) indexed.get(direction === 'downstream' ? edge.source : edge.target)?.push(edge);
       const pending = [nodeId];
       while (pending.length) {
         const id = pending.pop();
         if (nodeIds.has(id)) continue;
         nodeIds.add(id);
-        for (const edge of indexed.get(id) || []) { edgeKeys.add(edgeKey(edge)); pending.push(direction === 'downstream' ? edge.target : edge.source); }
+        for (const edge of adjacency.get(id)) { edgeKeys.add(edgeKey(edge)); pending.push(direction === 'downstream' ? edge.target : edge.source); }
       }
     }
     return {active: nodeIds.size > 0, nodeIds, edgeKeys};

@@ -19,14 +19,15 @@
     const nodes = [];
     const edges = [];
     const diagnostics = [];
-    const byKey = new Map();
+    const nodeIndex = new Map(), edgeIndex = new Map();
+    const incoming = new Map(), outgoing = new Map();
     const addNode = (type, raw, labelField) => {
       if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !raw.id) {
         diagnostics.push({kind: 'invalid_node', type});
         return;
       }
       const key = keyOf(type, raw.id);
-      if (byKey.has(key)) {
+      if (nodeIndex.has(key)) {
         diagnostics.push({kind: 'duplicate_node', key});
         return;
       }
@@ -38,23 +39,23 @@
         raw: clone(raw)
       };
       nodes.push(node);
-      byKey.set(key, node);
+      nodeIndex.set(key, node);
+      incoming.set(key, []); outgoing.set(key, []);
     };
     array(state.goals).forEach(raw => addNode('goal', raw, 'condition'));
     array(state.steps).forEach(raw => addNode('step', raw, 'description'));
     array(state.fact_records).forEach(raw => addNode('fact', raw, 'description'));
     array(state.findings).forEach(raw => addNode('finding', raw, 'claim'));
-    const edgeKeys = new Set();
     const addEdge = (kind, source, target, label, raw, supportValid = null) => {
-      const missing = [source, target].filter(key => !byKey.has(key));
+      const missing = [source, target].filter(key => !nodeIndex.has(key));
       if (missing.length) {
         diagnostics.push({kind: 'missing_reference', relation: kind, source, target, missing});
         return;
       }
       const id = 'edge:' + JSON.stringify([kind, source, target]);
-      if (edgeKeys.has(id)) return;
-      edgeKeys.add(id);
-      edges.push({id, kind, source, target, label, supportValid, raw: clone(raw)});
+      if (edgeIndex.has(id)) return;
+      const edge = {id, kind, source, target, label, supportValid, raw: clone(raw)};
+      edgeIndex.set(id, edge); edges.push(edge);
     };
     nodes.forEach(node => {
       const raw = node.raw;
@@ -80,9 +81,10 @@
     });
     nodes.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
     edges.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+    for (const edge of edges) { incoming.get(edge.target).push(edge); outgoing.get(edge.source).push(edge); }
     const projectId = text(state.graph && state.graph.project && state.graph.project.id);
     const generation = Number(state.graph && state.graph.project && state.graph.project.generation) || 0;
-    return {projectId, generation, nodes, edges, diagnostics};
+    return {projectId, generation, nodes, edges, diagnostics, nodeIndex, edgeIndex, incoming, outgoing};
   }
 
   function resolveNodeKey(nodes, selection) {
