@@ -251,17 +251,21 @@ func (f *updateRequestFixture) awaitTool(started <-chan struct{}, done <-chan up
 	}
 }
 
-func assertUpdateDelivered(t *testing.T, history []agent.Message, source, correction string) {
+func assertUpdateDelivered(t *testing.T, history []agent.Message, source, correction string, toolIDs ...string) {
 	t.Helper()
+	toolID := "wait-for-correction"
+	if len(toolIDs) > 0 {
+		toolID = toolIDs[0]
+	}
 	resultIndex, correctionIndex := -1, -1
 	uses, results := 0, 0
 	var update board.ExecuteUpdates
 	for i, message := range history {
 		for _, block := range message.Content {
-			if block.Type == "tool_use" && block.ID == "wait-for-correction" {
+			if block.Type == "tool_use" && block.ID == toolID {
 				uses++
 			}
-			if block.Type == "tool_result" && block.ToolUseID == "wait-for-correction" {
+			if block.Type == "tool_result" && block.ToolUseID == toolID {
 				resultIndex = i
 				results++
 			}
@@ -291,7 +295,7 @@ func assertUpdateDelivered(t *testing.T, history []agent.Message, source, correc
 	if !invalid || !fact || !relation {
 		t.Errorf("delivered notice omitted invalid source, correction, or reason: %+v", update)
 	}
-	if uses != 0 && (uses != 1 || results != 1) {
+	if (uses != 0 || len(toolIDs) > 0) && (uses != 1 || results != 1) {
 		t.Errorf("correction checkpoint broke tool result pairing: uses=%d results=%d", uses, results)
 	}
 	if resultIndex >= 0 && correctionIndex <= resultIndex {
