@@ -31,6 +31,7 @@ type GraphRequest struct {
 	Limit           int                        `json:"limit,omitempty"`
 	ExpectedVersion string                     `json:"expected_version,omitempty"`
 	IDs             []string                   `json:"ids,omitempty"`
+	AssetIDs        []string                   `json:"asset_ids,omitempty"`
 	Action          board.StateAction          `json:"action,omitempty"`
 	Batch           *board.DecisionBatch       `json:"batch,omitempty"`
 	Updates         *board.ExecuteUpdateCursor `json:"updates,omitempty"`
@@ -56,6 +57,9 @@ func ValidGraphRequestID(id string) bool {
 }
 
 func ValidateGraphRequest(j Job, r GraphRequest) error {
+	if err := validateGraphAssetFilter(r); err != nil {
+		return err
+	}
 	if !ValidGraphRequestID(r.RequestID) {
 		return errors.New("invalid graph request_id")
 	}
@@ -64,6 +68,9 @@ func ValidateGraphRequest(j Job, r GraphRequest) error {
 	}
 	if j.Kind == "curate" && !orchestrationJob(j) {
 		return errors.New("curate requires orchestration protocol 1")
+	}
+	if r.Op == "read_trace_runs" {
+		return validateTraceRunRequest(j, r)
 	}
 	if r.Op == "curate_receipt" {
 		if j.Kind != "curate" || !j.GraphRPC || j.Intent != nil || r.Action.Op != "" || r.Batch != nil || r.Updates != nil || r.Section != "" || len(r.IDs) != 0 || r.Offset != 0 || r.ByteOffset != nil || r.Limit != 0 || r.ExpectedVersion != "" || r.RecordVersion != "" {
@@ -102,7 +109,7 @@ func ValidateGraphRequest(j Job, r GraphRequest) error {
 		if err := validateGraphOffsets(r); err != nil {
 			return err
 		}
-		if !slices.Contains([]string{"", "overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources", "candidates", "disputes"}, r.Section) {
+		if !slices.Contains([]string{"", "overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources", "candidates", "disputes", "assets", "anchors", "history"}, r.Section) {
 			return errors.New("unknown graph section")
 		}
 		return nil
@@ -130,6 +137,9 @@ func ValidateGraphRequest(j Job, r GraphRequest) error {
 // arrays have explicit omission markers and their own lossless detail pages.
 // The server obtains State under the current execution fence before calling.
 func GraphPage(s board.State, r GraphRequest) (any, error) {
+	if err := validateGraphAssetFilter(r); err != nil {
+		return nil, err
+	}
 	if err := validateGraphIDs(r); err != nil {
 		return nil, err
 	}
@@ -194,6 +204,12 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 			raw, err = json.Marshal(s.FactRelations)
 		case "hints":
 			raw, err = json.Marshal(s.Graph.Hints)
+		case "assets":
+			raw, err = json.Marshal(s.Assets)
+		case "anchors":
+			raw, err = json.Marshal(s.AssetAnchors)
+		case "history":
+			raw, err = json.Marshal(s.History())
 		default:
 			return nil, errors.New("unknown graph section")
 		}
@@ -203,18 +219,25 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 		if err = json.Unmarshal(raw, &items); err != nil {
 			return nil, err
 		}
+		items, err = filterGraphAssets(s, r, items)
+		if err != nil {
+			return nil, err
+		}
 		missing := []string{}
 		if len(r.IDs) > 0 {
 			matched := map[string]bool{}
 			filtered := []json.RawMessage{}
 			for _, item := range items {
-				var identity struct{ ID, Source, Target string }
+				var identity struct {
+					ID, Source, Target string
+					NodeID             string `json:"node_id"`
+				}
 				if err := json.Unmarshal(item, &identity); err != nil {
 					return nil, err
 				}
 				include := false
 				for _, id := range r.IDs {
-					if identity.ID == id || (r.Section == "relations" && (identity.Source == id || identity.Target == id)) {
+					if identity.ID == id || (r.Section == "relations" && (identity.Source == id || identity.Target == id)) || (r.Section == "anchors" && identity.NodeID == id) {
 						include, matched[id] = true, true
 					}
 				}
@@ -466,15 +489,16 @@ func CompactGraphActionResult(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, err
 	}
 	return json.Marshal(struct {
-		Op            string `json:"op"`
-		ID            string `json:"id"`
-		Revision      int64  `json:"revision"`
-		StateVersion  string `json:"state_version,omitempty"`
-		Unchanged     bool   `json:"unchanged,omitempty"`
-		Committed     bool   `json:"committed,omitempty"`
-		ResultOmitted bool   `json:"result_omitted"`
-		ReadMore      string `json:"read_more"`
-	}{result.Op, result.ID, result.Revision, result.StateVersion, result.Unchanged, result.Committed, true, "Write succeeded. Read this entity by id in its graph section; follow any evidence_omitted or sources_omitted detail pages. Do not resubmit the write because its entity payload is omitted."})
+		Op            string   `json:"op"`
+		ID            string   `json:"id"`
+		Revision      int64    `json:"revision"`
+		StateVersion  string   `json:"state_version,omitempty"`
+		Unchanged     bool     `json:"unchanged,omitempty"`
+		Committed     bool     `json:"committed,omitempty"`
+		ResultOmitted bool     `json:"result_omitted"`
+		ReadMore      string   `json:"read_more"`
+		AssetIDs      []string `json:"asset_ids,omitempty"`
+	}{result.Op, result.ID, result.Revision, result.StateVersion, result.Unchanged, result.Committed, true, "Write succeeded. Read this entity by id in its graph section; follow any evidence_omitted or sources_omitted detail pages. Do not resubmit the write because its entity payload is omitted.", result.AssetIDs})
 }
 
 type graphPage struct {

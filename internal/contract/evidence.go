@@ -29,8 +29,36 @@ func parseEvidenceResult(raw json.RawMessage) (Result, error) {
 		return r, nil
 	}
 	fact, err := object(data["fact"])
-	if err != nil || len(fact) != 4 {
-		return Result{}, errors.New("fact requires only description, scope, observed_at and evidence")
+	if err != nil {
+		return Result{}, errors.New("fact requires an object")
+	}
+	for key := range fact {
+		switch key {
+		case "description", "scope", "observed_at", "evidence", "assets":
+		default:
+			return Result{}, errors.New("unexpected fact field")
+		}
+	}
+	if assets, exists := fact["assets"]; exists {
+		var items []map[string]json.RawMessage
+		if string(assets) == "null" || json.Unmarshal(assets, &items) != nil || len(items) > 32 {
+			return Result{}, errors.New("fact assets requires at most 32 asset objects")
+		}
+		for _, item := range items {
+			for _, key := range []string{"kind", "value"} {
+				if _, err := text(item[key]); err != nil {
+					return Result{}, errors.New("asset requires nonempty kind and value")
+				}
+			}
+			for key, value := range item {
+				if key != "kind" && key != "value" && key != "method" {
+					return Result{}, errors.New("unexpected asset field")
+				}
+				if _, err := text(value); err != nil {
+					return Result{}, errors.New("asset fields must be nonempty strings")
+				}
+			}
+		}
 	}
 	for _, key := range []string{"description", "scope", "observed_at"} {
 		if _, err := text(fact[key]); err != nil {

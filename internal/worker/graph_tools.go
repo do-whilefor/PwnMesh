@@ -213,6 +213,8 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 		r.Op = "read_graph"
 		return request(ctx, r)
 	}}
+	read.Schema = assetGraphReadSchema(read.Schema)
+	read.Description += " assets lists normalized project identities; anchors maps node IDs to assets. asset_ids filters facts/steps/findings/candidates/anchors/history by any selected asset without changing evidence status. Keep the same filters for every page. history contains literal summaries with member IDs; expand through the original steps/facts sections."
 	if orchestrationJob(j) {
 		read.Schema = json.RawMessage(strings.Replace(string(read.Schema), `"relations","hints","evidence","sources"`, `"relations","hints","evidence","sources","candidates","disputes"`, 1))
 		read.Description += " Candidate sources and evidence use the same detail pages. candidates and disputes expose original judgments and unresolved review questions; overview includes the curation boundary."
@@ -313,6 +315,9 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 		}
 	}
 	o.Tools = append(o.Tools, rawEvidenceTool(j, o, request))
+	if j.Kind == "explore" && j.GraphRPC && j.Intent != nil && j.RunID != "" {
+		o.Tools = append(o.Tools, workerTraceTool(j, o, request))
+	}
 	if j.Kind != "curate" && j.Graph.Project.Scenario == "pentest" {
 		o.Tools = append(o.Tools, cvssTool())
 	}

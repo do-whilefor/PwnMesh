@@ -19,8 +19,8 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 		kind   string
 		fields string
 	}{
-		{"reason", "action condition depends_on description dispute_id from goal_id id latest_run_id parent_id priority reason repair sources write_paths"},
-		{"explore", "claim description evidence observed_at reason scope sources status supersedes"},
+		{"reason", "action assets condition depends_on description dispute_id from goal_id id latest_run_id parent_id priority reason repair sources write_paths"},
+		{"explore", "assets claim description evidence observed_at reason scope sources status supersedes"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			opts := Options{Tools: []agent.Tool{}}
@@ -46,7 +46,7 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 				fields = append(fields, name)
 				want := "string"
 				switch name {
-				case "from", "sources", "evidence", "depends_on", "write_paths":
+				case "from", "sources", "evidence", "depends_on", "write_paths", "assets":
 					want = "array"
 				case "priority":
 					want = "integer"

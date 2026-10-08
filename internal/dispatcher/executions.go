@@ -620,7 +620,7 @@ func (s *Scheduler) configureGraphHandler() {
 				result.Results = nil
 			}
 			return result, err
-		case "read_graph", "read_snapshot", "read_updates":
+		case "read_graph", "read_snapshot", "read_updates", "read_trace_runs":
 			// Bound the HTTP response too: a current FGS may exceed the client
 			// limit even though the requested graph/evidence page is small.
 			var page json.RawMessage
@@ -629,6 +629,8 @@ func (s *Scheduler) configureGraphHandler() {
 				path = base + "/executions/" + url.PathEscape(j.RunID) + "/input/read"
 			} else if request.Op == "read_updates" {
 				path = base + "/executions/" + url.PathEscape(j.RunID) + "/updates"
+			} else if request.Op == "read_trace_runs" {
+				path = base + "/executions/" + url.PathEscape(j.RunID) + "/traces/read"
 			}
 			err := s.Client.Do(ctx, "POST", path, request, &page, &lease)
 			return page, err

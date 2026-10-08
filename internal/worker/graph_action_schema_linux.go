@@ -28,6 +28,7 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 		properties["latest_run_id"] = map[string]any{"type": "string", "description": "Required for step retry; copy the target Step's latest_run_id to bind the observed failed attempt."}
 		properties["dispute_id"] = map[string]any{"type": "string", "description": "Assign an independent review Step with a new execution. Include both sides' raw sources and a specific question in description."}
 		properties["repair"] = artifactcheck.Schema()
+		properties["assets"] = assetInputSchema()
 		properties["depends_on"] = map[string]any{
 			"type": "array", "items": text, "uniqueItems": true,
 			"description": "Optional step add prerequisites: existing Step IDs or earlier Step $aliases, never Fact IDs. Use from for evidence inputs.",
@@ -43,6 +44,7 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 	}
 	if kind != "curate" {
 		return map[string]any{"type": "object", "properties": map[string]any{
+			"assets":      assetInputSchema(),
 			"description": text,
 			"reason":      text,
 			"sources":     map[string]any{"type": "array", "items": text},

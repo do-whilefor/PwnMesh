@@ -48,6 +48,22 @@ func prepareFinalEvidence(ctx context.Context, j Job, runDir string, r Result, f
 	if err = json.Unmarshal(parsed.FactPayload, &payload); err != nil {
 		return r, err
 	}
+	// A terminal handoff must fail while the Worker can still correct its
+	// observation, before evidence or the finish receipt becomes durable.
+	if raw, ok := payload["assets"]; ok {
+		var assets []board.AssetSpec
+		if err = json.Unmarshal(raw, &assets); err != nil {
+			return r, fmt.Errorf("invalid final fact assets: %w", err)
+		}
+		if len(assets) > board.MaxActionAssets {
+			return r, errors.New("too many final fact assets")
+		}
+		for i, spec := range assets {
+			if _, err = board.NormalizeAsset(spec); err != nil {
+				return r, fmt.Errorf("invalid final fact asset %d: %w", i+1, err)
+			}
+		}
+	}
 	action := board.StateAction{Op: "fact", IdempotencyKey: j.RunID + ":final-result", Payload: parsed.FactPayload}
 	if r.Conclude {
 		var selections []board.EvidenceRef
