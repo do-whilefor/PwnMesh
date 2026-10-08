@@ -80,7 +80,7 @@ func Prompt(j Job, conclude bool) (string, error) {
 	} else if orchestrationJob(j) && !controlJob(j) {
 		body += "Keep parallel outputs private; honor this Step's write_paths for shared deliverables. Declarations coordinate writers, not filesystem isolation.\n"
 		body += "Keep useful interpretations as graph_action candidate notes backed by original evidence.\n"
-		body += "Use the supplied full Step and evidence directly; read_graph is for missing or changed information. Delegate reasoning subtasks with run_graph Agent nodes and deterministic operations with command nodes; run independent work concurrently. You own synthesis and Step completion.\n"
+		body += "Use supplied evidence directly; read_graph is for missing or changed information. Use direct tools for simple work; use run_graph only when parallel subtasks, artifact dependencies or reuse justify it. You own synthesis and Step completion.\n"
 	}
 	return environmentPrompt(j) + context + body + scenarioPrompt(j) + intentContext(j, view) + "\nCurrent run_id: " + j.RunID, nil
 }
