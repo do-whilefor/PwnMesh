@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -13,7 +14,8 @@ import (
 )
 
 func TestExecutionAssetsPublishFinishAndFrozenHTTPReads(t *testing.T) {
-	publisher, _ := newSnapshotHTTPFixture(t)
+	databasePath := filepath.Join(t.TempDir(), "assets.db")
+	publisher, store := newSnapshotHTTPFixture(t, databasePath)
 	prepareSnapshot(t, publisher, snapshotTemplate(publisher, "explore"))
 	fact := evidenceFixtureFact(publisher.run)
 	fact["assets"] = []board.AssetSpec{
@@ -80,6 +82,29 @@ func TestExecutionAssetsPublishFinishAndFrozenHTTPReads(t *testing.T) {
 	publisher.apply(http.StatusOK)
 	if !reflect.DeepEqual(current, publisher.state()) {
 		t.Fatal("completion replay duplicated asset anchors or the final observation")
+	}
+
+	// Close the real SQLite connection and replace the HTTP handler. A process
+	// restart must retain both the live index and the original paging snapshot,
+	// including the completion receipt that guards idempotent publication.
+	now := store.Now
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := board.Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	reopened.Now = now
+	publisher.store, publisher.handler = reopened, New(reopened)
+	reader.store, reader.handler = reopened, publisher.handler
+	if !reflect.DeepEqual(current, publisher.state()) {
+		t.Fatal("database reopen changed live assets, anchors or evidence")
+	}
+	publisher.apply(http.StatusOK)
+	if !reflect.DeepEqual(current, publisher.state()) {
+		t.Fatal("completion replay after restart duplicated assets or observations")
 	}
 
 	// Resume a page after the live catalog changed. Both identities and their

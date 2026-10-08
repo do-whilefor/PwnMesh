@@ -15,9 +15,13 @@ import (
 	"pwnmesh/internal/worker"
 )
 
-func newSnapshotHTTPFixture(t *testing.T) (*executionProtocolFixture, *board.Store) {
+func newSnapshotHTTPFixture(t *testing.T, databasePath ...string) (*executionProtocolFixture, *board.Store) {
 	t.Helper()
-	store, err := board.Open(filepath.Join(t.TempDir(), "snapshot.db"))
+	path := filepath.Join(t.TempDir(), "snapshot.db")
+	if len(databasePath) != 0 {
+		path = databasePath[0]
+	}
+	store, err := board.Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
