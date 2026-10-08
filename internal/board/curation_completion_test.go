@@ -22,8 +22,7 @@ func TestCurationProducerStatusDoesNotRequireAnotherGenerationToComplete(t *test
 			curator, input := f.curator("curator")
 			f.curate(curator, input, CurateGroup{CandidateIDs: []string{candidate}, Status: status, Reason: "Retain the producer's supported judgment without inventing confidence"})
 			f.do(func(tx *Tx) error {
-				requireAPIStatus(t, tx.ValidateStateCompletion("p", []string{fact}), 409)
-				return nil
+				return tx.ValidateStateCompletion("p", []string{fact})
 			})
 			f.finish(curator, "")
 			state := f.state()

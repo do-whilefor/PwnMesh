@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,7 +74,7 @@ func TestCurationReceiptLookupDistinguishesMissingFromTransportFailure(t *testin
 		status            int
 		body              string
 		committed, failed bool
-	}{{200, `{"committed":true}`, true, false}, {404, `{"detail":"not found"}`, false, false}, {503, `{"detail":"unavailable"}`, false, true}} {
+	}{{200, `{"committed":true,"execution_status":"succeeded"}`, true, false}, {404, `{"detail":"not found"}`, false, false}, {503, `{"detail":"unavailable"}`, false, true}} {
 		t.Run(http.StatusText(tc.status), func(t *testing.T) {
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/projects/p/state/curation/receipt" || r.Header.Get("X-PwnMesh-Lease") != "curate" || r.Header.Get("X-PwnMesh-Run") != "b@r" {
@@ -88,6 +89,46 @@ func TestCurationReceiptLookupDistinguishesMissingFromTransportFailure(t *testin
 			committed, err := s.curationCommitted(context.Background(), job)
 			if committed != tc.committed || (err != nil) != tc.failed {
 				t.Fatalf("committed=%v err=%v", committed, err)
+			}
+		})
+	}
+}
+
+func TestLegacyCurationReceiptRequiresSuccessfulExplicitSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name, execution, applied string
+		status                   int
+		wantApply                int32
+		wantSuccess              bool
+	}{
+		{"success", "running", "succeeded", http.StatusOK, 1, true},
+		{"forbidden", "running", "", http.StatusForbidden, 1, false},
+		{"unavailable", "running", "", http.StatusServiceUnavailable, 1, false},
+		{"rejected_after_read", "running", "rejected", http.StatusOK, 1, false},
+		{"already_rejected", "rejected", "", http.StatusOK, 0, false},
+		{"already_cancelled", "cancelled", "", http.StatusOK, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var reads, applies atomic.Int32
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == "GET" && r.URL.Path == "/projects/p/state/curation/receipt" {
+					reads.Add(1)
+					_, _ = w.Write([]byte(`{"committed":true,"execution_status":"` + tc.execution + `"}`))
+					return
+				}
+				if r.Method != "POST" || r.URL.Path != "/projects/p/executions/r/apply" || r.Header.Get("X-PwnMesh-Lease") != "curate" || r.Header.Get("X-PwnMesh-Run") != "b@r" {
+					t.Errorf("unexpected settlement request: %s %s", r.Method, r.URL.Path)
+				}
+				applies.Add(1)
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(`{"status":"` + tc.applied + `","detail":"synthetic recovery boundary"}`))
+			}))
+			defer api.Close()
+			s := &Scheduler{Client: &Client{Base: api.URL}}
+			run := &task{Job: worker.Job{RunID: "r", Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Lease: Lease{Run: "b@r", Kind: "curate"}}
+			committed, err := s.controlCommitted(context.Background(), run)
+			if committed != tc.wantSuccess || (err == nil) != tc.wantSuccess || reads.Load() != 1 || applies.Load() != tc.wantApply {
+				t.Fatalf("legacy receipt bypassed settlement: committed=%v err=%v reads=%d applies=%d", committed, err, reads.Load(), applies.Load())
 			}
 		})
 	}

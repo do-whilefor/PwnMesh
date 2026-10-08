@@ -145,7 +145,7 @@ func TestPendingResultSettlementDoesNotRequireOriginalBackend(t *testing.T) {
 	}
 }
 
-func TestCommittedCurationDeliveryUsesResultBackoff(t *testing.T) {
+func TestCommittedCurationNeedsNoSeparateResultDelivery(t *testing.T) {
 	s, runner, store, graph := pendingCurationFixture(t)
 	ctx := context.Background()
 	run := prepareCurationTestTask(t, s, graph, "curate", "committed-curation-delivery", nil)
@@ -163,25 +163,60 @@ func TestCommittedCurationDeliveryUsesResultBackoff(t *testing.T) {
 		}
 		return http.DefaultTransport.RoundTrip(request)
 	})}
-	for attempt := 1; attempt <= 3; attempt++ {
+	for range 3 {
 		recoverPendingResult(t, s, graph.Project)
-		if applies.Load() != int32(attempt) {
-			t.Fatalf("committed receipt did not reach result delivery: %d", applies.Load())
-		}
-		if attempt < 3 {
-			if !time.Now().Before(s.deliveryWaits[run.Job.RunID]) || curationExecution(t, store, run).Status != "result_pending" {
-				t.Fatal("committed curation did not retain and back off its result")
-			}
-			recoverPendingResult(t, s, graph.Project)
-			if applies.Load() != int32(attempt) {
-				t.Fatal("committed curation ignored the delivery cooldown")
-			}
-			s.deliveryWaits[run.Job.RunID] = time.Now().Add(-time.Second)
+		if applies.Load() != 0 {
+			t.Fatalf("committed receipt unnecessarily repeated result delivery: %d", applies.Load())
 		}
 	}
 	e := curationExecution(t, store, run)
-	if e.Status != "succeeded" || e.Resumes != 1 || runner.calls.Load() != before {
+	if e.Status != "succeeded" || e.Resumes != 0 || runner.calls.Load() != before {
 		t.Fatalf("committed curation reran the Worker or consumed delivery recovery: status=%s resumes=%d workers=%d", e.Status, e.Resumes, runner.calls.Load()-before)
+	}
+}
+
+func TestLegacyCommittedCurationSettlesBeforeBackendAndRecoveryChecks(t *testing.T) {
+	for _, change := range []string{"exhausted", "backend_removed", "environment_changed", "backend_at_capacity"} {
+		t.Run(change, func(t *testing.T) {
+			s, runner, store, graph := staleCuratorFixture(t)
+			run := prepareCurationTestTask(t, s, graph, "curate", "legacy-committed", nil)
+			if _, err := runner.curate(context.Background(), run.Job); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.Do(context.Background(), func(tx *board.Tx) error {
+				if _, err := tx.Exec("UPDATE xloom_executions SET status='running',result=NULL,resumes=2 WHERE project_id=? AND id=?", graph.Project.ID, run.Job.RunID); err != nil {
+					return err
+				}
+				_, err := tx.Exec("DELETE FROM xloom_revoked_runs WHERE project_id=? AND worker=?", graph.Project.ID, run.Lease.Run)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			switch change {
+			case "backend_removed":
+				s.Config.Workers = nil
+			case "environment_changed":
+				s.Config.Container.Image = "replacement-image"
+			case "backend_at_capacity":
+				s.Config.Workers[0].MaxRunning = 1
+				s.running["other-project"] = &task{Job: worker.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "other"}}}, Worker: s.Config.Workers[0]}
+			}
+			var resumes, applies atomic.Int32
+			s.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == executionPath(run)+"/resume" {
+					resumes.Add(1)
+				}
+				if request.URL.Path == executionPath(run)+"/apply" {
+					applies.Add(1)
+				}
+				return http.DefaultTransport.RoundTrip(request)
+			})}
+			recoverPendingResult(t, s, graph.Project)
+			execution := curationExecution(t, store, run)
+			if execution.Status != "succeeded" || execution.Resumes != 2 || resumes.Load() != 0 || applies.Load() != 1 || runner.calls.Load() != 0 {
+				t.Fatalf("legacy receipt restarted or stranded: status=%s recovery=%d resumes=%d applies=%d models=%d", execution.Status, execution.Resumes, resumes.Load(), applies.Load(), runner.calls.Load())
+			}
+		})
 	}
 }
 

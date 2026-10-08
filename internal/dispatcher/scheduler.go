@@ -467,10 +467,6 @@ func (s *Scheduler) wakeAt(until time.Time) {
 	}
 }
 
-func invalidStepSupport(step board.Step) bool {
-	return len(step.InvalidSources) > 0 || len(step.BlockedBy) > 0
-}
-
 // A queued dependency is normal pipeline progress. Missing, failed or invalid
 // accepted dependencies require a new decision rather than more execution.
 func supportNeedsDecision(step board.Step, steps map[string]board.Step) bool {
@@ -696,18 +692,10 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 			}
 		}
 	}
-	stepState := map[string]board.Step{}
-	for _, step := range state.Steps {
-		stepState[step.ID] = step
-	}
-	var next *board.Intent
+	var next *board.Step
 	var nextCheck board.ExecutionCheck
-	for n := range g.Intents {
-		i := &g.Intents[n]
-		if i.To != nil || i.ConcludedAt != nil || i.Worker != nil || stepState[i.ID].Status == "abandoned" || invalidStepSupport(stepState[i.ID]) {
-			continue
-		}
-		check, err := s.candidateCheck(ctx, input, g, "explore", i)
+	for _, step := range board.ExecutionSteps(input.Intents, input.Steps) {
+		check, err := s.candidateCheck(ctx, input, g, "explore", &board.Intent{ID: step.ID})
 		if err != nil {
 			return false, err
 		}
@@ -716,19 +704,20 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		}
 		local := false
 		for _, t := range s.running {
-			if t.Job.Graph.Project.ID == id && t.Lease.Intent == i.ID {
+			if t.Job.Graph.Project.ID == id && t.Lease.Intent == step.ID {
 				local = true
 			}
 		}
 		// Explicit priority wins; equal-priority work drains oldest first so
 		// newly appended Steps cannot continually overtake the ready queue.
 		// Scheduling pages preserve creation/row order for equal timestamps.
-		if !local && (next == nil || stepState[i.ID].Priority > stepState[next.ID].Priority || (stepState[i.ID].Priority == stepState[next.ID].Priority && i.CreatedAt < next.CreatedAt)) {
-			next, nextCheck = i, check
+		if !local && (next == nil || step.Priority > next.Priority || (step.Priority == next.Priority && step.CreatedAt < next.CreatedAt)) {
+			next, nextCheck = &step, check
 		}
 	}
 	if next != nil && s.executionCapacity(id) {
-		if ok, err := s.launch(ctx, g, "explore", next, "", nextCheck); ok || err != nil {
+		// Registration resolves the complete immutable assignment on the Server.
+		if ok, err := s.launch(ctx, g, "explore", &board.Intent{ID: next.ID}, "", nextCheck); ok || err != nil {
 			return ok, err
 		}
 	}
@@ -871,15 +860,7 @@ func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runEr
 		// Invalidation can interrupt startup, a model call, or recovery backoff.
 		// Reconcile once after the heartbeat stops, before releasing this lease.
 		if cause := context.Cause(ctx); outcome != "failed" && outcome != "success" && decisionStateChanged(cause) && (t.Root == nil || t.Root.Err() == nil) {
-			var committed bool
-			var err error
-			if t.Job.Kind == "curate" {
-				// Curation commits its facts before the final execution result.
-				// Recovery must apply that result, not merely report success.
-				committed, err = s.finishCommittedCuration(ctx, t)
-			} else {
-				committed, err = s.decisionCommitted(ctx, t)
-			}
+			committed, err := s.controlCommitted(ctx, t)
 			switch {
 			case err != nil:
 				outcome, runErr = "interrupted", err

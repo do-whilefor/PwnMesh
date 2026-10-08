@@ -117,6 +117,13 @@ func (f *orchestrationFixture) candidate(e Execution, fact, status string) strin
 func (f *orchestrationFixture) finish(e Execution, fact string) {
 	f.t.Helper()
 	f.do(func(tx *Tx) error {
+		if e.Kind == "curate" {
+			current, err := tx.Execution(e.ProjectID, e.ID)
+			if err == nil && current.Status != "succeeded" {
+				return fmt.Errorf("curation commit did not settle its execution: %s", current.Status)
+			}
+			return err
+		}
 		if fact != "" {
 			if _, err := tx.ConcludeEvidenceStep("p", e.Fence(), fact, nil); err != nil {
 				return err
@@ -128,9 +135,6 @@ func (f *orchestrationFixture) finish(e Execution, fact string) {
 		}
 		if err := tx.ExecutionStatus(e, "succeeded", result); err != nil {
 			return err
-		}
-		if e.Kind == "curate" {
-			return tx.ReleaseCurator("p", e.Lease)
 		}
 		return nil
 	})

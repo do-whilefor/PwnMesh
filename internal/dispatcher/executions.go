@@ -274,6 +274,17 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		if t.Job.Graph.Project.OrchestrationVersion != 1 || !t.Job.GraphRPC || t.Job.ResultContractVersion != 2 {
 			continue // Retained legacy inputs are history, never runnable jobs.
 		}
+		if t.Job.Kind == "curate" {
+			// A pre-upgrade committed batch needs only result settlement, even
+			// after the backend changed or its model recovery budget was spent.
+			committed, err := s.controlCommitted(ctx, t)
+			if err != nil {
+				return err
+			}
+			if committed {
+				continue
+			}
+		}
 		// A saved result only needs its registered lease and input fences. Its
 		// original model/backend may have been removed since execution finished.
 		t.Worker.Name = e.Backend
@@ -296,25 +307,10 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		// server can finish delivery even while this backend is unavailable.
 		until := s.unhealthy[t.Worker.Name]
 		if t.Execution.Status != "result_pending" && (s.incompatible[t.Worker.Name] != "" || time.Now().Before(until)) {
-			committed, err := s.decisionCommitted(ctx, t)
-			if err != nil {
-				return err
+			if s.incompatible[t.Worker.Name] == "" {
+				s.wakeAt(until)
 			}
-			if committed {
-				continue // Decide commits its execution status atomically.
-			}
-			if t.Job.Kind == "curate" {
-				committed, err = s.curationCommitted(ctx, t)
-				if err != nil {
-					return err
-				}
-			}
-			if !committed {
-				if s.incompatible[t.Worker.Name] == "" {
-					s.wakeAt(until)
-				}
-				continue
-			}
+			continue
 		}
 		err := s.Client.Do(ctx, "POST", executionPath(t)+"/resume", map[string]any{}, &t.Execution, &t.Lease)
 		if err != nil {
@@ -334,19 +330,11 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 	return nil
 }
 func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat func()) (string, error) {
-	if ok, err := s.decisionCommitted(ctx, t); ok || err != nil {
+	if ok, err := s.controlCommitted(ctx, t); ok || err != nil {
 		if ok {
 			return "success", nil
 		}
 		return "interrupted", err
-	}
-	if t.Job.Kind == "curate" && t.Execution.Resumes > 0 {
-		if committed, err := s.finishCommittedCuration(ctx, t); committed || err != nil {
-			if err != nil {
-				return "interrupted", err
-			}
-			return "success", nil
-		}
 	}
 	var result worker.Result
 	if t.Execution.Status == "result_pending" {
@@ -381,21 +369,10 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			if err == nil {
 				result, err = s.Runner.Run(ctx, t.Worker, t.Job)
 			}
-			if t.Job.Kind == "curate" {
-				committed, receiptErr := s.curationCommitted(ctx, t)
-				if receiptErr != nil {
-					return "interrupted", receiptErr
-				}
-				if committed {
-					// The durable receipt is authoritative even when the model's
-					// final response or graph acknowledgement was lost.
-					result, err = curationResult(result.Metrics), nil
-				}
-			}
 			if result.Metrics != nil {
 				slog.Info("decision observation", "project", t.Job.Graph.Project.ID, "run", t.Job.RunID, "metrics", result.Metrics)
 			}
-			if committed, receiptErr := s.decisionCommitted(ctx, t); committed || receiptErr != nil {
+			if committed, receiptErr := s.controlCommitted(ctx, t); committed || receiptErr != nil {
 				if committed {
 					s.observeDecision(ctx, t, result.Metrics)
 					return "success", nil
@@ -524,7 +501,14 @@ func decisionStateChanged(err error) bool {
 
 // A batch commits the graph and its execution result together. Prefer that
 // receipt even if project completion cancelled the process before it replied.
-func (s *Scheduler) decisionCommitted(ctx context.Context, t *task) (bool, error) {
+func (s *Scheduler) controlCommitted(ctx context.Context, t *task) (bool, error) {
+	if t.Job.Kind == "curate" {
+		committed, err := s.curationCommitted(ctx, t)
+		if err == nil && committed {
+			t.committedAt.CompareAndSwap(0, time.Now().UnixNano())
+		}
+		return committed, err
+	}
 	if t.Job.Kind != "reason" || t.Job.Decision == nil || t.Job.Decision.Version != 2 {
 		return false, nil
 	}
@@ -541,7 +525,7 @@ func (s *Scheduler) decisionCommitted(ctx context.Context, t *task) (bool, error
 const decisionFinishGrace = 10 * time.Second
 
 func (s *Scheduler) decisionFinishAllowed(ctx context.Context, t *task) bool {
-	committed, err := s.decisionCommitted(ctx, t)
+	committed, err := s.controlCommitted(ctx, t)
 	if err != nil || !committed || time.Since(time.Unix(0, t.committedAt.Load())) >= decisionFinishGrace {
 		return false
 	}

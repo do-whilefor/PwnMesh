@@ -199,8 +199,11 @@ func (f *updateRequestFixture) correct(source string) string {
 		"op": "curate", "idempotency_key": curator.Job.RunID + ":correction", "expected_version": curator.Job.InputSnapshot.StateVersion,
 		"payload": board.CuratePayload{ThroughRevision: curator.Job.InputSnapshot.Revision, Groups: []board.CurateGroup{}, Relations: []board.CurateRelation{{Kind: "refutes", Source: correction, Target: source, Reason: updateReason}}},
 	}, nil, &curator.Lease)
-	f.do("POST", executionPath(curator)+"/status", map[string]any{"status": "result_pending", "result": worker.Result{Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`}}, nil, &curator.Lease)
-	f.do("POST", executionPath(curator)+"/apply", map[string]any{}, nil, &curator.Lease)
+	var settled board.Execution
+	f.do("GET", executionPath(curator)+"?namespace="+f.scheduler.namespace(), nil, &settled, nil)
+	if settled.Status != "succeeded" {
+		f.t.Fatal("curation correction did not atomically settle its execution")
+	}
 	return correction
 }
 

@@ -534,11 +534,20 @@ func (t *Tx) StateAction(project string, fence ExecutionFence, action StateActio
 		_, releaseErr := t.Exec("RELEASE xloom_state_action")
 		err = errors.Join(err, releaseErr)
 	}()
+	if action.Op == "curate" {
+		if receipt, found, replayErr := t.replayCuration(project, fence, action); found || replayErr != nil {
+			return receipt, replayErr
+		}
+	}
 	s, err := t.State(project)
 	if err != nil {
 		return StateActionResult{}, err
 	}
-	return t.stateAction(&s, fence, action)
+	out, err = t.stateAction(&s, fence, action)
+	if err == nil && action.Op == "curate" {
+		err = t.CompleteCurationExecution(project, fence.Run)
+	}
+	return out, err
 }
 
 // A batch owns this snapshot for one transaction and replaces it only after a
@@ -587,21 +596,10 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if (action.Op == "fact" || action.Op == "finding") && fence.Lease == "reason" {
 		return StateActionResult{}, Err(403, "Decide cannot turn planning into observed evidence")
 	}
-	// Canonical JSON makes insignificant object ordering/whitespace irrelevant,
-	// but binds each key to its operation, exact values and execution identity.
-	var payload any
-	decoder := json.NewDecoder(bytes.NewReader(action.Payload))
-	decoder.UseNumber()
-	if err = decoder.Decode(&payload); err != nil {
-		return StateActionResult{}, Err(422, "invalid action JSON")
+	canonical, err := canonicalStateAction(fence, action)
+	if err != nil {
+		return StateActionResult{}, err
 	}
-	if err = decoder.Decode(new(any)); err != io.EOF {
-		return StateActionResult{}, Err(422, "invalid action JSON")
-	}
-	canonical, _ := json.Marshal(struct {
-		Run, Op string
-		Payload any
-	}{fence.Run, action.Op, payload})
 	var oldRequest, oldResponse string
 	err = t.QueryRow("SELECT request,response FROM xloom_state_actions WHERE project_id=? AND idempotency_key=?", project, action.IdempotencyKey).Scan(&oldRequest, &oldResponse)
 	if err == nil {

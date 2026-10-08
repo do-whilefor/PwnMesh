@@ -3,12 +3,10 @@ package dispatcher
 import (
 	"context"
 	"errors"
-	"net/url"
 	"slices"
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
 )
 
 // Coalesce a producer's fact/candidate/final-result burst without waiting
@@ -70,44 +68,30 @@ func (s *Scheduler) waitForControlConflict(until, now time.Time) bool {
 func (s *Scheduler) curationCommitted(ctx context.Context, t *task) (bool, error) {
 	readCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	var receipt board.StateActionResult
+	var receipt struct {
+		board.StateActionResult
+		ExecutionStatus string `json:"execution_status"`
+	}
 	err := s.Client.Do(readCtx, "GET", projectPath(t.Job.Graph.Project.ID)+"/state/curation/receipt", nil, &receipt, &t.Lease)
 	var pe *ProtocolError
 	if errors.As(err, &pe) && pe.Status == 404 {
 		return false, nil
 	}
-	return receipt.Committed, err
-}
-
-func curationResult(metrics *worker.DecisionMetrics) worker.Result {
-	return worker.Result{Type: "result", Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`, Metrics: metrics}
-}
-
-// A stale heartbeat may reach the dispatcher after curation committed. Unlike
-// Decide, that receipt does not mark the execution succeeded in its transaction.
-// Finish delivery without rerunning the model, retaining any pending result.
-func (s *Scheduler) finishCommittedCuration(ctx context.Context, t *task) (bool, error) {
-	committed, err := s.curationCommitted(ctx, t)
-	if err != nil || !committed {
-		return committed, err
-	}
-	finishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-	defer cancel()
-	var current board.Execution
-	if err = s.Client.Do(finishCtx, "GET", executionPath(t)+"?namespace="+url.QueryEscape(s.namespace()), nil, &current, nil); err != nil {
-		return true, err
-	}
-	t.Execution.Status = current.Status
-	if current.Status == "succeeded" {
-		return true, nil
-	}
-	if current.Status != "result_pending" {
-		if err = s.status(finishCtx, t, "result_pending", curationResult(nil)); err != nil {
-			return true, err
+	if err == nil && receipt.Committed && receipt.ExecutionStatus != "succeeded" {
+		// Only old persisted batches require delivery after commit. The explicit
+		// apply atomically settles their existing receipt without model recovery.
+		if !slices.Contains([]string{"prepared", "running", "retryable", "result_pending"}, receipt.ExecutionStatus) {
+			return false, errors.New("committed curation has no pending or successful execution")
+		}
+		var result struct {
+			Status string `json:"status"`
+		}
+		err = s.Client.Do(readCtx, "POST", executionPath(t)+"/apply", map[string]any{}, &result, &t.Lease)
+		if err == nil && result.Status != "succeeded" {
+			err = errors.New("curation receipt settlement did not succeed")
 		}
 	}
-	err = s.Client.Do(finishCtx, "POST", executionPath(t)+"/apply", map[string]any{}, nil, &t.Lease)
-	return true, err
+	return receipt.Committed && err == nil, err
 }
 
 // Keep one slot available to control roles when concurrency permits. A

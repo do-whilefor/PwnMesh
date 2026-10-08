@@ -15,18 +15,29 @@ import (
 func TestReadinessRecoveryBlocksModelWorkButSettlesStoredResults(t *testing.T) {
 	for _, mode := range []string{"startup_only", "startup_and_task"} {
 		for _, gate := range []string{"incompatible", "transient"} {
-			for _, boundary := range []string{"model_required", "result_pending", "curation_committed"} {
+			for _, boundary := range []string{"model_required", "result_pending", "curation_committed", "legacy_curation_committed"} {
 				t.Run(mode+"/"+gate+"/"+boundary, func(t *testing.T) {
 					var s *Scheduler
 					var runner *staleCuratorRunner
 					var store *board.Store
 					var run *task
-					if boundary == "curation_committed" {
+					if boundary == "curation_committed" || boundary == "legacy_curation_committed" {
 						var graph board.Graph
 						s, runner, store, graph = staleCuratorFixture(t)
 						run = prepareCurationTestTask(t, s, graph, "curate", "readiness-curator", nil)
 						if _, err := runner.curate(context.Background(), run.Job); err != nil {
 							t.Fatal(err)
+						}
+						if boundary == "legacy_curation_committed" {
+							if err := store.Do(context.Background(), func(tx *board.Tx) error {
+								if _, err := tx.Exec("UPDATE xloom_executions SET status='running',result=NULL WHERE project_id=? AND id=?", graph.Project.ID, run.Job.RunID); err != nil {
+									return err
+								}
+								_, err := tx.Exec("DELETE FROM xloom_revoked_runs WHERE project_id=? AND worker=?", graph.Project.ID, run.Lease.Run)
+								return err
+							}); err != nil {
+								t.Fatal(err)
+							}
 						}
 					} else {
 						s, runner, store, run = resultDeliveryFixture(t)
@@ -70,10 +81,7 @@ func TestReadinessRecoveryBlocksModelWorkButSettlesStoredResults(t *testing.T) {
 							t.Fatalf("unready model work consumed recovery or entered dispatch: %+v", execution)
 						}
 					} else {
-						wantResumes := 1
-						if boundary == "result_pending" {
-							wantResumes = 0
-						}
+						wantResumes := 0
 						if execution.Status != "succeeded" || execution.Resumes != wantResumes {
 							t.Fatalf("readiness stranded an existing result: status=%s resumes=%d", execution.Status, execution.Resumes)
 						}

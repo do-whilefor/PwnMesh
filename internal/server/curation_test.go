@@ -193,7 +193,7 @@ func TestCurationHTTPRelationsAreAtomicAndPreserveProducerEvidence(t *testing.T)
 	}
 }
 
-func TestCuratorReceiptSurvivesResumeAndIdempotentApplication(t *testing.T) {
+func TestCuratorReceiptSettlesExecutionAndSurvivesIdempotentApplication(t *testing.T) {
 	f := newCurationHTTPFixture(t)
 	prepareOrchestratedExecute(f)
 	fact := f.action("fact", "observed", evidenceFixtureFact(f.run))
@@ -205,15 +205,7 @@ func TestCuratorReceiptSurvivesResumeAndIdempotentApplication(t *testing.T) {
 	if !receipt.Committed {
 		t.Fatal("accepted curation did not return a durable receipt")
 	}
-	f.pending(`{"accepted":true,"data":{"curated":true}}`)
-	for range 4 {
-		f.request("POST", f.base()+"/curate/release", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)
-		var resumed board.Execution
-		f.request("POST", f.base()+"/executions/"+f.run+"/resume", map[string]any{}, true, http.StatusOK, &resumed)
-		if resumed.Status != "result_pending" || resumed.Resumes != 0 {
-			t.Fatalf("result delivery consumed Worker recovery: status=%s resumes=%d", resumed.Status, resumed.Resumes)
-		}
-	}
+	f.request("POST", f.base()+"/executions/"+f.run+"/resume", map[string]any{}, true, http.StatusConflict, nil)
 	f.apply(http.StatusOK)
 	completed := f.state()
 	f.apply(http.StatusOK)

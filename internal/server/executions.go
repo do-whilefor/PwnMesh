@@ -237,6 +237,21 @@ func applyExecution(t *b.Tx, e b.Execution) (int, any, error) {
 	if e.Status == "succeeded" || e.Status == "rejected" {
 		return 200, map[string]string{"status": e.Status}, nil
 	}
+	if e.Kind == "curate" {
+		// Pre-upgrade curators could commit a batch without settling their Run.
+		// Recovery is an explicit write; receipt GETs remain read-only.
+		receipt, err := t.CurationReceipt(e.ProjectID, e.Lease)
+		var api *b.APIError
+		if err != nil && (!errors.As(err, &api) || api.Status != http.StatusNotFound) {
+			return 0, nil, err
+		}
+		if receipt.Committed {
+			if err = t.CompleteCurationExecution(e.ProjectID, e.Lease); err != nil {
+				return 0, nil, err
+			}
+			return http.StatusOK, map[string]string{"status": "succeeded"}, nil
+		}
+	}
 	if e.Status != "result_pending" {
 		return 0, nil, b.Err(409, "Execution has no pending result")
 	}

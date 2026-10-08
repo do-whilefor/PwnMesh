@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"net/http"
@@ -44,21 +45,11 @@ func (s *Server) curate(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 				if q.err != nil {
 					return 0, nil, q.err
 				}
-				// A curator's own atomic write changes the content version before
-				// its final result is applied. The durable receipt wins that race,
-				// but only after the active project and live lease checks above.
-				receipt, receiptErr := t.CurationReceipt(project, worker)
-				var apiError *b.APIError
-				if receiptErr != nil && (!errors.As(receiptErr, &apiError) || apiError.Status != http.StatusNotFound) {
-					return 0, nil, receiptErr
+				state, stateErr := t.State(project)
+				if stateErr != nil {
+					return 0, nil, stateErr
 				}
-				if !receipt.Committed {
-					state, stateErr := t.State(project)
-					if stateErr != nil {
-						return 0, nil, stateErr
-					}
-					err = t.CheckDecisionStateVersion(state, b.ExecutionFence{Run: worker, Lease: "curate"}, expected)
-				}
+				err = t.CheckDecisionStateVersion(state, b.ExecutionFence{Run: worker, Lease: "curate"}, expected)
 			}
 		}
 	case "release":
@@ -78,12 +69,11 @@ func (s *Server) curationReceipt(t *b.Tx, _ *request, r *http.Request) (int, any
 	if fence.Run == "" || fence.Lease != "curate" || fence.Intent != "" {
 		return 0, nil, b.Err(403, "Curation receipt requires its curator identity")
 	}
-	var registered bool
-	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE project_id=? AND lease=? AND kind='curate' AND intent='')", r.PathValue("pid"), fence.Run).Scan(&registered); err != nil {
-		return 0, nil, err
-	}
-	if !registered {
+	var status string
+	if err := t.QueryRow("SELECT status FROM xloom_executions WHERE project_id=? AND lease=? AND kind='curate' AND intent=''", r.PathValue("pid"), fence.Run).Scan(&status); errors.Is(err, sql.ErrNoRows) {
 		return 0, nil, b.Err(403, "Curation receipt requires a registered curator execution")
+	} else if err != nil {
+		return 0, nil, err
 	}
 	// A persisted receipt remains readable after lease release, including when
 	// the successful submission's response was lost before result application.
@@ -92,5 +82,8 @@ func (s *Server) curationReceipt(t *b.Tx, _ *request, r *http.Request) (int, any
 	// Recovery only needs an acknowledgement; repeating that body could exceed
 	// the bounded graph bridge precisely when a lost response needs recovery.
 	receipt.Result = nil
-	return http.StatusOK, receipt, err
+	return http.StatusOK, struct {
+		b.StateActionResult
+		ExecutionStatus string `json:"execution_status"`
+	}{receipt, status}, err
 }

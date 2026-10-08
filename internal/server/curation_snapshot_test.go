@@ -77,7 +77,6 @@ func TestLargeCurationUsesLosslessSnapshotAndRetainsCommitFence(t *testing.T) {
 				return
 			}
 			f.request("POST", f.base()+"/state/actions", body, true, http.StatusOK, nil)
-			f.pending(`{"accepted":true,"data":{"curated":true}}`)
 			f.apply(http.StatusOK)
 			if current := f.state(); current.Curation.ThroughRevision != job.InputSnapshot.Revision || len(current.FactRecords) != len(want)+2 {
 				t.Fatal("large curation lost observations or failed to advance its cursor")

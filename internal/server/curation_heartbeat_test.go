@@ -53,7 +53,7 @@ func TestCuratorHeartbeatRejectsMalformedStateVersion(t *testing.T) {
 	}
 }
 
-func TestCuratorHeartbeatOwnCommitWinsBeforeResultApplication(t *testing.T) {
+func TestCuratorCommitRevokesHeartbeatAndRetainsReceipt(t *testing.T) {
 	f := newCurationHTTPFixture(t)
 	_, job := prepareCurator(f)
 	receipt := f.action("curate", "committed", board.CuratePayload{ThroughRevision: job.InputSnapshot.Revision, Groups: []board.CurateGroup{}})
@@ -64,9 +64,8 @@ func TestCuratorHeartbeatOwnCommitWinsBeforeResultApplication(t *testing.T) {
 	// A new producer event after commit also cannot invalidate an accepted batch.
 	f.request("POST", f.base()+"/hints", map[string]string{"content": "Next input after commit", "creator": "fixture"}, false, http.StatusCreated, nil)
 	for range 2 {
-		f.request("POST", f.base()+"/curate/heartbeat", body, true, http.StatusOK, nil)
+		f.request("POST", f.base()+"/curate/heartbeat", body, true, http.StatusConflict, nil)
 	}
-	f.pending(`{"accepted":true,"data":{"curated":true}}`)
 	f.apply(http.StatusOK)
 	before := f.state()
 	response := f.request("POST", f.base()+"/curate/heartbeat", body, true, http.StatusConflict, nil)

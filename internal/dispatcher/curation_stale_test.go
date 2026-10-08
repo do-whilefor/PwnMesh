@@ -186,8 +186,8 @@ func TestCuratorHeartbeatCancelsBlockedModelAndHealth(t *testing.T) {
 	}
 }
 
-func TestCuratorCommitWinsStaleCancellationAndAppliesPendingResult(t *testing.T) {
-	for _, mode := range []string{"final_lost", "pending_result", "pending_result_lost", "receipt_lost"} {
+func TestCuratorCommitWinsStaleCancellationWithoutSeparateResultDelivery(t *testing.T) {
+	for _, mode := range []string{"final_lost", "commit_ack_lost", "receipt_lost"} {
 		t.Run(mode, func(t *testing.T) {
 			s, runner, store, graph := staleCuratorFixture(t)
 			s.Config.Runtime.Interval = 30
@@ -196,45 +196,29 @@ func TestCuratorCommitWinsStaleCancellationAndAppliesPendingResult(t *testing.T)
 			defer cancel(nil)
 			stale := &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: late in-flight heartbeat"}`}
 			runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
-				result, err := runner.curate(ctx, job)
-				if err != nil {
-					return result, err
-				}
-				if !strings.HasPrefix(mode, "pending_result") {
-					cancel(stale)
-					return worker.Result{}, errors.New("synthetic lost final response")
-				}
-				return result, nil
+				_, err := runner.curate(ctx, job)
+				cancel(stale)
+				return worker.Result{}, errors.Join(err, errors.New("synthetic lost final response"))
 			}
 			var receiptReads atomic.Int32
+			var resultDeliveries atomic.Int32
 			s.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(request *http.Request) (*http.Response, error) {
-				if mode == "receipt_lost" && strings.HasSuffix(request.URL.Path, "/state/curation/receipt") && receiptReads.Add(1) == 1 {
+				if mode == "receipt_lost" && strings.HasSuffix(request.URL.Path, "/state/curation/receipt") && receiptReads.Add(1) == 2 {
 					return nil, errors.New("synthetic first receipt transport failure")
 				}
+				if request.URL.Path == executionPath(run)+"/apply" {
+					resultDeliveries.Add(1)
+					return nil, errors.New("curation must not require separate result application")
+				}
 				response, err := http.DefaultTransport.RoundTrip(request)
-				if strings.HasPrefix(mode, "pending_result") && err == nil && response.StatusCode == http.StatusOK && request.URL.Path == executionPath(run)+"/status" {
-					body, bodyErr := request.GetBody()
-					if bodyErr != nil {
-						return nil, bodyErr
-					}
-					var update struct{ Status string }
-					decodeErr := json.NewDecoder(body).Decode(&update)
-					_ = body.Close()
-					if decodeErr != nil {
-						return nil, decodeErr
-					}
-					if update.Status == "result_pending" {
-						cancel(stale)
-						if mode == "pending_result_lost" {
-							_ = response.Body.Close()
-							return nil, errors.Join(context.Canceled, stale)
-						}
-					}
+				if mode == "commit_ack_lost" && err == nil && response.StatusCode == http.StatusOK && strings.HasSuffix(request.URL.Path, "/state/actions") {
+					_ = response.Body.Close()
+					return nil, errors.New("synthetic lost business acknowledgement")
 				}
 				return response, err
 			})}
 			outcome, err := s.runTask(ctx, run)
-			if outcome != "success" || err != nil || !decisionStateChanged(context.Cause(ctx)) || runner.calls.Load() != 1 {
+			if outcome != "success" || err != nil || !decisionStateChanged(context.Cause(ctx)) || runner.calls.Load() != 1 || resultDeliveries.Load() != 0 {
 				t.Fatalf("committed curator was lost or rerun: outcome=%s err=%v cause=%v calls=%d", outcome, err, context.Cause(ctx), runner.calls.Load())
 			}
 			e := curationExecution(t, store, run)
@@ -435,7 +419,7 @@ func TestPendingOrActiveCuratorStillGatesMainAgent(t *testing.T) {
 	}
 }
 
-func TestCuratorStaleReconciliationCannotCrossHumanStopOrRestart(t *testing.T) {
+func TestCommittedCuratorHistorySurvivesLaterHumanStopOrRestart(t *testing.T) {
 	for _, action := range []string{"stop", "restart"} {
 		t.Run(action, func(t *testing.T) {
 			s, runner, store, graph := staleCuratorFixture(t)
@@ -455,8 +439,8 @@ func TestCuratorStaleReconciliationCannotCrossHumanStopOrRestart(t *testing.T) {
 				}
 				return result, err
 			}
-			if outcome, _ := s.runTask(ctx, run); outcome == "success" {
-				t.Fatal("stale reconciliation overrode a newer management boundary")
+			if outcome, err := s.runTask(ctx, run); action == "stop" && (outcome != "success" || err != nil) {
+				t.Fatalf("a later pause erased accepted history: %s %v", outcome, err)
 			}
 			var state board.State
 			if err := s.Client.Do(context.Background(), "GET", projectPath(graph.Project.ID)+"/state", nil, &state, nil); err != nil {
@@ -465,7 +449,7 @@ func TestCuratorStaleReconciliationCannotCrossHumanStopOrRestart(t *testing.T) {
 			if state.Graph.Project.Curator != nil || runner.calls.Load() != 1 {
 				t.Fatal("reconciliation reclaimed a lease or restarted a model")
 			}
-			if action == "stop" && (state.Graph.Project.Status != "stopped" || curationExecution(t, store, run).Status == "succeeded") || action == "restart" && state.Graph.Project.Generation != graph.Project.Generation+1 {
+			if action == "stop" && (state.Graph.Project.Status != "stopped" || curationExecution(t, store, run).Status != "succeeded") || action == "restart" && state.Graph.Project.Generation != graph.Project.Generation+1 {
 				t.Fatal("reconciliation changed stopped project or new generation")
 			}
 		})

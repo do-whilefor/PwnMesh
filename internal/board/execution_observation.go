@@ -13,8 +13,8 @@ func (t *Tx) RecordExecutionObservation(project, run string, fence ExecutionFenc
 	if err != nil {
 		return err
 	}
-	if e.Kind != "reason" || e.Fence() != fence {
-		return Err(403, "observation requires the registered Decide identity")
+	if !controlKind(e.Kind) || e.Fence() != fence {
+		return Err(403, "observation requires the registered control execution identity")
 	}
 	if e.Status != "succeeded" {
 		return Err(409, "observations require a successful decision receipt")

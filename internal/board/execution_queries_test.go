@@ -121,7 +121,11 @@ func TestScheduleExecutionChecksMatchIndividualAdmission(t *testing.T) {
 		} {
 			putQueryExecution(t, tx, e, 0, "")
 		}
-		checks, err := tx.ScheduleExecutionChecks("p", "ns", intents, nil)
+		steps := make([]Step, 0, len(intents))
+		for _, intent := range intents {
+			steps = append(steps, Step{ID: intent.ID, Status: "open"})
+		}
+		checks, err := tx.ScheduleExecutionChecks("p", "ns", intents, steps)
 		if err != nil || len(checks) != len(intents) {
 			t.Fatalf("checks=%+v err=%v", checks, err)
 		}

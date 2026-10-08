@@ -282,10 +282,6 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, intents []Intent
 	if len(intents) == 0 {
 		return checks, nil
 	}
-	stepState := make(map[string]Step, len(steps))
-	for _, step := range steps {
-		stepState[step.ID] = step
-	}
 	var writeOwners []Step
 	if slices.ContainsFunc(steps, func(step Step) bool { return len(step.WritePaths) != 0 || step.Repair != nil }) {
 		data, _, _, err := t.stateData(project)
@@ -299,19 +295,21 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, intents []Intent
 	}
 	values := make([]string, 0, len(intents))
 	args := make([]any, 0, 3*len(intents)+6)
-	for _, i := range intents {
-		kind := "explore"
-		if i.To == nil && i.ConcludedAt == nil && i.Description == "bootstrap" && i.Creator == "dispatcher.bootstrap" && len(i.From) == 1 && i.From[0] == "origin" {
-			kind = "bootstrap"
-		} else if step := stepState[i.ID]; i.To != nil || i.ConcludedAt != nil || i.Worker != nil || step.Status == "abandoned" || len(step.InvalidSources) > 0 || len(step.BlockedBy) > 0 {
-			continue
-		}
-		if stepWriteConflict(stepState[i.ID], writeOwners) != "" {
-			checks[kind+":"+i.ID] = ExecutionCheck{Blocked: true}
+	for _, step := range ExecutionSteps(intents, steps) {
+		if stepWriteConflict(step, writeOwners) != "" {
+			checks["explore:"+step.ID] = ExecutionCheck{Blocked: true}
 			continue
 		}
 		values = append(values, "(?,?,?)")
-		args = append(args, kind, i.ID, kind+":"+i.ID)
+		args = append(args, "explore", step.ID, "explore:"+step.ID)
+	}
+	// Historical bootstrap checks are a compatibility query, never a Step
+	// authorization in the current dispatcher.
+	for _, i := range intents {
+		if pendingBootstrap(i) {
+			values = append(values, "(?,?,?)")
+			args = append(args, "bootstrap", i.ID, "bootstrap:"+i.ID)
+		}
 	}
 	if len(values) == 0 {
 		return checks, nil
