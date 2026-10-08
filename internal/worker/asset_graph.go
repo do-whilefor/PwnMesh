@@ -91,23 +91,6 @@ func assetInputSchema() map[string]any {
 	}}
 }
 
-func assetGraphReadSchema(raw json.RawMessage) json.RawMessage {
-	// The base schema is a static program constant, not model input.
-	var schema map[string]any
-	if err := json.Unmarshal(raw, &schema); err != nil {
-		panic(err)
-	}
-	properties := schema["properties"].(map[string]any)
-	section := properties["section"].(map[string]any)
-	section["enum"] = append(section["enum"].([]any), "assets", "anchors", "history")
-	properties["asset_ids"] = map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "maxItems": 32, "uniqueItems": true, "description": "Match any of these assets in assets/anchors/facts/steps/findings/candidates/history. Combine with ids to narrow records; preserve filters while paging."}
-	result, err := json.Marshal(schema)
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
 func assetFinishSchema(raw json.RawMessage) json.RawMessage {
 	var schema map[string]any
 	if err := json.Unmarshal(raw, &schema); err != nil {

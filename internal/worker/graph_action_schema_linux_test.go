@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,65 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 )
+
+func TestGraphReadSchemasPreserveModeSectionsAndSnapshotContract(t *testing.T) {
+	legacy := Job{Kind: "explore"}
+	orchestrated := legacy
+	orchestrated.Graph.Project.OrchestrationVersion = 1
+	planner := orchestrated
+	planner.Kind = "reason"
+	snapshot, _ := snapshotRuntimeFixture(t, "explore")
+	snapshot.Graph.Project.OrchestrationVersion = 1
+	for name, job := range map[string]Job{
+		"legacy": legacy, "execute": orchestrated, "decide": planner, "curate": curationJob(t), "snapshot": snapshot,
+	} {
+		t.Run(name, func(t *testing.T) {
+			opts := Options{Tools: []agent.Tool{}}
+			if err := ConfigureRuntimeTools(job, &opts); err != nil {
+				t.Fatal(err)
+			}
+			reads := map[string]json.RawMessage{}
+			for _, tool := range opts.Tools {
+				if tool.Name == "read_graph" || tool.Name == "read_snapshot" {
+					reads[tool.Name] = tool.Schema
+				}
+			}
+			if len(reads["read_graph"]) == 0 {
+				t.Fatal("missing graph read schema")
+			}
+			if job.InputSnapshot != nil && !bytes.Equal(reads["read_graph"], reads["read_snapshot"]) {
+				t.Fatal("snapshot reads changed their graph read contract")
+			}
+			for tool, schema := range reads {
+				for _, section := range []string{"overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources", "assets", "anchors", "history", "candidates", "disputes"} {
+					raw := json.RawMessage(`{"section":"` + section + `"}`)
+					want := name != "legacy" || section != "candidates" && section != "disputes"
+					if err := agent.ValidateArguments(schema, raw); (err == nil) != want {
+						t.Errorf("%s section %s: allowed=%v, err=%v", tool, section, want, err)
+					}
+				}
+				for _, raw := range []string{
+					`{"section":"facts","ids":["f1"],"asset_ids":["a1"],"offset":2,"limit":1}`,
+					`{"section":"evidence","ids":["f1"],"offset":0,"byte_offset":4,"expected_version":"state","record_version":"record"}`,
+				} {
+					if err := agent.ValidateArguments(schema, json.RawMessage(raw)); err != nil {
+						t.Errorf("%s lost a supported read shape: %s: %v", tool, raw, err)
+					}
+				}
+				for _, raw := range []string{
+					`{}`, `{"section":"unknown"}`, `{"section":"facts","extra":true}`,
+					`{"section":"facts","ids":[7]}`, `{"section":"facts","asset_ids":null}`,
+					`{"section":"facts","asset_ids":[7]}`, `{"section":"facts","offset":-1}`,
+					`{"section":"facts","byte_offset":-1}`, `{"section":"facts","limit":0}`, `{"section":"facts","limit":51}`,
+				} {
+					if err := agent.ValidateArguments(schema, json.RawMessage(raw)); err == nil {
+						t.Errorf("%s accepted malformed read: %s", tool, raw)
+					}
+				}
+			}
+		})
+	}
+}
 
 func TestCandidateSchemaAllowsTentativeNotesAndExplicitRevisions(t *testing.T) {
 	schema, err := json.Marshal(orchestrationPayloadSchema("explore"))

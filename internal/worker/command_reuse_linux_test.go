@@ -5,6 +5,8 @@ package worker
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -44,6 +46,25 @@ func reuseGraph() commandGraphSpec {
 		{ID: "downloaded", Kind: "reuse", ReuseFrom: &commandGraphReuse{Key: "original", Node: "download"}, Resources: []string{}},
 		{ID: "fixed", Command: `python3 -c 'import json, os; deps=json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); item=next(d for d in deps if d["id"]=="downloaded"); data=json.load(open(item["output"]["files"]["result.json"]["path"])); assert data["version"]==1; open("report.txt","w").write("repaired\n")' && printf 'fixed\n' >> "$PWNMESH_WORKSPACE/repair-effects" && printf 'fixed\n'`, DependsOn: []workergraph.Dependency{{ID: "downloaded"}}, Resources: []string{}, Artifacts: []string{"report.txt"}, Inputs: []commandGraphInput{{Node: "downloaded", Artifact: "result.json"}}, When: &commandGraphWhen{Node: "downloaded", Contains: "downloaded"}},
 	}}
+}
+
+func TestCommandGraphPreservesOriginalInputBinding(t *testing.T) {
+	j, dir, checkpoint := reuseSource(t, false)
+	identity, err := identityFor(j, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the original checkpoint wire format, including field order.
+	original := []byte(`{"identity":` + string(raw) + `,"key":"original"}`)
+	input, err := commandGraphInitialInput(identity, "original")
+	digest := sha256.Sum256(original)
+	if err != nil || !bytes.Equal(input, original) || checkpoint.InputSHA256 != hex.EncodeToString(digest[:]) {
+		t.Fatalf("command graph input changed its persisted binding: %s, checkpoint=%s, err=%v", input, checkpoint.InputSHA256, err)
+	}
 }
 
 func TestCommandGraphReuseSuccessAfterRequiredFailureWithoutReplaying(t *testing.T) {

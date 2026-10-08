@@ -290,10 +290,7 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 		return "", err
 	}
 	defer unlock()
-	input, err := json.Marshal(struct {
-		Identity executionIdentity `json:"identity"`
-		Key      string            `json:"key"`
-	}{identity, spec.Key})
+	input, err := commandGraphInitialInput(identity, spec.Key)
 	if err != nil {
 		return "", err
 	}
