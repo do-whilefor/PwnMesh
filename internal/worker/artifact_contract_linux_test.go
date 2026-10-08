@@ -393,7 +393,7 @@ func TestArtifactContractViewsReachParentCommandAndAgent(t *testing.T) {
 				continue
 			}
 			artifact, exists := view.Output.Files["result.json"]
-			if !exists || len(view.Output.Files) != 1 || len(view.Output.Artifacts) != 2 {
+			if !exists || len(view.Output.Files) != 1 || len(view.Output.Artifacts) != 3 {
 				t.Fatalf("declared result not separated from legacy log refs: %+v", view)
 			}
 			content, err := os.ReadFile(artifact.Path)

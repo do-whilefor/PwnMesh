@@ -434,7 +434,7 @@ func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 			}
 			var value commandGraphOutput
 			dep := dependencies[0]
-			if dep.ID != "observe" || dep.Kind != "function" || dep.Status != "succeeded" || json.Unmarshal(dep.Output.Value, &value) != nil || value.Stdout != "observed input" || len(dep.Output.Artifacts) != 1 || dep.Output.Artifacts[0].SHA256 == "" {
+			if dep.ID != "observe" || dep.Kind != "function" || dep.Status != "succeeded" || json.Unmarshal(dep.Output.Value, &value) != nil || value.Stdout != "observed input" || len(dep.Output.Artifacts) != 2 || dep.Output.Artifacts[0].SHA256 == "" || dep.Output.Artifacts[1].Path != value.StderrPath {
 				return agent.Message{}, fmt.Errorf("wrong dependency snapshot: %+v", dep)
 			}
 			return agent.Text("assistant", "assessed "+value.Stdout), nil

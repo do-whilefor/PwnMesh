@@ -136,7 +136,14 @@ func Cancelled(runDir string) bool {
 	return err == nil
 }
 
+// Run writes both command streams to output.
 func Run(ctx context.Context, dir, runDir string, output *os.File, name string, args ...string) error {
+	return RunStreams(ctx, dir, runDir, output, output, name, args...)
+}
+
+// RunStreams keeps command output and diagnostics separate while retaining the
+// same process ownership and cancellation guarantees as Run.
+func RunStreams(ctx context.Context, dir, runDir string, stdout, stderr *os.File, name string, args ...string) error {
 	random := make([]byte, 16)
 	if _, err := rand.Read(random); err != nil {
 		return err
@@ -150,8 +157,8 @@ func Run(ctx context.Context, dir, runDir string, output *os.File, name string, 
 	}
 	cmd.Env = append(cmd.Env, "PWNMESH_PROCESS_TOKEN="+token)
 	cmd.Dir = dir
-	cmd.Stdout = output
-	cmd.Stderr = output
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.WaitDelay = 2 * time.Second
 	cmd.Cancel = func() error {

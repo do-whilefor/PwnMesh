@@ -76,16 +76,16 @@ func commandNodeValue(t *testing.T, checkpoint workergraph.Checkpoint, id string
 	return workergraph.NodeState{}, commandGraphOutput{}
 }
 
-func TestCommandGraphJSONArtifactIsIndependentOfCombinedLog(t *testing.T) {
+func TestCommandGraphJSONArtifactAndStdoutExcludeStderr(t *testing.T) {
 	description := commandGraphTool(Job{}, Options{}).Description
 	for _, required := range []string{"PWNMESH_DEPENDENCIES names a JSON array", `deps={d["id"]:d for d in json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))}`} {
 		if !strings.Contains(description, required) {
 			t.Fatalf("missing dependency container type or name lookup guidance %q", required)
 		}
 	}
-	for _, required := range []string{"stdout/stderr", "declare a separate JSON artifact instead of parsing combined logs", `json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))`, "artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there"} {
+	for _, required := range []string{"output_path and stderr_path name the separate full logs", "declare structured results as JSON artifacts", `json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))`, "artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there"} {
 		if !strings.Contains(description, required) {
-			t.Fatalf("missing combined-log guidance %q", required)
+			t.Fatalf("missing output contract guidance %q", required)
 		}
 	}
 	spec := commandGraphSpec{Key: "json-artifact", Nodes: []commandGraphNode{
@@ -97,8 +97,12 @@ func TestCommandGraphJSONArtifactIsIndependentOfCombinedLog(t *testing.T) {
 	}
 	node, value := commandNodeValue(t, checkpoint, "left")
 	log, err := os.ReadFile(value.OutputPath)
-	if err != nil || string(log) != value.Stdout || !strings.Contains(string(log), "warning") || json.Valid(log) {
-		t.Fatalf("expected combined JSON and diagnostic output: %q %v", log, err)
+	if err != nil || string(log) != value.Stdout || string(log) != "{\"ok\":true}\n" {
+		t.Fatalf("stdout was contaminated: %q %v", log, err)
+	}
+	diagnostic, err := os.ReadFile(value.StderrPath)
+	if err != nil || string(diagnostic) != value.Stderr || value.Stderr != "warning\n" {
+		t.Fatalf("stderr was lost: %q %v", diagnostic, err)
 	}
 	for _, artifact := range node.Output.Artifacts {
 		if filepath.Base(artifact.Path) != "result.json" {
@@ -135,7 +139,7 @@ func TestCommandGraphParallelDependenciesAndIsolatedArtifacts(t *testing.T) {
 	if !left.StartedAt.Before(right.FinishedAt) || !right.StartedAt.Before(left.FinishedAt) || joined.StartedAt.Before(left.FinishedAt) || joined.StartedAt.Before(right.FinishedAt) {
 		t.Fatalf("parallel execution/dependency ordering wrong: %+v", checkpoint)
 	}
-	if leftValue.OutputPath == rightValue.OutputPath || value.Stdout != "left\nright\n" || len(joined.Output.Artifacts) != 2 {
+	if leftValue.OutputPath == rightValue.OutputPath || value.Stdout != "left\nright\n" || len(joined.Output.Artifacts) != 3 {
 		t.Fatalf("isolated outputs/merge wrong: %+v", checkpoint)
 	}
 	if _, err := os.Stat(filepath.Join(job.Workspace, "ready")); !os.IsNotExist(err) {

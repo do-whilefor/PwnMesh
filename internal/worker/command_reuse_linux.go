@@ -275,7 +275,7 @@ func prepareCommandReuses(ctx context.Context, j Job, o Options, spec commandGra
 		if err := validateCommandGraph(&sourceSpec); err != nil {
 			return fail(err)
 		}
-		definition := workergraph.Definition{Version: "mixed-dag-v2"}
+		definition := workergraph.Definition{Version: commandGraphVersion}
 		source := sourceGraph{dir: dir, nodes: map[string]workergraph.NodeState{}, specs: map[string]commandGraphNode{}}
 		for _, nodeSpec := range sourceSpec.Nodes {
 			definition.Nodes = append(definition.Nodes, commandNodeDefinition(nodeSpec))

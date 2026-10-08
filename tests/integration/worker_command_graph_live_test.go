@@ -46,11 +46,13 @@ func TestWorkerCommandGraphTiming(t *testing.T) {
 	}
 	var measurements []map[string]any
 	join := `python3 - <<'PY'
-import json, os
+import json, os, sys
 deps = {d['id']: d for d in json.load(open(os.environ['PWNMESH_DEPENDENCIES']))}
 values = []
 for name in ('left', 'right'):
-    values.extend(json.load(open(deps[name]['output']['value']['output_path'])))
+    path = deps[name]['output']['value']['output_path']
+    sys.stderr.write(name + ' stdout=' + path + '\n')
+    values.extend(json.load(open(path)))
 print(json.dumps({'values': values, 'sum': sum(values)}))
 PY`
 	for repeat := 1; repeat <= 3; repeat++ {
@@ -97,7 +99,7 @@ PY`
 			}
 			files := map[string][]byte{}
 			for _, id := range []string{"left", "right", "sum"} {
-				for _, name := range []string{"stdout.log", "dependencies.json"} {
+				for _, name := range []string{"stdout.log", "stderr.log", "dependencies.json"} {
 					path := base + "nodes/" + id + "/" + name
 					files[path], err = os.ReadFile(path)
 					if err != nil {
@@ -114,6 +116,15 @@ PY`
 			}
 			if len(failures) != 0 {
 				t.Fatal(failures)
+			}
+			for _, id := range []string{"left", "right", "sum"} {
+				want := ""
+				if id == "sum" {
+					want = "left stdout=" + base + "nodes/left/stdout.log\nright stdout=" + base + "nodes/right/stdout.log\n"
+				}
+				if actual := string(files[base+"nodes/"+id+"/stderr.log"]); actual != want {
+					t.Fatalf("%s stderr = %q, want %q", id, actual, want)
+				}
 			}
 			measurements = append(measurements, map[string]any{"repeat": repeat, "parallelism": parallelism, "wall_seconds": wall, "checkpoint": cp, "passed": true})
 			t.Logf("repeat=%d parallelism=%d tool_wall_seconds=%.3f", repeat, parallelism, wall)
@@ -296,14 +307,18 @@ func validateCommandGraphCheckpoint(cp workergraph.Checkpoint, run, base string,
 		check(node.Kind == "function" && node.Status == "succeeded" && node.Attempt == 1 && !node.StartedAt.IsZero() && node.FinishedAt.After(node.StartedAt), "node has no successful execution interval: "+node.ID)
 		var value struct {
 			OutputPath string `json:"output_path"`
+			StderrPath string `json:"stderr_path"`
 			ExitCode   int    `json:"exit_code"`
 		}
 		check(json.Unmarshal(node.Output.Value, &value) == nil && value.ExitCode == 0 && value.OutputPath == base+"nodes/"+node.ID+"/stdout.log", "node result path or exit code is invalid: "+node.ID)
-		body, exists := files[value.OutputPath]
-		digest := fmt.Sprintf("%x", sha256.Sum256(body))
-		check(exists && slices.ContainsFunc(node.Output.Artifacts, func(a workergraph.Artifact) bool {
-			return a.Path == value.OutputPath && a.SHA256 == digest
-		}), "node stdout is missing or differs from its retained SHA-256: "+node.ID)
+		check(value.StderrPath == base+"nodes/"+node.ID+"/stderr.log" && value.StderrPath != value.OutputPath, "node stderr path is invalid: "+node.ID)
+		for _, stream := range []struct{ name, path string }{{"stdout", value.OutputPath}, {"stderr", value.StderrPath}} {
+			body, exists := files[stream.path]
+			digest := fmt.Sprintf("%x", sha256.Sum256(body))
+			check(exists && slices.ContainsFunc(node.Output.Artifacts, func(a workergraph.Artifact) bool {
+				return a.Path == stream.path && a.SHA256 == digest
+			}), "node "+stream.name+" is missing or differs from its retained SHA-256: "+node.ID)
+		}
 	}
 	left, right, sum := nodes["left"], nodes["right"], nodes["sum"]
 	check(left.StartedAt.Before(right.FinishedAt) && right.StartedAt.Before(left.FinishedAt), "independent input commands did not overlap")
@@ -335,14 +350,16 @@ func TestCommandGraphAcceptanceRejectsBrokenProvenance(t *testing.T) {
 		start := time.Date(2026, 9, 28, 0, 0, 0, 0, time.UTC)
 		for i, id := range []string{"left", "right", "sum"} {
 			path := base + "nodes/" + id + "/stdout.log"
+			stderrPath := base + "nodes/" + id + "/stderr.log"
 			body := []byte([]string{"[2,3]\n", "[5]\n", "{\"values\":[2,3,5],\"sum\":10}\n"}[i])
 			files[path] = body
-			value, _ := json.Marshal(map[string]any{"output_path": path, "exit_code": 0})
+			files[stderrPath] = []byte("debug: " + id + "\n")
+			value, _ := json.Marshal(map[string]any{"stdout": string(body), "output_path": path, "stderr": string(files[stderrPath]), "stderr_path": stderrPath, "exit_code": 0})
 			at := start
 			if id == "sum" {
 				at = at.Add(2 * time.Second)
 			}
-			cp.Nodes = append(cp.Nodes, workergraph.NodeState{ID: id, Kind: "function", Status: "succeeded", Attempt: 1, StartedAt: at, FinishedAt: at.Add(time.Second), Output: workergraph.Output{Value: value, Artifacts: []workergraph.Artifact{{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(body))}}}})
+			cp.Nodes = append(cp.Nodes, workergraph.NodeState{ID: id, Kind: "function", Status: "succeeded", Attempt: 1, StartedAt: at, FinishedAt: at.Add(time.Second), Output: workergraph.Output{Value: value, Artifacts: []workergraph.Artifact{{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(body))}, {Path: stderrPath, SHA256: fmt.Sprintf("%x", sha256.Sum256(files[stderrPath]))}}}})
 		}
 		files[base+"nodes/sum/dependencies.json"], _ = json.Marshal(cp.Nodes[:2])
 		return cp, files
@@ -364,6 +381,18 @@ func TestCommandGraphAcceptanceRejectsBrokenProvenance(t *testing.T) {
 		{"tampered_output", func(_ *workergraph.Checkpoint, f map[string][]byte) {
 			f[base+"nodes/left/stdout.log"] = []byte("[100]")
 		}},
+		{"tampered_stderr", func(_ *workergraph.Checkpoint, f map[string][]byte) {
+			f[base+"nodes/sum/stderr.log"] = []byte("changed diagnostic\n")
+		}},
+		{"missing_stderr", func(_ *workergraph.Checkpoint, f map[string][]byte) {
+			delete(f, base+"nodes/sum/stderr.log")
+		}},
+		{"merged_stream_paths", func(cp *workergraph.Checkpoint, _ map[string][]byte) {
+			var value map[string]any
+			_ = json.Unmarshal(cp.Nodes[2].Output.Value, &value)
+			value["stderr_path"] = value["output_path"]
+			cp.Nodes[2].Output.Value, _ = json.Marshal(value)
+		}},
 		{"missing_dependencies", func(_ *workergraph.Checkpoint, f map[string][]byte) { delete(f, base+"nodes/sum/dependencies.json") }},
 		{"forged_dependencies", func(_ *workergraph.Checkpoint, f map[string][]byte) {
 			f[base+"nodes/sum/dependencies.json"] = []byte("[]")
@@ -374,6 +403,34 @@ func TestCommandGraphAcceptanceRejectsBrokenProvenance(t *testing.T) {
 			tc.change(&cp, files)
 			if len(validateCommandGraphCheckpoint(cp, "r", base, files)) == 0 {
 				t.Fatal("accepted broken command graph")
+			}
+		})
+	}
+	for _, tc := range []struct{ name, body string }{
+		{"stdout_prefix_noise", "debug: joining inputs\n{\"values\":[2,3,5],\"sum\":10}\n"},
+		{"stdout_suffix_noise", "{\"values\":[2,3,5],\"sum\":10}\ndebug: joined inputs\n"},
+		{"stdout_multiple_json", "{\"values\":[2,3,5],\"sum\":10}\n{\"values\":[2,3,5],\"sum\":10}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cp, files := fixture()
+			path := base + "nodes/sum/stdout.log"
+			files[path] = []byte(tc.body)
+			// Keep the output preview and retained digest truthful. Noise in the
+			// actual stdout must fail the JSON contract even with valid provenance.
+			var value map[string]any
+			_ = json.Unmarshal(cp.Nodes[2].Output.Value, &value)
+			value["stdout"] = tc.body
+			cp.Nodes[2].Output.Value, _ = json.Marshal(value)
+			for i := range cp.Nodes[2].Output.Artifacts {
+				if cp.Nodes[2].Output.Artifacts[i].Path == path {
+					cp.Nodes[2].Output.Artifacts[i].SHA256 = fmt.Sprintf("%x", sha256.Sum256(files[path]))
+				}
+			}
+			if failures := validateCommandGraphCheckpoint(cp, "r", base, files); !slices.Equal(failures, []string{"join has no correct calculation receipt"}) {
+				t.Fatalf("noisy stdout failures = %v, want only the strict JSON contract failure", failures)
+			}
+			if string(files[path]) != tc.body {
+				t.Fatal("validation rewrote the retained stdout")
 			}
 		})
 	}
@@ -394,14 +451,16 @@ func workerCommandGraphDeliveryFixture(t *testing.T) (board.State, map[string][]
 	for i, id := range []string{"left", "right", "sum"} {
 		body := []byte([]string{"[2,3]\n", "[5]\n", "{\"values\":[2,3,5],\"sum\":10}\n"}[i])
 		path := base + "nodes/" + id + "/stdout.log"
+		stderrPath := base + "nodes/" + id + "/stderr.log"
 		files[path] = body
+		files[stderrPath] = []byte("debug: " + id + "\n")
 		fact.Evidence = append(fact.Evidence, retainOrchestrationEvidence("producer-run", body, files))
-		value, _ := json.Marshal(map[string]any{"stdout": string(body), "output_path": path, "exit_code": 0})
+		value, _ := json.Marshal(map[string]any{"stdout": string(body), "output_path": path, "stderr": string(files[stderrPath]), "stderr_path": stderrPath, "exit_code": 0})
 		at := start
 		if id == "sum" {
 			at = at.Add(2 * time.Second)
 		}
-		cp.Nodes = append(cp.Nodes, workergraph.NodeState{ID: id, Kind: "function", Status: "succeeded", Attempt: 1, InputSHA256: strings.Repeat("a", 64), StartedAt: at, FinishedAt: at.Add(time.Second), Output: workergraph.Output{Value: value, Artifacts: []workergraph.Artifact{{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(body))}}}})
+		cp.Nodes = append(cp.Nodes, workergraph.NodeState{ID: id, Kind: "function", Status: "succeeded", Attempt: 1, InputSHA256: strings.Repeat("a", 64), StartedAt: at, FinishedAt: at.Add(time.Second), Output: workergraph.Output{Value: value, Artifacts: []workergraph.Artifact{{Path: path, SHA256: fmt.Sprintf("%x", sha256.Sum256(body))}, {Path: stderrPath, SHA256: fmt.Sprintf("%x", sha256.Sum256(files[stderrPath]))}}}})
 	}
 	files[base+"graph.json"], _ = json.Marshal(cp)
 	files[base+"nodes/sum/dependencies.json"], _ = json.MarshalIndent(cp.Nodes[:2], "", "  ")
