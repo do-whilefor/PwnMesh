@@ -645,10 +645,10 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 			return "", err
 		}
 		if o.decision != nil {
-			return "This Decide has no committed receipt. Continue planning with read_graph and graph_action, then commit the draft; an empty plan requires a valid open or running Step. Final JSON cannot publish a plan. For truncated tool calls, reissue complete arguments. The original deadline still applies. If unable to proceed, return accepted:false with a reason.", nil
+			return "This Decide has no committed receipt. Use native tool calls for read_graph, assess_root when available, and graph_action; XML/JSON text is not executed. Then commit the draft; an empty plan requires a valid open or running Step. For truncated tool calls, reissue complete arguments. The original deadline still applies. If unable to proceed, return accepted:false with a reason.", nil
 		}
 		if o.curation != nil {
-			return "This curation has no committed receipt. Read the supplied evidence and submit graph_action curate. Final JSON cannot commit curation. The original input boundary and deadline still apply. If unable to proceed, return accepted:false with a reason.", nil
+			return "This curation has no committed receipt. Read the supplied evidence and submit graph_action curate using native tool calls; XML/JSON text is not executed. The original input boundary and deadline still apply. If unable to proceed, return accepted:false with a reason.", nil
 		}
 		return "Continue the unfinished work in this same execution. Tools are enabled. The original task deadline still applies. Use completed only when the assigned task is finished; otherwise continue working or report incomplete with the remaining work and blocker.", nil
 	}
