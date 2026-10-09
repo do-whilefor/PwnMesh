@@ -4,8 +4,58 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestStateFactIDCollisionRollsBackWithoutSplittingObservation(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	e := f.worker("observation", "")
+	f.do(func(tx *Tx) error {
+		g, err := tx.Load("p")
+		if err != nil {
+			return err
+		}
+		// A compatible graph writer may supply an ID after this database was
+		// opened, so startup counter repair has not seen it yet.
+		g.Facts = append(g.Facts, Fact{ID: "f001", Description: "Existing immutable observation"})
+		return tx.Save(g)
+	})
+	before := f.state()
+	payload, _ := json.Marshal(map[string]any{"description": "Different new observation", "scope": "fixture", "observed_at": "2026-09-28T08:00:00Z", "evidence": []EvidenceRef{{RunID: e.Lease, Path: "evidence/raw.txt", Excerpt: "new observation"}}})
+	var beforeMetadata string
+	var beforeActions, beforeEvents int
+	f.do(func(tx *Tx) error {
+		return tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM xloom_state_actions),(SELECT COUNT(*) FROM xloom_state_events) FROM xloom_state WHERE project_id='p'`).Scan(&beforeMetadata, &beforeActions, &beforeEvents)
+	})
+	err := f.store.Do(context.Background(), func(tx *Tx) error {
+		_, err := tx.StateAction("p", e.Fence(), StateAction{Op: "fact", IdempotencyKey: "new-observation", Payload: payload})
+		return err
+	})
+	requireAPIStatus(t, err, 409)
+	if !strings.Contains(err.Error(), "f001") || !strings.Contains(err.Error(), "counter") {
+		t.Fatalf("collision has no useful diagnostic: %v", err)
+	}
+	if after := f.state(); !reflect.DeepEqual(before, after) {
+		t.Fatal("collision changed the original observation, projection or revision")
+	}
+	f.do(func(tx *Tx) error {
+		var metadata string
+		var actions, events int
+		if err := tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM xloom_state_actions),(SELECT COUNT(*) FROM xloom_state_events) FROM xloom_state WHERE project_id='p'`).Scan(&metadata, &actions, &events); err != nil {
+			return err
+		}
+		if metadata != beforeMetadata || actions != beforeActions || events != beforeEvents {
+			t.Fatal("collision committed metadata, an idempotency receipt or an event")
+		}
+		id, err := tx.Next("p", "fact")
+		if err == nil && id != "f001" {
+			t.Fatalf("collision consumed an allocation despite rollback: %s", id)
+		}
+		return err
+	})
+}
 
 func TestStateNodeAddsWriteOnlyNewNode(t *testing.T) {
 	for _, op := range []string{"fact", "step"} {

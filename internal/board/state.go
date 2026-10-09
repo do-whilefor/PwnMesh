@@ -759,12 +759,24 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 		return "", nil, err
 	}
 	f := FactRecord{ID: id, Description: strings.TrimSpace(input.Description), Scope: strings.TrimSpace(input.Scope), ObservedAt: observed.UTC().Format(time.RFC3339Nano), Evidence: input.Evidence, Status: "valid", RunID: fence.Run, SourceStepID: fence.Intent}
+	// The duplicated base fields are required by rollback readers. Accept a
+	// new record only when its immutable SQL Fact was inserted from this same
+	// value; a stale allocation counter must not create two observations for
+	// one ID. Limit conflict handling to the primary key, not other failures.
+	inserted, err := t.Exec("INSERT INTO facts(id,project_id,description) VALUES(?,?,?) ON CONFLICT(id,project_id) DO NOTHING", id, s.Graph.Project.ID, f.Description)
+	if err != nil {
+		return "", nil, err
+	}
+	count, err := inserted.RowsAffected()
+	if err != nil {
+		return "", nil, err
+	}
+	if count != 1 {
+		return "", nil, Err(409, "Fact ID "+id+" already exists; its allocation counter is inconsistent")
+	}
 	d.Facts = append(d.Facts, f)
 	s.Graph.Facts = append(s.Graph.Facts, Fact{ID: id, Description: f.Description})
-	_, err = t.Exec("INSERT OR IGNORE INTO facts(id,project_id,description) VALUES(?,?,?)", id, s.Graph.Project.ID, f.Description)
-	if err == nil {
-		err = t.addAssetAnchors(s.Graph.Project.ID, s.Graph.Project.Generation, "fact", id, assets)
-	}
+	err = t.addAssetAnchors(s.Graph.Project.ID, s.Graph.Project.Generation, "fact", id, assets)
 	return id, f, err
 }
 

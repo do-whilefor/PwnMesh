@@ -202,3 +202,53 @@ func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestNewFactMatchesLegacyReaderAndFrozenInput(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	e := f.worker("observation", "")
+	id := f.fact(e, "current-observation")
+	before := f.state()
+	version := DecisionStateVersion(before)
+	var ref *InputSnapshot
+	f.do(func(tx *Tx) error {
+		var raw []byte
+		if err := tx.QueryRow("SELECT data FROM xloom_state WHERE project_id='p'").Scan(&raw); err != nil {
+			return err
+		}
+		// The rollback reader replaces the SQL Fact with this complete record.
+		var legacy struct {
+			Facts []FactRecord `json:"facts"`
+		}
+		if err := json.Unmarshal(raw, &legacy); err != nil {
+			return err
+		}
+		var base Fact
+		if err := tx.QueryRow("SELECT id,description FROM facts WHERE project_id='p' AND id=?", id).Scan(&base.ID, &base.Description); err != nil {
+			return err
+		}
+		if len(legacy.Facts) != 1 || legacy.Facts[0].ID != base.ID || legacy.Facts[0].Description != base.Description || !reflect.DeepEqual(legacy.Facts[0], before.FactRecords[len(before.FactRecords)-1]) {
+			t.Fatal("current Fact, rollback reader and SQL base do not describe the same observation")
+		}
+		var err error
+		ref, err = tx.FreezeInput(before)
+		return err
+	})
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.store = store
+	if after := f.state(); !reflect.DeepEqual(before, after) || DecisionStateVersion(after) != version {
+		t.Fatal("reopening changed the Fact projection or decision identity")
+	}
+	f.do(func(tx *Tx) error {
+		frozen, err := tx.ReadInputSnapshot("p", ref.ID)
+		if err == nil && (!reflect.DeepEqual(before, frozen) || DecisionStateVersion(frozen) != version) {
+			t.Fatal("frozen Fact input changed after reopen")
+		}
+		return err
+	})
+}
