@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -331,15 +332,18 @@ func TestCommittedDecisionFinishGraceHonorsProjectFence(t *testing.T) {
 		name       string
 		status     string
 		generation int64
+		protocol   int
 		expired    bool
 		allowed    bool
 	}{
-		{"active", "active", 3, false, true},
-		{"completed", "completed", 3, false, true},
-		{"stopped", "stopped", 3, false, false},
-		{"terminated", "terminated", 3, false, false},
-		{"restarted", "active", 4, false, false},
-		{"expired", "completed", 3, true, false},
+		{"active", "active", 3, board.ScheduleProtocolVersion, false, true},
+		{"completed", "completed", 3, board.ScheduleProtocolVersion, false, true},
+		{"stopped", "stopped", 3, board.ScheduleProtocolVersion, false, false},
+		{"terminated", "terminated", 3, board.ScheduleProtocolVersion, false, false},
+		{"restarted", "active", 4, board.ScheduleProtocolVersion, false, false},
+		{"expired", "completed", 3, board.ScheduleProtocolVersion, true, false},
+		{"unversioned_server", "completed", 3, 0, false, false},
+		{"future_server", "completed", 3, board.ScheduleProtocolVersion + 1, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -347,7 +351,10 @@ func TestCommittedDecisionFinishGraceHonorsProjectFence(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(board.DecisionReceipt{Committed: true})
 					return
 				}
-				_ = json.NewEncoder(w).Encode(board.Graph{Project: board.Project{ID: "p", Status: tc.status, Generation: tc.generation}})
+				if !strings.HasSuffix(r.URL.Path, "/scheduling") || r.URL.Query().Get("protocol_version") != fmt.Sprint(board.ScheduleProtocolVersion) {
+					t.Errorf("unexpected scheduling request or missing protocol declaration: %s", r.URL)
+				}
+				_ = json.NewEncoder(w).Encode(board.SchedulePage{ProtocolVersion: tc.protocol, Project: board.Project{ID: "p", Status: tc.status, Generation: tc.generation}})
 			}))
 			defer api.Close()
 			s := New(config.Config{Server: api.URL}, &batchProtocolRunner{})
