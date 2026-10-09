@@ -82,7 +82,7 @@ test('dependency details use upstream readiness, including blocked and unsupport
     [{status:'completed'}, ['first'], 'invalid', '前置结果需复核'],
     [{status:'completed',support_valid:false}, ['first'], 'invalid', '前置结果需复核'],
     [{status:'completed'}, [], 'pending', '等待有效完成结果'],
-    [{status:'completed',support_valid:false}, ['another'], 'pending', '等待有效完成结果'],
+    [{status:'completed',support_valid:false}, ['another'], 'invalid', '前置步骤需处理'],
     [{status:'running'}, ['first'], 'running', '前置步骤运行中'],
     [{status:'failed'}, ['first'], 'invalid', '前置步骤需处理'],
     [{status:'completed',invalid_sources:['old']}, ['first'], 'invalid', '前置结果需复核'],
@@ -106,6 +106,52 @@ test('root goal is terminal anchor; goal input never becomes an inferred answer'
   assert.equal(nodePresentation(mapped.nodes.find(node => node.type === 'finding'), 'goal:goal').status, 'pending');
   assert.equal(visualStatus(mapped.nodes.find(node => node.type === 'step')), 'invalid');
   assert.equal(visualStatus(mapped.nodes.find(node => node.type === 'goal')), 'invalid');
+});
+
+test('current Step and Fact support survives projection without rewriting execution history', () => {
+  for (const support of [undefined, false]) {
+    const input = {graph:{project:{orchestration_version:1}}, steps:[
+      {id:'producer',status:'completed',from:['origin'],result:'result',support_valid:support},
+      {id:'consumer',status:'completed',from:['origin'],depends_on:['producer'],blocked_by:['producer'],result:'derived'},
+      {id:'independent',status:'completed',result:'independent-result',support_valid:true}
+    ], fact_records:[{id:'origin',status:'input'},{id:'result',status:'refuted'},
+      {id:'derived',status:'valid',support_invalid:true},{id:'independent-result',status:'valid'}]};
+    const mapped = mapState(input);
+    for (const key of ['step:producer','step:consumer','fact:derived']) {
+      const node = mapped.nodeIndex.get(key);
+      assert.equal(visualStatus(node), 'invalid', key);
+      assert.match(nodePresentation(node, null).statusLabel, /支持失效/);
+    }
+    assert.equal(mapped.nodeIndex.get('step:producer').status, 'completed');
+    assert.equal(mapped.nodeIndex.get('fact:derived').status, 'valid');
+    assert.equal(visualStatus(mapped.nodeIndex.get('step:independent')), 'done');
+    for (const edge of mapped.edges.filter(edge => ['step_result','step_dependency'].includes(edge.kind) && edge.source !== 'step:independent')) {
+      assert.equal(describeEdge(mapped, edge).status, 'invalid', edge.id);
+    }
+    assert.equal(input.steps[0].support_valid, support, 'projection must not mutate the source');
+  }
+});
+
+test('omitted Step support respects legacy and synthetic feedback contracts', () => {
+  const step = {id:'work',status:'completed',result:'result'};
+  for (const project of [{}, {orchestration_version:0}]) {
+    const node = mapState({graph:{project},steps:[step]}).nodes[0];
+    assert.equal(node.supportValid, null); assert.equal(visualStatus(node), 'done');
+  }
+  const input = {graph:{project:{orchestration_version:1}},steps:[
+    {...step,id:'feedback',description:'external_feedback'},
+    {...step,id:'ordinary'},
+    {...step,id:'root',result:'goal',support_valid:true}
+  ],fact_records:[{id:'result',status:'valid',legacy:true},{id:'goal',status:'input'}]};
+  let mapped = mapState(input);
+  assert.equal(visualStatus(mapped.nodeIndex.get('step:feedback')), 'done');
+  assert.equal(visualStatus(mapped.nodeIndex.get('step:ordinary')), 'invalid');
+  assert.equal(visualStatus(mapped.nodeIndex.get('step:root')), 'done');
+  delete input.steps[2].support_valid;
+  input.fact_records[0].source_step_id = 'real-worker';
+  mapped = mapState(input);
+  assert.equal(visualStatus(mapped.nodeIndex.get('step:feedback')), 'invalid', 'description alone cannot confer synthetic input status');
+  assert.equal(visualStatus(mapped.nodeIndex.get('step:root')), 'invalid', 'root completion still requires current support');
 });
 test('incremental layout preserves moved points through reorder, add/remove and cyclic relationships', () => {
   const mapped = mapState(fixture()); const first = layout(mapped.nodes, mapped.edges, {seed: 'stable'});

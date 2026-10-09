@@ -270,6 +270,26 @@ test('workbench collapses long logs and filters cards without losing the canvas 
       assert.equal(await page.locator('#node-inspector').isVisible(),true);
     });
 
+    await t.test('invalidated completion support refreshes cards, result edges and the selected inspector', async () => {
+      state.graph.project.orchestration_version = 1;
+      delete state.steps[0].support_valid; state.fact_records[1].support_invalid = true;
+      state.steps[1].blocked_by = ['done']; state.revision++;
+      await page.waitForFunction(() => document.querySelector('[data-node-key="step:done"]')?.classList.contains('invalid'));
+      const inspector = page.locator('#node-inspector');
+      assert.match(await inspector.innerText(), /有效 · 支持失效/);
+      const completed = page.locator('[data-node-key="step:done"]');
+      assert.match(await completed.getAttribute('aria-label'), /已完成 · 完成结果支持失效/);
+      const resultLabels = await page.locator('.graph-edge-hit').evaluateAll(nodes => nodes.filter(node => node.dataset.edgeKey === 'edge:' + JSON.stringify(['step_result','step:done','fact:long'])).map(node => node.getAttribute('aria-label')));
+      assert.equal(resultLabels.length, 1); assert.match(resultLabels[0], /支持已失效$/);
+      await completed.dispatchEvent('click'); await waitPaint();
+      assert.match(await inspector.innerText(), /已完成 · 完成结果支持失效/);
+      await page.locator('[data-status-filter="done"]').click(); await waitPaint();
+      assert.equal(await completed.isVisible(), false);
+      assert.equal(await page.locator('[data-node-key="fact:long"]').isVisible(), false);
+      assert.equal(await page.locator('[data-node-key="fact:short"]').isVisible(), true);
+      assert.equal(await inspector.isVisible(), false);
+    });
+
     assert.deepEqual(writes,[],'regression must never mutate the backing service');
     assert.deepEqual(assetErrors,[]);
     assert.deepEqual(errors,[]);

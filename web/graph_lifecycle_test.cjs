@@ -141,6 +141,31 @@ test('separate graph instances have unique SVG marker identities', () => {
   const first = harness(), second = harness(); assert.notEqual(first.graph.instanceId, second.graph.instanceId);
   assert.notEqual(first.graph.defs.children[0].getAttribute('id'), second.graph.defs.children[0].getAttribute('id')); first.graph.destroy(); second.graph.destroy();
 });
+
+test('lost Step support updates cards, result edges and completion filters without changing history or geometry', () => {
+  const h = harness(), graph = h.graph, value = state();
+  value.graph.project.orchestration_version = 1;
+  value.steps[0].status = 'completed'; value.steps[0].support_valid = true;
+  graph.setState(value); h.flush(); graph.setStatusFilter('done'); h.flush();
+  const card = graph.cards.get('step:work'), fact = graph.cards.get('fact:old');
+  const result = graph.edges.find(edge => edge.kind === 'step_result'), edge = graph.edgeElements.get(result.id);
+  const cache = graph.edgeRouteCache, positions = [...graph.positions], camera = [graph.scale,graph.tx,graph.ty];
+  assert.equal(card.hidden, false); assert.equal(fact.hidden, false);
+  delete value.steps[0].support_valid; value.fact_records[1].support_invalid = true;
+  graph.setState(value); h.flush();
+  assert.equal(card.hidden, true); assert.equal(fact.hidden, true);
+  assert.ok(card.classList.contains('invalid')); assert.ok(fact.classList.contains('invalid'));
+  assert.match(card.getAttribute('aria-label'), /已完成 · 完成结果支持失效/);
+  assert.match(fact.getAttribute('aria-label'), /有效 · 支持失效/);
+  assert.match(edge.hit.getAttribute('aria-label'), /支持已失效/);
+  assert.equal(edge.group.style.display, 'none');
+  assert.equal(card.dataset.status, 'completed'); assert.equal(fact.dataset.status, 'valid');
+  assert.equal(graph.edgeRouteCache, cache); assert.deepEqual(new Map(graph.positions), new Map(positions)); assert.deepEqual([graph.scale,graph.tx,graph.ty], camera);
+  value.steps[0].support_valid = true; delete value.fact_records[1].support_invalid;
+  graph.setState(value); h.flush();
+  assert.equal(graph.cards.get('step:work'), card); assert.equal(card.hidden, false); assert.equal(fact.hidden, false);
+  assert.equal(edge.group.style.display, ''); graph.destroy();
+});
 test('the first real nodes arriving after an empty snapshot receive initial fit', () => {
   const h = harness(), graph = h.graph; graph.setState({graph: {project: {id: 'A', generation: 1}}}); h.flush();
   graph.setState(state()); assert.notEqual(graph.fitFrame, null); h.flush();

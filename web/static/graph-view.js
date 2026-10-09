@@ -9,7 +9,8 @@
   const KINDS = {start: '起点', task: '任务', fact: '事实', goal: '终点', subgoal: '子目标', finding: '发现'};
   const edgeKey = edge => typeof edge === 'string' ? edge : edge?.id || 'edge:' + JSON.stringify([edge.kind, edge.source, edge.target]);
   function supportProblem(node) {
-    if (node.raw?.invalid_sources?.length) return '支持失效';
+    if (node.raw?.invalid_sources?.length || node.raw?.support_invalid === true) return '支持失效';
+    if (node.type === 'step' && node.status === 'completed' && node.supportValid === false) return '完成结果支持失效';
     if (node.type === 'goal' && node.status === 'achieved') {
       if (!node.sources?.length) return '缺少有效证据';
       if (node.supportValid !== true) return node.supportValid === false ? '支持失效' : '证据待核对';
@@ -59,7 +60,7 @@
       return {...record, sourceNode, targetNode, status, statusLabel, description: `${targetNode.label || targetNode.id} 依赖 ${sourceNode.label || sourceNode.id} 的有效完成结果。${statusLabel}。`};
     }
     const correction = ['refutes', 'supersedes', 'narrows'].includes(record.kind);
-    const invalid = record.supportValid === false || (['goal_support', 'finding_support', 'step_input'].includes(record.kind) && ['refuted', 'superseded', 'narrowed'].includes(sourceNode.status));
+    const invalid = record.supportValid === false || (['goal_support', 'finding_support', 'step_input'].includes(record.kind) && (sourceNode.raw?.support_invalid === true || ['refuted', 'superseded', 'narrowed'].includes(sourceNode.status))) || (record.kind === 'step_result' && visualStatus(targetNode) === 'invalid');
     const step = record.kind === 'step_input' ? targetNode : record.kind === 'step_result' ? sourceNode : null;
     const supported = ['goal_support', 'finding_support'].includes(record.kind) ? targetNode : null;
     const status = invalid || correction ? 'invalid' : step ? visualStatus(step) : supported ? visualStatus(supported) : 'recorded';

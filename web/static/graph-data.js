@@ -63,6 +63,11 @@
         if (text(raw.parent_id)) addEdge('parent', keyOf('goal', raw.parent_id), node.key, '子目标', null);
         if (node.status === 'achieved') node.sources.forEach(id => addEdge('goal_support', keyOf('fact', id), node.key, '支持目标', null, node.supportValid));
       } else if (node.type === 'step') {
+        const result = nodeIndex.get(keyOf('fact', raw.result));
+        const feedback = raw.description === 'external_feedback' && result?.raw.legacy === true && !result.raw.source_step_id;
+        // Protocol 1 omits false Step support. Legacy projects do not compute
+        // this field; synthetic human feedback is an input, not Worker success.
+        if (state.graph?.project?.orchestration_version === 1 && !feedback) node.supportValid = raw.support_valid === true;
         if (text(raw.goal_id)) addEdge('goal_step', keyOf('goal', raw.goal_id), node.key, '任务归属', null);
         strings(raw.depends_on).forEach(id => addEdge('step_dependency', keyOf('step', id), node.key, '执行依赖', null));
         strings(raw.from).forEach(id => addEdge('step_input', keyOf('fact', id), node.key, '依据', null, strings(raw.invalid_sources).includes(id) ? false : null));

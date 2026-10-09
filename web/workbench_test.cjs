@@ -6,7 +6,7 @@ const vm = require('node:vm');
 const {Client, RequestScope} = require('./static/api.js');
 const data = require('./static/data.js');
 const {mapState} = require('./static/graph-data.js');
-const {describeEdge} = require('./static/graph-view.js');
+const graphView = require('./static/graph-view.js'), {describeEdge} = graphView;
 const html = fs.readFileSync(path.join(__dirname, 'static/index.html'), 'utf8');
 const app = fs.readFileSync(path.join(__dirname, 'static/app.js'), 'utf8');
 const now = '2026-09-24T00:00:00Z';
@@ -84,7 +84,7 @@ function harness(handler, selected = 'A', markup = html, stored = {}) {
     selectEdge(edge) { this.selected = null; this.options.onSelectEdge(edge); }
     destroy() {}
   }
-  const window = {PwnMeshAPI:{Client:FakeClient,RequestScope},PwnMeshGraph:FakeGraph,PwnMeshData:{...data,buildLogs(state,events,runs) { projections.push({state,events,runs}); return data.buildLogs(state,events,runs); }},addEventListener() {}};
+  const window = {PwnMeshAPI:{Client:FakeClient,RequestScope},PwnMeshGraph:FakeGraph,PwnMeshGraphView:graphView,PwnMeshData:{...data,buildLogs(state,events,runs) { projections.push({state,events,runs}); return data.buildLogs(state,events,runs); }},addEventListener() {}};
   const storage = new Map(Object.entries(stored));
   const context = {window,document,location:{search:'?project=' + selected},localStorage:{getItem:key => storage.get(key),setItem:(key,value) => storage.set(key,value),removeItem:key => storage.delete(key)},URLSearchParams,AbortController,innerWidth:1400,innerHeight:900,
     setTimeout(fn,ms) { timers.set(++timerID,{fn,ms}); return timerID; }, clearTimeout(id) { timers.delete(id); }, FormData:class { get() { return 'ctf'; } }, console};

@@ -121,7 +121,7 @@
       }
       host.append(endpoints); if (edge.description) host.append(el('p', '', edge.description)); if (edge.invalid || edge.supportValid === false) host.append(el('p', 'evidence-warning', '此关系的证据支持已失效，请核对来源。'));
     } else {
-      host.append(el('h3', '', node.title || node.label || node.id), el('p', '', node.description || ''), el('small', '', data.nodeTypeName(node.type) + ' / ' + data.statusName(node.status)));
+      host.append(el('h3', '', node.title || node.label || node.id), el('p', '', node.description || ''), el('small', '', data.nodeTypeName(node.type) + ' / ' + window.PwnMeshGraphView.nodePresentation(node, null).statusLabel));
       if (node.raw?.invalid_sources?.length) host.append(el('p', 'evidence-warning', '无效证据：' + node.raw.invalid_sources.join('、')));
       if (node.type === 'step' && node.raw?.depends_on?.length) {
         host.append(el('p', '', '前置步骤'), evidenceButtons(node.raw.depends_on.map(id => ({type:'step',id}))));
