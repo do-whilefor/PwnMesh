@@ -77,17 +77,8 @@ func commandNodeValue(t *testing.T, checkpoint workergraph.Checkpoint, id string
 }
 
 func TestCommandGraphJSONArtifactAndStdoutExcludeStderr(t *testing.T) {
-	description := commandGraphTool(Job{}, Options{}).Description
-	for _, required := range []string{"PWNMESH_DEPENDENCIES names a JSON array", `deps={d["id"]:d for d in json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))}`} {
-		if !strings.Contains(description, required) {
-			t.Fatalf("missing dependency container type or name lookup guidance %q", required)
-		}
-	}
-	for _, required := range []string{"output.value.output_path and output.value.stderr_path name the separate full logs", "logs are not in output.files", "declare structured results as JSON artifacts", `json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))`, "artifacts as paths relative to PWNMESH_NODE_DIR; Agents must create them there"} {
-		if !strings.Contains(description, required) {
-			t.Fatalf("missing output contract guidance %q", required)
-		}
-	}
+	// Exercise the dependency file, array shape, artifact and log contract
+	// through actual producer/consumer execution rather than tutorial wording.
 	spec := commandGraphSpec{Key: "json-artifact", Nodes: []commandGraphNode{
 		{ID: "left", Command: `printf '{"ok":true}\n' > result.json; cat result.json; printf 'warning\n' >&2`, Resources: []string{}, Artifacts: []string{"result.json"}},
 		{ID: "consume-logs", Command: `python3 -c 'import json, os; deps=json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); assert len(deps)==1 and deps[0]["id"]=="left"; output=deps[0]["output"]; assert "stdout.log" not in output.get("files", {}) and "stderr.log" not in output.get("files", {}); assert json.load(open(output["value"]["output_path"]))=={"ok":True}; assert open(output["value"]["stderr_path"]).read()=="warning\n"; print("consumed separate logs")'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "left"}}},
