@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -24,12 +25,12 @@ func TestSchedulingChecksAreOptionalAndPaged(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	var legacy, first, next board.SchedulePage
-	f.request("GET", f.base()+"/scheduling", nil, false, http.StatusOK, &legacy)
-	if legacy.ExecutionChecks != nil {
-		t.Fatal("legacy caller unexpectedly requested registry checks")
+	var metadata, first, next board.SchedulePage
+	f.request("GET", f.base()+"/scheduling?protocol_version=1", nil, false, http.StatusOK, &metadata)
+	if metadata.ExecutionChecks != nil {
+		t.Fatal("metadata caller unexpectedly requested registry checks")
 	}
-	raw := f.request("GET", f.base()+"/scheduling?namespace=test", nil, false, http.StatusOK, &first)
+	raw := f.request("GET", f.base()+"/scheduling?protocol_version=1&namespace=test", nil, false, http.StatusOK, &first)
 	for _, omitted := range []string{`"intents":`, `"description":`, `"from":`, `"depends_on":`, `"support_valid":`} {
 		if strings.Contains(raw, omitted) {
 			t.Fatalf("scheduling leaked duplicate task or semantic content: %s", omitted)
@@ -38,7 +39,7 @@ func TestSchedulingChecksAreOptionalAndPaged(t *testing.T) {
 	if len(first.Steps) != 100 || len(first.ExecutionChecks) != 101 || first.NextOffset != 100 {
 		t.Fatalf("first page: steps=%d checks=%d next=%d", len(first.Steps), len(first.ExecutionChecks), first.NextOffset)
 	}
-	f.request("GET", f.base()+"/scheduling?namespace=test&offset=100&expected_version="+first.StateVersion, nil, false, http.StatusOK, &next)
+	f.request("GET", f.base()+"/scheduling?protocol_version=1&namespace=test&offset=100&expected_version="+first.StateVersion, nil, false, http.StatusOK, &next)
 	if len(next.Steps) != 5 || len(next.ExecutionChecks) != 5 || next.NextOffset != 0 {
 		t.Fatalf("next page: steps=%d checks=%d next=%d", len(next.Steps), len(next.ExecutionChecks), next.NextOffset)
 	}
@@ -49,6 +50,9 @@ func TestSchedulingChecksAreOptionalAndPaged(t *testing.T) {
 		t.Fatal("queried curation without pending observations")
 	}
 	for _, page := range []board.SchedulePage{first, next} {
+		if page.ProtocolVersion != board.ScheduleProtocolVersion {
+			t.Fatalf("page has incompatible scheduling protocol: %d", page.ProtocolVersion)
+		}
 		for _, step := range page.Steps {
 			check, ok := page.ExecutionChecks["explore:"+step.ID]
 			if !step.Ready || !ok || check.Blocked || check.Pending {
@@ -57,7 +61,25 @@ func TestSchedulingChecksAreOptionalAndPaged(t *testing.T) {
 		}
 	}
 	for _, namespace := range []string{"", strings.Repeat("n", 129)} {
-		f.request("GET", f.base()+"/scheduling?namespace="+namespace, nil, false, http.StatusUnprocessableEntity, nil)
+		f.request("GET", f.base()+"/scheduling?protocol_version=1&namespace="+namespace, nil, false, http.StatusUnprocessableEntity, nil)
 	}
-	f.request("GET", f.base()+"/scheduling?namespace=test&expected_version=outdated", nil, false, http.StatusConflict, nil)
+	f.request("GET", f.base()+"/scheduling?protocol_version=1&namespace=test&expected_version=outdated", nil, false, http.StatusConflict, nil)
+}
+
+func TestSchedulingRejectsIncompatibleDispatchers(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	before := f.state()
+	for _, query := range []string{"", "protocol_version=", "protocol_version=0", "protocol_version=2", "protocol_version=01", "protocol_version=1&protocol_version=2"} {
+		for _, namespace := range []string{"", "&namespace=test"} {
+			raw := f.request("GET", f.base()+"/scheduling?"+query+namespace, nil, false, http.StatusUnprocessableEntity, nil)
+			if !strings.Contains(raw, "scheduling protocol mismatch") || !strings.Contains(raw, "upgrade Server and Dispatcher together") {
+				t.Fatalf("incompatible caller received no upgrade guidance: %s", raw)
+			}
+		}
+	}
+	if !reflect.DeepEqual(before, f.state()) {
+		t.Fatal("incompatible scheduling request changed persisted graph")
+	}
+	// Ordinary graph reads do not negotiate the scheduler's private projection.
+	f.request("GET", f.base()+"/state", nil, false, http.StatusOK, nil)
 }

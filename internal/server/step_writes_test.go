@@ -42,7 +42,10 @@ func TestStepWriteHTTPClaimSchedulingAndSuccessfulHandoff(t *testing.T) {
 		t.Fatalf("claim did not explain its temporary write conflict: %s", response)
 	}
 	var scheduling board.SchedulePage
-	f.request("GET", f.base()+"/scheduling?namespace=protocol-test", nil, false, http.StatusOK, &scheduling)
+	rawScheduling := f.request("GET", f.base()+"/scheduling?protocol_version=1&namespace=protocol-test", nil, false, http.StatusOK, &scheduling)
+	if strings.Contains(rawScheduling, `"write_paths"`) || strings.Contains(rawScheduling, "/workspace/reports") {
+		t.Fatal("scheduling repeated server-only write paths instead of their admission result")
+	}
 	if !scheduling.ExecutionChecks["explore:"+waiting].Blocked || scheduling.ExecutionChecks["explore:"+independent].Blocked {
 		t.Fatalf("waiting writer prevented independent dispatch: %+v", scheduling.ExecutionChecks)
 	}

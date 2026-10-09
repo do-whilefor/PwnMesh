@@ -13,6 +13,10 @@ import (
 )
 
 func (s *Server) schedulingInput(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
+	versions := r.URL.Query()["protocol_version"]
+	if len(versions) != 1 || versions[0] != strconv.Itoa(b.ScheduleProtocolVersion) {
+		return 0, nil, b.Err(422, "scheduling protocol mismatch: Server requires protocol_version="+strconv.Itoa(b.ScheduleProtocolVersion)+"; upgrade Server and Dispatcher together")
+	}
 	offset := 0
 	if raw := r.URL.Query().Get("offset"); raw != "" {
 		n, err := strconv.Atoi(raw)

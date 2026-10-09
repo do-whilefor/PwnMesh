@@ -97,9 +97,14 @@ func DecisionRetryKey(g Graph, revision int64) string {
 	return "reason:" + hex.EncodeToString(sum[:])
 }
 
+// ScheduleProtocolVersion identifies the normalized Step scheduling projection.
+// Server and Dispatcher must agree before treating absent fields as idle work.
+const ScheduleProtocolVersion = 1
+
 // SchedulePage contains runtime metadata only. Node descriptions, evidence,
 // hints and historical Jobs never cross the daily scheduling boundary.
 type SchedulePage struct {
+	ProtocolVersion   int                       `json:"protocol_version"`
 	Project           Project                   `json:"project"`
 	FactCount         int                       `json:"fact_count"`
 	HintCount         int                       `json:"hint_count"`
@@ -129,7 +134,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 	if offset < 0 || offset > len(s.Graph.Intents) {
 		return SchedulePage{}, Err(422, "invalid scheduling offset")
 	}
-	p := SchedulePage{Project: s.Graph.Project, FactCount: len(s.Graph.Facts), HintCount: len(s.Graph.Hints), OpenCount: s.Graph.OpenCount(), Revision: s.Revision, DecisionRevision: s.DecisionRevision, StateVersion: version, RetryKey: DecisionRetryKey(s.Graph, s.DecisionRevision)}
+	p := SchedulePage{ProtocolVersion: ScheduleProtocolVersion, Project: s.Graph.Project, FactCount: len(s.Graph.Facts), HintCount: len(s.Graph.Hints), OpenCount: s.Graph.OpenCount(), Revision: s.Revision, DecisionRevision: s.DecisionRevision, StateVersion: version, RetryKey: DecisionRetryKey(s.Graph, s.DecisionRevision)}
 	p.CurationRequested = s.PendingCurationRequest() != nil
 	if p.CurationNeeded, err = t.curationNeeded(s); err != nil {
 		return SchedulePage{}, err

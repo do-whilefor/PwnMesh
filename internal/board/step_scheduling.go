@@ -12,7 +12,7 @@ type ScheduleStep struct {
 	Running        bool     `json:"running,omitempty"`
 	InvalidSources []string `json:"invalid_sources,omitempty"`
 	BlockedBy      []string `json:"blocked_by,omitempty"`
-	WritePaths     []string `json:"write_paths,omitempty"`
+	WritePaths     []string `json:"-"` // Server-side admission only; checks carry the result.
 }
 
 // Preserve persisted task order and legacy fences at this one boundary. Failed

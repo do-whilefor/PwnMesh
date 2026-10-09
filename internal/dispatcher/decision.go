@@ -3,11 +3,27 @@ package dispatcher
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"strconv"
 
 	"pwnmesh/internal/board"
 )
+
+func (s *Scheduler) schedulePage(ctx context.Context, id string, query url.Values) (board.SchedulePage, error) {
+	if query == nil {
+		query = url.Values{}
+	}
+	query.Set("protocol_version", strconv.Itoa(board.ScheduleProtocolVersion))
+	var page board.SchedulePage
+	if err := s.Client.Do(ctx, "GET", projectPath(id)+"/scheduling?"+query.Encode(), nil, &page, nil); err != nil {
+		return board.SchedulePage{}, err
+	}
+	if page.ProtocolVersion != board.ScheduleProtocolVersion {
+		return board.SchedulePage{}, fmt.Errorf("scheduling protocol mismatch: Server returned version %d, Dispatcher requires %d; upgrade Server and Dispatcher together", page.ProtocolVersion, board.ScheduleProtocolVersion)
+	}
+	return page, nil
+}
 
 func (s *Scheduler) scheduleInput(ctx context.Context, id string) (board.SchedulePage, error) {
 	var input board.SchedulePage
@@ -16,8 +32,8 @@ func (s *Scheduler) scheduleInput(ctx context.Context, id string) (board.Schedul
 		if offset > 0 {
 			query.Set("expected_version", input.StateVersion)
 		}
-		var page board.SchedulePage
-		if err := s.Client.Do(ctx, "GET", projectPath(id)+"/scheduling?"+query.Encode(), nil, &page, nil); err != nil {
+		page, err := s.schedulePage(ctx, id, query)
+		if err != nil {
 			return input, err
 		}
 		if offset == 0 {

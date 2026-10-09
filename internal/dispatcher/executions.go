@@ -532,8 +532,7 @@ func (s *Scheduler) decisionFinishAllowed(ctx context.Context, t *task) bool {
 	// A human stop or a new generation always overrides this delivery grace.
 	readCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	var input board.SchedulePage
-	err = s.Client.Do(readCtx, "GET", projectPath(t.Job.Graph.Project.ID)+"/scheduling", nil, &input, nil)
+	input, err := s.schedulePage(readCtx, t.Job.Graph.Project.ID, nil)
 	return err == nil && input.Project.Generation == t.Job.Graph.Project.Generation && (input.Project.Status == "active" || input.Project.Status == "completed")
 }
 
