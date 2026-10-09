@@ -178,6 +178,45 @@ func TestExecutionRejectsUnboundOrChangedDependencyResult(t *testing.T) {
 	}
 }
 
+func TestExecutionDependencyCheckObservesEarlierCurationInSameTransaction(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	producer := f.worker("producer", "")
+	accepted := f.fact(producer, "accepted")
+	f.finish(producer, accepted)
+	child := dependentStep(f, "consumer", producer.Intent)
+	run := dependencyRun(f, "consumer", child)
+	f.do(func(tx *Tx) error { return tx.RegisterExecution(run) })
+	corrector := f.worker("corrector", "")
+	correction := f.fact(corrector, "correction")
+	f.finish(corrector, correction)
+	curator, input := f.curator("correction")
+	payload, err := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: accepted, Reason: "Independent evidence invalidates the accepted upstream result"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.do(func(tx *Tx) error {
+		if err := tx.CheckExecutionDependencies(run); err != nil {
+			return err
+		}
+		if _, err := tx.StateAction("p", curator.Fence(), StateAction{Op: "curate", IdempotencyKey: "same-transaction-correction", ExpectedVersion: DecisionStateVersion(input), Payload: payload}); err != nil {
+			return err
+		}
+		// Sharing one projection within a check must never become a Tx cache:
+		// a later boundary in this transaction needs the newly corrected graph.
+		err := tx.CheckExecutionDependencies(run)
+		requireAPIStatus(t, err, 409)
+		if !strings.Contains(err.Error(), "dependency_invalidated") {
+			t.Fatalf("wrong dependency rejection: %v", err)
+		}
+		_, err = tx.StepDependencyResults("p", child)
+		requireAPIStatus(t, err, 409)
+		return nil
+	})
+	if step := dependencyStepState(t, f.state(), child); !slices.Equal(step.BlockedBy, []string{producer.Intent}) {
+		t.Fatalf("committed invalidation did not survive the shared check: %+v", step)
+	}
+}
+
 func invalidateDependencyFact(f *orchestrationFixture, target string) {
 	f.t.Helper()
 	correction := f.worker("correction", "")

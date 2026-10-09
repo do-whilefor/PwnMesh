@@ -19,6 +19,13 @@ func (t *Tx) stepReady(project, id, lease string) error {
 	if err != nil {
 		return err
 	}
+	return t.stepReadyState(s, id, lease)
+}
+
+// Reuse a projection only inside the current check. Never cache it on Tx:
+// another action in the same transaction can invalidate the prerequisites.
+func (t *Tx) stepReadyState(s State, id, lease string) error {
+	project := s.Graph.Project.ID
 	for _, step := range s.Steps {
 		if step.ID == id {
 			if step.Status == "abandoned" {

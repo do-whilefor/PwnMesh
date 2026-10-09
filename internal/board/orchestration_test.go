@@ -14,13 +14,13 @@ import (
 )
 
 type orchestrationFixture struct {
-	t       *testing.T
+	t       testing.TB
 	store   *Store
 	path    string
 	planner ExecutionFence
 }
 
-func newOrchestrationFixture(t *testing.T) *orchestrationFixture {
+func newOrchestrationFixture(t testing.TB) *orchestrationFixture {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "orchestration.db")
 	store, err := Open(path)
