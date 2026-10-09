@@ -389,21 +389,26 @@ test('creation without files keeps the existing active-project request unchanged
   assert.equal(payload.start_paused,undefined); assert.equal(h.calls.some(call => call.url.endsWith('/inputs') || call.url.endsWith('/status')),false);
 });
 
-test('file-only supplement is allowed, retains completed uploads on failure and clears after success', async () => {
-  const states = {A:snapshot('A')}, imported = [], names = []; let fail = true;
+for (const content of ['', '仅静态分析，不重放请求']) test('supplement commits all files and accompanying text together: ' + (content || 'files only'), async () => {
+  const states = {A:snapshot('A')}, imported = [], batches = []; let fail = true;
   const h = harness((url,options) => {
-    if (url === '/projects/A/inputs') {
-      if (options.method !== 'POST') return imported;
-      const name = options.body.get('file').name; names.push(name);
-      if (name === 'source.zip' && fail) { fail = false; throw Object.assign(new Error('retry upload'),{status:503}); }
-      const item = {id:name,name,path:'/workspace/' + name,size:3,sha256:'a'.repeat(64),created_at:now}; imported.push(item); return item;
+    if (url === '/projects/A/inputs' && options.method !== 'POST') return imported;
+    if (url === '/projects/A/inputs/batch') {
+      assert.equal(options.method,'POST'); assert.equal(options.body.get('content'),content || null);
+      const names = options.body.getAll('file').map(file => file.name); batches.push(names);
+      assert.deepEqual(names,['request.http','source.zip']);
+      if (fail) { fail = false; throw Object.assign(new Error('retry batch'),{status:503}); }
+      imported.push(...names.map(name => ({id:name,name,path:'/workspace/' + name,size:3,sha256:'a'.repeat(64),created_at:now}))); return imported;
     }
+    if (options.method === 'POST') assert.fail('supplement used a separate mutation: ' + url);
     return standard(url,states);
   });
   await settle(); await h.elements.get('add-hint').click(); await chooseFiles(h,'hint',[new File(['http'],'request.http'),new File(['zip'],'source.zip')]);
-  await h.elements.get('hint-form').emit('submit'); await settle(); assert.equal(h.elements.get('hint-dialog').open,true); assert.equal(imported.length,1);
-  assert.match(h.elements.get('imported-inputs').textContent,/request.http.*SHA-256:/);
-  await h.elements.get('hint-form').emit('submit'); assert.deepEqual(names,['request.http','source.zip','source.zip']); assert.equal(h.elements.get('hint-dialog').open,false);
+  h.elements.get('hint-input').value = content;
+  await h.elements.get('hint-form').emit('submit'); await settle(); assert.equal(h.elements.get('hint-dialog').open,true); assert.equal(imported.length,0);
+  assert.equal(h.elements.get('hint-progress').textContent,'');
+  assert.equal(h.elements.get('hint-file-list').children.length,2); assert.equal(h.elements.get('hint-input').value,content);
+  await h.elements.get('hint-form').emit('submit'); assert.deepEqual(batches,[['request.http','source.zip'],['request.http','source.zip']]); assert.equal(imported.length,2); assert.equal(h.elements.get('hint-dialog').open,false);
   assert.equal(h.calls.some(call => call.url.endsWith('/hints')),false); assert.equal(h.elements.get('hint-file-list').children.length,0);
 });
 
@@ -418,4 +423,47 @@ test('oversized file selection is rejected before project creation', async () =>
   const states = {A:snapshot('A')}; const h = harness(url => standard(url,states));
   await settle(); await fillCreate(h); await chooseFiles(h,'create',[{name:'large.apk',size:256 * 1048576 + 1}]);
   assert.match(h.elements.get('create-error').textContent,/256 MiB/); assert.equal(h.elements.get('create-file-list').children.length,0);
+});
+
+for (const deletion of ['pending project', 'unrelated project', 'failed delete']) test('creation draft after deleting ' + deletion, async () => {
+  const states = {A:snapshot('A')}, uploads = []; let creates = 0, failUpload = true;
+  const h = harness((url,options) => {
+    if (url === '/projects' && options.method === 'POST') {
+      const id = ++creates === 1 ? 'B' : 'C'; states[id] = snapshot(id); states[id].graph.project.status = 'stopped'; return states[id].graph;
+    }
+    const match = url.match(/^\/projects\/([^/]+)(.*)$/);
+    if (match && options.method === 'DELETE') {
+      if (deletion === 'failed delete') throw Object.assign(new Error('delete unavailable'),{status:503});
+      delete states[match[1]]; return {};
+    }
+    if (match && options.method === 'POST' && match[2] === '/inputs') {
+      assert.ok(states[match[1]], 'uploads cannot target a deleted project');
+      const name = options.body.get('file').name; uploads.push(match[1] + ':' + name);
+      if (name === 'client.apk' && failUpload) { failUpload = false; throw Object.assign(new Error('upload unavailable'),{status:503}); }
+      return {id:name,name,path:'/workspace/' + name,size:3,sha256:'a'.repeat(64),created_at:now};
+    }
+    if (match && options.method === 'PUT' && match[2] === '/status') { states[match[1]].graph.project.status = 'active'; return states[match[1]].graph; }
+    return standard(url,states);
+  });
+  const files = () => [new File(['har'],'capture.har'),new File(['apk'],'client.apk')];
+  await settle(); await fillCreate(h); await chooseFiles(h,'create',files()); await h.elements.get('create-form').emit('submit');
+  assert.equal(h.elements.get('create-name').disabled,true); assert.equal(h.elements.get('create-file-list').children.length,2);
+  h.elements.get('create-dialog').close();
+  const deletedID = deletion === 'unrelated project' ? 'A' : 'B';
+  const row = h.elements.get('project-list').children.find(item => item.dataset?.projectId === deletedID);
+  await row.children[1].children[1].children.find(button => button.dataset.action === 'delete').click();
+  await h.elements.get('confirm-form').emit('submit');
+  if (deletion === 'pending project') {
+    assert.equal(h.elements.get('create-name').disabled,false); assert.equal(h.elements.get('create-file-list').children.length,0);
+    assert.equal(h.elements.get('create-progress').textContent,''); assert.equal(h.elements.get('create-error').textContent,'');
+    await fillCreate(h); await chooseFiles(h,'create',files());
+  } else {
+    assert.equal(h.elements.get('create-name').disabled,true); assert.equal(h.elements.get('create-file-list').children.length,2);
+    assert.match(h.elements.get('create-error').textContent,/upload unavailable/);
+    h.elements.get('confirm-dialog').close(); await h.elements.get('new-project').click();
+  }
+  await h.elements.get('create-form').emit('submit');
+  assert.equal(h.elements.get('create-dialog').open,false); assert.equal(h.elements.get('create-name').disabled,false);
+  assert.equal(creates,deletion === 'pending project' ? 2 : 1);
+  assert.deepEqual(uploads,deletion === 'pending project' ? ['B:capture.har','B:client.apk','C:capture.har','C:client.apk'] : ['B:capture.har','B:client.apk','B:client.apk']);
 });

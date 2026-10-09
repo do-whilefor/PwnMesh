@@ -336,7 +336,13 @@
     try {
       if (command.action === 'delete') await api.request(pathFor(command.id), {method:'DELETE'}); else await api.request(pathFor(command.id) + '/' + command.action, {method:'POST',body:{expected_generation:command.generation}});
       $('confirm-dialog').close(); eventCache.delete(command.id);
-      if (command.action === 'delete') { drafts.delete(command.id); graph.forgetProject?.(command.id); if (selectedId === command.id) resetSelection(''); }
+      if (command.action === 'delete') {
+        drafts.delete(command.id); graph.forgetProject?.(command.id); if (selectedId === command.id) resetSelection('');
+        if (createPending?.created.project.id === command.id) {
+          createPending = null; createFiles = []; createDraft = false; $('create-form').reset(); $('create-files').value = '';
+          $('create-progress').textContent = ''; $('create-error').textContent = '';
+        }
+      }
       else if (command.id === selectedId) { selectedNode = null; selectedEdge = null; graph.selectNode(null); if (command.action === 'restart') resetSelection(command.id); }
       toast({delete:'项目记录已删除',restart:'项目已重启，旧轮已归档',terminate:'项目已终止，记录已保留'}[command.action]);
     } catch (error) { requireConfirm = [0,409].includes(error.status); $('confirm-error').textContent = mutationError(error); }
@@ -349,8 +355,14 @@
     event.preventDefault(); if (!hintProjectId || mutating || $('send-hint').disabled) return; const id = hintProjectId, content = $('hint-input').value.trim();
     if ((!content && !hintFiles.length) || content.length > 32768) { $('hint-error').textContent = content ? '提示不能超过 32768 个字符。' : '请输入补充提示或选择测试材料。'; $('hint-input').setAttribute('aria-invalid', 'true'); return; }
     drafts.set(id, $('hint-input').value); startMutation();
-    try { await uploadFiles(id, 'hint', hintFiles); if (content) await api.request(pathFor(id) + '/hints', {method:'POST',body:{content,creator:'user'}}); hintFiles = []; $('hint-progress').textContent = ''; $('hint-input').value = ''; drafts.delete(id); $('hint-dialog').close(); selectedNode = null; selectedEdge = null; graph.selectNode(null); tab = 'board'; toast('补充材料已保存'); }
-    catch (error) { $('hint-error').textContent = mutationError(error); loadInputs(id); } finally { await finishMutation(); }
+    try {
+      if (hintFiles.length) {
+        $('hint-progress').textContent = '正在提交 ' + hintFiles.length + ' 个文件及补充说明…';
+        await api.uploadInputs(pathFor(id), hintFiles.map(item => item.file), content);
+      } else if (content) await api.request(pathFor(id) + '/hints', {method:'POST',body:{content,creator:'user'}});
+      hintFiles = []; $('hint-progress').textContent = ''; $('hint-input').value = ''; drafts.delete(id); $('hint-dialog').close(); selectedNode = null; selectedEdge = null; graph.selectNode(null); tab = 'board'; toast('补充材料已保存');
+    }
+    catch (error) { $('hint-progress').textContent = ''; $('hint-error').textContent = mutationError(error); loadInputs(id); } finally { await finishMutation(); }
   });
   $('hint-input').addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); $('hint-form').requestSubmit(); } });
   $('new-project').addEventListener('click', openCreate); $('empty-create').addEventListener('click', openCreate); $('add-hint').addEventListener('click', openHint);

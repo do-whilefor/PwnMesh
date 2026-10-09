@@ -19,6 +19,7 @@ func (s *Server) registerInputRoutes(m *http.ServeMux) {
 		return 200, files, err
 	}))
 	m.HandleFunc("POST /projects/{pid}/inputs", s.uploadInput)
+	m.HandleFunc("POST /projects/{pid}/inputs/batch", s.uploadInputBatch)
 	m.HandleFunc("GET /projects/{pid}/inputs/{fid}", s.downloadInput)
 }
 
@@ -80,6 +81,9 @@ func (s *Server) uploadInput(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) downloadInput(w http.ResponseWriter, r *http.Request) {
+	// APK downloads need the same transfer budget as uploads, including when
+	// dispatchers receive them over a slow connection.
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute))
 	var file b.InputFile
 	var data []byte
 	err := s.Store.Do(r.Context(), func(t *b.Tx) error {

@@ -122,4 +122,23 @@ test('upload timeout is independent of the short JSON request timeout', async ()
   const fetcher = client.fetcher; client.fetcher = (...args) => { uploadSignal = args[1].signal; return fetcher(...args); };
   await client.uploadInput('/projects/p', new File(['test'], 'sample.http'));
   assert.equal(uploadSignal.aborted, false);
+  await client.uploadInputs('/projects/p', [new File(['test'], 'sample.http')], 'Inspect only');
+  assert.equal(uploadSignal.aborted, false);
+});
+
+test('supplement sends binary files and their instructions in one multipart request', async () => {
+  const bytes = new Uint8Array([0,255,13,10]);
+  const files = [new File([bytes], '客户端.apk'), new File(['GET / HTTP/1.1\r\n'], 'capture.http')];
+  let calls = 0;
+  const client = new Client(async (path, options) => {
+    calls++;
+    assert.equal(path, '/projects/p/inputs/batch'); assert.equal(options.method, 'POST');
+    assert.equal(options.headers['Content-Type'], undefined);
+    assert.deepEqual(options.body.getAll('file').map(file => file.name), files.map(file => file.name));
+    assert.deepEqual(new Uint8Array(await options.body.getAll('file')[0].arrayBuffer()), bytes);
+    assert.equal(options.body.get('content'), '仅静态分析，不重放请求');
+    return {status:201, ok:true, text:async () => '[{"id":"apk"},{"id":"http"}]'};
+  });
+  assert.deepEqual(await client.uploadInputs('/projects/p', files, '仅静态分析，不重放请求'), [{id:'apk'},{id:'http'}]);
+  assert.equal(calls, 1);
 });
