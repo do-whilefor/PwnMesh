@@ -258,6 +258,17 @@ func TestCompletedDependencyInvalidationPropagatesWithoutRewritingHistory(t *tes
 	curator, state := f.curator("merge")
 	f.curate(curator, state, CurateGroup{CandidateIDs: []string{c}, Status: "verified", Reason: "Accepted result supports the producer judgment"})
 	f.finish(curator, "")
+	waitingSource := f.action(f.planner, "step", "waiting-source", map[string]any{"action": "add", "from": []string{grandResult}, "description": "pending evidence consumer"}, "").ID
+	waitingDependency := dependentStep(f, "pending task consumer", grandchild)
+	state = f.state()
+	if !state.Findings[0].SupportValid {
+		t.Fatal("supported Finding was invalid before the premise changed")
+	}
+	for _, id := range []string{waitingSource, waitingDependency} {
+		if step := dependencyStepState(t, state, id); step.Status != "open" || len(step.InvalidSources)+len(step.BlockedBy) != 0 {
+			t.Fatalf("supported pending Step was blocked: %+v", step)
+		}
+	}
 	invalidateDependencyFact(f, fact)
 	state = f.state()
 	for _, id := range []string{producer.Intent, child, grandchild} {
@@ -284,6 +295,12 @@ func TestCompletedDependencyInvalidationPropagatesWithoutRewritingHistory(t *tes
 	}
 	if len(state.Findings) != 1 || state.Findings[0].SupportValid {
 		t.Fatal("Finding retained invalid support")
+	}
+	if step := dependencyStepState(t, state, waitingSource); step.Status != "needs_review" || !slices.Equal(step.InvalidSources, []string{grandResult}) {
+		t.Fatalf("pending fact consumer retained invalid support: %+v", step)
+	}
+	if step := dependencyStepState(t, state, waitingDependency); step.Status != "blocked" || !slices.Equal(step.BlockedBy, []string{grandchild}) {
+		t.Fatalf("pending task consumer retained invalid support: %+v", step)
 	}
 	f.do(func(tx *Tx) error {
 		requireAPIStatus(t, tx.ValidateStateCompletion("p", []string{independent}), 409)

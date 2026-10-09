@@ -259,12 +259,6 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 	}
 	s.Goals = append(s.Goals, root)
 	s.Goals = append(s.Goals, d.Goals...)
-	for n := range s.Goals {
-		s.Goals[n].SupportValid = s.Goals[n].Status == "achieved" && s.ValidateFactSources(s.Goals[n].Sources, true) == nil
-	}
-	for n := range s.Findings {
-		s.Findings[n].SupportValid = len(s.Findings[n].Sources) > 0 && s.ValidateFactSources(s.Findings[n].Sources, true) == nil
-	}
 	latest := map[string]Execution{}
 	currentRuns := map[string]bool{}
 	// A graph read needs only the latest runtime state of each existing Step.
@@ -340,18 +334,28 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 		if execution, ok := latest[i.ID]; ok && g.Project.OrchestrationVersion == 1 && slices.Contains([]string{"failed", "rejected", "cancelled", "retry_requested"}, execution.Status) {
 			step.LatestRunID = execution.ID
 		}
-		for _, id := range step.From {
-			if s.ValidateFactSources([]string{id}, false) != nil {
-				step.InvalidSources = append(step.InvalidSources, id)
+		if g.Project.OrchestrationVersion != 1 {
+			for _, id := range step.From {
+				if s.ValidateFactSources([]string{id}, false) != nil {
+					step.InvalidSources = append(step.InvalidSources, id)
+				}
 			}
-		}
-		if step.Status == "open" && len(step.InvalidSources) > 0 {
-			step.Status = "needs_review"
+			if step.Status == "open" && len(step.InvalidSources) > 0 {
+				step.Status = "needs_review"
+			}
 		}
 		s.Steps = append(s.Steps, step)
 	}
 	if g.Project.OrchestrationVersion == 1 {
 		s.projectStepSupport(latest, currentRuns)
+	}
+	// Assess conclusions once, after Step dependencies have established which
+	// accepted result Facts still have valid support.
+	for n := range s.Goals {
+		s.Goals[n].SupportValid = s.Goals[n].Status == "achieved" && s.ValidateFactSources(s.Goals[n].Sources, true) == nil
+	}
+	for n := range s.Findings {
+		s.Findings[n].SupportValid = len(s.Findings[n].Sources) > 0 && s.ValidateFactSources(s.Findings[n].Sources, true) == nil
 	}
 	if err := t.projectAssets(&s); err != nil {
 		return State{}, err

@@ -147,12 +147,6 @@ func (s *State) projectStepSupport(latest map[string]Execution, currentRuns map[
 			}
 		}
 	}
-	for n := range s.Goals {
-		s.Goals[n].SupportValid = s.Goals[n].Status == "achieved" && s.ValidateFactSources(s.Goals[n].Sources, true) == nil
-	}
-	for n := range s.Findings {
-		s.Findings[n].SupportValid = len(s.Findings[n].Sources) > 0 && s.ValidateFactSources(s.Findings[n].Sources, true) == nil
-	}
 }
 
 func (t *Tx) StepDependencyResults(project, id string) ([]DependencyResult, error) {
