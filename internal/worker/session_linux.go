@@ -73,7 +73,6 @@ type session struct {
 	Identity               executionIdentity        `json:"identity"`
 	Log                    journalCheckpoint        `json:"log_checkpoint"`
 	ContextCheckpoint      *agent.ContextCheckpoint `json:"context_checkpoint,omitempty"`
-	Replan                 *ReplanObservation       `json:"replan,omitempty"`
 	GraphVersion           string                   `json:"graph_version,omitempty"`
 	DecisionConflict       string                   `json:"decision_conflict,omitempty"`
 	ExecuteUpdates         *executeUpdateState      `json:"execute_updates,omitempty"`
@@ -290,6 +289,7 @@ func openJournal(runDir string, saved *journalCheckpoint) (*eventJournal, error)
 		if err = json.Unmarshal(line, &event); err != nil || event.Type == "" {
 			return nil, fmt.Errorf("invalid complete event record at byte %d", j.offset)
 		}
+		// Historical shadow transcripts used their own sequence space.
 		if !strings.HasPrefix(event.Type, "replan_") && event.Message != nil && event.Message.Sequence > j.lastSequence {
 			j.lastSequence = event.Message.Sequence
 		}

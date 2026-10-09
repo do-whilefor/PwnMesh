@@ -30,7 +30,6 @@ type Options struct {
 	ContextTokens       int
 	ContextTargetTokens int
 	GraphVersion        *string
-	ReplanShadow        bool
 	decision            *decisionDraft
 	curation            *curationCommit
 	stepFinish          *stepFinish
@@ -292,7 +291,6 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 		r.StateVersion = state.GraphVersion
 		if controlJob(j) {
 			metrics := journal.metrics.finish(j, r, state.StartedAt, o.Now())
-			metrics.Replan = state.Replan
 			if o.curation != nil && o.curation.committed {
 				metrics.Committed, metrics.Outcome = true, "curation_committed"
 			}
@@ -728,36 +726,6 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 		}
 		if err != nil {
 			return finish(Result{Type: "result", Status: "failed", Conclude: l.Concluding, Error: err.Error()})
-		}
-	}
-	// The experiment runs once, before planning, with the same absolute task
-	// deadline. A crash cannot buy another check or carry its private transcript
-	// into Decide. Even a valid keep does not skip the normal planner.
-	if j.Kind == "reason" {
-		if state.Replan != nil && state.Replan.Status == "running" {
-			state.Replan.Status, state.Replan.Fallback = "interrupted", "decide"
-		} else if !resuming && (o.ReplanShadow || config.Getenv("PWNMESH_REPLAN_SHADOW") == "1") {
-			state.Replan = &ReplanObservation{Mode: "shadow", Status: "skipped", Fallback: "decide"}
-			if j.Decision != nil {
-				state.Replan.StateVersion, state.Replan.Generation = j.Decision.StateVersion, j.Decision.Generation
-				state.Replan.FromRevision, state.Replan.ToRevision = j.Decision.FromRevision, j.Decision.ToRevision
-			}
-			if j.Decision != nil && j.Decision.Mode == "changes" && (j.State != nil || j.InputSnapshot != nil) && j.openCount() > 0 {
-				state.Replan.Status = "running"
-				if err = save(l.History); err != nil {
-					return Result{}, err
-				}
-				if err = runReplanCheck(runCtx, j, o, state.Replan, emit, func() error { return save(l.History) }); err != nil {
-					return Result{}, err
-				}
-			}
-		}
-		if state.Replan != nil {
-			raw, _ := json.Marshal(state.Replan)
-			emit(agent.Event{Type: "replan_observation", Text: string(raw)})
-			if err = save(l.History); err != nil {
-				return Result{}, err
-			}
 		}
 	}
 	if len(l.History) == 0 {
