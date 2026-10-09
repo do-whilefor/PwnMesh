@@ -1,25 +1,42 @@
 package board
 
-// ExecutionSteps is the scheduling adapter for retained Intent records. The
-// dispatcher orders Steps; legacy conclusion and lease fields stay at this
-// boundary. Failed Steps remain candidates because the execution registry owns
-// retry authorization. A missing projected Step never authorizes new execution.
-func ExecutionSteps(intents []Intent, steps []Step) []Step {
+// ScheduleStep is the current scheduling projection. Historical Intent fences
+// are resolved server-side; dispatchers need neither a second task list nor
+// descriptions and evidence. Ready still requires an execution-registry grant.
+type ScheduleStep struct {
+	ID             string   `json:"id"`
+	Status         string   `json:"status"`
+	Priority       int      `json:"priority"`
+	CreatedAt      string   `json:"created_at"`
+	Ready          bool     `json:"ready"`
+	Running        bool     `json:"running,omitempty"`
+	InvalidSources []string `json:"invalid_sources,omitempty"`
+	BlockedBy      []string `json:"blocked_by,omitempty"`
+	WritePaths     []string `json:"write_paths,omitempty"`
+}
+
+// Preserve persisted task order and legacy fences at this one boundary. Failed
+// Steps remain candidates because only the execution registry authorizes retry.
+// Missing projected Steps never authorize new execution.
+func scheduleSteps(intents []Intent, steps []Step) []ScheduleStep {
 	byID := make(map[string]Step, len(steps))
 	for _, step := range steps {
 		byID[step.ID] = step
 	}
-	var candidates []Step
+	projected := make([]ScheduleStep, 0, len(intents))
 	for _, intent := range intents {
 		step, exists := byID[intent.ID]
-		if !exists || pendingBootstrap(intent) || intent.To != nil || intent.ConcludedAt != nil || intent.Worker != nil ||
-			(step.Status != "open" && step.Status != "failed") || len(step.InvalidSources) != 0 || len(step.BlockedBy) != 0 {
-			continue
-		}
-		step.CreatedAt = intent.CreatedAt
-		candidates = append(candidates, step)
+		open := intent.To == nil && intent.ConcludedAt == nil
+		projected = append(projected, ScheduleStep{
+			ID: intent.ID, Status: step.Status, Priority: step.Priority, CreatedAt: intent.CreatedAt,
+			Ready: exists && open && intent.Worker == nil && !pendingBootstrap(intent) &&
+				(step.Status == "open" || step.Status == "failed") && len(step.InvalidSources) == 0 && len(step.BlockedBy) == 0,
+			Running:        open && intent.Worker != nil,
+			InvalidSources: step.InvalidSources[:min(1, len(step.InvalidSources))], BlockedBy: step.BlockedBy,
+			WritePaths: stepWritePaths(step),
+		})
 	}
-	return candidates
+	return projected
 }
 
 func pendingBootstrap(i Intent) bool {

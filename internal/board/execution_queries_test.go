@@ -125,14 +125,22 @@ func TestScheduleExecutionChecksMatchIndividualAdmission(t *testing.T) {
 		for _, intent := range intents {
 			steps = append(steps, Step{ID: intent.ID, Status: "open"})
 		}
-		checks, err := tx.ScheduleExecutionChecks("p", "ns", intents, steps)
-		if err != nil || len(checks) != len(intents) {
+		checks, err := tx.ScheduleExecutionChecks("p", "ns", scheduleSteps(intents, steps))
+		if err != nil || len(checks) != len(intents)-1 {
 			t.Fatalf("checks=%+v err=%v", checks, err)
 		}
 		for _, i := range intents {
 			kind := "explore"
 			if i.ID == "boot" {
-				kind = "bootstrap"
+				if _, ok := checks["bootstrap:boot"]; ok {
+					t.Fatal("daily scheduling queried historical bootstrap")
+				}
+				// Historical inspection remains available through the direct API.
+				old, err := tx.CheckExecutions(ExecutionCheckQuery{ProjectID: "p", Namespace: "ns", Kind: "bootstrap", Intent: i.ID, RetryKey: "bootstrap:boot"})
+				if err != nil || !old.Blocked {
+					t.Fatalf("historical bootstrap query=%+v err=%v", old, err)
+				}
+				continue
 			}
 			key := kind + ":" + i.ID
 			want, err := tx.CheckExecutions(ExecutionCheckQuery{ProjectID: "p", Namespace: "ns", Generation: 1, Kind: kind, Intent: i.ID, RetryKey: key})
@@ -144,7 +152,7 @@ func TestScheduleExecutionChecksMatchIndividualAdmission(t *testing.T) {
 		if checks["explore:granted"].PreviousRunID != "g2" {
 			t.Fatal("lost retry-grant tie ordering")
 		}
-		checks, err = tx.ScheduleExecutionChecks("p", "ns", nil, nil)
+		checks, err = tx.ScheduleExecutionChecks("p", "ns", nil)
 		if err != nil || len(checks) != 0 {
 			t.Fatalf("empty page=%+v err=%v", checks, err)
 		}
@@ -157,18 +165,12 @@ func TestScheduleExecutionChecksSkipUnavailableHistory(t *testing.T) {
 		intents := []Intent{{ID: "done", To: Ptr("fact")}, {ID: "ended", ConcludedAt: Ptr("now")}, {ID: "working", Worker: Ptr("worker")}, {ID: "abandoned"}, {ID: "invalid"}}
 		steps := []Step{{ID: "abandoned", Status: "abandoned"}, {ID: "invalid", InvalidSources: []string{"withdrawn"}}}
 		boot := Intent{ID: "boot", Description: "bootstrap", Creator: "dispatcher.bootstrap", From: []string{"origin"}, Worker: Ptr("worker")}
-		checks, err := tx.ScheduleExecutionChecks("p", "ns", append(intents, boot), steps)
-		if err != nil || len(checks) != 1 {
-			t.Fatalf("bootstrap retry must remain visible: %+v err=%v", checks, err)
-		}
-		if _, ok := checks["bootstrap:boot"]; !ok {
-			t.Fatal("missing bootstrap check")
-		}
+		projected := scheduleSteps(append(intents, boot), steps)
 		// An all-history page does not query the registry at all.
 		if _, err := tx.Exec("DROP TABLE xloom_executions"); err != nil {
 			t.Fatal(err)
 		}
-		checks, err = tx.ScheduleExecutionChecks("p", "ns", intents, steps)
+		checks, err := tx.ScheduleExecutionChecks("p", "ns", projected)
 		if err != nil || len(checks) != 0 {
 			t.Fatalf("history triggered registry work: %+v err=%v", checks, err)
 		}

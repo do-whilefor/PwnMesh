@@ -120,7 +120,7 @@ func TestStepWriteClaimsSerializeAcrossStoresWithoutBlockingIndependentWork(t *t
 				steps = append(steps, dependencyStepState(t, state, intent.ID))
 			}
 		}
-		checks, err := tx.ScheduleExecutionChecks("p", "test", intents, steps)
+		checks, err := tx.ScheduleExecutionChecks("p", "test", scheduleSteps(intents, steps))
 		if err != nil {
 			return err
 		}
@@ -227,7 +227,7 @@ func TestStepWritesRetainPendingReservationAfterLeaseEnds(t *testing.T) {
 					if err != nil {
 						return err
 					}
-					checks, err := tx.ScheduleExecutionChecks("p", "test", state.Graph.Intents, state.Steps)
+					checks, err := tx.ScheduleExecutionChecks("p", "test", scheduleSteps(state.Graph.Intents, state.Steps))
 					if err == nil && (check.Blocked != want || checks["explore:"+waiting].Blocked != want || checks["explore:"+independent].Blocked) {
 						t.Fatalf("admission paths disagree about pending ownership: single=%+v batch=%+v want=%v", check, checks, want)
 					}

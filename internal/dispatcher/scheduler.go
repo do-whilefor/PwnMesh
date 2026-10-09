@@ -405,7 +405,7 @@ func (s *Scheduler) trigger(g board.Graph, check board.ExecutionCheck, previous 
 		return "initial"
 	}
 	// Legacy To-based draining excludes the planner's own abandonment (To=nil).
-	// Actual scheduling separately filters State.Steps and ConcludedAt.
+	// Actual scheduling uses the Server's normalized Ready flag.
 	facts, hints, open := len(g.Facts), len(g.Hints), g.OpenCount()
 	if input, ok := s.schedules[g.Project.ID]; ok {
 		facts, hints, open = input.FactCount, input.HintCount, input.OpenCount
@@ -469,7 +469,7 @@ func (s *Scheduler) wakeAt(until time.Time) {
 
 // A queued dependency is normal pipeline progress. Missing, failed or invalid
 // accepted dependencies require a new decision rather than more execution.
-func supportNeedsDecision(step board.Step, steps map[string]board.Step) bool {
+func supportNeedsDecision(step board.ScheduleStep, steps map[string]board.ScheduleStep) bool {
 	if len(step.InvalidSources) > 0 {
 		return true
 	}
@@ -487,7 +487,7 @@ func (s *Scheduler) noteInvalidDependencies(id string, previous, input board.Sch
 	// when a planner slot only becomes available on a later tick. Old invalid
 	// steps must not disable coalescing for every subsequent ordinary update.
 	oldInvalid := map[string]bool{}
-	oldSteps, currentSteps := map[string]board.Step{}, map[string]board.Step{}
+	oldSteps, currentSteps := map[string]board.ScheduleStep{}, map[string]board.ScheduleStep{}
 	for _, step := range previous.Steps {
 		oldSteps[step.ID] = step
 	}
@@ -582,11 +582,10 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	g := board.Graph{Project: input.Project, Intents: input.Intents}
+	g := board.Graph{Project: input.Project}
 	if g.Project.OrchestrationVersion != 1 {
 		return false, nil
 	}
-	state := board.State{Graph: g, Steps: input.Steps, Revision: input.Revision, DecisionRevision: input.DecisionRevision}
 	s.observeGeneration(g.Project)
 	previous := s.schedules[id]
 	s.schedules[id] = input
@@ -605,7 +604,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	if !s.restartReady(ctx, g.Project) {
 		return false, nil
 	}
-	s.stateRevisions[id] = state.DecisionRevision
+	s.stateRevisions[id] = input.DecisionRevision
 	if g.Project.Status != "active" {
 		return false, nil
 	}
@@ -680,7 +679,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 			// retain the existing quiet/max-wait deadline; urgent input and
 			// unresolved execution failures still reach Decide first.
 			preferReady := trigger == "new_facts_or_hints_or_finished_intents" && !s.producersRunning(g) && input.HintCount <= s.checkpoints[id].Hints && !s.reasonWaits[id].Urgent
-			for _, step := range state.Steps {
+			for _, step := range input.Steps {
 				if len(step.InvalidSources) > 0 || step.Status == "failed" || step.Status == "needs_review" {
 					preferReady = false
 				}
@@ -692,9 +691,12 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 			}
 		}
 	}
-	var next *board.Step
+	var next *board.ScheduleStep
 	var nextCheck board.ExecutionCheck
-	for _, step := range board.ExecutionSteps(input.Intents, input.Steps) {
+	for _, step := range input.Steps {
+		if !step.Ready {
+			continue
+		}
 		check, err := s.candidateCheck(ctx, input, g, "explore", &board.Intent{ID: step.ID})
 		if err != nil {
 			return false, err

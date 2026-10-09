@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -12,14 +13,13 @@ import (
 
 func coalescingFixture() (*Scheduler, board.Graph, board.SchedulePage, time.Time) {
 	s := New(config.Config{}, nil)
-	g := board.Graph{Project: board.Project{ID: "coalesce"}, Intents: []board.Intent{
-		{ID: "working", Worker: board.Ptr("execute@one")}, {ID: "queued"},
-	}}
+	g := board.Graph{Project: board.Project{ID: "coalesce"}}
 	s.checkpoints[g.Project.ID] = checkpoint{Facts: 2, Open: 2}
 	s.decisionRevisions[g.Project.ID] = 1
 	s.stateRevisions[g.Project.ID] = 2
 	previous := board.SchedulePage{FactCount: 2, OpenCount: 2, DecisionRevision: 1}
-	s.schedules[g.Project.ID] = board.SchedulePage{FactCount: 3, OpenCount: 2, DecisionRevision: 2}
+	s.schedules[g.Project.ID] = board.SchedulePage{FactCount: 3, OpenCount: 2, DecisionRevision: 2,
+		Steps: []board.ScheduleStep{{ID: "working", Status: "running", Running: true}, {ID: "queued", Status: "open", Ready: true}}}
 	return s, g, previous, time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)
 }
 
@@ -75,6 +75,7 @@ func TestReasonUrgentInputsAndIdleExecutionBypassCoalescing(t *testing.T) {
 			}
 			previous = s.schedules[g.Project.ID]
 			input, check := previous, board.ExecutionCheck{}
+			input.Steps = slices.Clone(input.Steps)
 			switch name {
 			case "hint":
 				input.HintCount++
@@ -83,13 +84,13 @@ func TestReasonUrgentInputsAndIdleExecutionBypassCoalescing(t *testing.T) {
 			case "explicit_retry":
 				check.PreviousRunID = "authorized-attempt"
 			case "idle":
-				g.Intents[0].Worker = nil
+				input.Steps[0].Running = false
 			case "drained":
 				input.OpenCount = 0
 			case "invalid_dependency":
-				input.Steps = []board.Step{{ID: "queued", InvalidSources: []string{"refuted"}}}
+				input.Steps[1].InvalidSources = []string{"refuted"}
 			case "blocked_dependency":
-				input.Steps = []board.Step{{ID: "queued", BlockedBy: []string{"failed-producer"}}}
+				input.Steps[1].BlockedBy = []string{"failed-producer"}
 			}
 			s.schedules[g.Project.ID] = input
 			if got := s.trigger(g, check, previous, now.Add(time.Second)); got == "" {
@@ -101,14 +102,14 @@ func TestReasonUrgentInputsAndIdleExecutionBypassCoalescing(t *testing.T) {
 
 func TestReasonOldInvalidDependencyDoesNotDisableCoalescing(t *testing.T) {
 	s, g, previous, now := coalescingFixture()
-	previous.Steps = []board.Step{{ID: "old", InvalidSources: []string{"already-refuted"}}}
+	previous.Steps = []board.ScheduleStep{{ID: "working", Status: "running", Running: true}, {ID: "old", InvalidSources: []string{"already-refuted"}}}
 	input := s.schedules[g.Project.ID]
 	input.Steps = previous.Steps
 	s.schedules[g.Project.ID] = input
 	if got := s.trigger(g, board.ExecutionCheck{}, previous, now); got != "" {
 		t.Fatalf("previously observed invalid dependency made an ordinary update urgent: %q", got)
 	}
-	input.Steps = append(input.Steps, board.Step{ID: "new", InvalidSources: []string{"new-refutation"}})
+	input.Steps = append(input.Steps, board.ScheduleStep{ID: "new", InvalidSources: []string{"new-refutation"}})
 	s.schedules[g.Project.ID] = input
 	if got := s.trigger(g, board.ExecutionCheck{}, previous, now.Add(time.Second)); got == "" {
 		t.Fatal("new invalid dependency did not wake Decide")
@@ -121,7 +122,7 @@ func TestReasonOldInvalidDependencyDoesNotDisableCoalescing(t *testing.T) {
 func TestReasonInvalidationObservedDuringPlannerCancellationStaysUrgent(t *testing.T) {
 	s, g, previous, now := coalescingFixture()
 	input := s.schedules[g.Project.ID]
-	input.Steps = []board.Step{{ID: "queued", InvalidSources: []string{"refuted"}}}
+	input.Steps[1].InvalidSources = []string{"refuted"}
 	// dispatch observes this page while an old planner is still running, so
 	// it records the invalidation but does not try to launch another Decide.
 	s.noteInvalidDependencies(g.Project.ID, previous, input)

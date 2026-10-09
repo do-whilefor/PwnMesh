@@ -45,12 +45,7 @@ func (s *Scheduler) producersRunning(g board.Graph) bool {
 			return true
 		}
 	}
-	for _, intent := range g.Intents {
-		if intent.Worker != nil && intent.To == nil && intent.ConcludedAt == nil {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(s.schedules[g.Project.ID].Steps, func(step board.ScheduleStep) bool { return step.Running })
 }
 
 // Only a confirmed stale attempt delays the next ordinary control run beyond

@@ -26,7 +26,6 @@ func (s *Scheduler) scheduleInput(ctx context.Context, id string) (board.Schedul
 			if page.StateVersion != input.StateVersion || page.Project.Generation != input.Project.Generation {
 				return input, errors.New("state_changed: scheduling pages do not match")
 			}
-			input.Intents = append(input.Intents, page.Intents...)
 			input.Steps = append(input.Steps, page.Steps...)
 			for key, check := range page.ExecutionChecks {
 				if input.ExecutionChecks == nil {

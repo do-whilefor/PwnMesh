@@ -29,13 +29,18 @@ func TestSchedulingChecksAreOptionalAndPaged(t *testing.T) {
 	if legacy.ExecutionChecks != nil {
 		t.Fatal("legacy caller unexpectedly requested registry checks")
 	}
-	f.request("GET", f.base()+"/scheduling?namespace=test", nil, false, http.StatusOK, &first)
-	if len(first.Intents) != 100 || len(first.ExecutionChecks) != 101 || first.NextOffset != 100 {
-		t.Fatalf("first page: intents=%d checks=%d next=%d", len(first.Intents), len(first.ExecutionChecks), first.NextOffset)
+	raw := f.request("GET", f.base()+"/scheduling?namespace=test", nil, false, http.StatusOK, &first)
+	for _, omitted := range []string{`"intents":`, `"description":`, `"from":`, `"depends_on":`, `"support_valid":`} {
+		if strings.Contains(raw, omitted) {
+			t.Fatalf("scheduling leaked duplicate task or semantic content: %s", omitted)
+		}
+	}
+	if len(first.Steps) != 100 || len(first.ExecutionChecks) != 101 || first.NextOffset != 100 {
+		t.Fatalf("first page: steps=%d checks=%d next=%d", len(first.Steps), len(first.ExecutionChecks), first.NextOffset)
 	}
 	f.request("GET", f.base()+"/scheduling?namespace=test&offset=100&expected_version="+first.StateVersion, nil, false, http.StatusOK, &next)
-	if len(next.Intents) != 5 || len(next.ExecutionChecks) != 5 || next.NextOffset != 0 {
-		t.Fatalf("next page: intents=%d checks=%d next=%d", len(next.Intents), len(next.ExecutionChecks), next.NextOffset)
+	if len(next.Steps) != 5 || len(next.ExecutionChecks) != 5 || next.NextOffset != 0 {
+		t.Fatalf("next page: steps=%d checks=%d next=%d", len(next.Steps), len(next.ExecutionChecks), next.NextOffset)
 	}
 	if check, ok := first.ExecutionChecks["reason:"]; !ok || check.Pending || check.Blocked {
 		t.Fatalf("initial control admission missing or blocked: %+v", check)
@@ -44,10 +49,10 @@ func TestSchedulingChecksAreOptionalAndPaged(t *testing.T) {
 		t.Fatal("queried curation without pending observations")
 	}
 	for _, page := range []board.SchedulePage{first, next} {
-		for _, intent := range page.Intents {
-			check, ok := page.ExecutionChecks["explore:"+intent.ID]
-			if !ok || check.Blocked || check.Pending {
-				t.Fatalf("missing or blocked new candidate %s: %+v", intent.ID, check)
+		for _, step := range page.Steps {
+			check, ok := page.ExecutionChecks["explore:"+step.ID]
+			if !step.Ready || !ok || check.Blocked || check.Pending {
+				t.Fatalf("missing or blocked new candidate %s: %+v", step.ID, check)
 			}
 		}
 	}

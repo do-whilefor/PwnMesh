@@ -109,8 +109,7 @@ type SchedulePage struct {
 	DecisionRevision  int64                     `json:"decision_revision"`
 	StateVersion      string                    `json:"state_version"`
 	RetryKey          string                    `json:"retry_key"`
-	Intents           []Intent                  `json:"intents"`
-	Steps             []Step                    `json:"steps"`
+	Steps             []ScheduleStep            `json:"steps"`
 	NextOffset        int                       `json:"next_offset,omitempty"`
 	ExecutionChecks   map[string]ExecutionCheck `json:"execution_checks,omitempty"`
 	CurationNeeded    bool                      `json:"curation_needed,omitempty"`
@@ -130,7 +129,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 	if offset < 0 || offset > len(s.Graph.Intents) {
 		return SchedulePage{}, Err(422, "invalid scheduling offset")
 	}
-	p := SchedulePage{Project: s.Graph.Project, FactCount: len(s.Graph.Facts), HintCount: len(s.Graph.Hints), OpenCount: s.Graph.OpenCount(), Revision: s.Revision, DecisionRevision: s.DecisionRevision, StateVersion: version, RetryKey: DecisionRetryKey(s.Graph, s.DecisionRevision), Intents: []Intent{}, Steps: []Step{}}
+	p := SchedulePage{Project: s.Graph.Project, FactCount: len(s.Graph.Facts), HintCount: len(s.Graph.Hints), OpenCount: s.Graph.OpenCount(), Revision: s.Revision, DecisionRevision: s.DecisionRevision, StateVersion: version, RetryKey: DecisionRetryKey(s.Graph, s.DecisionRevision)}
 	p.CurationRequested = s.PendingCurationRequest() != nil
 	if p.CurationNeeded, err = t.curationNeeded(s); err != nil {
 		return SchedulePage{}, err
@@ -145,26 +144,11 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 		goal = goal || f.ID == "goal"
 	}
 	p.Initial = p.Initial && origin && goal
-	steps := map[string]Step{}
-	for _, step := range s.Steps {
-		steps[step.ID] = step
-	}
 	for _, i := range s.Graph.Intents {
-		boot := i.To == nil && i.ConcludedAt == nil && i.Description == "bootstrap" && i.Creator == "dispatcher.bootstrap" && len(i.From) == 1 && i.From[0] == "origin"
-		p.Initial = p.Initial && boot
+		p.Initial = p.Initial && pendingBootstrap(i)
 	}
 	end := min(offset+100, len(s.Graph.Intents))
-	for _, i := range s.Graph.Intents[offset:end] {
-		boot := i.Description == "bootstrap" && i.Creator == "dispatcher.bootstrap" && len(i.From) == 1 && i.From[0] == "origin"
-		if !boot {
-			i.Description = ""
-			i.Creator = ""
-			i.From = nil
-		}
-		p.Intents = append(p.Intents, i)
-		step := steps[i.ID]
-		p.Steps = append(p.Steps, Step{ID: step.ID, Status: step.Status, Priority: step.Priority, InvalidSources: step.InvalidSources[:min(1, len(step.InvalidSources))], DependsOn: step.DependsOn, WritePaths: stepWritePaths(step), BlockedBy: step.BlockedBy, SupportValid: step.SupportValid})
-	}
+	p.Steps = scheduleSteps(s.Graph.Intents[offset:end], s.Steps)
 	if end < len(s.Graph.Intents) {
 		p.NextOffset = end
 	}

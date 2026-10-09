@@ -277,13 +277,13 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 
 // Scheduling needs only admission and retry grants for the current page's
 // Execute candidates. Registration still verifies their leases and identity.
-func (t *Tx) ScheduleExecutionChecks(project, namespace string, intents []Intent, steps []Step) (map[string]ExecutionCheck, error) {
-	checks := make(map[string]ExecutionCheck, len(intents))
-	if len(intents) == 0 {
+func (t *Tx) ScheduleExecutionChecks(project, namespace string, steps []ScheduleStep) (map[string]ExecutionCheck, error) {
+	checks := make(map[string]ExecutionCheck, len(steps))
+	if len(steps) == 0 {
 		return checks, nil
 	}
 	var writeOwners []Step
-	if slices.ContainsFunc(steps, func(step Step) bool { return len(step.WritePaths) != 0 || step.Repair != nil }) {
+	if slices.ContainsFunc(steps, func(step ScheduleStep) bool { return step.Ready && len(step.WritePaths) != 0 }) {
 		data, _, _, err := t.stateData(project)
 		if err != nil {
 			return nil, err
@@ -293,23 +293,18 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, intents []Intent
 			return nil, err
 		}
 	}
-	values := make([]string, 0, len(intents))
-	args := make([]any, 0, 3*len(intents)+6)
-	for _, step := range ExecutionSteps(intents, steps) {
-		if stepWriteConflict(step, writeOwners) != "" {
+	values := make([]string, 0, len(steps))
+	args := make([]any, 0, 3*len(steps)+6)
+	for _, step := range steps {
+		if !step.Ready {
+			continue
+		}
+		if stepWriteConflict(Step{ID: step.ID, WritePaths: step.WritePaths}, writeOwners) != "" {
 			checks["explore:"+step.ID] = ExecutionCheck{Blocked: true}
 			continue
 		}
 		values = append(values, "(?,?,?)")
 		args = append(args, "explore", step.ID, "explore:"+step.ID)
-	}
-	// Historical bootstrap checks are a compatibility query, never a Step
-	// authorization in the current dispatcher.
-	for _, i := range intents {
-		if pendingBootstrap(i) {
-			values = append(values, "(?,?,?)")
-			args = append(args, "bootstrap", i.ID, "bootstrap:"+i.ID)
-		}
 	}
 	if len(values) == 0 {
 		return checks, nil

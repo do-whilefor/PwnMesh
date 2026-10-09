@@ -304,12 +304,12 @@ func TestUserCorrectionKeepsControlAheadOfAuthorizedPipeline(t *testing.T) {
 func TestQueuedPipelineDependencyBecomesUrgentOnlyWhenItsSupportFails(t *testing.T) {
 	s := New(config.Config{}, nil)
 	previous := board.SchedulePage{}
-	waiting := board.SchedulePage{Steps: []board.Step{{ID: "upstream", Status: "open"}, {ID: "join", Status: "blocked", BlockedBy: []string{"upstream"}}}}
+	waiting := board.SchedulePage{Steps: []board.ScheduleStep{{ID: "upstream", Status: "open"}, {ID: "join", Status: "blocked", BlockedBy: []string{"upstream"}}}}
 	s.noteInvalidDependencies("project", previous, waiting)
 	if s.reasonWaits["project"].Urgent {
 		t.Fatal("an authorized dependency waiting to execute was treated as new invalid evidence")
 	}
-	failed := board.SchedulePage{Steps: []board.Step{{ID: "upstream", Status: "failed"}, {ID: "join", Status: "blocked", BlockedBy: []string{"upstream"}}}}
+	failed := board.SchedulePage{Steps: []board.ScheduleStep{{ID: "upstream", Status: "failed"}, {ID: "join", Status: "blocked", BlockedBy: []string{"upstream"}}}}
 	s.noteInvalidDependencies("project", waiting, failed)
 	if !s.reasonWaits["project"].Urgent {
 		t.Fatal("failed upstream did not require prompt reconsideration of the authorized plan")

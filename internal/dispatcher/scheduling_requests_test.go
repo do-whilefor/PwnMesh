@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
@@ -85,5 +86,43 @@ func TestRetryKeyPreservesLegacyBytes(t *testing.T) {
 	s.stateRevisions[g.Project.ID] = 7
 	if got := s.retryKey(g, "reason", nil); got != "reason:a86d0bc22e11e5da882fdc78a134a95cafd08467213a711605afcc547492a35d" {
 		t.Fatalf("ordered completion identity changed: %s", got)
+	}
+}
+
+func TestSchedulingPagesKeepRemoteLeaseAndCreationOrder(t *testing.T) {
+	s, _, store, graph := automaticRetryFixture(t, 0, "")
+	ctx := context.Background()
+	if err := store.Do(ctx, func(tx *board.Tx) error {
+		g, err := tx.Load(graph.Project.ID)
+		if err != nil {
+			return err
+		}
+		for n := 0; n < 105; n++ {
+			intent := board.Intent{ID: fmt.Sprintf("s%03d", n), From: []string{"origin"}, Description: "Observe fixture", Creator: "fixture", CreatedAt: tx.Now}
+			if n == 100 {
+				intent.Worker, intent.Heartbeat = board.Ptr("other-dispatcher@run"), board.Ptr(tx.Now)
+			}
+			g.Intents = append(g.Intents, intent)
+		}
+		return tx.Save(g)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	input, err := s.scheduleInput(ctx, graph.Project.ID)
+	if err != nil || len(input.Steps) != 105 {
+		t.Fatalf("lost scheduling page: steps=%d err=%v", len(input.Steps), err)
+	}
+	for n, step := range input.Steps {
+		if step.ID != fmt.Sprintf("s%03d", n) || step.CreatedAt == "" || step.Ready != (n != 100) || step.Running != (n == 100) {
+			t.Fatalf("page changed lease/readiness/ordering at %d: %+v", n, step)
+		}
+		_, checked := input.ExecutionChecks["explore:"+step.ID]
+		if checked != step.Ready {
+			t.Fatalf("registry admission disagrees with page candidate %s", step.ID)
+		}
+	}
+	s.schedules[graph.Project.ID] = input
+	if !s.producersRunning(board.Graph{Project: input.Project}) {
+		t.Fatal("planner ignored another dispatcher's lease on a later page")
 	}
 }

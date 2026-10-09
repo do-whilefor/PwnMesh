@@ -14,8 +14,9 @@ import (
 )
 
 func TestCurationCoalescingDrainsPromptlyAndCannotStarve(t *testing.T) {
-	s := &Scheduler{running: map[string]*task{}}
-	g := board.Graph{Project: board.Project{ID: "p"}, Intents: []board.Intent{{ID: "i", Worker: board.Ptr("live")}}}
+	s := New(config.Config{}, nil)
+	g := board.Graph{Project: board.Project{ID: "p"}}
+	s.schedules["p"] = board.SchedulePage{Steps: []board.ScheduleStep{{ID: "i", Running: true}}}
 	now := time.Unix(1000, 0)
 	if !s.waitForCuration(g, 1, now) {
 		t.Fatal("did not coalesce in-flight observation burst")
@@ -26,7 +27,7 @@ func TestCurationCoalescingDrainsPromptlyAndCannotStarve(t *testing.T) {
 	if s.waitForCuration(g, 3, now.Add(reasonMaxWait)) {
 		t.Fatal("continuous producer starved curation")
 	}
-	g.Intents[0].ConcludedAt = board.Ptr("done")
+	s.schedules["p"] = board.SchedulePage{Steps: []board.ScheduleStep{{ID: "i", Status: "completed"}}}
 	if s.waitForCuration(g, 4, now.Add(11*time.Second)) {
 		t.Fatal("finished producers incurred quiet-period latency")
 	}

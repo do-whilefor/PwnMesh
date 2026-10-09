@@ -20,9 +20,11 @@ func TestUrgentReasonConflictRestoresUnconsumedDependencyCorrection(t *testing.T
 	// Exercise the scheduling metadata boundary separately from the real HTTP
 	// registration/commit protocol. The same invalid Step remains on later pages;
 	// no second transition can restore urgency after launch clears reasonWaits.
-	g := board.Graph{Project: graph.Project, Intents: []board.Intent{{ID: "working", Worker: board.Ptr("other@execute")}}}
+	g := board.Graph{Project: graph.Project}
 	previous := board.SchedulePage{FactCount: 2, OpenCount: 1, DecisionRevision: 1}
-	input := board.SchedulePage{FactCount: 2, OpenCount: 1, DecisionRevision: 2, Steps: []board.Step{{ID: "queued", InvalidSources: []string{"refuted"}}}}
+	input := board.SchedulePage{FactCount: 2, OpenCount: 1, DecisionRevision: 2, Steps: []board.ScheduleStep{
+		{ID: "working", Running: true}, {ID: "queued", InvalidSources: []string{"refuted"}},
+	}}
 	s.checkpoints[id] = checkpoint{Facts: 2, Open: 1}
 	s.decisionRevisions[id], s.stateRevisions[id] = 1, 2
 	s.schedules[id] = input

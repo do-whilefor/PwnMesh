@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -51,15 +52,16 @@ func TestControlConflictWaitPreservesUrgentInputsAndDrain(t *testing.T) {
 				s, g, previous, now := coalescingFixture()
 				s.controlConflicts[g.Project.ID] = now.Add(reasonMaxWait)
 				input := s.schedules[g.Project.ID]
+				input.Steps = slices.Clone(input.Steps)
 				switch change {
 				case "hint":
 					input.HintCount++
 				case "invalid_dependency":
-					input.Steps = []board.Step{{ID: "queued", InvalidSources: []string{"refuted"}}}
+					input.Steps[1].InvalidSources = []string{"refuted"}
 				case "blocked_dependency":
-					input.Steps = []board.Step{{ID: "queued", BlockedBy: []string{"failed"}}}
+					input.Steps[1].BlockedBy = []string{"failed"}
 				case "idle":
-					g.Intents[0].Worker = nil
+					input.Steps[0].Running = false
 				}
 				s.schedules[g.Project.ID] = input
 				// dispatch records invalidation before deciding either role's readiness.
