@@ -6,19 +6,16 @@
   const bindings = new WeakMap();
   const efforts = { low: '低 / 更快响应', high: '高 / 深入推理', max: '最高 / 充分推理' };
   let saved = null;
-  let draft = null;
-  let dirty = false;
   const providerDefaults = () => Object.fromEntries(Object.entries(providers).map(([id, preset]) => [id, { url: preset.url, model: preset.model }]));
-  let providerDrafts = providerDefaults();
-  let proxyDraft = { protocol: 'http', host: 'host.docker.internal', port: '7897' };
   const defaults = () => ({ provider: 'deepseek', protocol: 'anthropic', url: providers.deepseek.url, model: providers.deepseek.model, reasoningEffort: helpers.defaultReasoningEffort, connection: { mode: 'direct' } });
+  const entryState = state => ({...state,reasoningEffort:helpers.defaultReasoningEffort,connection:{mode:'direct'}});
   const esc = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const providerIcon = (id, className = '') => providers[id].icon ? `<img class="${className}" src="${providers[id].icon}" alt="" aria-hidden="true">` : `<i class="${className}" data-lucide="settings-2" aria-hidden="true"></i>`;
   const connectionLabel = (connection) => connection.mode === 'proxy' ? `${helpers.proxyProtocols[connection.protocol]} 代理` : '直连';
 
   function render({ returnLabel = '返回项目', projectName = '' } = {}) {
-    const state = draft || saved || defaults();
-    const proxy = state.connection.mode === 'proxy' ? state.connection : proxyDraft;
+    const state = entryState(saved || defaults());
+    const proxy = helpers.parseProxy(serverSettings?.proxy_url);
     return `<section class="llm-page" aria-labelledby="llm-title">
       <header class="llm-heading"><h1 id="llm-title">模型接入</h1><button type="button" class="llm-back" data-llm-return title="${esc(projectName ? `${returnLabel} · ${projectName}` : returnLabel)}"><i data-lucide="arrow-left"></i>${esc(returnLabel)}</button></header>
       <div class="llm-layout"><form class="llm-form" novalidate autocomplete="off">
@@ -58,7 +55,9 @@
     bindings.get(host)?.();
     const form = host.querySelector('.llm-form');
     if (!form) return;
-    let provider = (draft || saved || defaults()).provider, verified = false, busy = false, loaded = false;
+    let provider = (saved || defaults()).provider, verified = false, busy = false, loaded = false, dirty = false;
+    const providerDrafts = providerDefaults();
+    let proxyDraft = helpers.parseProxy(serverSettings?.proxy_url);
     let generation = 0, disposed = false, request = null, keyOrigin = '';
     const controller = new AbortController(), options = {signal:controller.signal};
     const field = name => form.elements.namedItem(name), query = selector => host.querySelector(selector);
@@ -73,7 +72,6 @@
       icons();
     };
     const remember = (changed = true) => {
-      draft = current();
       providerDrafts[provider] = {url:field('url').value,model:field('model').value};
       proxyDraft = {protocol:field('proxyProtocol').value,host:field('proxyHost').value,port:field('proxyPort').value};
       if (changed) dirty = true;
@@ -166,21 +164,21 @@
       try {
         const result = await api.request('/model-settings',{method:'PUT',body,signal:request.signal});
         if (disposed || version !== generation) return;
-        serverSettings = result;proxyDraft = helpers.parseProxy(result.proxy_url);saved = fromServer(result);draft = saved;dirty = false;verified = false;fill(saved);
+        serverSettings = result;proxyDraft = helpers.parseProxy(result.proxy_url);saved = fromServer(result);dirty = false;verified = false;fill(saved);
         query('.llm-summary-status').textContent = '已保存';status('success','配置已保存，新启动的任务将使用此配置；运行中的任务保持原配置。');
         window.dispatchEvent(new CustomEvent('llm-updated',{detail:{provider:providers[saved.provider].name,model:saved.model,connection:{...saved.connection}}}));
       } catch(error) {if (!disposed && version === generation) status('error','保存失败：'+error.message);}
       finally {if (!disposed && version === generation) {busy = false;request = null;sync();}}
     },options);
     const cleanup = () => {
-      if (disposed) return;disposed = true;if (loaded) remember(false);
+      if (disposed) return;disposed = true;
       generation++;request?.abort();controller.abort();field('key').value = '';keyOrigin = '';observer.disconnect();
       if (bindings.get(host) === cleanup) bindings.delete(host);
     };
     const observer = new MutationObserver(() => {if (!form.isConnected) cleanup();});
     host.addEventListener('click',event => {
       if (!event.target.closest('[data-llm-return]')) return;
-      const detail = {saved:Boolean(saved && !dirty),draftRetained:dirty};cleanup();
+      const detail = {saved:Boolean(saved && !dirty),draftRetained:false};cleanup();
       if (typeof onReturn === 'function') onReturn(detail);else window.dispatchEvent(new CustomEvent('llm-return',{detail}));
     },options);
     observer.observe(host,{childList:true,subtree:true});bindings.set(host,cleanup);
@@ -188,9 +186,11 @@
     request = new AbortController();
     api.request('/model-settings',{signal:request.signal}).then(settings => {
       if (disposed) return;
-      if (!dirty) proxyDraft = helpers.parseProxy(settings.proxy_url);
+      proxyDraft = helpers.parseProxy(settings.proxy_url);
       serverSettings = settings;saved = settings.has_token ? fromServer(settings) : null;loaded = true;busy = false;
-      fill(dirty && draft ? draft : fromServer(settings));
+      const state = entryState(fromServer(settings));
+      dirty = Boolean(saved && (saved.reasoningEffort !== state.reasoningEffort || saved.connection.mode !== state.connection.mode));
+      fill(state);
       query('.llm-summary-status').textContent = dirty ? '未保存' : saved ? '已保存' : '待配置';
     }).catch(error => {if (!disposed) {busy = false;status('error','配置读取失败：'+error.message+'。返回项目后可重新打开重试。');sync();}});
     return cleanup;

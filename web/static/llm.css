@@ -35,6 +35,16 @@
 .llm-select-wrap,.llm-key-wrap{position:relative}
 .llm-select-wrap select{appearance:none;padding-right:37px}
 .llm-select-wrap>.lucide{position:absolute;right:12px;top:12px;color:#5c6f7c;pointer-events:none}
+@supports (appearance:base-select){
+  .llm-select-wrap select,.llm-select-wrap select::picker(select){appearance:base-select}
+  .llm-select-wrap select{display:flex;align-items:center;cursor:pointer}
+  .llm-select-wrap select::picker-icon{display:none}
+  .llm-select-wrap select::picker(select){min-width:anchor-size(width);margin-block:6px;padding:5px;border:1px solid #e1e7eb;border-radius:10px;background:#fff;color:#3e5361;box-shadow:0 8px 30px #293c4517;font:inherit}
+  .llm-select-wrap option{display:flex;align-items:center;gap:8px;min-height:35px;padding:8px 10px;border:0;border-radius:6px;background:transparent;cursor:pointer;font-size:13px}
+  .llm-select-wrap option:hover,.llm-select-wrap option:focus{background:#f3f6f8;outline:none}
+  .llm-select-wrap option:checked{background:#fff2eb;color:#9a4e32}
+  .llm-select-wrap option::checkmark{order:1;margin-left:auto;color:#b95535;font-size:12px}
+}
 .llm-key-wrap input{padding-right:43px}
 .llm-key-toggle{display:flex;align-items:center;justify-content:center;position:absolute;right:4px;top:4px;width:32px;height:32px;color:#5c6f7c;border:0;background:transparent;cursor:pointer;border-radius:4px}
 .llm-key-toggle:hover{background:#f3f6f7;color:#3e5361}
