@@ -5,7 +5,7 @@
   else root.PwnMeshGraphView = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
-  const STATES = {open: '待执行', pending: '待执行', blocked: '等待依赖', running: '运行中', completed: '已完成', failed: '失败', abandoned: '已放弃', achieved: '已达成', withdrawn: '已撤回', valid: '有效', input: '输入', superseded: '被取代', refuted: '被反驳', narrowed: '已收窄', candidate: '待验证', verified: '已验证', paused: '已暂停', needs_review: '待复核', unknown: '未标明状态'};
+  const STATES = {open: '待执行', pending: '待执行', blocked: '等待依赖', running: '运行中', completed: '已完成', cancelled: '已取消', failed: '失败', abandoned: '已放弃', achieved: '已达成', withdrawn: '已撤回', valid: '有效', input: '输入', superseded: '被取代', refuted: '被反驳', narrowed: '已收窄', candidate: '待验证', verified: '已验证', paused: '已暂停', needs_review: '待复核', unknown: '未标明状态'};
   const KINDS = {start: '起点', task: '任务', fact: '事实', goal: '终点', subgoal: '子目标', finding: '发现'};
   const edgeKey = edge => typeof edge === 'string' ? edge : edge?.id || 'edge:' + JSON.stringify([edge.kind, edge.source, edge.target]);
   function supportProblem(node) {
@@ -25,7 +25,7 @@
     return '';
   }
   function visualStatus(node) {
-    if (supportProblem(node) || ['failed', 'refuted', 'superseded', 'narrowed', 'withdrawn', 'abandoned', 'needs_review'].includes(node.status)) return 'invalid';
+    if (supportProblem(node) || ['failed', 'cancelled', 'refuted', 'superseded', 'narrowed', 'withdrawn', 'abandoned', 'needs_review'].includes(node.status)) return 'invalid';
     if (['completed', 'achieved', 'valid', 'input', 'verified'].includes(node.status)) return 'done';
     if (node.status === 'running') return 'running';
     if (node.status === 'paused') return 'paused';
@@ -37,7 +37,7 @@
     const statusLabel = (STATES[node.status] || node.status) + (invalid ? ' · ' + invalid : '');
     return {kind, label: node.key === 'fact:goal' ? '目标输入' : KINDS[kind] || node.type, status: visualStatus(node), statusLabel, subtitle: node.key === 'fact:origin' ? '项目原始输入' : node.key === 'fact:goal' ? '用户定义的目标输入' : invalid ? '证据支持需要复核' : node.type === 'goal' ? node.raw?.parent_id ? '下级目标条件' : '项目根目标条件' : node.type === 'finding' ? '发现与证据' : node.description || node.id};
   }
-  function projectGeometry(nodes, positions, width = 164, height = 90) {
+  function projectGeometry(nodes, positions, width = 148, height = 78) {
     return new Map(nodes.filter(node => positions.has(node.key)).map(node => [node.key, {...positions.get(node.key), width, height}]));
   }
   function describeEdge(project, edge) {

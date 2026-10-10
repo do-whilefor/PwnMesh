@@ -29,12 +29,13 @@ import (
 )
 
 type Client struct {
-	Config       config.Container
-	http         *http.Client
-	locks        sync.Map
-	graphMu      sync.RWMutex
-	graphHandler func(context.Context, worker.Job, worker.GraphRequest) (any, error)
-	inputReader  func(context.Context, worker.Job, board.InputFile) (io.ReadCloser, error)
+	Config          config.Container
+	http            *http.Client
+	locks           sync.Map
+	graphMu         sync.RWMutex
+	graphHandler    func(context.Context, worker.Job, worker.GraphRequest) (any, error)
+	inputReader     func(context.Context, worker.Job, board.InputFile) (io.ReadCloser, error)
+	lookupProxyHost func(context.Context, string) ([]net.IPAddr, error)
 }
 type APIError struct{ Status int }
 
@@ -160,7 +161,14 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 		return "", errors.New("worker image contains model provider environment; rebuild it without ANTHROPIC_ environment and keep model configuration in the dispatcher")
 	}
 	if missing {
-		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": map[string]string{"pwnmesh.namespace": c.Config.Namespace, "pwnmesh.project": id, "pwnmesh.model-boundary": modelBoundary}, "HostConfig": map[string]any{"NetworkMode": c.Config.Network, "CapAdd": c.Config.CapAdd, "Init": true}}
+		hostConfig := map[string]any{"NetworkMode": c.Config.Network, "CapAdd": c.Config.CapAdd, "Init": true}
+		// Docker rejects ExtraHosts with container:<id> networking. That mode
+		// shares the target container's hosts file, so its owner supplies any
+		// host.docker.internal mapping needed by a proxy.
+		if !strings.HasPrefix(c.Config.Network, "container:") {
+			hostConfig["ExtraHosts"] = []string{"host.docker.internal:host-gateway"}
+		}
+		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": map[string]string{"pwnmesh.namespace": c.Config.Namespace, "pwnmesh.project": id, "pwnmesh.model-boundary": modelBoundary}, "HostConfig": hostConfig}
 		err = c.json(ctx, "POST", "/containers/create?name="+url.QueryEscape(name), input, nil)
 		if status(err, 409) {
 			missing = false
@@ -411,6 +419,9 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	if err != nil {
 		return worker.Result{}, err
 	}
+	if p.Client != nil {
+		defer p.Client.CloseIdleConnections()
+	}
 	env, err := modelWorkerEnv(w, p.Token)
 	if err != nil {
 		return worker.Result{}, err
@@ -418,6 +429,12 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	name, err := c.ensure(ctx, j.Graph.Project.ID, p.Token)
 	if err != nil {
 		return worker.Result{}, err
+	}
+	// A shared network's hosts file belongs to its owner, not this worker.
+	if w.Env["PWNMESH_CONNECTION_MODE"] == "proxy" && !strings.HasPrefix(c.Config.Network, "container:") {
+		if err = c.ensureProxyHost(ctx, name, w.Env["PWNMESH_PROXY_URL"]); err != nil {
+			return worker.Result{}, err
+		}
 	}
 	if err = c.stageInputs(ctx, name, j); err != nil {
 		return worker.Result{}, err

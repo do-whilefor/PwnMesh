@@ -18,6 +18,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/modelconfig"
 	"pwnmesh/internal/worker"
 )
 
@@ -58,6 +59,8 @@ type cleaned struct {
 	Err       error
 }
 type Scheduler struct {
+	modelSettings     modelconfig.Settings
+	modelSettingsErr  error
 	Config            config.Config
 	Client            *Client
 	Runner            Runner
@@ -104,6 +107,9 @@ func New(c config.Config, r Runner) *Scheduler {
 	return s
 }
 func (s *Scheduler) Health(ctx context.Context, force bool) error {
+	if err := s.refreshModelSettings(); err != nil {
+		return err
+	}
 	if s.Config.Runtime.HealthMode == "disabled" && !force {
 		return nil
 	}
@@ -208,10 +214,12 @@ func (s *Scheduler) reap() {
 				}
 			}
 			key := s.rejectKey(f.Task.Job.Graph.Project.ID, f.Task.Job.Kind, f.Task.Worker.Name)
-			if f.Outcome == "unhealthy" {
-				s.recordHealth(f.Task.Worker.Name, f.Err)
-			} else {
-				delete(s.unhealthy, f.Task.Worker.Name)
+			if s.currentModelSettings(f.Task.Worker) {
+				if f.Outcome == "unhealthy" {
+					s.recordHealth(f.Task.Worker.Name, f.Err)
+				} else {
+					delete(s.unhealthy, f.Task.Worker.Name)
+				}
 			}
 			if f.Outcome == "rejected" {
 				s.rejected[key] = time.Now().Add(5 * time.Second)
@@ -256,6 +264,7 @@ func (s *Scheduler) Step(ctx context.Context) error {
 		return err
 	}
 	s.reap()
+	s.modelSettingsErr = s.refreshModelSettings()
 	if s.leaseTimeout == 0 {
 		var settings board.Settings
 		if err := s.Client.Do(ctx, "GET", "/settings", nil, &settings, nil); err != nil {
@@ -349,6 +358,9 @@ func (s *Scheduler) Step(ctx context.Context) error {
 			continue
 		}
 		s.queueCleanup(ctx, id, state)
+	}
+	if s.modelSettingsErr != nil {
+		return s.modelSettingsErr
 	}
 	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
 	if len(active) > 0 {

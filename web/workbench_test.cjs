@@ -108,7 +108,7 @@ function standard(url, states, extra = () => undefined) {
 
 test('embedded browser modules and visible identity use PwnMesh', () => {
   assert.match(html, /<title>PwnMesh · 任务工作台<\/title>/);
-  assert.match(html, /<span>PwnMesh<small>/);
+  assert.match(html, /class="brand-art"><img src="\/static\/brand.png" alt="PwnMesh"/);
   const mark = fs.readFileSync(path.join(__dirname, 'static/mark.svg'), 'utf8');
   assert.deepEqual(markupValues(mark, 'aria-label', 'svg'), ['PwnMesh']);
   const context = vm.createContext({});
@@ -466,4 +466,44 @@ for (const deletion of ['pending project', 'unrelated project', 'failed delete']
   assert.equal(h.elements.get('create-dialog').open,false); assert.equal(h.elements.get('create-name').disabled,false);
   assert.equal(creates,deletion === 'pending project' ? 2 : 1);
   assert.deepEqual(uploads,deletion === 'pending project' ? ['B:capture.har','B:client.apk','C:capture.har','C:client.apk'] : ['B:capture.har','B:client.apk','B:client.apk']);
+});
+
+test('v5 material view reads real uploads and ignores a stale project response', async () => {
+  const a = snapshot('A'), b = snapshot('B'), pending = deferred();
+  a.graph.facts = [{id:'origin',description:'https://a.example.test'},{id:'goal',description:'Verify authorization'}];
+  const h = harness(url => url === '/projects/A/inputs' ? pending.promise : standard(url,{A:a,B:b}, path => path === '/projects/B/inputs' ? [{name:'b.har',size:128,path:'inputs/b.har',created_at:now,sha256:'bhash'}] : undefined));
+  await settle(); await h.elements.get('view-materials').click();
+  assert.equal(h.elements.get('graph-stage').hidden,true);
+  await h.select('B'); await settle();
+  pending.resolve([{name:'a.secret',size:100,path:'inputs/a.secret',created_at:now,sha256:'ahash'}]); await settle();
+  assert.match(h.elements.get('materials-view').textContent,/b\.har/);
+  assert.doesNotMatch(h.elements.get('materials-view').textContent,/a\.secret/);
+  assert.equal(h.elements.get('material-count').textContent,'1');
+});
+
+test('v5 log search scans full content and reader preserves plain text', async () => {
+  const a = snapshot('A'); a.graph.facts = [{id:'origin',description:'start',created_at:now},{id:'goal',description:'target',created_at:now}];
+  a.fact_records = [{id:'proof',description:'Evidence '.repeat(70) + '<script>needle-value</script>',status:'valid',created_at:now}];
+  const h = harness(url => standard(url,{A:a})); await settle();
+  const search = h.elements.get('log-search'); search.value = 'needle-value'; await search.emit('input');
+  const entries = h.elements.get('activity-content').children.filter(item => item.className?.includes('timeline-entry'));
+  assert.equal(entries.length,1); assert.match(entries[0].textContent,/needle-value/);
+  const reader = entries[0].children.find(item => item.className.includes('read-log')); await reader.click();
+  assert.equal(h.elements.get('reader-dialog').open,true);
+  assert.match(h.elements.get('reader-content').textContent,/<script>needle-value<\/script>/);
+  search.value = 'absent phrase'; await search.emit('input'); assert.equal(h.elements.get('activity-count').textContent,'0 条记录');
+});
+
+test('v5 project info and main results use current server state', async () => {
+  const a = snapshot('A'); a.graph.facts = [{id:'origin',description:'https://real.example.test'},{id:'goal',description:'Validate the reported scope'}];
+  const h = harness(url => standard(url,{A:a})); await settle();
+  await h.elements.get('project-info').click();
+  assert.match(h.elements.get('reader-content').textContent,/https:\/\/real\.example\.test/);
+  assert.match(h.elements.get('project-created-at').textContent,/创建 2026-09-24 08:00:00/);
+  assert.match(h.elements.get('reader-content').textContent,/Validate the reported scope/);
+  await h.elements.get('view-results').click();
+  assert.equal(h.elements.get('results-view').hidden,false);
+  assert.match(h.elements.get('results-view').textContent,/答案正在探索中/);
+  assert.equal(h.elements.get('graph-legend').hidden,true);
+  await h.elements.get('view-canvas').click(); assert.equal(h.elements.get('graph-stage').hidden,false);
 });

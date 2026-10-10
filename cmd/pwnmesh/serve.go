@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/modelconfig"
 	"pwnmesh/internal/server"
 )
 
@@ -58,8 +59,12 @@ func serve(ctx context.Context, args []string, errOut io.Writer) error {
 		return err
 	}
 	defer store.Close()
+	modelSettingsPath := os.Getenv(modelconfig.PathEnv)
+	if modelSettingsPath == "" {
+		modelSettingsPath = filepath.Join(filepath.Dir(*db), "model-settings.json")
+	}
 	srv := &http.Server{
-		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)), Handler: guard(server.New(store)),
+		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)), Handler: guard(server.NewWithModelSettings(store, modelSettingsPath)),
 		ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
 		WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second,
 	}

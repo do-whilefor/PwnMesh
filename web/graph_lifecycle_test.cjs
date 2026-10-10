@@ -14,7 +14,7 @@ class Target {
 }
 class Element extends Target {
   constructor(document) {
-    super(); this.ownerDocument = document; this.children = []; this.dataset = {}; this.style = {}; this.attrs = {}; this.className = ''; this.clientWidth = 800; this.clientHeight = 600; this.capture = new Set();
+    super(); this.ownerDocument = document; this.children = []; this.dataset = {}; this.style = {setProperty(key, value) { this[key] = value; }}; this.attrs = {}; this.className = ''; this.clientWidth = 800; this.clientHeight = 600; this.capture = new Set();
     this.classList = {contains: name => this.className.split(' ').includes(name), toggle: (name, active) => { const names = new Set(this.className.split(' ').filter(Boolean)); if (active) names.add(name); else names.delete(name); this.className = [...names].join(' '); }, add: name => this.classList.toggle(name, true), remove: name => this.classList.toggle(name, false)};
   }
   append(...nodes) { for (const node of nodes) { node.remove(); node.parent = this; this.children.push(node); } }
@@ -140,6 +140,37 @@ test('blur, hidden document and destruction stop animation and remove every list
 test('separate graph instances have unique SVG marker identities', () => {
   const first = harness(), second = harness(); assert.notEqual(first.graph.instanceId, second.graph.instanceId);
   assert.notEqual(first.graph.defs.children[0].getAttribute('id'), second.graph.defs.children[0].getAttribute('id')); first.graph.destroy(); second.graph.destroy();
+});
+
+test('relation colors and arrowheads survive live status and selection changes', () => {
+  const h = harness(), graph = h.graph, value = state(); graph.setState(value); h.flush();
+  const input = graph.edges.find(edge => edge.kind === 'step_input');
+  const output = graph.edges.find(edge => edge.kind === 'step_result');
+  const entry = graph.edgeElements.get(input.id), outputEntry = graph.edgeElements.get(output.id);
+  const color = entry.group.style['--edge-color'], marker = entry.path.getAttribute('marker-end');
+  assert.ok(color); assert.notEqual(color, outputEntry.group.style['--edge-color']);
+  assert.equal(entry.port.getAttribute('fill'), color); assert.equal(entry.label.style['--edge-color'], color);
+  assert.equal(entry.path.dataset.edgeKind, 'step_input'); assert.equal(entry.path.classList.contains('running'), true);
+  const arrow = graph.defs.children.find(element => marker.includes(element.getAttribute('id'))).children[0];
+  assert.equal(arrow.getAttribute('fill'), 'none'); assert.equal(arrow.getAttribute('stroke'), color);
+  graph.selectEdge(input); h.flush();
+  assert.equal(entry.path.getAttribute('marker-end'), marker); assert.equal(entry.group.style['--edge-color'], color);
+  assert.equal(entry.path.classList.contains('selected'), true);
+  value.steps[0].status = 'completed'; value.steps[0].support_valid = true; graph.setState(value); h.flush();
+  assert.equal(entry.path.classList.contains('done'), true); assert.equal(entry.path.getAttribute('marker-end'), marker);
+  assert.equal(entry.group.style['--edge-color'], color); graph.destroy();
+});
+
+test('cancelled work remains visible as cancelled and cannot return to the pending filter', () => {
+  const h = harness(), graph = h.graph, value = state(); graph.setState(value); h.flush();
+  const card = graph.cards.get('step:work'), positions = new Map(graph.positions);
+  value.steps[0].status = 'cancelled'; graph.setState(value); h.flush();
+  assert.equal(graph.cards.get('step:work'), card); assert.equal(card.dataset.status, 'cancelled');
+  assert.ok(card.classList.contains('invalid')); assert.match(card.getAttribute('aria-label'), /已取消/);
+  assert.ok(graph.getEdgeDetails(graph.edges.find(edge => edge.kind === 'step_input')).status === 'invalid');
+  graph.setStatusFilter('pending'); h.flush(); assert.equal(card.hidden, true);
+  graph.setStatusFilter('all'); h.flush(); assert.equal(card.hidden, false);
+  assert.deepEqual(graph.positions, positions); graph.destroy();
 });
 
 test('lost Step support updates cards, result edges and completion filters without changing history or geometry', () => {

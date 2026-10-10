@@ -2,9 +2,23 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {mapState, resolveNodeKey} = require('./static/graph-data.js');
-const {layout, mergePositions, anchors} = require('./static/layout.js');
+const {layout, mergePositions, anchors, NODE_WIDTH, NODE_HEIGHT} = require('./static/layout.js');
 const {routeEdges} = require('./static/routing.js');
-const {visualStatus, nodePresentation, collectSelection, describeEdge} = require('./static/graph-view.js');
+const {visualStatus, nodePresentation, collectSelection, describeEdge, projectGeometry} = require('./static/graph-view.js');
+const {worldBounds} = require('./static/canvas.js');
+
+test('card geometry, viewport bounds and connector endpoints share compact V5 dimensions', () => {
+  const positions = new Map([['a', {x:0,y:0}], ['b', {x:400,y:0}]]);
+  const geometry = projectGeometry([{key:'a'}, {key:'b'}], positions);
+  assert.equal(NODE_WIDTH, 148); assert.equal(NODE_HEIGHT, 78);
+  assert.equal(geometry.get('a').width, NODE_WIDTH); assert.equal(geometry.get('a').height, NODE_HEIGHT);
+  const bounds = worldBounds(positions, {padding:0,baseWidth:0,baseHeight:0});
+  assert.equal(bounds.right, 400 + NODE_WIDTH); assert.equal(bounds.bottom, NODE_HEIGHT);
+  const edge = {id:'ab',source:'a',target:'b'}, route = routeEdges([edge],positions).get(edge);
+  assert.ok(route.start.x >= NODE_WIDTH && route.start.x < NODE_WIDTH + 10);
+  assert.ok(route.end.x <= 400 && route.end.x > 390);
+  assert.equal(route.start.y, NODE_HEIGHT / 2); assert.equal(route.end.y, NODE_HEIGHT / 2);
+});
 
 function fixture() {
   return {graph: {project: {id: 'real-project', generation: 4}}, goals: [{id: 'goal', condition: '证明目标', status: 'achieved', sources: ['result'], support_valid: false}],
@@ -182,7 +196,7 @@ test('dense random placement completes with finite nonoverlapping cards and fixe
   assert.deepEqual(first.positions.get('fact:origin'), second.positions.get('fact:origin')); assert.deepEqual(first.positions.get('goal:goal'), second.positions.get('goal:goal'));
   const points = [...first.positions.values()];
   for (let a = 0; a < points.length; a++) for (let b = a + 1; b < points.length; b++) {
-    assert.ok(Math.abs(points[a].x - points[b].x) >= 188 || Math.abs(points[a].y - points[b].y) >= 114);
+    assert.ok(Math.abs(points[a].x - points[b].x) >= NODE_WIDTH + 24 || Math.abs(points[a].y - points[b].y) >= NODE_HEIGHT + 24);
   }
   assert.ok(points.every(point => Number.isFinite(point.x) && Number.isFinite(point.y)));
 });

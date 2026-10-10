@@ -30,12 +30,27 @@ docker compose --profile images build worker-image
 反向代理保留外部 Host 时，启动服务需显式添加 `--allow-host pwn.example.com`；
 可重复传入或以逗号分隔，填写精确主机名，不带协议、端口或通配符。不会信任 `X-Forwarded-Host`。
 
-模型配置和凭据只保留在 Dispatcher。Worker 镜像和容器不得设置非空的 `ANTHROPIC_*` 环境变量。
+模型配置和凭据保留在控制服务与 Dispatcher，Worker 镜像和容器不得设置非空的 `ANTHROPIC_*` 环境变量。
 主 Agent、子 Agent 和上下文摘要均通过 Dispatcher 调用模型；模型回复经完整检查后交付，文本增量不会实时抵达 Worker。
 升级需同时重建控制镜像和 Worker 镜像，不能混用新旧二进制。
 升级后，缺少 `pwnmesh.model-boundary=dispatcher-v1` 标签的旧项目容器会被拒绝复用，
 不会自动删除：先保全并检查工作区，再迁移到新建容器；不要给旧容器补标签绕过检查。
 旧进程、日志或工件中已有的凭据不会因升级消失；确认曾暴露时应轮换凭据。
+
+### Web 模型接入与代理
+
+在 Web 的「模型接入」中配置 Anthropic Messages 地址、模型名称与 API Key。
+Compose 将配置以 `0600` 权限保存在数据卷的 `/data/model-settings.json`，Dispatcher 只读共享，
+修改在新调度和新 Worker 运行时生效，已经开始的运行保留启动时配置。
+页面不回显密钥；同一接口来源下留空可保留，切换协议、主机或端口必须输入新密钥。
+「模拟测试」使用当前表单执行真实 `tool_use → tool_result → 最终答复` 往返，不保存未提交的配置。
+
+本机代理端口为 `7897` 时，选择「使用代理」，地址填写 `http://host.docker.internal:7897`。
+Compose 和新 Worker 配置了 `host-gateway` 映射；容器中的 `localhost` 代理地址也会转换为宿主机地址。
+Linux 宿主机代理需要监听容器可达的接口，并允许容器网关访问；仅监听宿主机 `127.0.0.1` 的代理可能无法连通。
+代理覆盖模型 HTTP 客户端，以及 Worker 的 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY` 和小写环境变量。
+支持 HTTP(S) 与 SOCKS5；不支持这些环境变量的裸 TCP/UDP 工具仍需自行配置代理。
+直连模式清除 Worker 代理变量，内部控制 API 和 Docker Engine 通信保持直接连接。
 
 `run_graph` 命令节点分别保留 `stdout.log` 和 `stderr.log`，回执中的 `output_path`、
 `stderr_path` 指向对应完整文件；两份日志均校验 SHA-256，结构化 stdout 不混入诊断信息。

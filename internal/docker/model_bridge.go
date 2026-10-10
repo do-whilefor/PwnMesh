@@ -59,9 +59,16 @@ func publicModelSettings(p *provider.Anthropic) modelrpc.Settings {
 
 func modelWorkerEnv(w config.Worker, token string) ([]string, error) {
 	env := []string{"PWNMESH_MODEL_BRIDGE=dispatcher-v1"}
+	mode := w.Env["PWNMESH_CONNECTION_MODE"]
 	for key, value := range w.Env {
 		if strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") || key == "PWNMESH_MODEL_BRIDGE" || key == "PWNMESH_LAUNCH_TOKEN" {
 			continue
+		}
+		if mode != "" {
+			switch strings.ToUpper(key) {
+			case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
+				continue
+			}
 		}
 		if strings.Contains(key, "=") || strings.ContainsRune(key+value, '\x00') {
 			return nil, errors.New("invalid worker environment")
@@ -70,6 +77,25 @@ func modelWorkerEnv(w config.Worker, token string) ([]string, error) {
 			return nil, errors.New("model credential is duplicated in the tool environment")
 		}
 		env = append(env, key+"="+value)
+	}
+	if mode != "" {
+		proxy := ""
+		if mode == "proxy" {
+			var err error
+			proxy, err = provider.ProxyURL(w.Env["PWNMESH_PROXY_URL"], true)
+			if err != nil {
+				return nil, err
+			}
+		} else if mode != "direct" {
+			return nil, errors.New("connection_mode must be direct or proxy")
+		}
+		for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+			env = append(env, key+"="+proxy)
+		}
+		// Local RPC and tools' loopback services must remain directly reachable.
+		for _, key := range []string{"NO_PROXY", "no_proxy"} {
+			env = append(env, key+"=localhost,127.0.0.1,::1,server")
+		}
 	}
 	return env, nil
 }

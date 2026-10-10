@@ -11,7 +11,7 @@
   const {mergePositions, NODE_WIDTH, NODE_HEIGHT} = layout;
   const {projectGeometry, describeEdge, collectSelection, placeEdgeLabel, nodePresentation, edgeKey} = view;
   const NS = 'http://www.w3.org/2000/svg';
-  const COLORS = {done: '#8fa17a', running: '#d97757', pending: '#b0aea5', recorded: '#b0aea5', paused: '#b38548', invalid: '#b18748', selected: '#bc6043'};
+  const COLORS = Object.freeze({neutral: '#7b8b9e', step_input: '#6b89b2', step_result: '#4a938a', step_dependency: '#8a71aa', goal_step: '#9983b3', parent: '#62977d', goal_support: '#3f8b70', finding_support: '#b18a42', refutes: '#b66b73', supersedes: '#9275a8', narrows: '#8c854d'});
   let nextInstance = 0;
   const clone = value => value == null ? null : JSON.parse(JSON.stringify(value));
 
@@ -33,7 +33,7 @@
       this.defs = this.svgEl('defs');
       for (const [name, color] of Object.entries(COLORS)) {
         const marker = this.svgEl('marker', {id: this.instanceId + '-arrow-' + name, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 5, markerHeight: 5, orient: 'auto-start-reverse'});
-        marker.append(this.svgEl('path', {d: 'M 1 1 L 9 5 L 1 9 Z', fill: color})); this.defs.append(marker);
+        marker.append(this.svgEl('path', {d: 'M 2 2 L 8 5 L 2 8', fill: 'none', stroke: color, 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round'})); this.defs.append(marker);
       }
       this.edgeLayer = this.svgEl('g'); this.labelLayer = this.svgEl('g', {class: 'graph-edge-labels'}); this.svg.append(this.defs, this.edgeLayer, this.labelLayer);
       this.world.append(this.svg, this.nodeHost); this.viewport.append(this.world);
@@ -67,7 +67,7 @@
     }
     el(tag, cls, text) { const node = this.document.createElement(tag); node.className = cls; if (text !== undefined) node.textContent = text; return node; }
     svgEl(tag, attrs = {}) { const node = this.document.createElementNS(NS, tag); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, value); return node; }
-    icon(name) { const icon = this.svgEl('svg', {class: 'icon', 'aria-hidden': 'true'}); icon.append(this.svgEl('use', {href: '#i-' + name})); return icon; }
+    icon(name) { const icon = this.svgEl('svg', {class: 'icon', viewBox: '0 0 24 24', 'aria-hidden': 'true'}); icon.append(this.svgEl('use', {href: '#i-' + name})); return icon; }
     listen(target, name, fn, options) { target.addEventListener(name, fn, options); this.listeners.push(() => target.removeEventListener(name, fn, options)); }
     size() { return {width: this.viewport.clientWidth, height: this.viewport.clientHeight}; }
     requestFrame(fn) { return this.window.requestAnimationFrame(fn); }
@@ -128,7 +128,7 @@
         card.dataset.status = node.status; card.dataset.viewType = shape.kind;
         card.setAttribute('aria-label', shape.label + '：' + (node.label || node.id) + '，' + shape.statusLabel);
         card.title = shape.label + ' · ' + shape.statusLabel + '\n' + (node.description || node.id);
-        card.parts.kind.replaceChildren(this.icon(({start: 'flag', task: 'node', fact: 'file', goal: 'check', subgoal: 'node', finding: 'file'})[shape.kind] || 'node'), card.parts.kindText);
+        card.parts.kind.replaceChildren(this.icon(({start: 'flag', task: 'node', fact: 'file', goal: 'target', subgoal: 'target', finding: 'shield'})[shape.kind] || 'node'), card.parts.kindText);
         card.parts.kindText.textContent = shape.label; card.parts.statusText.textContent = shape.statusLabel;
         card.parts.title.textContent = node.label || node.id; card.parts.subtitle.textContent = shape.subtitle;
         card.parts.status.replaceChildren();
@@ -177,7 +177,7 @@
         const route = this.edgeRouteCache.routes.get(edge.id), detail = describeEdge(this.project, edge); if (!route || !detail) continue;
         let entry = this.edgeElements.get(edge.id);
         if (!entry) {
-          const group = this.svgEl('g'), path = this.svgEl('path', {'aria-hidden': 'true'}), port = this.svgEl('circle', {r: 2.2, class: 'graph-source-port'});
+          const group = this.svgEl('g'), path = this.svgEl('path', {'aria-hidden': 'true'}), port = this.svgEl('circle', {r: 1.7, class: 'graph-source-port'});
           const hit = this.svgEl('path', {role: 'button', tabindex: 0}), title = this.svgEl('title'), label = this.svgEl('text', {'text-anchor': 'middle', 'dominant-baseline': 'central', 'aria-hidden': 'true'});
           hit.append(title); group.append(path, port, hit); this.edgeLayer.append(group); this.labelLayer.append(label);
           hit.dataset.edgeKey = edge.id; label.dataset.edgeKey = edge.id;
@@ -186,7 +186,10 @@
         const visible = this.isEdgeVisible(edge);
         entry.group.style.display = visible ? '' : 'none'; entry.label.style.display = visible ? '' : 'none';
         const selected = this.selectedEdge === edge.id, related = selection.edgeKeys.has(edge.id), dim = selection.active && !related;
-        const color = selected ? 'selected' : detail.status;
+        const color = Object.hasOwn(COLORS, edge.kind) ? edge.kind : 'neutral';
+        entry.group.style.setProperty('--edge-color', COLORS[color]);
+        entry.label.style.setProperty('--edge-color', COLORS[color]);
+        for (const element of [entry.path, entry.port, entry.hit, entry.label]) element.dataset.edgeKind = edge.kind;
         const classes = detail.status + (selected ? ' selected' : '') + (related ? ' lineage' : '') + (dim ? ' dim' : '');
         entry.path.setAttribute('d', route.d); entry.path.setAttribute('class', 'graph-edge ' + classes); entry.path.setAttribute('marker-end', 'url(#' + this.instanceId + '-arrow-' + color + ')');
         entry.port.setAttribute('cx', route.start.x); entry.port.setAttribute('cy', route.start.y); entry.port.setAttribute('fill', COLORS[color]); entry.port.setAttribute('opacity', dim ? .2 : 1);

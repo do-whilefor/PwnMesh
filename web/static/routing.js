@@ -8,7 +8,7 @@
 
   function geometry(positions, options) {
     if (!(positions instanceof Map)) throw new TypeError('Routing positions must be a Map');
-    const width = options.width ?? 164, height = options.height ?? 90;
+    const width = options.width ?? 148, height = options.height ?? 78;
     if (![width, height].every(value => Number.isFinite(value) && value > 0)) throw new RangeError('Routing dimensions must be positive');
     return new Map([...positions].map(([id, point]) => {
       if (![point.x, point.y].every(Number.isFinite)) throw new RangeError('Routing coordinates must be finite');

@@ -23,7 +23,7 @@ func TestWorkbenchServesDocumentWithSameOriginPolicy(t *testing.T) {
 				t.Fatalf("workspace content type = %q", response.Header().Get("Content-Type"))
 			}
 			html := response.Body.String()
-			for _, want := range []string{"<title>PwnMesh · 任务工作台</title>", "<span>PwnMesh<small>", "保存至 PwnMesh 服务", `id="graph-host"`} {
+			for _, want := range []string{"<title>PwnMesh · 任务工作台</title>", `src="/static/brand.png"`, "保存至 PwnMesh 服务", `id="graph-host"`, `id="view-materials"`, `id="view-results"`, `id="open-models"`} {
 				if !strings.Contains(html, want) {
 					t.Errorf("PwnMesh workspace is missing %q", want)
 				}
@@ -90,7 +90,7 @@ func TestWorkbenchLoadsEmbeddedCanvasAssets(t *testing.T) {
 						t.Error("HEAD response contains an asset body")
 					}
 					mediaType, _, err := mime.ParseMediaType(asset.Header().Get("Content-Type"))
-					want := map[string]string{".js": "javascript", ".css": "text/css", ".svg": "image/svg+xml"}[path.Ext(endpoint)]
+					want := map[string]string{".js": "javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png", ".woff2": "font/woff2"}[path.Ext(endpoint)]
 					if err != nil || want == "" || !strings.Contains(mediaType, want) {
 						t.Errorf("asset Content-Type = %q for %s", asset.Header().Get("Content-Type"), endpoint)
 					}
@@ -100,7 +100,7 @@ func TestWorkbenchLoadsEmbeddedCanvasAssets(t *testing.T) {
 	}
 	for _, name := range []string{
 		"api.js", "data.js", "graph-data.js", "canvas.js", "layout.js", "routing.js",
-		"graph-view.js", "graph.js", "app.js", "style.css", "graph.css", "mark.svg",
+		"graph-view.js", "graph.js", "app.js", "style.css", "graph.css", "brand.png", "workbench.css", "models.js", "models.css",
 	} {
 		if !loaded["/static/"+name] {
 			t.Errorf("workspace does not load %s", name)

@@ -40,7 +40,7 @@ func (s *Scheduler) environmentID(w config.Worker) string {
 		env[key] = w.Env[key]
 	}
 	// Keep existing identities stable when these newer settings are absent.
-	for _, key := range []string{"PWNMESH_CONTEXT_TOKENS", "PWNMESH_CONTEXT_TARGET_TOKENS"} {
+	for _, key := range []string{"PWNMESH_CONTEXT_TOKENS", "PWNMESH_CONTEXT_TARGET_TOKENS", "PWNMESH_CONNECTION_MODE", "PWNMESH_PROXY_URL"} {
 		if value := w.Env[key]; value != "" {
 			env[key] = value
 		}
@@ -229,6 +229,9 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 		t := &task{Job: worker.Job{RunID: e.ID, Graph: board.Graph{Project: project}}, Lease: Lease{Run: e.Lease, Kind: e.Kind, Intent: e.Intent}}
 		if states[e.ProjectID] != "active" || e.Generation != s.generations[e.ProjectID] {
 			s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: "hard_cancelled", Error: "project is not active"})
+			continue
+		}
+		if s.modelSettingsErr != nil && e.Status != "result_pending" {
 			continue
 		}
 		if until, waiting := s.deliveryWaits[e.ID]; waiting {

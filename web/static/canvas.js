@@ -7,7 +7,7 @@
   'use strict';
 
   function worldBounds(positions, options = {}) {
-    const { width = 164, height = 90, baseWidth = 1780, baseHeight = 1080, padding = 32 } = options;
+    const { width = 148, height = 78, baseWidth = 1780, baseHeight = 1080, padding = 32 } = options;
     if (![width, height, baseWidth, baseHeight, padding].every(value => Number.isFinite(value) && value >= 0)) throw new RangeError('Canvas dimensions must be finite and non-negative');
     let left = 0, top = 0, right = baseWidth, bottom = baseHeight;
     for (const point of positions.values()) {

@@ -3,7 +3,8 @@
   const data = window.PwnMeshData, api = new window.PwnMeshAPI.Client(), requests = new window.PwnMeshAPI.RequestScope();
   const $ = id => document.getElementById(id), NS = 'http://www.w3.org/2000/svg';
   const eventCache = new Map(), drafts = new Map(), expandedLogs = new Set();
-  let logBodyId = 0;
+  let logBodyId = 0, mainView = 'canvas', materialVersion = 0, materialProject = '', materialItems = [];
+  let logQuery = '';
   let projects = [], state = null, executions = [], events = [], logs = [], selectedId = '';
   let selectedNode = null, selectedEdge = null, tab = 'board', systemFilter = 'all', logLimit = 300;
   let timer, toastTimer, management = null, hintProjectId = '', mutating = false, connected = false;
@@ -45,7 +46,7 @@
       const button = el('button', 'project-item'), mark = el('span', 'project-symbol'), copy = el('span', 'project-copy'), meta = el('small');
       button.type = 'button'; button.dataset.projectId = project.id; button.title = project.title; button.disabled = mutating;
       button.setAttribute('aria-current', String(project.id === selectedId)); button.setAttribute('aria-label', project.title + '，' + data.scenarioName(project.scenario)); mark.append(icon(scenarioIcon(project)));
-      meta.append(el('i', 'status-dot ' + cssStatus(project.status)), el('span', '', data.statusName(project.status)));
+      meta.append(el('span', '', data.scenarioName(project.scenario)), el('i', 'status-dot ' + cssStatus(project.status)), el('span', '', data.statusName(project.status)));
       const created = timestamp(project.created_at); created.className = 'project-created'; created.title = '项目创建时间（上海时区）';
       copy.append(el('strong', '', project.title), meta, created); button.append(mark, copy); button.addEventListener('click', () => selectProject(project.id));
       const menu = el('details', 'project-menu'), summary = el('summary'), panel = el('div', 'project-menu-panel');
@@ -69,9 +70,13 @@
     const project = current(), ended = project && ['completed','terminated'].includes(project.status);
     $('breadcrumb-title').textContent = project?.title || '我的项目'; $('project-title').textContent = project?.title || (connected ? '准备好开始探索了吗？' : '正在加载项目');
     $('project-type').replaceChildren(); if (project) $('project-type').append(icon(scenarioIcon(project)), document.createTextNode(data.scenarioName(project.scenario)));
+    $('project-title').title = project?.title || '';
+    $('project-info').disabled = !project;
     $('project-status').textContent = project ? data.statusName(project.status) : ''; $('project-status').className = 'status-badge ' + cssStatus(project?.status || ''); $('project-status').hidden = !project;
     $('round-label').textContent = project ? '第 ' + ((project.generation || 0) + 1) + ' 轮探索' : '新的探索';
     const timing = data.projectTiming(state, executions), progress = data.taskProgress(state);
+    $('project-created-at').textContent = project ? '创建 ' + data.formatTime(project.created_at) : '';
+    if (project?.created_at) $('project-created-at').dateTime = project.created_at; else $('project-created-at').removeAttribute('datetime');
     $('project-start').textContent = project ? '开始 ' + (timing.startedAt ? data.formatTime(timing.startedAt) : '尚未开始') : '等待创建项目';
     if (timing.startedAt) $('project-start').dateTime = timing.startedAt; else $('project-start').removeAttribute('datetime');
     $('project-end').textContent = ended ? '结束 ' + (timing.endedAt ? data.formatTime(timing.endedAt) : '未记录时间') : '';
@@ -143,6 +148,7 @@
   }
   function renderLog(log) {
     const article = el('article', 'timeline-entry ' + log.level + (log.kind === 'model' ? ' conclusion' : '')); article.dataset.logId = log.id;
+    const read = el('button', 'icon-button read-log'); read.type = 'button'; read.setAttribute('aria-label', '阅读全文：' + log.title); read.append(icon('expand')); read.addEventListener('click', () => openReader(log.title, [log.body, log.scope && '范围：' + log.scope, log.code, log.worker && 'Worker：' + log.worker].filter(Boolean).join('\n\n'))); article.append(read);
     const meta = el('div', 'entry-meta'); meta.append(el('span', 'entry-tag', log.kind === 'model' ? '关键结论' : data.phaseName(log.phase)), timestamp(log.time)); article.append(meta, el('h3', '', log.title));
     const parts = [el('p', '', log.body || '')]; if (log.scope) parts.push(el('p', '', '范围：' + log.scope)); if (log.code) parts.push(el('pre', 'log-code', log.code));
     article.append(logContent('board', log.id, parts)); if (log.worker) article.append(el('small', 'log-worker', log.worker));
@@ -155,7 +161,16 @@
     if (selectedEdge) {
       const detail = graph.getEdgeDetails(selectedEdge.id), ids = new Set(); for (const node of [detail?.sourceNode, detail?.targetNode]) if (node) for (const log of data.filterLogs(logs, {node})) ids.add(log.id); entries = logs.filter(log => ids.has(log.id));
     }
+    entries = filterLogEntries(entries);
     $('activity-count').textContent = entries.length + ' 条记录'; if (!entries.length) { $('activity-content').append(emptyPanel('还没有关联记录', '项目产生的决策、执行和证据会显示在这里。', 'message')); return; }
+    if (!selectedNode && !selectedEdge && !logQuery) {
+      const active = (state?.steps || []).filter(step => step.status === 'running');
+      if (active.length) {
+        const card = el('button', 'current-task-card'), meta = el('span', 'current-task-meta'); card.type = 'button';
+        meta.append(el('span', '', '正在执行'), el('small', '', active.length > 1 ? active.length + ' 项任务' : '当前任务'));
+        card.append(meta, el('strong', '', active[0].description), el('span', 'current-task-note', '点击查看任务状态与关联证据')); card.addEventListener('click', () => revealNode({type:'step',id:active[0].id})); $('activity-content').append(card, el('p', 'history-caption', '历史记录'));
+      }
+    }
     const shown = entries.slice(-logLimit).reverse(); $('activity-content').append(...shown.map(renderLog));
     if (entries.length > shown.length) { const more = el('button', 'button secondary more-logs', '显示更早记录（' + (entries.length - shown.length) + '）'); more.addEventListener('click', () => { logLimit += 300; renderActivity(); }); $('activity-content').append(more); }
   }
@@ -164,7 +179,7 @@
     for (const [value, label] of [['all','全部日志'],['http','LLM 错误'],['errors','全部错误']]) { const option = el('option', '', label); option.value = value; filter.append(option); }
     filter.value = systemFilter; filter.addEventListener('change', () => { systemFilter = filter.value; renderActivity(); }); $('activity-tools').append(el('span', '', '系统运行记录'), filter);
     $('activity-content').append(el('p', 'source-notice', system.unavailable.join('、') + '：暂未接入。'));
-    const entries = system.logs.filter(log => systemFilter === 'http' ? log.component === 'LLM' && log.level === 'error' : systemFilter !== 'errors' || log.level === 'error'); $('activity-count').textContent = entries.length + ' 条记录';
+    const entries = filterLogEntries(system.logs).filter(log => systemFilter === 'http' ? log.component === 'LLM' && log.level === 'error' : systemFilter !== 'errors' || log.level === 'error'); $('activity-count').textContent = entries.length + ' 条记录';
     for (const log of entries.slice(-logLimit).reverse()) {
       const article = el('article', 'system-entry ' + log.level), meta = el('div', 'system-meta'); article.dataset.logId = log.id; meta.append(icon('terminal'), el('span', '', log.component), timestamp(log.time)); article.append(meta, el('h3', '', log.title || ''), logContent('system', log.id, [el('p', '', log.body || '')]));
       if (log.truncated) article.append(el('p', 'evidence-warning', '输出已截断，内容不完整。')); if (log.node) article.append(evidenceButtons([log.node])); $('activity-content').append(article);
@@ -177,20 +192,20 @@
     for (const [format, label, suffix] of [['yaml','导出项目','yaml'], ['timeline','导出时间线','txt']]) { const link = el('a', 'button secondary export-result'); link.href = pathFor(selectedId) + '/export?format=' + format; link.download = selectedId + '-' + format + '.' + suffix; link.append(icon('download'), document.createTextNode(label)); box.append(link); }
     return box;
   }
-  function renderResult() {
-    const result = data.buildResult(state, logs); $('activity-tools').append(el('span', '', '结论与证据'), el('span', '', result.status === 'completed' ? '本轮已完成' : '当前轮')); $('activity-count').textContent = result.findings.length + ' 项发现';
+  function renderResult(host = $('activity-content'), toolbar = $('activity-tools'), counter = $('activity-count')) {
+    const result = data.buildResult(state, logs); toolbar.append(el('span', '', '结论与证据'), el('span', '', result.status === 'completed' ? '本轮已完成' : '当前轮')); counter.textContent = result.findings.length + ' 项发现';
     const titles = {completed:'探索已完成',terminated:'本轮已终止',pending:'答案正在探索中',unverified:'完成证据待核对'};
-    if (result.status === 'completed') { const header = el('div', 'result-header'), check = el('span', 'result-check'); check.append(icon('check')); header.append(check, el('h3', '', titles[result.status])); $('activity-content').append(header, el('p', 'result-summary', result.summary)); }
-    else $('activity-content').append(emptyPanel(titles[result.status] || titles.pending, result.notice || '当前轮还没有可确认的项目完成结论。'));
-    if (result.status === 'completed' && result.notice) $('activity-content').append(el('p', 'source-notice', result.notice)); if (result.truncated) $('activity-content').append(el('p', 'evidence-warning', '包含已截断输出，结论内容不完整。'));
-    if (result.findings.length) $('activity-content').append(el('h3', 'result-subheading', '发现与支持证据'));
-    for (const finding of result.findings) { const article = el('article', 'finding' + (finding.supportValid === false ? ' invalid' : '')); article.append(el('h3', '', finding.claim), el('p', '', finding.statusLabel || data.statusName(finding.status))); if (finding.sources?.length) article.append(evidenceButtons(finding.sources)); $('activity-content').append(article); }
-    if (result.conclusions.length) { $('activity-content').append(el('h3', 'result-subheading', '单次执行结论'), el('p', 'source-notice', '执行结论不等于项目已完成，请结合目标和有效证据核对。')); $('activity-content').append(...result.conclusions.map(renderLog)); }
-    $('activity-content').append(exportLinks());
+    if (result.status === 'completed') { const header = el('div', 'result-header'), check = el('span', 'result-check'); check.append(icon('check')); header.append(check, el('h3', '', titles[result.status])); host.append(header, el('p', 'result-summary', result.summary)); }
+    else host.append(emptyPanel(titles[result.status] || titles.pending, result.notice || '当前轮还没有可确认的项目完成结论。'));
+    if (result.status === 'completed' && result.notice) host.append(el('p', 'source-notice', result.notice)); if (result.truncated) host.append(el('p', 'evidence-warning', '包含已截断输出，结论内容不完整。'));
+    if (result.findings.length) host.append(el('h3', 'result-subheading', '发现与支持证据'));
+    for (const finding of result.findings) { const article = el('article', 'finding' + (finding.supportValid === false ? ' invalid' : '')); article.append(el('h3', '', finding.claim), el('p', '', finding.statusLabel || data.statusName(finding.status))); if (finding.sources?.length) article.append(evidenceButtons(finding.sources)); host.append(article); }
+    if (result.conclusions.length) { host.append(el('h3', 'result-subheading', '单次执行结论'), el('p', 'source-notice', '执行结论不等于项目已完成，请结合目标和有效证据核对。')); host.append(...result.conclusions.map(renderLog)); }
+    host.append(exportLinks());
   }
   function renderActivity({reset = false} = {}) {
     if (selectedNode && !graph.getNodes().some(node => nodeKey(node) === nodeKey(selectedNode))) selectedNode = null; if (selectedEdge && !graph.getEdgeDetails(selectedEdge.id)) selectedEdge = null;
-    const signature = JSON.stringify([tab, systemFilter, workspaceVersion, nodeKey(selectedNode), selectedEdge?.id, logLimit]);
+    const signature = JSON.stringify([tab, systemFilter, logQuery, workspaceVersion, nodeKey(selectedNode), selectedEdge?.id, logLimit]);
     if (!reset && signature === activitySignature) return; activitySignature = signature; const content = $('activity-content'), previousTop = content.scrollTop;
     const system = data.buildSystemLogs(logs);
     content.replaceChildren(); $('activity-tools').replaceChildren(); renderInspector();
@@ -204,10 +219,11 @@
   function updateGraph(value) { updatingGraph = true; try { graph.setState(value); } finally { updatingGraph = false; } }
   function resetSelection(id) {
     if (id !== selectedId) { hintFiles = []; hintFilesProjectId = ''; $('hint-files').value = ''; renderFiles('hint', hintFiles); }
+    materialVersion++; materialProject = ''; materialItems = []; $('material-count').textContent = '';
     selectedId = id; state = null; executions = []; events = []; logs = []; selectedNode = null; selectedEdge = null; logLimit = 300; activitySignature = ''; workspaceSignature = '';
-    updateGraph(null); renderHeader(); renderActivity({reset:true}); try { if (id) localStorage.setItem('pwnmesh.selected-project', id); else localStorage.removeItem('pwnmesh.selected-project'); } catch {}
+    updateGraph(null); renderHeader(); renderActivity({reset:true}); renderMainView(); try { if (id) localStorage.setItem('pwnmesh.selected-project', id); else localStorage.removeItem('pwnmesh.selected-project'); } catch {}
   }
-  async function selectProject(id) { if (mutating) return; if (id !== selectedId || !state) resetSelection(id); closeMenus(); renderProjects(); await loadWorkspace(id); }
+  async function selectProject(id) { if (mutating) return; window.PwnMeshModels?.close(); if (id !== selectedId || !state) resetSelection(id); closeMenus(); renderProjects(); await loadWorkspace(id); }
   async function loadWorkspace(preferred = selectedId) {
     if (mutating) return; clearTimeout(timer); const request = requests.begin(), options = {signal:request.signal}; let retryGeneration = false;
     try {
@@ -233,7 +249,7 @@
       state = nextState; executions = runs.filter(run => (run.generation || 0) === generation); events = cache.events.filter(event => event.revision <= state.revision);
       // Execution status can change without advancing the board revision.
       const signature = JSON.stringify([state, events, executions]);
-      if (signature !== workspaceSignature) { workspaceSignature = signature; workspaceVersion++; logs = data.buildLogs(state, events, executions); updateGraph(state); renderActivity(); }
+      if (signature !== workspaceSignature) { workspaceSignature = signature; workspaceVersion++; logs = data.buildLogs(state, events, executions); updateGraph(state); renderActivity(); renderMainView(); }
       setConnection(true); $('last-update').textContent = '刷新 ' + data.formatTime(new Date().toISOString());
     } catch (error) { if (!requests.current(request.version)) return; setConnection(false, error.message + '。已显示的数据会保留，稍后自动重试。'); }
     finally { if (requests.current(request.version)) timer = setTimeout(() => loadWorkspace(selectedId), retryGeneration ? 0 : document.hidden ? 10000 : 2500); }
@@ -298,7 +314,106 @@
       }));
     } catch (error) { if (version === inputReadVersion && hintProjectId === id) $('imported-inputs-status').textContent = '材料列表读取失败：' + error.message; }
   }
-  function openCreate() { if (mutating) return; if (!createDraft) $('create-form').reset(); if (!createUncertain) $('create-error').textContent = ''; lockInputs(); $('create-dialog').showModal(); $('create-name').focus(); }
+  function filterLogEntries(entries) {
+    if (!logQuery) return entries;
+    return entries.filter(entry => [entry.title, entry.body, entry.code, entry.worker, entry.scope, entry.phase, entry.component].filter(Boolean).join('\n').toLocaleLowerCase().includes(logQuery));
+  }
+  function openReader(title, content) {
+    $('reader-title').textContent = title || '查看内容'; $('reader-content').replaceChildren();
+    if (typeof content === 'string') $('reader-content').textContent = content; else $('reader-content').append(content);
+    $('reader-dialog').showModal();
+  }
+  function projectInput(name) {
+    const facts = state?.graph?.facts || [];
+    const fact = facts.find(item => item.id === name);
+    return fact?.content || fact?.description || fact?.value || current()?.[name] || '';
+  }
+  function showProjectInfo() {
+    const project = current(); if (!project) return;
+    const list = el('dl', 'project-info-grid');
+    for (const [label, value] of [['项目类型',data.scenarioName(project.scenario)],['起点 / 已知信息',projectInput('origin')],['终点 / 项目目标',projectInput('goal')],['项目状态',data.statusName(project.status)],['创建时间',data.formatTime(project.created_at)],['当前轮次',String((project.generation || 0) + 1)]]) {
+      const row = el('div'); row.append(el('dt', '', label), el('dd', '', value || '尚未记录')); list.append(row);
+    }
+    openReader(project.title, list);
+  }
+  function contentHeading(title, description) {
+    const header = el('header', 'content-heading'), copy = el('div'); copy.append(el('h2', '', title), el('p', '', description)); header.append(copy); return header;
+  }
+  function renderMaterials() {
+    const host = $('materials-view'); host.replaceChildren();
+    const heading = contentHeading('项目材料', '原始输入与上传文件，供 Agent 探索和证据核对。'), upload = el('button', 'button secondary');
+    upload.append(icon('paperclip'), document.createTextNode('添加材料')); upload.disabled = !current() || !['active','stopped'].includes(current()?.status) || mutating || !connected; upload.addEventListener('click', openHint); heading.append(upload); host.append(heading);
+    for (const [label,name] of [['起点 / 已知信息','origin'],['终点 / 项目目标','goal']]) {
+      const value = projectInput(name); if (!value) continue;
+      const card = el('article', 'project-summary-card'); card.append(el('h3', '', label), el('p', '', value)); host.append(card);
+    }
+    const list = el('div', 'material-list'); host.append(list);
+    if (materialProject !== selectedId) { list.append(emptyPanel('正在读取材料', '正在从项目服务读取原始文件清单。', 'paperclip')); return; }
+    if (!materialItems.length) { list.append(emptyPanel('尚未上传文件', '通过「添加材料」上传源码、请求记录、APK 或其他测试文件。', 'paperclip')); return; }
+    for (const input of materialItems) {
+      const card = el('article', 'material-card'), copy = el('div', 'material-card-copy'), actions = el('div', 'material-actions'), details = el('button', 'button secondary', '查看详情');
+      copy.append(el('h3', '', input.name), el('p', '', fileSize(input.size) + ' · ' + data.formatTime(input.created_at)), el('p', '', input.path));
+      details.addEventListener('click', () => openMaterialReader(input, selectedId));
+      const download = el('a', 'button secondary', '下载'); download.href = pathFor(selectedId) + '/inputs/' + encodeURIComponent(input.id); download.download = input.name; actions.append(details, download);
+      card.append(icon('file'), copy, actions); list.append(card);
+    }
+    $('material-count').textContent = materialItems.length ? String(materialItems.length) : '';
+  }
+  async function openMaterialReader(input, projectId) {
+    const content = el('div', 'material-reader'), meta = el('p', 'material-reader-meta');
+    meta.textContent = '大小：' + fileSize(input.size) + '\n导入时间：' + data.formatTime(input.created_at) + '\n路径：' + input.path + '\nSHA-256：' + input.sha256;
+    const download = el('a', 'button secondary', '下载原始文件'); download.href = pathFor(projectId) + '/inputs/' + encodeURIComponent(input.id); download.download = input.name;
+    content.append(meta, download); openReader(input.name, content);
+    if (!window.PwnMeshInputPreview?.textFile(input)) { content.append(el('p', 'source-notice', '二进制文件或超过 256 KiB 的材料请下载查看。')); return; }
+    const preview = el('pre', 'material-preview', '正在读取文件内容…'); content.append(preview);
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15000);
+    $('reader-dialog').addEventListener('close', () => controller.abort(), {once:true});
+    try { preview.textContent = await window.PwnMeshInputPreview.read(download.href.startsWith('/') ? download.href : new URL(download.href).pathname, {signal:controller.signal}); }
+    catch (error) { if (!controller.signal.aborted) preview.textContent = error.message; else preview.textContent = '读取已取消或超时，请下载查看。'; }
+    finally { clearTimeout(timeout); }
+  }
+  async function readMaterials() {
+    const id = selectedId, version = ++materialVersion;
+    if (!id) { materialProject = ''; materialItems = []; renderMaterials(); return; }
+    renderMaterials();
+    try {
+      const inputs = await api.request(pathFor(id) + '/inputs');
+      if (selectedId !== id || version !== materialVersion) return;
+      materialProject = id; materialItems = inputs; renderMaterials();
+    } catch (error) {
+      if (selectedId !== id || version !== materialVersion) return;
+      $('materials-view').replaceChildren(contentHeading('项目材料', '文件清单暂时不可用'), emptyPanel('材料读取失败', error.message));
+      const retry = el('button', 'button secondary', '重试'); retry.addEventListener('click', readMaterials); $('materials-view').append(retry);
+    }
+  }
+  function renderMainView() {
+    if (mainView === 'results') {
+      const host = $('results-view'); host.replaceChildren(contentHeading('探索结果', '查看当前轮的结论、发现与支持证据。'));
+      if (current()) renderResult(host, el('div'), el('span')); else host.append(emptyPanel('尚未选择项目', '创建或选择项目后查看探索结果。'));
+    } else if (mainView === 'materials') {
+      if (materialProject === selectedId) renderMaterials(); else readMaterials();
+    }
+  }
+  function showView(view) {
+    mainView = view;
+    for (const [name, id] of [['canvas','graph-stage'],['materials','materials-view'],['results','results-view']]) {
+      $(id).hidden = name !== view; $('view-' + name).setAttribute('aria-selected', String(name === view)); $('view-' + name).tabIndex = name === view ? 0 : -1;
+    }
+    $('graph-legend').hidden = view !== 'canvas'; renderMainView();
+    if (view === 'canvas') graph.refreshViewport?.();
+  }
+  const viewNames = ['canvas','materials','results'];
+  for (const name of viewNames) {
+    const button = $('view-' + name); button.addEventListener('click', () => showView(name));
+    button.addEventListener('keydown', event => {
+      let index = viewNames.indexOf(name);
+      if (event.key === 'ArrowRight') index = (index + 1) % viewNames.length; else if (event.key === 'ArrowLeft') index = (index + viewNames.length - 1) % viewNames.length; else if (event.key === 'Home') index = 0; else if (event.key === 'End') index = viewNames.length - 1; else return;
+      event.preventDefault(); showView(viewNames[index]); $('view-' + viewNames[index]).focus();
+    });
+  }
+  $('project-info').addEventListener('click', showProjectInfo);
+  $('log-search').addEventListener('input', () => { logQuery = $('log-search').value.trim().toLocaleLowerCase(); renderActivity({reset:true}); });
+  function openCreate() { if (mutating) return; window.PwnMeshModels?.close(); if (!createDraft) $('create-form').reset(); if (!createUncertain) $('create-error').textContent = ''; lockInputs(); $('create-dialog').showModal(); $('create-name').focus(); }
   function openHint() {
     const project = current(); if (!project || !['active','stopped'].includes(project.status) || mutating || !connected) return;
     hintProjectId = project.id; if (hintFilesProjectId !== project.id) { hintFiles = []; $('hint-files').value = ''; $('hint-progress').textContent = ''; } hintFilesProjectId = project.id;
@@ -360,7 +475,7 @@
         $('hint-progress').textContent = '正在提交 ' + hintFiles.length + ' 个文件及补充说明…';
         await api.uploadInputs(pathFor(id), hintFiles.map(item => item.file), content);
       } else if (content) await api.request(pathFor(id) + '/hints', {method:'POST',body:{content,creator:'user'}});
-      hintFiles = []; $('hint-progress').textContent = ''; $('hint-input').value = ''; drafts.delete(id); $('hint-dialog').close(); selectedNode = null; selectedEdge = null; graph.selectNode(null); tab = 'board'; toast('补充材料已保存');
+      hintFiles = []; $('hint-progress').textContent = ''; $('hint-input').value = ''; drafts.delete(id); $('hint-dialog').close(); materialProject = ''; materialVersion++; selectedNode = null; selectedEdge = null; graph.selectNode(null); tab = 'board'; toast('补充材料已保存');
     }
     catch (error) { $('hint-progress').textContent = ''; $('hint-error').textContent = mutationError(error); loadInputs(id); } finally { await finishMutation(); }
   });

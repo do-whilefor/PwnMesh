@@ -83,6 +83,9 @@ func (s *Scheduler) health(ctx context.Context, w config.Worker, budgets ...conf
 		if err != nil {
 			return &healthFailure{Kind: "configuration", Err: err}
 		}
+		if p.Client != nil {
+			defer p.Client.CloseIdleConnections()
+		}
 		if seen[p.ReasoningEffort] {
 			continue
 		}

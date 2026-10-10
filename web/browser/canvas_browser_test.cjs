@@ -35,6 +35,28 @@ test('embedded canvas handles live graph changes and unrestricted pointer moveme
   await page.evaluate(() => new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   const initial = await page.evaluate(() => ({duration:initialDuration,positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty]}));
   assert.ok(initial.duration < 3000, `122-node initial update blocked for ${initial.duration}ms`);
+  const presentation = await page.evaluate(() => {
+    const card = key => {
+      const element = probe.cards.get(key), style = getComputedStyle(element);
+      return {width:element.offsetWidth,height:element.offsetHeight,background:style.backgroundColor};
+    };
+    const edge = kind => {
+      const record = probe.edges.find(edge => edge.kind === kind), element = probe.edgeElements.get(record.id);
+      const marker = document.getElementById(element.path.getAttribute('marker-end').slice(5,-1));
+      return {stroke:getComputedStyle(element.path).stroke,marker:marker.firstElementChild.getAttribute('stroke'),fill:marker.firstElementChild.getAttribute('fill')};
+    };
+    return {start:card('fact:origin'),fact:card('fact:f0'),task:card('step:s0'),goal:card('goal:goal'),input:edge('step_input'),output:edge('step_result'),refutes:edge('refutes')};
+  });
+  for (const kind of ['start','fact','task','goal']) {
+    assert.equal(presentation[kind].width,148); assert.equal(presentation[kind].height,78);
+  }
+  assert.equal(new Set(['start','fact','task','goal'].map(kind=>presentation[kind].background)).size,4,'entity types retain distinct V5 card colors');
+  assert.equal(presentation.start.background,'rgb(52, 73, 96)');
+  assert.equal(presentation.fact.background,'rgb(243, 248, 255)');
+  assert.equal(presentation.task.background,'rgb(247, 244, 255)');
+  assert.equal(presentation.goal.background,'rgb(237, 248, 244)');
+  assert.equal(new Set(['input','output','refutes'].map(kind=>presentation[kind].stroke)).size,3,'relation colors remain distinct even when statuses match');
+  assert.equal(presentation.input.fill,'none'); assert.equal(presentation.input.marker,'#6b89b2');
   const update = await page.evaluate(async () => {
     const element = document.querySelector('#canvas-probe [data-node-key="fact:f0"]');
     probeState.fact_records.reverse(); probeState.steps.reverse();

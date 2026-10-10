@@ -2,11 +2,14 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
   <title>PwnMesh · 任务工作台</title>
-  <link rel="icon" href="/static/mark.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/brand.png" type="image/png">
   <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/workbench.css">
+  <link rel="stylesheet" href="/static/models.css">
   <link rel="stylesheet" href="/static/graph.css">
   <script defer src="/static/api.js"></script><script defer src="/static/data.js"></script><script defer src="/static/graph-data.js"></script>
   <script defer src="/static/layout.js"></script>
@@ -14,7 +17,9 @@
   <script defer src="/static/routing.js"></script>
   <script defer src="/static/graph-view.js"></script>
   <script defer src="/static/graph.js"></script>
+  <script defer src="/static/input-preview.js"></script>
   <script defer src="/static/app.js"></script>
+  <script defer src="/static/models.js"></script>
 </head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
@@ -42,40 +47,50 @@
     <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
     <symbol id="i-node" viewBox="0 0 24 24"><path d="m12 3 9 5v8l-9 5-9-5V8ZM3 8l9 5 9-5m-9 5v8"/></symbol>
     <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5m6-5v5M7 8h10v4a5 5 0 0 1-10 0V8Zm5 9v5"/></symbol>
+    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9a6 6 0 0 1 9 9l-8 8"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7-8 8M10 21H3v-7m0 7 8-8"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></symbol>
   </defs></svg>
 
   <aside class="sidebar" id="sidebar" aria-label="项目导航">
-    <a class="brand" href="/"><img src="/static/mark.svg" alt=""><span>PwnMesh<small>自主探索，清晰可见。</small></span></a>
-    <button class="button primary create-button" id="new-project"><svg class="icon"><use href="#i-plus"/></svg>创建项目<kbd>N</kbd></button>
+    <a class="brand" href="/" aria-label="PwnMesh 工作台"><span class="brand-art"><img src="/static/brand.png" alt="PwnMesh"></span></a>
+    <button class="button primary create-button" id="new-project"><svg class="icon"><use href="#i-plus"/></svg>新建项目<kbd>N</kbd></button>
     <label class="project-search"><svg class="icon"><use href="#i-search"/></svg><input type="search" id="project-search" placeholder="搜索项目…" aria-label="搜索项目"><kbd>/</kbd></label>
-    <div class="sidebar-label"><span class="project-list-heading">我的项目<span id="project-count">0</span></span><span class="running-total" aria-live="polite"><i class="status-dot active" aria-hidden="true"></i><span id="running-project-count">0</span>运行中</span></div>
+    <div class="sidebar-label"><span class="project-list-heading">项目<span id="project-count">0</span></span><span class="running-total" aria-live="polite"><i class="status-dot active" aria-hidden="true"></i><span id="running-project-count">0</span>运行中</span></div>
     <nav class="project-list" id="project-list" aria-label="项目列表"></nav>
   </aside>
 
   <div class="workbench">
-    <header class="topbar">
-      <div class="breadcrumbs"><span>工作空间</span><svg class="icon"><use href="#i-chevron"/></svg><strong id="breadcrumb-title">工作台</strong></div>
+    <header class="topbar" hidden><div class="breadcrumbs"><span>工作空间</span><strong id="breadcrumb-title">工作台</strong></div></header>
+    <p class="workspace-error" id="workspace-error" role="alert" hidden></p>
+    <header class="project-heading">
+      <div class="project-heading-copy">
+        <div class="title-row"><h1 id="project-title">工作台</h1><button class="icon-button project-info-button" id="project-info" aria-label="查看项目信息"><svg class="icon"><use href="#i-chevron"/></svg></button><span class="status-badge" id="project-status"></span></div>
+        <div class="project-meta"><div class="project-type" id="project-type"></div><span class="round-label" id="round-label">第 1 轮探索</span><span><time id="project-created-at"></time></span><span class="project-start-info"><time id="project-start"></time></span><span id="project-end"></span></div>
+      </div>
+      <div class="header-controls"><button class="button compact secondary" id="toggle-running"></button><button class="button compact secondary" id="add-hint"><svg class="icon"><use href="#i-message"/></svg>补充信息</button><button class="button compact secondary" id="open-models"><svg class="icon"><use href="#i-plug"/></svg>模型接入</button></div>
     </header>
-    <p class="workspace-error" id="workspace-error" role="alert" hidden></p><div class="workspace">
+    <div class="workspace" id="project-workspace">
       <main class="main-pane">
-        <header class="project-heading">
-          <div class="heading-top"><div class="project-type" id="project-type"></div><span class="round-label" id="round-label">第 1 次推理</span></div>
-          <div class="title-row"><h1 id="project-title">工作台</h1><span class="status-badge" id="project-status"></span></div>
-          <div class="project-meta"><span><svg class="icon"><use href="#i-clock"/></svg><time id="project-start"></time></span><span id="project-end"></span><div class="header-controls"><div class="graph-summary" aria-label="任务概览"><div class="graph-heading"><span class="count-pill" id="node-count"></span></div><div class="graph-progress"><span id="task-progress"></span><div class="progress-track"><i id="progress-fill"></i></div></div></div><button class="button compact secondary" id="toggle-running"></button><button class="button compact secondary" id="add-hint"><svg class="icon"><use href="#i-message"/></svg>补充</button></div></div>
-        </header>
+        <nav class="view-tabs" role="tablist" aria-label="项目视图"><button id="view-canvas" data-view="canvas" role="tab" aria-selected="true" aria-controls="graph-stage"><svg class="icon"><use href="#i-graph"/></svg>画布</button><button id="view-materials" tabindex="-1" data-view="materials" role="tab" aria-selected="false" aria-controls="materials-view"><svg class="icon"><use href="#i-paperclip"/></svg>材料<span id="material-count"></span></button><button id="view-results" tabindex="-1" data-view="results" role="tab" aria-selected="false" aria-controls="results-view"><svg class="icon"><use href="#i-file"/></svg>结果</button><span class="view-node-count" id="node-count"></span></nav>
         <section class="graph-stage" id="graph-stage" aria-label="项目业务与步骤依赖图">
           <div class="canvas-caption"><span class="graph-scope" tabindex="0" title="显示目标、步骤、事实与发现的关系，不包含 Worker 单次运行内的任务图。" aria-label="项目关系图：显示目标、步骤、事实与发现的关系，不包含 Worker 单次运行内的任务图。">项目关系图</span><span class="status-dot"></span><span id="canvas-caption">探索正在展开</span></div>
           <div id="graph-host" class="graph-host"></div>
-          <div class="graph-empty" id="graph-empty" hidden><img src="/static/mark.svg" alt=""><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" id="empty-create">创建项目</button></div>
+          <div class="graph-empty" id="graph-empty" hidden><img src="/static/brand.png" alt=""><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" id="empty-create">创建项目</button></div>
           <div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小任务图"><svg class="icon"><use href="#i-minus"/></svg></button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大任务图"><svg class="icon"><use href="#i-plus"/></svg></button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布"><svg class="icon"><use href="#i-fit"/></svg></button><button class="icon-button" id="arrange-graph" aria-label="重新随机分布" title="重新随机分布"><svg class="icon"><use href="#i-restart"/></svg></button></div></div>
         </section>
-        <div class="graph-legend" role="group" aria-label="按状态筛选卡片"><button type="button" data-status-filter="done" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot done" aria-hidden="true"></i>已完成</button><button type="button" data-status-filter="running" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot running" aria-hidden="true"></i>运行中</button><button type="button" data-status-filter="pending" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot pending" aria-hidden="true"></i>待执行</button><span class="legend-guide">点击节点追溯来源与依赖 · 点击连线查看关系</span></div>
+        <section class="project-content" id="materials-view" role="tabpanel" aria-labelledby="view-materials" hidden></section>
+        <section class="project-content" id="results-view" role="tabpanel" aria-labelledby="view-results" hidden></section>
+        <div class="graph-legend" id="graph-legend" role="group" aria-label="按状态筛选卡片"><button type="button" data-status-filter="done" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot done" aria-hidden="true"></i>已完成</button><button type="button" data-status-filter="running" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot running" aria-hidden="true"></i>运行中</button><button type="button" data-status-filter="pending" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot pending" aria-hidden="true"></i>待执行</button><span class="legend-guide">点击节点与连线查看来源</span><div class="graph-progress"><span id="task-progress"></span><div class="progress-track"><i id="progress-fill"></i></div></div></div>
       </main>
       <aside class="activity-pane" aria-label="运行观察">
         <div class="activity-top">
-        <header class="activity-heading"><h2>运行观察</h2><span id="activity-live">等待连接</span></header>
+        <header class="activity-heading"><h2><svg class="icon"><use href="#i-file"/></svg>黑板日志</h2><span id="activity-live">等待连接</span></header>
         <div class="activity-tabs" role="tablist" aria-label="运行信息"><button id="tab-board" data-tab="board" role="tab" aria-controls="activity-content" aria-selected="true">黑板日志</button><button id="tab-system" data-tab="system" role="tab" aria-controls="activity-content" aria-selected="false" tabindex="-1">系统日志<span class="tab-alert" id="system-alert"></span></button><button id="tab-result" data-tab="result" role="tab" aria-controls="activity-content" aria-selected="false" tabindex="-1">最终结果</button></div>
         </div>
+        <label class="activity-search"><svg class="icon"><use href="#i-search"/></svg><input id="log-search" type="search" placeholder="搜索日志全文" aria-label="搜索日志全文"></label>
         <div class="activity-body">
         <div class="activity-tools" id="activity-tools"></div>
         <div class="node-inspector" id="node-inspector" hidden></div>
@@ -86,6 +101,8 @@
     </div>
   </div>
 
+  <section id="models-page" class="models-page" hidden aria-label="模型接入"></section>
+  <dialog id="reader-dialog" class="reader-dialog" aria-labelledby="reader-title"><header class="dialog-heading"><h2 id="reader-title"></h2><button type="button" class="icon-button" data-close="reader-dialog" aria-label="关闭内容阅读器"><svg class="icon"><use href="#i-close"/></svg></button></header><div id="reader-content"></div></dialog>
   <dialog id="create-dialog" aria-labelledby="create-title">
     <form id="create-form"><header class="dialog-heading"><div><span class="dialog-kicker">开始新的探索</span><h2 id="create-title">创建项目</h2></div><button type="button" class="icon-button" data-close="create-dialog" aria-label="关闭创建项目"><svg class="icon"><use href="#i-close"/></svg></button></header>
       <fieldset class="scenario-field"><legend>项目类型</legend><div class="scenario-options" id="scenario-options"></div></fieldset>

@@ -30,6 +30,8 @@ func TestEnvironmentIdentityTracksLegacySettings(t *testing.T) {
 		{"REQUEST_TIMEOUT", "100", "200"},
 		{"CONTEXT_TOKENS", "100", "200"},
 		{"CONTEXT_TARGET_TOKENS", "100", "200"},
+		{"CONNECTION_MODE", "direct", "proxy"},
+		{"PROXY_URL", "http://proxy:7897", "http://proxy:7898"},
 	} {
 		t.Run(tc.suffix, func(t *testing.T) {
 			legacy, canonical := "XLOOM_"+tc.suffix, "PWNMESH_"+tc.suffix
@@ -47,5 +49,29 @@ func TestEnvironmentIdentityTracksLegacySettings(t *testing.T) {
 				t.Fatal("explicitly empty canonical setting did not suppress legacy identity")
 			}
 		})
+	}
+}
+
+func TestEnvironmentIdentityPreservesPreProxyExecutionReceipts(t *testing.T) {
+	w := config.Worker{Type: "go", Env: map[string]string{"ANTHROPIC_BASE_URL": "https://model.invalid", "ANTHROPIC_MODEL": "fixture"}}
+	s := Scheduler{Config: config.Config{Container: config.Container{Image: "fixture", Network: "bridge"}}}
+	legacyEnv := map[string]string{}
+	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {
+		legacyEnv[key] = w.Env[key]
+	}
+	legacy := digest(struct {
+		Type    string
+		Image   string
+		Network string
+		Caps    []string
+		Env     map[string]string
+	}{"go", "fixture", "bridge", nil, legacyEnv})
+	if s.environmentID(w) != legacy {
+		t.Fatal("upgrade changed legacy execution identity without a settings change")
+	}
+	w.Env["PWNMESH_CONNECTION_MODE"] = ""
+	w.Env["PWNMESH_PROXY_URL"] = ""
+	if s.environmentID(w) != legacy {
+		t.Fatal("empty proxy settings changed legacy execution identity")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"pwnmesh/internal/modelconfig"
 )
 
 type Runtime struct {
@@ -51,12 +52,13 @@ type Worker struct {
 	Env        map[string]string `yaml:"env"`
 }
 type Config struct {
-	Server    string            `yaml:"server"`
-	Runtime   Runtime           `yaml:"runtime"`
-	Tasks     Tasks             `yaml:"tasks"`
-	Container Container         `yaml:"container"`
-	CommonEnv map[string]string `yaml:"common_env"`
-	Workers   []Worker          `yaml:"workers"`
+	ModelSettingsPath string            `yaml:"-"`
+	Server            string            `yaml:"server"`
+	Runtime           Runtime           `yaml:"runtime"`
+	Tasks             Tasks             `yaml:"tasks"`
+	Container         Container         `yaml:"container"`
+	CommonEnv         map[string]string `yaml:"common_env"`
+	Workers           []Worker          `yaml:"workers"`
 }
 
 func Load(path string) (Config, error) {
@@ -78,6 +80,13 @@ func Load(path string) (Config, error) {
 	return c, c.Validate()
 }
 func (c *Config) Validate() error {
+	if c.ModelSettingsPath == "" {
+		c.ModelSettingsPath = os.Getenv(modelconfig.PathEnv)
+	}
+	modelSettings, hasModelSettings, modelSettingsErr := modelconfig.Read(c.ModelSettingsPath)
+	if modelSettingsErr != nil {
+		return modelSettingsErr
+	}
 	if c.Runtime.Execution == "" {
 		c.Runtime.Execution = "container"
 	}
@@ -175,7 +184,7 @@ func (c *Config) Validate() error {
 				}
 				return value
 			})
-			if missing != "" {
+			if missing != "" && !(c.ModelSettingsPath != "" && strings.HasPrefix(missing, "ANTHROPIC_")) {
 				return fmt.Errorf("environment variable %s is required for worker %q", missing, w.Name)
 			}
 		}
@@ -190,11 +199,14 @@ func (c *Config) Validate() error {
 			}
 		}
 		w.Env = env
+		if hasModelSettings {
+			w.Env = modelSettings.Overlay(w.Env)
+		}
 		if w.Env["ANTHROPIC_MODEL"] == "" {
 			w.Env["ANTHROPIC_MODEL"] = w.Env["ANTHROPIC_DEFAULT_FABLE_MODEL"]
 		}
 		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
-			if strings.TrimSpace(w.Env[key]) == "" {
+			if strings.TrimSpace(w.Env[key]) == "" && c.ModelSettingsPath == "" {
 				return fmt.Errorf("worker %q is missing %s", w.Name, key)
 			}
 		}

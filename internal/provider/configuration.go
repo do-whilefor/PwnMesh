@@ -53,5 +53,9 @@ func FromEnvironment(getenv func(string) string, effort string) (*Anthropic, err
 	if strings.TrimSpace(p.Token) == "" {
 		return nil, errors.New("ANTHROPIC_AUTH_TOKEN is required")
 	}
+	p.Client, err = connectionClient(getenv("PWNMESH_CONNECTION_MODE"), getenv("PWNMESH_PROXY_URL"))
+	if err != nil {
+		return nil, err
+	}
 	return p, nil
 }

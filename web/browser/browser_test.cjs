@@ -117,9 +117,11 @@ test('workbench persists project operations through the real HTTP service', {
         const persisted = await request(projectPath(project.id));
         assert.equal(persisted.project.orchestration_version, 1, 'Web-created orchestration must survive reload');
         const stamp = new Date(Date.parse(project.created_at) + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ');
-        assert.ok((await row(project.title).innerText()).includes(stamp), `missing Shanghai creation time ${stamp}`);
+        await select(project);
+        assert.ok((await page.locator('.project-heading').innerText()).includes(stamp), `missing Shanghai creation time ${stamp}`);
       }
       const current = [...created.values()].at(-1);
+      await select(current);
       await waitText('project-title', current.title);
       const state = await request(projectPath(current.id) + '/state');
       const expectedKeys = [['goal', state.goals], ['step', state.steps], ['fact', state.fact_records], ['finding', state.findings]]

@@ -38,8 +38,13 @@ func decodeStrictFields(q *request, v any) error {
 }
 
 func New(store *b.Store) http.Handler {
+	return NewWithModelSettings(store, "")
+}
+
+func NewWithModelSettings(store *b.Store, modelSettingsPath string) http.Handler {
 	s := &Server{store}
 	m := http.NewServeMux()
+	registerModelSettings(m, modelSettingsPath)
 	m.HandleFunc("GET /static", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/static/", http.StatusTemporaryRedirect)
 	})

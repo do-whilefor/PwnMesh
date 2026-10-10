@@ -5,7 +5,7 @@
   else root.PwnMeshLayout = api;
 })(typeof globalThis === 'object' ? globalThis : this, function () {
   'use strict';
-  const NODE_WIDTH = 164, NODE_HEIGHT = 90;
+  const NODE_WIDTH = 148, NODE_HEIGHT = 78;
   function randomFrom(seed) {
     let state = 2166136261;
     for (const character of String(seed)) state = Math.imul(state ^ character.charCodeAt(0), 16777619);

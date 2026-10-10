@@ -100,3 +100,52 @@ func TestEnsureChecksRuntimeConfigAfterCreateRace(t *testing.T) {
 		t.Fatalf("raced container accepted with old configuration: %v", err)
 	}
 }
+
+func TestEnsureHostGatewayRespectsSharedContainerNetworking(t *testing.T) {
+	for _, network := range []string{"bridge", "default", "", "host", "container:network-owner"} {
+		t.Run(network, func(t *testing.T) {
+			created := false
+			engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/containers/test-dispatch-p/json":
+					w.WriteHeader(http.StatusNotFound)
+				case r.Method == http.MethodGet && r.URL.Path == "/images/worker:current/json":
+					_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256:fixture"})
+				case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+					created = true
+					var payload struct {
+						HostConfig map[string]json.RawMessage `json:"HostConfig"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+						t.Error(err)
+					}
+					var actualNetwork string
+					if err := json.Unmarshal(payload.HostConfig["NetworkMode"], &actualNetwork); err != nil || actualNetwork != network {
+						t.Errorf("network changed: %s %v", actualNetwork, err)
+					}
+					raw, hasExtraHosts := payload.HostConfig["ExtraHosts"]
+					if strings.HasPrefix(network, "container:") {
+						if hasExtraHosts {
+							t.Error("Docker forbids ExtraHosts with shared container networking")
+							w.WriteHeader(http.StatusBadRequest)
+						}
+					} else {
+						var hosts []string
+						if !hasExtraHosts || json.Unmarshal(raw, &hosts) != nil || len(hosts) != 1 || hosts[0] != "host.docker.internal:host-gateway" {
+							t.Error("ordinary network lost Docker host proxy mapping")
+						}
+					}
+				case r.Method == http.MethodPost && r.URL.Path == "/containers/test-dispatch-p/start":
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(500)
+				}
+			}))
+			defer engine.Close()
+			client := &Client{Config: config.Container{Namespace: "test", Image: "worker:current", Network: network}, http: &http.Client{Transport: graphBridgeTestTransport{base: http.DefaultTransport, endpoint: engine.URL}}}
+			if _, err := client.ensure(context.Background(), "p"); err != nil || !created {
+				t.Fatalf("create worker network=%q: created=%v error=%v", network, created, err)
+			}
+		})
+	}
+}

@@ -104,7 +104,7 @@ test('workbench collapses long logs and filters cards without losing the canvas 
     await page.waitForFunction(() => document.querySelectorAll('#graph-host .graph-node').length === 8);
     await waitPaint();
 
-    await t.test('compact desktop navigation and aligned separators persist at narrower window widths', async () => {
+    await t.test('v5 project header and separated workspace panels fit desktop widths', async () => {
       assert.equal(await page.locator('#project-goal').count(),0);
       assert.equal(await page.locator('.canvas-help').count(),0);
       assert.equal(await page.locator('#mobile-menu, #sidebar-scrim, #connection-state, #refresh-project, #about-button, #about-dialog').count(),0);
@@ -117,29 +117,27 @@ test('workbench collapses long logs and filters cards without losing the canvas 
           projectHeading:document.querySelector('.project-heading').getBoundingClientRect().toJSON(),
           activityHeading:document.querySelector('.activity-heading').getBoundingClientRect().toJSON(),
           graphTop:document.querySelector('.graph-stage').getBoundingClientRect().top,
-          tabsBottom:document.querySelector('.activity-tabs').getBoundingClientRect().bottom,
+          tabsBottom:document.querySelector('.view-tabs').getBoundingClientRect().bottom,
           sidebar:document.querySelector('.sidebar').getBoundingClientRect().toJSON(),
           main:document.querySelector('.main-pane').getBoundingClientRect().toJSON(),
           activity:document.querySelector('.activity-pane').getBoundingClientRect().toJSON(),
           documentWidth:document.documentElement.scrollWidth,
           bodyWidth:document.body.getBoundingClientRect().width,
         }));
-        assert.ok(rectangles.topbar.height <= 40,`navigation leaves excessive top whitespace at ${width}px`);
-        assert.ok(rectangles.breadcrumbs.height > 0 && rectangles.breadcrumbs.top >= rectangles.topbar.top + 1
-          && rectangles.breadcrumbs.bottom <= rectangles.topbar.bottom - 1,'breadcrumb text fits inside the compact navigation');
-        assert.ok(Math.abs(rectangles.projectHeading.top - rectangles.topbar.bottom) <= 1,
-          'project heading follows navigation without an empty gap');
-        assert.ok(Math.abs(rectangles.activityHeading.top - rectangles.topbar.bottom) <= 1,
-          'activity heading follows navigation without an empty gap');
+        assert.equal(rectangles.topbar.height,0,'legacy navigation has no leftover whitespace');
+        assert.ok(rectangles.projectHeading.height >= 60 && rectangles.projectHeading.height <= 100,
+          'project identity fits in a compact independent header');
+        assert.ok(rectangles.projectHeading.bottom < rectangles.main.top,
+          'project header sits above the workspace panels');
         assert.ok(Math.abs(rectangles.graphTop - rectangles.tabsBottom) <= 1,
           `separators differ at ${width}px: ${JSON.stringify(rectangles)}`);
         assert.equal(await page.locator('#sidebar').isVisible(),true,'project navigation remains visible');
         assert.ok(rectangles.sidebar.left >= 0 && rectangles.sidebar.width > 0,'sidebar stays in the desktop layout');
-        assert.ok(Math.abs(rectangles.main.left - rectangles.sidebar.right) <= 1,'main pane follows the sidebar');
-        assert.ok(Math.abs(rectangles.activity.left - rectangles.main.right) <= 1,'logs remain beside the canvas');
+        assert.ok(rectangles.main.left > rectangles.sidebar.right && rectangles.main.left - rectangles.sidebar.right <= 24,'main pane is separated from sidebar by a small gutter');
+        assert.ok(rectangles.activity.left > rectangles.main.right && rectangles.activity.left - rectangles.main.right <= 24,'logs remain beside the canvas with a small gutter');
         assert.ok(Math.abs(rectangles.activity.top - rectangles.main.top) <= 1,'logs never stack below the canvas');
         if (width >= 1024) assert.ok(rectangles.documentWidth <= width + 1,`desktop overflow at ${width}px`);
-        else assert.ok(rectangles.bodyWidth >= 1024,'narrow windows retain the desktop minimum width');
+        else assert.ok(rectangles.bodyWidth >= 900,'narrow windows retain the desktop minimum width');
         await fs.writeFile(path.join(screenshots,`layout-${width}.json`),JSON.stringify(rectangles,null,2));
         await page.screenshot({path:path.join(screenshots,`workbench-${width}.png`),fullPage:true});
       }
