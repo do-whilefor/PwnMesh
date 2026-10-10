@@ -3,17 +3,14 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
-// Serve the real bundle and optional, unmodified v5 reference. API fixtures
-// remain browser-local so this helper can also test a populated live service.
+// Serve the real bundle. API fixtures remain browser-local so this helper can
+// also test a populated live service.
 async function staticServer() {
-  const production = path.resolve(__dirname,'../static');
-  const reference = path.resolve(__dirname,'../../tmp/pwn-web-demo');
+  const root = path.resolve(__dirname,'../static');
   const server = http.createServer(async (req,res) => {
     try {
       const pathname = decodeURIComponent(new URL(req.url,'http://local').pathname);
-      const isReference = pathname.startsWith('/reference/');
-      const root = isReference ? reference : production;
-      const relative = isReference ? pathname.slice(11) : pathname === '/' ? 'index.html' : pathname.startsWith('/static/') ? pathname.slice(8) : null;
+      const relative = pathname === '/' ? 'index.html' : pathname.startsWith('/static/') ? pathname.slice(8) : null;
       if (relative === null) throw new Error('Unknown route');
       const file = path.resolve(root,relative);
       if (!file.startsWith(root + path.sep)) throw new Error('Invalid path');

@@ -118,7 +118,10 @@ test('the Demo model form only saves a successful real probe and cancels stale w
     assert.equal(await page.locator('.llm-save').isDisabled(),true);
     await page.locator('.llm-test').click();await page.locator('.llm-save').click();
     assert.equal(await page.locator('#llm-key').inputValue(),'');
-    assert.equal(await page.locator('.llm-return').isVisible(),true);
+    assert.equal(await page.locator('.llm-return').count(),0);
+    assert.equal(await page.locator('.llm-save').isVisible(),true);
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    assert.equal(await page.locator('.llm-summary-status').textContent(),'已保存');
     assert.equal(await page.evaluate(() => calls.at(-1).body.token),'changed-after-verification');
     await page.locator('#llm-connection-mode').selectOption('proxy');
     assert.equal(await page.locator('.llm-proxy-fields').isVisible(),true);
