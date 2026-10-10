@@ -107,7 +107,7 @@ test('the Demo model form only saves a successful real probe and cancels stale w
     await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host,{onReturn:() => host.replaceChildren()});});
     await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     assert.equal(await page.locator('#llm-effort').inputValue(),'max');
-    assert.match(await page.locator('.llm-network').textContent(),/全局配置.*新任务.*支持代理环境变量的 Worker 工具/);
+    assert.equal(await page.locator('.llm-proxy-fields').isVisible(),false);
     assert.deepEqual(await page.locator('#llm-effort option').evaluateAll(options => options.map(option => option.value)),['low','high','max']);
     await page.locator('#llm-model').fill('saved-model');await page.locator('.llm-test').click();
     assert.match(await page.locator('.llm-status').textContent(),/失败.*401/);
@@ -121,6 +121,7 @@ test('the Demo model form only saves a successful real probe and cancels stale w
     assert.equal(await page.locator('.llm-return').isVisible(),true);
     assert.equal(await page.evaluate(() => calls.at(-1).body.token),'changed-after-verification');
     await page.locator('#llm-connection-mode').selectOption('proxy');
+    assert.equal(await page.locator('.llm-proxy-fields').isVisible(),true);
     for (const [protocol,label] of Object.entries(proxyProtocols)) {
       await page.locator('#llm-proxy-protocol').selectOption(protocol);
       await page.locator('#llm-proxy-host').fill('proxy.test');

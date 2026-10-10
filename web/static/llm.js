@@ -37,7 +37,6 @@
               <div class="llm-field"><label for="llm-proxy-port">端口</label><input id="llm-proxy-port" name="proxyPort" value="${esc(proxy.port)}" inputmode="numeric" placeholder="7897"${state.connection.mode === 'direct' ? ' disabled' : ''}></div>
               <p class="llm-field-hint">代理地址需能从服务端访问。Docker 访问宿主机代理可用 host.docker.internal。</p>
             </div>
-            <p class="llm-field-hint">全局配置，适用于所有项目的新任务；用于模型连接，并同步给支持代理环境变量的 Worker 工具。</p>
           </div>
         </section>
         <div class="llm-status" role="status" aria-live="polite"></div>
