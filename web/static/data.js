@@ -5,11 +5,7 @@
 }(typeof window === 'object' ? window : globalThis, function () {
   'use strict';
 
-  const SCENARIOS = Object.freeze([
-    Object.freeze({id:'ctf', name:'CTF', description:'围绕明确目标验证结果', icon:'flag'}),
-    Object.freeze({id:'pentest', name:'渗透测试', description:'记录过程中的观察与发现', icon:'shield'}),
-    Object.freeze({id:'audit', name:'代码审计', description:'从代码到可追溯的结论', icon:'code'})
-  ]);
+  const SCENARIOS = Object.freeze(['ctf','pentest','audit']);
   const NAMES = Object.freeze({
     active:'进行中', running:'进行中', paused:'已暂停', stopped:'已暂停', completed:'已完成', terminated:'已终止',
     open:'待执行', blocked:'等待依赖', achieved:'已达成', withdrawn:'已撤回', abandoned:'已放弃',
@@ -20,11 +16,6 @@
   });
   const PHASES = {bootstrap:'Bootstrap', reason:'Decide', explore:'Execute', intent:'Execute'};
   const PHASE_NAMES = Object.freeze({bootstrap:'启动引导',reason:'决策',decide:'决策',explore:'执行',intent:'执行',execute:'执行',system:'系统',model:'模型结论'});
-  const NODE_TYPE_NAMES = Object.freeze({start:'起点',origin:'起点',step:'任务',intent:'任务',fact:'事实',finding:'发现',goal:'目标'});
-  const TIME_FORMATTER = new Intl.DateTimeFormat('en-CA', {
-    timeZone:'Asia/Shanghai',calendar:'gregory',numberingSystem:'latn',
-    year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'
-  });
   const array = value => Array.isArray(value) ? value : [];
   const string = value => typeof value === 'string' ? value : '';
   const object = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -32,9 +23,7 @@
   const ref = (type, id) => string(id) ? {type, id} : undefined;
   const refs = ids => [...new Set(array(ids).filter(id => typeof id === 'string' && id))].map(id => ({type:'fact', id}));
   const statusName = value => NAMES[value] || string(value) || '未知状态';
-  const scenarioName = value => (SCENARIOS.find(scenario => scenario.id === value) || {name:'未分类'}).name;
   const phaseName = value => PHASE_NAMES[string(value).toLowerCase()] || string(value) || '系统';
-  const nodeTypeName = value => NODE_TYPE_NAMES[string(value).toLowerCase()] || string(value) || '节点';
 
   function validateProject(input) {
     input = object(input);
@@ -45,18 +34,10 @@
       if (!value || value.length > limit) throw new Error(label + '需填写 1–' + limit + ' 个字符。');
       payload[key] = value;
     }
-    if (!SCENARIOS.some(scenario => scenario.id === input.scenario)) throw new Error('请选择一个项目场景。');
+    if (!SCENARIOS.includes(input.scenario)) throw new Error('请选择一个项目场景。');
     payload.scenario = input.scenario;
     payload.orchestration_version = 1;
     return payload;
-  }
-
-  function formatTime(value) {
-    if (!string(value)) return '未记录时间';
-    const date = new Date(value);
-    if (!Number.isFinite(date.getTime())) return '未记录时间';
-    const parts = Object.fromEntries(TIME_FORMATTER.formatToParts(date).map(part => [part.type,part.value]));
-    return parts.year.padStart(4,'0') + '-' + parts.month + '-' + parts.day + ' ' + parts.hour + ':' + parts.minute + ':' + parts.second;
   }
 
   function timestamp(value) {
@@ -126,26 +107,6 @@
       startedAt:started === null ? null : new Date(started).toISOString(),
       endedAt:ends.length ? new Date(Math.max(...ends)).toISOString() : null
     };
-  }
-
-  function taskProgress(state) {
-    state = object(state);
-    const graph = object(state.graph), project = object(graph.project);
-    const records = array(state.steps).length ? array(state.steps) : array(graph.intents).map(item => {
-      const intent = object(item);
-      return {...intent,status:string(intent.to) ? 'completed' : intent.concluded_at ? 'abandoned' : string(intent.worker) ? 'running' : 'open'};
-    });
-    const tasks = new Map();
-    for (const item of records) {
-      const step = object(item);
-      if (string(step.id)) tasks.set(step.id,step);
-    }
-    let completed = 0, running = 0;
-    for (const step of tasks.values()) {
-      if (step.status === 'completed') completed++;
-      if (project.status === 'active' && step.status === 'running') running++;
-    }
-    return {completed,total:tasks.size,running};
   }
 
   function recordBody(record, type) {
@@ -388,26 +349,6 @@
     }).map(entry => entry.row);
   }
 
-  function filterLogs(logs, options = {}) {
-    const query = string(options.query).trim().toLocaleLowerCase();
-    const selected = nodeKey(options.node);
-    return array(logs).filter(log => (!options.phase || options.phase === 'all' || log.phase === options.phase)
-      && (!selected || nodeKey(log.node) === selected || array(log.evidence).some(evidence => nodeKey(evidence) === selected))
-      && (!query || [log.title,log.body,log.code,log.worker,log.scope,log.statusLabel,nodeKey(log.node),...array(log.evidence).map(nodeKey)]
-        .filter(Boolean).join(' ').toLocaleLowerCase().includes(query)));
-  }
-
-  function buildSystemLogs(rows = []) {
-    // Public execution records identify a phase, not the cause of an upstream
-    // transport failure. Never infer an LLM provider or HTTP status from text.
-    const logs = rows.filter(log =>
-      (log.source === 'execution' && log.kind !== 'model') ||
-      (log.source === 'event' && (log.runId || log.title.startsWith('状态更新'))) ||
-      log.id.startsWith('project:')
-    ).map(log => ({...log, component:log.source === 'execution' ? log.phase : '黑板'}));
-    return {logs, unavailable:['LLM 请求日志','组件运行日志']};
-  }
-
   function buildResult(state, logs = []) {
     state = object(state);
     const graph = object(state.graph), project = object(graph.project);
@@ -445,5 +386,5 @@
     return {status,summary,notice,findings,conclusions,truncated};
   }
 
-  return {SCENARIOS,validateProject,scenarioName,statusName,phaseName,nodeTypeName,formatTime,projectTiming,taskProgress,buildLogs,filterLogs,buildSystemLogs,buildResult};
+  return {validateProject,projectTiming,buildLogs,buildResult};
 }));

@@ -138,17 +138,20 @@ func TestWorkbenchEmbedsNestedVisualAssets(t *testing.T) {
 }
 
 func TestWorkbenchLogoIdentifiesPwnMesh(t *testing.T) {
+	handler := New(nil)
 	response := httptest.NewRecorder()
-	New(nil).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/mark.svg", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	html := response.Body.String()
+	if !regexp.MustCompile(`<a\b[^>]*aria-label="PwnMesh 工作台"[^>]*><span\b[^>]*><img\b[^>]*src="/static/brand.png"[^>]*alt="PwnMesh"`).MatchString(html) {
+		t.Fatal("visible logo must identify PwnMesh for assistive technology")
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/brand.png", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("logo returned HTTP %d", response.Code)
 	}
-	svg := response.Body.String()
-	if !strings.Contains(svg, `role="img"`) || !strings.Contains(svg, `aria-label="PwnMesh"`) {
-		t.Fatal("logo must identify PwnMesh for assistive technology")
-	}
-	if regexp.MustCompile(`\b(?:Pwn|X-Loom)\b`).MatchString(svg) {
-		t.Fatal("logo still displays the replaced brand")
+	if !strings.HasPrefix(response.Header().Get("Content-Type"), "image/png") || response.Body.Len() == 0 {
+		t.Fatal("visible logo must serve its embedded PNG")
 	}
 }
 
@@ -163,6 +166,8 @@ func TestClassicInterfaceIsUnavailable(t *testing.T) {
 		"/static/vendor/cytoscape.min.js", "/static/vendor/dagre.min.js",
 		"/static/vendor/cytoscape-dagre.js", "/static/pwnmesh.svg",
 		"/static/workbench.css", "/static/models.css",
+		"/static/mark.svg", "/static/provider-deepseek.svg", "/static/provider-glm.svg",
+		"/static/provider-kimi.svg", "/static/provider-sources.json", "/static/LICENSE-lobe-icons.txt",
 	} {
 		t.Run(path, func(t *testing.T) {
 			for _, method := range []string{http.MethodGet, http.MethodHead} {

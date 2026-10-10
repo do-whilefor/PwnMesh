@@ -15,26 +15,15 @@ test('Web creation selects orchestration for all scenarios and omits obsolete bo
     assert.deepEqual(data.validateProject({title:' 项目 ',origin:'输入',goal:'目标',scenario,bootstrap_enabled:true,orchestration_version:0}),
       {title:'项目',origin:'输入',goal:'目标',scenario,orchestration_version:1});
   }
-  assert.equal(data.scenarioName(undefined),'未分类');
   assert.throws(() => data.validateProject({title:'x'.repeat(201),origin:'x',goal:'y',scenario:'ctf'}));
   assert.throws(() => data.validateProject({title:'x',origin:'',goal:'y',scenario:'ctf'}));
 });
 
-test('time is Shanghai calendar time, with no invented fallback timestamp', () => {
-  assert.equal(data.formatTime('2026-09-23T16:05:09Z'),'2026-09-24 00:05:09');
-  assert.equal(data.formatTime('invalid'),'未记录时间');
-  assert.equal(data.formatTime(null),'未记录时间');
-});
-
-test('task progress counts unique steps, including failed and review work, separately from nodes', () => {
-  const state = fixture();
-  state.steps = [{id:'1',status:'completed'},{id:'1',status:'completed'},{id:'2',status:'failed'},
-    {id:'3',status:'needs_review'},{id:'4',status:'running'}];
-  assert.deepEqual(data.taskProgress(state),{completed:1,total:4,running:1});
-  state.graph.project.status = 'stopped';
-  assert.equal(data.taskProgress(state).running,0);
-  assert.equal(data.statusName('needs_review'),'需要复核');
-  assert.equal(data.statusName('blocked'),'等待依赖');
+test('activity time is Shanghai calendar time, with no invented fallback timestamp', () => {
+  const activity = require('./static/activity-data.js');
+  const entries = activity.buildEntries({logs:[{time:null},{time:'invalid'},{time:'2026-09-23T16:05:09Z'}]});
+  assert.deepEqual(entries.map(entry => entry.time),['00:05:09','—','—']);
+  assert.equal(entries[0].timestamp,'2026-09-23T16:05:09Z');
 });
 
 test('only persisted completion with valid root support becomes a project result', () => {
@@ -82,14 +71,14 @@ test('execution conclusions remain separate from project completion and never in
   assert.doesNotMatch(JSON.stringify(executionLogs),/内部推理|旧轮/);
 });
 
-test('system projection identifies real execution phases and reports unavailable log sources', () => {
+test('activity logs identify real execution phases without inferring an upstream component', () => {
   const state = fixture();
-  const result = data.buildSystemLogs(data.buildLogs(state,[],[{id:'run',generation:1,status:'failed',kind:'reason',
-    updated_at:'2026-09-24T00:01:00Z',result:{error:'HTTP 503: execution failed'}}]));
-  const error = result.logs.find(log => log.runId === 'run');
-  assert.equal(error.component,'Decide');
+  const logs = data.buildLogs(state,[],[{id:'run',generation:1,status:'failed',kind:'reason',
+    updated_at:'2026-09-24T00:01:00Z',result:{error:'HTTP 503: execution failed'}}]);
+  const error = logs.find(log => log.runId === 'run');
+  assert.equal(error.phase,'Decide');
   assert.equal(error.level,'error');
   assert.equal(error.time,'2026-09-24T00:01:00Z');
-  assert.equal(result.logs.some(log => log.component === 'LLM'),false);
-  assert.deepEqual(result.unavailable,['LLM 请求日志','组件运行日志']);
+  assert.match(error.body,/HTTP 503: execution failed/);
+  assert.equal(logs.some(log => log.phase === 'LLM'),false);
 });

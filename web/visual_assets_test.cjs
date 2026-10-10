@@ -5,12 +5,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const root = path.join(__dirname,'static');
-// Accepted reference: tmp/pwn-web-demo/v5. Keep the shipped visual assets intact;
-// production data and API adapters are deliberately outside this manifest.
+// Accepted V5 assets, with unused pre-migration CSS selectors removed.
+// Production data and API adapters are deliberately outside this manifest.
 const accepted = {
-  "style.css": "e1d8264039a608ed891db19010dcbee4d32b901dca8987885a0b78cac1a25891",
+  "style.css": "a61ce2e4b8dea9022c28501f4e2554faf09390f2e3a251ae16e8f4958942f254",
   "llm.css": "d4133924a1950253ac498be990f36dc3ff6cc74673a690329c5f2bf7e328db04",
-  "shell.css": "1958b368426087ba16bd7ef7938cb55b30e923f0995cea03f51cd597dc22e04e",
+  "shell.css": "3565d4c793e28cd6dcbdb39835b68eaf30d704f65cb5242ea27d8efb4af0b664",
   "blackboard.css": "fc7d88685b4e2462c47c71bd144d66902f57aab588a6f9b7bdb4b37263b23c4e",
   "forms.css": "81c75f23362d42389f8cf1fc29c5053a6b1329b8657c9f6b47169c7e884dbeab",
   "inspector.css": "b0447e4c09b8716d4e4f14dca2d2a86ad0308a218238dbb9c8787af649ab46a8",
@@ -32,9 +32,9 @@ const accepted = {
   "lucide.min.js": "ab85225ecc1daa2033607856f03dd2dabcbc08e2d260a5b97e17c690aa929766"
 };
 
-test('visual assets and graph engine match the accepted V5 demo exactly', () => {
+test('visual assets and graph engine match the accepted workbench baseline', () => {
   for (const [name,digest] of Object.entries(accepted)) {
-    assert.equal(crypto.createHash('sha256').update(/\.(png|woff2)$/.test(name) ? fs.readFileSync(path.join(root,name)) : fs.readFileSync(path.join(root,name),'utf8').replace(/\r\n/g,'\n')).digest('hex'),digest,name+' drifted from the accepted V5 source');
+    assert.equal(crypto.createHash('sha256').update(/\.(png|woff2)$/.test(name) ? fs.readFileSync(path.join(root,name)) : fs.readFileSync(path.join(root,name),'utf8').replace(/\r\n/g,'\n')).digest('hex'),digest,name+' drifted from the accepted workbench baseline');
   }
   assert.match(fs.readFileSync(path.join(root,'LICENSE-lucide.txt'),'utf8'),/ISC License/);
 });

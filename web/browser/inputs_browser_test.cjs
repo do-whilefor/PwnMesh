@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
 const {assetServer,launch,fillCreate,stateFor,projectPath}=require('./demo_harness.cjs');
-test('demo forms upload raw files, retry a paused project, and atomically supplement materials',{
+test('production forms render accessible dialogs, retry uploads, and atomically supplement materials',{
  timeout:60000,skip:process.env.PLAYWRIGHT_MODULE?false:'Set PLAYWRIGHT_MODULE for isolated upload regression',
 },async()=>{
  const server=await assetServer(),browser=await launch();
@@ -22,9 +22,14 @@ test('demo forms upload raw files, retry a paused project, and atomically supple
    if(pathname.endsWith('/status')){project.status=req.postDataJSON().status;return reply(project);}
    errors.push('Unexpected '+method+' '+pathname);return reply({},404);
   });
-  await page.goto(server.url,{waitUntil:'networkidle'});await fillCreate(page,'真实材料上传');await page.locator('#project-files').setInputFiles([{name:'one.http',mimeType:'text/plain',buffer:Buffer.from('GET /one')},{name:'two.apk',mimeType:'application/octet-stream',buffer:Buffer.from([0,255,13,10])}]);await page.locator('#create-form [type="submit"]').click();await page.waitForFunction(()=>document.getElementById('create-error').textContent.includes('Controlled failed upload'));assert.equal(creates,1);assert.equal(project.status,'stopped');assert.equal(await page.locator('#project-name').isDisabled(),true);assert.equal(await page.locator('#selected-files [data-remove-file]').first().isDisabled(),true);assert.equal(await page.locator('#selected-files li').count(),2);
+  await page.goto(server.url,{waitUntil:'networkidle'});await fillCreate(page,'真实材料上传');
+  assert.ok(await page.getByRole('dialog',{name:'新建项目',exact:true}).isVisible());
+  assert.equal(await page.getByLabel('项目名称',{exact:true}).inputValue(),'真实材料上传');
+  await page.locator('#project-files').setInputFiles([{name:'one.http',mimeType:'text/plain',buffer:Buffer.from('GET /one')},{name:'two.apk',mimeType:'application/octet-stream',buffer:Buffer.from([0,255,13,10])}]);await page.locator('#create-form [type="submit"]').click();await page.waitForFunction(()=>document.getElementById('create-error').textContent.includes('Controlled failed upload'));assert.equal(creates,1);assert.equal(project.status,'stopped');assert.equal(await page.locator('#project-name').isDisabled(),true);assert.equal(await page.locator('#selected-files [data-remove-file]').first().isDisabled(),true);assert.equal(await page.locator('#selected-files li').count(),2);
   await page.locator('#create-form [type="submit"]').click();await page.locator('#create-dialog').waitFor({state:'hidden'});assert.equal(creates,1);assert.deepEqual(uploaded,['one.http','two.apk','two.apk']);assert.equal(project.status,'active');
-  await page.locator('#add-hint').click();await page.locator('#hint-text').fill('只使用授权测试环境');await page.locator('#hint-files').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('supplement bytes')});const before=writes.length;await page.locator('#hint-form [type="submit"]').click();await page.locator('#hint-dialog').waitFor({state:'hidden'});assert.deepEqual(writes.slice(before),['POST /projects/uploaded/inputs/batch']);
+  await page.locator('#add-hint').click();
+  assert.ok(await page.getByRole('dialog',{name:'补充信息',exact:true}).isVisible());
+  await page.getByLabel('补充内容',{exact:true}).fill('只使用授权测试环境');await page.locator('#hint-files').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('supplement bytes')});const before=writes.length;await page.locator('#hint-form [type="submit"]').click();await page.locator('#hint-dialog').waitFor({state:'hidden'});assert.deepEqual(writes.slice(before),['POST /projects/uploaded/inputs/batch']);
   await page.locator('[data-view="materials"]').click();await page.waitForFunction(()=>document.querySelectorAll('.material-row').length===3);assert.match(await page.locator('#project-view').textContent(),/notes\.txt/);assert.deepEqual(errors,[]);
  }finally{await browser.close();await server.close();}
 });

@@ -261,8 +261,6 @@
     closeMenu(); disposeRecord?.(); disposeActivity?.(); disposeActivity = null; disposeInspector?.(); disposeInspector = null; graph?.destroy(); graph = null; disposeLLM?.(); disposeLLM = null; selectedNode = null; selectedEdge = null;
     activityOrigin = null;
     const page = route(), p = viewed();
-    $('.topbar').hidden = true;
-    $('.topbar').innerHTML = '';
     if (page === 'llm') {
       const origin = projects.find(project => project.id === llmReturn?.id) || projects[0];
       $('#main').innerHTML = PwnLLMDemo.render({returnLabel:origin ? '返回项目' : '返回工作台',projectName:origin?.name || ''});

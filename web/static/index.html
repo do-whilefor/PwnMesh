@@ -52,21 +52,12 @@
     <nav id="project-list" aria-label="项目列表"></nav>
   </aside>
   <div class="workbench">
-    <header class="topbar" hidden></header>
     <main id="main"></main>
   </div>
   <dialog id="create-dialog" aria-labelledby="create-title">
-    <form id="create-form" novalidate>
-      <header class="dialog-header"><h2 id="create-title">新建项目</h2><button type="button" class="icon-button" data-close="create-dialog" aria-label="关闭创建项目"><i data-lucide="x"></i></button></header>
-      <div class="type-choices" aria-label="项目类型"><label><input type="radio" name="type" value="ctf"><span><i data-lucide="flag"></i>CTF</span></label><label><input type="radio" name="type" value="audit"><span><i data-lucide="code-2"></i>代码审计</span></label><label><input type="radio" name="type" value="pentest" checked><span><i data-lucide="shield-check"></i>渗透测试</span></label></div>
-      <label class="field-label" for="project-name">项目名称</label><input id="project-name" name="name" maxlength="200" placeholder="例如：核心业务 API 安全评估" required>
-      <label class="field-label" for="project-target">起点 / 已知信息</label><textarea id="project-target" name="target" rows="2" maxlength="32768" placeholder="目标地址、代码位置，或已掌握的线索" required></textarea>
-      <label class="field-label" for="project-goal">终点 / 项目目标</label><textarea id="project-goal" name="goal" rows="2" maxlength="32768" placeholder="希望验证什么？怎样算完成？" required></textarea>
-      <label class="field-label" for="project-files">测试材料 <span>可选</span></label><label class="upload-zone" for="project-files"><i data-lucide="paperclip"></i><span>选择源码、HAR 或其他测试材料<small>单个文件 ≤ 256 MiB · 保留原始文件并上传至项目</small></span><input id="project-files" type="file" multiple></label><ul id="selected-files" class="file-list"></ul>
-      <p id="create-error" class="form-error" role="alert"></p><footer class="dialog-footer"><button type="button" class="button secondary" data-close="create-dialog">取消</button><button type="submit" class="button primary">创建并开始</button></footer>
-    </form>
+    <form id="create-form" novalidate></form>
   </dialog>
-  <dialog id="hint-dialog" aria-labelledby="hint-title"><form id="hint-form"><header class="dialog-header"><h2 id="hint-title">补充信息</h2><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充信息"><i data-lucide="x"></i></button></header><textarea id="hint-text" rows="5" maxlength="32768" aria-label="补充信息" placeholder="补充线索、范围或需要关注的问题…" required></textarea><p class="form-error" id="hint-error" role="alert"></p><footer class="dialog-footer"><button type="button" class="button secondary" data-close="hint-dialog">取消</button><button type="submit" class="button primary">添加</button></footer></form></dialog>
+  <dialog id="hint-dialog" aria-labelledby="hint-title"><form id="hint-form"></form></dialog>
   <div id="project-menu" class="project-menu-popover" role="menu" aria-label="项目操作" hidden></div>
   <dialog id="project-dialog" aria-labelledby="project-dialog-title"></dialog>
   <dialog id="action-dialog" aria-labelledby="action-title" aria-describedby="action-description"><form id="action-form">
