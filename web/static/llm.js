@@ -1,38 +1,20 @@
 (function () {
   'use strict';
 
-  const providers = {
-    deepseek: { name: 'DeepSeek', icon: '/static/assets/provider-deepseek.svg', protocol: 'anthropic', url: 'https://api.deepseek.com/anthropic', model: 'deepseek-flash' },
-    glm: { name: 'GLM', icon: '/static/assets/provider-glm.svg', protocol: 'anthropic', url: 'https://open.bigmodel.cn/api/anthropic', model: 'glm-5.3' },
-    kimi: { name: 'Kimi', icon: '/static/assets/provider-kimi.svg', protocol: 'anthropic', url: 'https://api.kimi.com/coding', model: 'kimi-for-coding' },
-    custom: { name: '自定义', protocol: 'anthropic', url: '', model: '' }
-  };
+  const helpers = window.PwnMeshModelSettings;
+  const providers = Object.fromEntries(Object.entries(helpers.providers).map(([id,preset]) => [id,{...preset,url:preset.base_url}]));
   const bindings = new WeakMap();
-  const efforts = { '': '默认 / 不指定', low: '低 / 更快响应', high: '高 / 深入推理', max: '最高 / 充分推理' };
+  const efforts = { low: '低 / 更快响应', high: '高 / 深入推理', max: '最高 / 充分推理' };
   let saved = null;
   let draft = null;
   let dirty = false;
   const providerDefaults = () => Object.fromEntries(Object.entries(providers).map(([id, preset]) => [id, { url: preset.url, model: preset.model }]));
   let providerDrafts = providerDefaults();
   let proxyDraft = { protocol: 'http', host: 'host.docker.internal', port: '7897' };
-  const defaults = () => ({ provider: 'deepseek', protocol: 'anthropic', url: providers.deepseek.url, model: providers.deepseek.model, reasoningEffort: '', connection: { mode: 'direct' } });
+  const defaults = () => ({ provider: 'deepseek', protocol: 'anthropic', url: providers.deepseek.url, model: providers.deepseek.model, reasoningEffort: helpers.defaultReasoningEffort, connection: { mode: 'direct' } });
   const esc = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const providerIcon = (id, className = '') => providers[id].icon ? `<img class="${className}" src="${providers[id].icon}" alt="" aria-hidden="true">` : `<i class="${className}" data-lucide="settings-2" aria-hidden="true"></i>`;
-  const connectionLabel = (connection) => connection.mode === 'proxy' ? `${connection.protocol === 'socks5' ? 'SOCKS5' : 'HTTP'} 代理` : '直连';
-
-  function validateProxy(connection) {
-    if (connection.mode !== 'proxy') return null;
-    if (!['http', 'socks5'].includes(connection.protocol)) return ['proxyProtocol', '请选择 HTTP 或 SOCKS5 代理。'];
-    const host = String(connection.host || '').trim();
-    if (!host) return ['proxyHost', '请填写代理主机。'];
-    try {
-      const url = new URL(`http://${host}`);
-      if (/[\\\s/?#@]/.test(host) || url.pathname !== '/' || url.port || (host.includes(':') && !/^\[[a-f\d:]+\]$/i.test(host))) throw new Error('Invalid proxy host');
-    } catch { return ['proxyHost', '请填写主机名或 IP 地址，端口单独填写。']; }
-    const port = String(connection.port ?? '').trim();
-    if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535) return ['proxyPort', '代理端口需为 1–65535 的整数。'];
-    return null;
-  }
+  const connectionLabel = (connection) => connection.mode === 'proxy' ? `${helpers.proxyProtocols[connection.protocol]} 代理` : '直连';
 
   function render({ returnLabel = '返回项目', projectName = '' } = {}) {
     const state = draft || saved || defaults();
@@ -47,18 +29,19 @@
           <div class="llm-field"><label for="llm-url">Base URL</label><input id="llm-url" name="url" type="url" value="${esc(state.url)}" placeholder="https://api.example.com/v1" spellcheck="false"></div>
           <div class="llm-field"><label for="llm-model">模型名称</label><input id="llm-model" name="model" type="text" value="${esc(state.model)}" placeholder="输入模型 ID" spellcheck="false"></div>
           <div class="llm-field"><label for="llm-key">API Key</label><div class="llm-key-wrap"><input id="llm-key" name="key" type="password" value="" placeholder="输入 API Key" autocomplete="off" spellcheck="false"><button type="button" class="llm-key-toggle" aria-label="显示 API Key" aria-pressed="false"><i data-lucide="eye"></i></button></div><p class="llm-field-hint">密钥保存在服务端，页面不会回显；留空保留同一服务的已存密钥。</p></div>
-          <div class="llm-field llm-effort"><div class="llm-effort-description"><label for="llm-effort">思考强度<span>可选</span></label><p class="llm-field-hint" id="llm-effort-hint">可用强度取决于模型与服务商。</p></div><div class="llm-select-wrap"><select id="llm-effort" name="reasoningEffort" aria-describedby="llm-effort-hint">${Object.entries(efforts).map(([value, label]) => `<option value="${value}"${state.reasoningEffort === value ? ' selected' : ''}>${label}</option>`).join('')}</select><i data-lucide="chevron-down"></i></div></div>
+          <div class="llm-field llm-effort"><div class="llm-effort-description"><label for="llm-effort">思考强度</label><p class="llm-field-hint" id="llm-effort-hint">可用强度取决于模型与服务商。</p></div><div class="llm-select-wrap"><select id="llm-effort" name="reasoningEffort" aria-describedby="llm-effort-hint">${Object.entries(efforts).map(([value, label]) => `<option value="${value}"${state.reasoningEffort === value ? ' selected' : ''}>${label}</option>`).join('')}</select><i data-lucide="chevron-down"></i></div></div>
           <div class="llm-field llm-network"><div class="llm-network-row"><label for="llm-connection-mode">连接方式</label><div class="llm-select-wrap"><select id="llm-connection-mode" name="connectionMode"><option value="direct"${state.connection.mode === 'direct' ? ' selected' : ''}>直连</option><option value="proxy"${state.connection.mode === 'proxy' ? ' selected' : ''}>使用代理</option></select><i data-lucide="chevron-down"></i></div></div>
             <div class="llm-proxy-fields"${state.connection.mode === 'direct' ? ' hidden' : ''}>
-              <div class="llm-field"><label for="llm-proxy-protocol">代理协议</label><div class="llm-select-wrap"><select id="llm-proxy-protocol" name="proxyProtocol"${state.connection.mode === 'direct' ? ' disabled' : ''}><option value="http"${proxy.protocol === 'http' ? ' selected' : ''}>HTTP</option><option value="socks5"${proxy.protocol === 'socks5' ? ' selected' : ''}>SOCKS5</option></select><i data-lucide="chevron-down"></i></div></div>
+              <div class="llm-field"><label for="llm-proxy-protocol">代理协议</label><div class="llm-select-wrap"><select id="llm-proxy-protocol" name="proxyProtocol"${state.connection.mode === 'direct' ? ' disabled' : ''}>${Object.entries(helpers.proxyProtocols).map(([value,label]) => `<option value="${value}"${proxy.protocol === value ? ' selected' : ''}>${label}</option>`).join('')}</select><i data-lucide="chevron-down"></i></div></div>
               <div class="llm-field"><label for="llm-proxy-host">主机</label><input id="llm-proxy-host" name="proxyHost" value="${esc(proxy.host)}" placeholder="host.docker.internal" spellcheck="false"${state.connection.mode === 'direct' ? ' disabled' : ''}></div>
               <div class="llm-field"><label for="llm-proxy-port">端口</label><input id="llm-proxy-port" name="proxyPort" value="${esc(proxy.port)}" inputmode="numeric" placeholder="7897"${state.connection.mode === 'direct' ? ' disabled' : ''}></div>
-              <p class="llm-field-hint">模型与 Worker 的 HTTP(S) 请求使用此代理，新运行生效。Docker 访问本机代理使用 host.docker.internal:7897。</p>
+              <p class="llm-field-hint">代理地址需能从服务端访问。Docker 访问宿主机代理可用 host.docker.internal。</p>
             </div>
+            <p class="llm-field-hint">全局配置，适用于所有项目的新任务；模型与 Worker 的 HTTP(S) 请求共用此连接方式。</p>
           </div>
         </section>
         <div class="llm-status" role="status" aria-live="polite"></div>
-        <footer class="llm-actions"><div><button class="llm-test" type="button"><i data-lucide="plug"></i>模拟测试</button><button class="llm-save" type="submit" disabled${showReturn ? ' hidden' : ''}>保存配置</button><button class="llm-return" type="button" data-llm-return${showReturn ? '' : ' hidden'}>完成并返回<i data-lucide="arrow-right"></i></button></div></footer>
+        <footer class="llm-actions"><div><button class="llm-test" type="button"><i data-lucide="plug"></i>连接测试</button><button class="llm-save" type="submit" disabled${showReturn ? ' hidden' : ''}>保存配置</button><button class="llm-return" type="button" data-llm-return${showReturn ? '' : ' hidden'}>完成并返回<i data-lucide="arrow-right"></i></button></div></footer>
       </form>
       <aside class="llm-aside"><div class="llm-overview"><div class="llm-diagram"><div class="llm-diagram-node"><span class="llm-mini-brand" aria-hidden="true"><img src="/static/brand.png" alt=""></span><strong>PwnMesh</strong></div><div class="llm-diagram-node llm-model-node"><span class="llm-model-symbol" aria-hidden="true">${providerIcon(state.provider)}</span><div><strong class="llm-summary-provider">${providers[state.provider].name}</strong><small class="llm-summary-model">${esc(state.model || '待选择模型')}</small></div><span class="llm-connection-dot"></span></div></div><dl class="llm-summary"><div><dt>状态</dt><dd class="llm-summary-status">${saved ? '已保存' : '待配置'}</dd></div><div><dt>协议</dt><dd class="llm-summary-protocol">Anthropic</dd></div><div><dt>思考强度</dt><dd class="llm-summary-effort">${efforts[state.reasoningEffort]}</dd></div><div><dt>连接方式</dt><dd class="llm-summary-connection">${connectionLabel(state.connection)}</dd></div><div class="llm-summary-proxy"${state.connection.mode === 'direct' ? ' hidden' : ''}><dt>代理地址</dt><dd class="llm-summary-proxy-address">${esc(proxy.host)}:${esc(proxy.port)}</dd></div></dl></div></aside></div>
     </section>`;
@@ -66,13 +49,11 @@
 
   let serverSettings = null;
   const api = new window.PwnMeshAPI.Client();
-  const helpers = window.PwnMeshModelSettings;
   const origin = (value) => { try { return new URL(value).origin; } catch { return ''; } };
   function fromServer(settings) {
     const proxy = helpers.parseProxy(settings.proxy_url);
-    proxyDraft = proxy;
     return {provider: helpers.providerFor(settings.base_url), protocol:'anthropic', url:settings.base_url,
-      model:settings.model, reasoningEffort:settings.reasoning_effort || '',
+      model:settings.model, reasoningEffort:settings.reasoning_effort || helpers.defaultReasoningEffort,
       connection:settings.connection_mode === 'proxy' ? {mode:'proxy',...proxy} : {mode:'direct'}};
   }
   function bind(host, {onReturn} = {}) {
@@ -183,14 +164,14 @@
     },options);
     form.addEventListener('submit',async event => {
       event.preventDefault();if (busy || !loaded) return;
-      if (!verified) {status('error','请先完成模拟测试，再保存配置。');return;}
+      if (!verified) {status('error','请先完成连接测试，再保存配置。');return;}
       let body;try {body = payload();} catch(error) {status('error',error.message);return;}
       busy = true;request = new AbortController();const version = generation;sync();status('pending','正在保存配置…');
       try {
         const result = await api.request('/model-settings',{method:'PUT',body,signal:request.signal});
         if (disposed || version !== generation) return;
-        serverSettings = result;saved = fromServer(result);draft = saved;dirty = false;verified = false;fill(saved);
-        query('.llm-summary-status').textContent = '已保存';status('success','配置已保存，新的模型请求与 Worker 将使用此配置。');
+        serverSettings = result;proxyDraft = helpers.parseProxy(result.proxy_url);saved = fromServer(result);draft = saved;dirty = false;verified = false;fill(saved);
+        query('.llm-summary-status').textContent = '已保存';status('success','配置已保存，新启动的任务将使用此配置；运行中的任务保持原配置。');
         window.dispatchEvent(new CustomEvent('llm-updated',{detail:{provider:providers[saved.provider].name,model:saved.model,connection:{...saved.connection}}}));
       } catch(error) {if (!disposed && version === generation) status('error','保存失败：'+error.message);}
       finally {if (!disposed && version === generation) {busy = false;request = null;sync();}}
@@ -211,12 +192,13 @@
     request = new AbortController();
     api.request('/model-settings',{signal:request.signal}).then(settings => {
       if (disposed) return;
+      if (!dirty) proxyDraft = helpers.parseProxy(settings.proxy_url);
       serverSettings = settings;saved = settings.has_token ? fromServer(settings) : null;loaded = true;busy = false;
       fill(dirty && draft ? draft : fromServer(settings));
       query('.llm-summary-status').textContent = dirty ? '未保存' : saved ? '已保存' : '待配置';
-      status('',dirty ? '已恢复未保存的草稿，请重新模拟测试。' : '');
+      status('',dirty ? '已恢复未保存的草稿，请重新连接测试。' : '');
     }).catch(error => {if (!disposed) {busy = false;status('error','配置读取失败：'+error.message+'。返回项目后可重新打开重试。');sync();}});
     return cleanup;
   }
-  window.PwnLLMDemo = {render,bind,validateProxy,summary:() => saved ? `${providers[saved.provider].name} · ${saved.model}` : '尚未配置模型'};
+  window.PwnLLMDemo = {render,bind,summary:() => saved ? `${providers[saved.provider].name} · ${saved.model}` : '尚未配置模型'};
 }());

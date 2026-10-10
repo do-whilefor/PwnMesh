@@ -9,19 +9,28 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
   skip:process.env.PWNMESH_WEB_QA === '1' && process.env.PWNMESH_WEB_URL ? false : 'Requires an isolated PWNMESH_WEB_QA service',
 }, async t => {
   const base = new URL(process.env.PWNMESH_WEB_URL), requests = [], owned = [];
-  let rejectModel = false;
+  let rejectModel = false, acceptedKey = 'qa-secret-only';
   const upstream = http.createServer(async (req,res) => {
     let raw = ''; for await (const chunk of req) raw += chunk;
     const input = JSON.parse(raw);
-    requests.push({url:req.url,version:req.headers['anthropic-version'],authorized:req.headers['x-api-key'] === 'qa-secret-only' || req.headers.authorization === 'Bearer qa-secret-only',input});
+    requests.push({url:req.url,version:req.headers['anthropic-version'],authorized:req.headers['x-api-key'] === acceptedKey || req.headers.authorization === 'Bearer '+acceptedKey,input});
     res.setHeader('Content-Type','application/json');
     if (rejectModel) { res.writeHead(401); res.end(JSON.stringify({error:{message:'controlled authentication failure'}})); return; }
     const content = input.messages?.at(-1)?.content;
     const second = Array.isArray(content) && content.some(block => block.type === 'tool_result');
     res.end(JSON.stringify({id:'qa-message',type:'message',role:'assistant',model:input.model,stop_reason:second ? 'end_turn' : 'tool_use',
-      content:second ? [{type:'text',text:'PWNMESH_OK'}] : [{type:'tool_use',id:'check-1',name:'connection_check',input:{ready:true}}],usage:{input_tokens:12,output_tokens:8}}));
+      content:second ? [{type:'text',text:content.find(block => block.type === 'tool_result').content}] : [{type:'tool_use',id:'check-1',name:'connection_check',input:{ready:true}}],usage:{input_tokens:12,output_tokens:8}}));
   });
   await new Promise(resolve => upstream.listen(0,'0.0.0.0',resolve));
+  const proxied = [];
+  const proxy = http.createServer((req,res) => {
+    const destination = new URL(req.url);proxied.push(destination.href);
+    const forwarded = http.request({hostname:'127.0.0.1',port:upstream.address().port,path:destination.pathname,method:req.method,headers:req.headers},response => {
+      res.writeHead(response.statusCode,response.headers);response.pipe(res);
+    });
+    forwarded.on('error',() => {res.writeHead(502);res.end();});req.pipe(forwarded);
+  });
+  await new Promise(resolve => proxy.listen(0,'0.0.0.0',resolve));
   const endpoint = `http://${process.env.PWNMESH_QA_UPSTREAM_HOST || 'host.docker.internal'}:${upstream.address().port}/anthropic`;
   const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
@@ -61,6 +70,27 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
       assert.ok(!(await page.locator('.llm-status').innerText()).includes('qa-secret-only'));
       rejectModel = false; await page.locator('.llm-back').click();
     });
+    await t.test('updated endpoint and key persist through a real HTTP proxy and direct mode bypasses it',async () => {
+      await page.locator('#model-entry').click();await page.waitForFunction(() => !document.querySelector('.llm-test')?.disabled);
+      acceptedKey = 'qa-rotated-key';requests.length = 0;
+      await page.locator('#llm-url').fill(endpoint+'/updated');await page.locator('#llm-key').fill(acceptedKey);
+      await page.locator('#llm-connection-mode').selectOption('proxy');await page.locator('#llm-proxy-protocol').selectOption('http');
+      await page.locator('#llm-proxy-host').fill(process.env.PWNMESH_QA_UPSTREAM_HOST || 'host.docker.internal');
+      await page.locator('#llm-proxy-port').fill(String(proxy.address().port));
+      const checked = responseFor('/model-settings/test');await page.locator('.llm-test').click();assert.equal((await (await checked).json()).ok,true);
+      assert.equal(proxied.length,2);assert.ok(requests.every(req => req.url === '/anthropic/updated/v1/messages' && req.authorized));
+      const saved = responseFor('/model-settings','PUT');await page.locator('.llm-save').click();assert.ok((await saved).ok());
+      const settings = await api('/model-settings');assert.equal(settings.connection_mode,'proxy');assert.equal(settings.base_url,endpoint+'/updated');
+      assert.ok(!JSON.stringify(settings).includes(acceptedKey));
+      await page.reload({waitUntil:'networkidle'});await page.waitForFunction(() => !document.querySelector('.llm-test')?.disabled);
+      assert.equal(await page.locator('#llm-proxy-port').inputValue(),String(proxy.address().port));assert.equal(await page.locator('#llm-key').inputValue(),'');
+      await page.locator('#llm-connection-mode').selectOption('direct');
+      const direct = responseFor('/model-settings/test');await page.locator('.llm-test').click();assert.equal((await (await direct).json()).ok,true);
+      assert.equal(proxied.length,2,'direct requests must bypass the saved proxy');assert.equal(requests.length,4);
+      assert.ok(requests.every(req => req.authorized),'the rotated server-side key is reused');
+      const directSaved = responseFor('/model-settings','PUT');await page.locator('.llm-save').click();assert.ok((await directSaved).ok());
+      await page.locator('.llm-back').click();
+    });
     await t.test('material upload persists original bytes and unfinished results stay unfinished',async () => {
       const graph = await api('/projects','POST',{title:'V5 真实材料验收',origin:'Controlled local input only',goal:'Verify material persistence',scenario:'audit',start_paused:true});
       owned.push(graph.project.id); const projectPath = '/projects/' + encodeURIComponent(graph.project.id);
@@ -78,6 +108,6 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
     assert.deepEqual(errors,[]);
   } finally {
     for (const id of owned) await api('/projects/' + encodeURIComponent(id),'DELETE');
-    await browser.close(); await new Promise(resolve => upstream.close(resolve));
+    await browser.close();await new Promise(resolve => proxy.close(resolve));await new Promise(resolve => upstream.close(resolve));
   }
 });
