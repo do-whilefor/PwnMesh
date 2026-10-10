@@ -18,7 +18,6 @@
 
   function render({ returnLabel = '返回项目', projectName = '' } = {}) {
     const state = draft || saved || defaults();
-    const showReturn = Boolean(saved && !dirty);
     const proxy = state.connection.mode === 'proxy' ? state.connection : proxyDraft;
     return `<section class="llm-page" aria-labelledby="llm-title">
       <header class="llm-heading"><h1 id="llm-title">模型接入</h1><button type="button" class="llm-back" data-llm-return title="${esc(projectName ? `${returnLabel} · ${projectName}` : returnLabel)}"><i data-lucide="arrow-left"></i>${esc(returnLabel)}</button></header>
@@ -40,7 +39,7 @@
           </div>
         </section>
         <div class="llm-status" role="status" aria-live="polite"></div>
-        <footer class="llm-actions"><div><button class="llm-test" type="button"><i data-lucide="plug"></i>连接测试</button><button class="llm-save" type="submit" disabled${showReturn ? ' hidden' : ''}>保存配置</button><button class="llm-return" type="button" data-llm-return${showReturn ? '' : ' hidden'}>完成并返回<i data-lucide="arrow-right"></i></button></div></footer>
+        <footer class="llm-actions"><div><button class="llm-test" type="button"><i data-lucide="plug"></i>连接测试</button><button class="llm-save" type="submit" disabled>保存配置</button></div></footer>
       </form>
       <aside class="llm-aside"><div class="llm-overview"><div class="llm-diagram"><div class="llm-diagram-node"><span class="llm-mini-brand" aria-hidden="true"><img src="/static/brand.png" alt=""></span><strong>PwnMesh</strong></div><div class="llm-diagram-node llm-model-node"><span class="llm-model-symbol" aria-hidden="true">${providerIcon(state.provider)}</span><div><strong class="llm-summary-provider">${providers[state.provider].name}</strong><small class="llm-summary-model">${esc(state.model || '待选择模型')}</small></div><span class="llm-connection-dot"></span></div></div><dl class="llm-summary"><div><dt>状态</dt><dd class="llm-summary-status">${saved ? '已保存' : '待配置'}</dd></div><div><dt>协议</dt><dd class="llm-summary-protocol">Anthropic</dd></div><div><dt>思考强度</dt><dd class="llm-summary-effort">${efforts[state.reasoningEffort]}</dd></div><div><dt>连接方式</dt><dd class="llm-summary-connection">${connectionLabel(state.connection)}</dd></div><div class="llm-summary-proxy"${state.connection.mode === 'direct' ? ' hidden' : ''}><dt>代理地址</dt><dd class="llm-summary-proxy-address">${esc(proxy.host)}:${esc(proxy.port)}</dd></div></dl></div></aside></div>
     </section>`;
@@ -86,8 +85,6 @@
       for (const name of ['proxyProtocol','proxyHost','proxyPort']) {field(name).disabled = busy || !loaded || !proxy;field(name).required = proxy;}
       query('.llm-test').disabled = busy || !loaded;
       query('.llm-save').disabled = busy || !loaded || !verified;
-      query('.llm-save').hidden = Boolean(saved && !dirty);
-      query('.llm-return').hidden = !(saved && !dirty);
       query('.llm-key-toggle').disabled = busy || !loaded;
       form.querySelectorAll('[data-llm-provider]').forEach(button => {
         const selected = button.dataset.llmProvider === provider;
