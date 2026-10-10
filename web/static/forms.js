@@ -13,6 +13,7 @@
     if (![getProject, onCreate, onHint].every(callback => typeof callback === 'function')) throw new TypeError('Project form callbacks are required.');
     activeBinding?.destroy();
     const { validateProject, validateHint, validateFiles, isProjectClosed, createFormDrafts, PROJECT_TYPES, fileSize } = window.PwnDemoModel;
+    const hintUnavailable = project => project?.readOnly ? '历史项目只读，请新建项目继续。' : isProjectClosed(project) ? '项目已结束，无法补充信息。' : '';
     const drafts = createFormDrafts();
     const $ = selector => document.querySelector(selector);
     const createDialog = $('#create-dialog'), hintDialog = $('#hint-dialog');
@@ -92,9 +93,9 @@
     }
     function hintStatus(project) {
       const status = $('#hint-status');
-      status.hidden = project?.status !== 'paused' && !isProjectClosed(project);
-      status.textContent = isProjectClosed(project) ? '项目已结束，无法补充信息。' : project?.status === 'paused' ? '项目已暂停，补充内容将在继续后使用。' : '';
-      hintForm.querySelector('[type="submit"]').disabled = hintBusy || isProjectClosed(project);
+      status.hidden = project?.status !== 'paused' && !hintUnavailable(project);
+      status.textContent = hintUnavailable(project) || (project?.status === 'paused' ? '项目已暂停，补充内容将在继续后使用。' : '');
+      hintForm.querySelector('[type="submit"]').disabled = hintBusy || !!hintUnavailable(project);
     }
     function pending(kind, busy) {
       const form = kind === 'create' ? createForm : hintForm;
@@ -116,7 +117,7 @@
     function openHint(id) {
       if (createBusy || hintBusy) { toast('正在提交，请稍候。'); return false; }
       const project = getProject(id);
-      if (!project || isProjectClosed(project)) { toast(project ? '项目已结束，无法补充信息。' : '项目不存在或已移除。'); return false; }
+      if (!project || hintUnavailable(project)) { toast(project ? hintUnavailable(project) : '项目不存在或已移除。'); return false; }
       if (createDialog.open) { captureCreate(); createDialog.close(); }
       if (hintProjectId !== null) captureHint();
       hintProjectId = id;
@@ -145,7 +146,7 @@
         const draft = kind === 'create' ? drafts.getCreate() : drafts.getHint(hintProjectId);
         const next = [...draft.files, ...incoming];
         const project = kind === 'hint' ? getProject(hintProjectId) : null;
-        const error = kind === 'hint' && (!project || isProjectClosed(project)) ? '项目已结束或不可用，无法补充材料。' : validateFiles(next, project?.files || []);
+        const error = kind === 'hint' && (!project || hintUnavailable(project)) ? hintUnavailable(project) || '项目不存在或已移除。' : validateFiles(next, project?.files || []);
         report(kind, error);
         if (error) { input.setAttribute('aria-invalid', 'true'); return; }
         draft.files = next;
@@ -206,7 +207,7 @@
       if (hintBusy || hintProjectId === null) return;
       captureHint();
       const id = hintProjectId, draft = drafts.getHint(id), values = { text: draft.text.trim(), files: draft.files };
-      const project = getProject(id), error = validateHint(values, project); report('hint', error);
+      const project = getProject(id), error = hintUnavailable(project) || validateHint(values, project); report('hint', error);
       hintStatus(project);
       if (error) { if (!values.text && !values.files.length) { $('#hint-text').setAttribute('aria-invalid', 'true'); $('#hint-text').focus(); } return; }
       hintBusy = true; pending('hint', true);

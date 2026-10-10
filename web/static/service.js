@@ -7,7 +7,7 @@
   const pathFor = id => '/projects/' + encodeURIComponent(id);
   const statuses = {active:'running',stopped:'paused',completed:'done',terminated:'terminated'};
   function projectView(raw,previous={}) {
-    return {...previous,id:raw.id,name:raw.title,type:raw.scenario || 'pentest',status:statuses[raw.status] || 'pending',generation:raw.generation || 0,createdAt:raw.created_at,endedAt:raw.terminated_at || previous.endedAt || null,target:previous.target || '',goal:previous.goal || '',files:previous.files || [],history:previous.history || [],state:previous.state || null,logs:previous.logs || [],raw};
+    return {...previous,id:raw.id,name:raw.title,type:raw.scenario || 'pentest',status:statuses[raw.status] || 'pending',readOnly:raw.orchestration_version !== 1,generation:raw.generation || 0,createdAt:raw.created_at,endedAt:raw.terminated_at || previous.endedAt || null,target:previous.target || '',goal:previous.goal || '',files:previous.files || [],history:previous.history || [],state:previous.state || null,logs:previous.logs || [],raw};
   }
   function snapshotView(state,events=[],runs=[],files=[],previous={}) {
     const project=projectView(state.graph.project,previous), facts=state.graph.facts || [];

@@ -9,7 +9,7 @@ const systemHead='浏览器折叠验收的系统记录开头。',systemTail='系
 const boardBody=boardHead+'\n'+'这是应折叠显示的详细证据内容。'.repeat(120)+'\n'+boardTail+' <script>literal-only</script>';
 const systemBody=systemHead+'\n'+'这是应折叠显示的执行错误详情。'.repeat(120)+'\n'+systemTail;
 function fixture(){
-  const project={id:'ui-details-fixture',title:'日志与任务筛选浏览器验收',scenario:'ctf',status:'active',generation:0,created_at:created};
+  const project={id:'ui-details-fixture',title:'日志与任务筛选浏览器验收',scenario:'ctf',status:'active',orchestration_version:1,generation:0,created_at:created};
   const facts=[{id:'origin',description:'受控的浏览器测试输入',status:'input'},{id:'long',description:boardBody,status:'valid'},{id:'short',description:'简短的证据记录',status:'valid'}].map(fact=>({...fact,created_at:created}));
   const steps=[{id:'done',description:'已经完成的任务',status:'completed',from:['origin'],result:'long',support_valid:true},{id:'running',description:'正在运行的任务',status:'running',from:['long'],depends_on:['done']},{id:'pending',description:'等待执行的任务',status:'blocked',from:['short'],depends_on:['running'],blocked_by:['running']},{id:'failed',description:'失败的任务',status:'failed',from:['origin']}].map(step=>({...step,goal_id:'goal',created_at:created}));
   const text='<script>window.previewExecuted=true</script>\nGET /orders HTTP/1.1';
@@ -104,7 +104,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
 
     await t.test('invalidated completion support updates selected details, card colors and result edges',async()=>{
       await page.locator('[data-node-key="fact:long"]').dispatchEvent('click');
-      state.graph.project.orchestration_version=1;delete state.steps[0].support_valid;state.fact_records[1].support_invalid=true;state.steps[1].blocked_by=['done'];state.revision++;
+      delete state.steps[0].support_valid;state.fact_records[1].support_invalid=true;state.steps[1].blocked_by=['done'];state.revision++;
       await page.waitForFunction(()=>document.querySelector('[data-node-key="step:done"]')?.classList.contains('invalid'));
       assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/有效 · 支持失效/);
       const completed=page.locator('[data-node-key="step:done"]');assert.match(await completed.getAttribute('aria-label'),/已完成 · 完成结果支持失效/);
@@ -113,6 +113,18 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       await completed.dispatchEvent('click');assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/已完成 · 完成结果支持失效/);
       await page.locator('[data-filter="done"]').click();await paint(page);
       assert.equal(await completed.isVisible(),false);assert.equal(await page.locator('[data-node-key="fact:long"]').isVisible(),false);assert.equal(await page.locator('[data-node-key="fact:short"]').isVisible(),true);assert.equal(await page.locator('.activity-pane .node-inspector').count(),0);
+    });
+
+    await t.test('historical projects stay readable but hide unavailable mutations and reject an already-open hint form',async()=>{
+      await page.locator('#add-hint').click();await page.locator('#hint-text').fill('A draft opened before the project became read-only');
+      delete state.graph.project.orchestration_version;state.revision++;
+      await page.waitForFunction(()=>document.querySelector('#add-hint')?.disabled);
+      await page.locator('#hint-form [type="submit"]').click();assert.match(await page.locator('#hint-error').innerText(),/历史项目只读/);
+      assert.equal(await page.locator('#hint-form [type="submit"]').isDisabled(),true);await page.locator('#hint-dialog [data-close="hint-dialog"]').first().click();
+      assert.match(await page.locator('.project-heading .badge').innerText(),/历史项目.*只读/);assert.equal(await page.locator('.project-more').isDisabled(),true);
+      await page.locator('#project-manage').click();assert.match(await page.locator('#project-dialog').innerText(),/历史项目只读/);assert.equal(await page.locator('#project-dialog [data-action]').count(),0);await page.locator('[data-close="project-dialog"]').click();
+      await page.locator('#view-tab-materials').click();assert.equal(await page.locator('#add-materials').count(),0);assert.equal(await page.locator('.material-row').count(),2);
+      await page.reload({waitUntil:'networkidle'});await page.locator('.project-heading .badge').filter({hasText:'只读'}).waitFor();assert.equal(await page.locator('#add-hint').isDisabled(),true);assert.equal(await page.locator('.project-more').isDisabled(),true);
     });
 
     assert.deepEqual(requests.writes,[],'detail checks never mutate the backing service');assert.deepEqual(requests.unexpected,[]);assert.deepEqual(assetErrors,[]);assert.deepEqual(errors,[]);

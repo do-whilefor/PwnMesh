@@ -33,7 +33,7 @@ test('production matches the actual v5 Demo at 1440 and 1920 pixels, including m
     const context=await browser.newContext({viewport:{width:1440,height:960},deviceScaleFactor:1,reducedMotion:'reduce'});
     const page=await context.newPage(),reference=await context.newPage(),errors=[],assetErrors=[];
     for(const current of [page,reference]){current.on('pageerror',error=>errors.push(error.message));current.on('response',response=>{if(response.status()>=400)assetErrors.push(response.url());});}
-    const project={id:'atlas',title:'Atlas 平台安全评估',scenario:'pentest',status:'active',generation:0,created_at:'2026-10-09T01:24:00Z'};
+    const project={id:'atlas',title:'Atlas 平台安全评估',scenario:'pentest',status:'active',orchestration_version:1,generation:0,created_at:'2026-10-09T01:24:00Z'};
     const facts=[{id:'origin',description:'atlas.example.com',status:'input',created_at:project.created_at},{id:'goal',description:'验证核心业务接口的访问控制，追溯每一项发现的证据。',status:'input',created_at:project.created_at}];
     const fixture={state:{graph:{project,facts,intents:[],hints:[]},revision:1,goals:[{id:'goal',condition:facts[1].description,status:'open'}],steps:[],fact_records:facts,findings:[],fact_relations:[]}};
     const requests=await interceptProject(page,fixture);

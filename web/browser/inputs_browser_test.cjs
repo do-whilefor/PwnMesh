@@ -10,7 +10,7 @@ test('demo forms upload raw files, retry a paused project, and atomically supple
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/projects**',async route=>{const req=route.request(),url=new URL(req.url()),pathname=url.pathname,method=req.method(),reply=(body,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
    if(method!=='GET')writes.push(method+' '+pathname);
-   if(pathname==='/projects'&&method==='POST'){creates++;const data=req.postDataJSON();assert.equal(data.start_paused,true);project={id:'uploaded',title:data.title,status:'stopped',scenario:data.scenario,generation:0,created_at:'2026-10-10T02:00:00Z'};return reply({project},201);}
+   if(pathname==='/projects'&&method==='POST'){creates++;const data=req.postDataJSON();assert.equal(data.start_paused,true);project={id:'uploaded',title:data.title,status:'stopped',scenario:data.scenario,orchestration_version:1,generation:0,created_at:'2026-10-10T02:00:00Z'};return reply({project},201);}
    if(pathname==='/projects')return reply(project?[project]:[]);
    if(pathname.endsWith('/rounds'))return reply({items:[]});if(pathname.endsWith('/state/events'))return reply([]);if(pathname.endsWith('/state'))return reply(stateFor(project));if(pathname.endsWith('/identity'))return reply({id:project.id,generation:0});if(pathname.endsWith('/executions'))return reply({items:[],through:0});
    if(pathname.endsWith('/inputs')&&method==='GET')return reply(inputs);
@@ -40,7 +40,7 @@ test('material readers ignore older responses and navigation to the model page',
 },async()=>{
  const server=await assetServer(),browser=await launch();
  try{
-  const page=await browser.newPage({viewport:{width:1440,height:960}}),project={id:'reader',title:'材料读取隔离',scenario:'pentest',status:'active',generation:0,created_at:'2026-10-10T02:00:00Z'};let slowRoute;
+  const page=await browser.newPage({viewport:{width:1440,height:960}}),project={id:'reader',title:'材料读取隔离',scenario:'pentest',status:'active',orchestration_version:1,generation:0,created_at:'2026-10-10T02:00:00Z'};let slowRoute;
   const files=['slow','fast'].map(id=>({id,name:id+'.txt',size:12,path:'/inputs/'+id+'.txt',created_at:project.created_at,sha256:'a'.repeat(64)}));
   await page.route('**/model-settings',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',has_token:false,connection_mode:'direct',reasoning_effort:'high'})}));
   await page.route('**/projects**',route=>{const pathname=new URL(route.request().url()).pathname,reply=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});if(pathname==='/projects')return reply([project]);if(pathname.endsWith('/inputs/slow')){slowRoute=route;return;}if(pathname.endsWith('/inputs/fast'))return route.fulfill({body:'fast actual',contentType:'application/octet-stream'});if(pathname.endsWith('/inputs'))return reply(files);if(pathname.endsWith('/state/events'))return reply([]);if(pathname.endsWith('/state'))return reply(stateFor(project));if(pathname.endsWith('/identity'))return reply({id:project.id,generation:0});if(pathname.endsWith('/executions'))return reply({items:[],through:0});if(pathname.endsWith('/rounds'))return reply({items:[]});return reply({});});
