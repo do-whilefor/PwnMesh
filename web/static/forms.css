@@ -1,0 +1,59 @@
+.forms-dialog{width:610px;max-width:calc(100vw - 40px);max-height:calc(100dvh - 40px);overflow:auto;overscroll-behavior:contain;scrollbar-width:none;scrollbar-gutter:auto;padding:24px 26px;border:1px solid #d9e1e6;border-radius:16px;color:#3e5361}
+.forms-dialog::-webkit-scrollbar,.forms-dialog *::-webkit-scrollbar{display:none;width:0;height:0}
+.forms-dialog textarea,.forms-dialog .forms-files{scrollbar-width:none}
+.forms-dialog .lucide{width:16px;height:16px;stroke-width:1.6;flex:none}
+.forms-dialog .dialog-header{align-items:center;margin:0 0 22px;gap:20px}
+.forms-dialog .dialog-header h2{font-size:19px;font-weight:700;line-height:1.4;letter-spacing:-.3px;margin:0;color:#273743}
+.forms-branded-heading{display:flex;align-items:center;gap:18px;min-width:0}
+.forms-brand{position:relative;display:block;flex:none;width:130px;height:34px;overflow:hidden;isolation:isolate;mix-blend-mode:multiply}
+.forms-brand img{position:absolute;width:200px;max-width:none;left:-35px;top:-34px}
+.forms-branded-heading h2{padding-left:18px;border-left:1px solid #d9e1e6}
+.forms-dialog .dialog-header .icon-button{margin:-2px -5px 0 0;color:#5c6f7c}
+.forms-dialog .field-label{display:flex;align-items:center;gap:7px;font-size:12px;font-weight:700;color:#3e5361;margin:14px 0 7px}
+.forms-dialog .field-label>span{font-size:11px;font-weight:400;color:#5c6f7c}
+.forms-dialog input:not([type=radio]):not([type=file]),.forms-dialog textarea{display:block;width:100%;border:1px solid #d9e1e6;border-radius:9px;padding:9px 12px;font-size:13px;color:#3e5361;background:#fbfcfd;line-height:1.6;transition:border-color .15s,box-shadow .15s,background .15s}
+.forms-dialog input:not([type=radio]):not([type=file]){height:39px}
+.forms-dialog textarea{resize:vertical;min-height:64px;max-height:180px}
+.forms-dialog input::placeholder,.forms-dialog textarea::placeholder{color:#5c6f7c}
+.forms-dialog input[aria-invalid=true],.forms-dialog textarea[aria-invalid=true]{border-color:#b95535}
+.forms-dialog input:focus,.forms-dialog textarea:focus{background:#fff;border-color:#b95535;box-shadow:0 0 0 3px #fbede780;outline:0}
+.forms-type-choices{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:4px;background:#f3f5f6;border:0;border-radius:7px;margin:0 0 3px}
+.forms-type-choices label{position:relative;min-width:0;cursor:pointer}
+.forms-type-choices input{position:absolute;opacity:0;width:1px;height:1px}
+.forms-type-choices span{display:flex;justify-content:center;align-items:center;gap:8px;height:37px;padding:0 10px;border:0;border-radius:5px;font-size:12px;color:#3e5361;background:transparent}
+.forms-type-choices input:checked+span{background:#fff;box-shadow:0 1px 3px #23394510;color:#9a4e32;border-color:transparent}
+.forms-type-choices input:focus-visible+span{outline:2px solid #9a4e32;outline-offset:2px}
+.forms-dialog .forms-material-label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px}
+.forms-material-label .field-label{margin:0 0 7px}
+.forms-file-count{font-size:10px;font-variant-numeric:tabular-nums;color:#5c6f7c;margin-bottom:7px}
+.forms-upload{position:relative;display:flex;align-items:center;gap:8px;padding:11px 12px;border:1px dashed #d9e1e6;border-radius:9px;background:#fbfcfd;color:#3e5361;font-size:12px;cursor:pointer;overflow:hidden}
+.forms-upload:hover{border-color:#b7cbd6;background:#f5f9fb}
+.forms-upload:focus-within{outline:2px solid #9a4e32;outline-offset:2px}
+.forms-upload input[type=file]{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;z-index:1}
+.forms-upload>small{margin-left:auto;font-size:10px;color:#5c6f7c}
+.forms-file-limits{font-size:10px;line-height:1.7;color:#5c6f7c;margin:6px 0 0}
+.forms-dialog .forms-files{padding:0;margin:9px 0 0;max-height:135px;overflow:auto;list-style:none;scrollbar-width:none}
+.forms-files:empty{display:none}
+.forms-dialog .forms-files li{display:flex;align-items:center;gap:8px;min-width:0;padding:6px 0;border:0;font-size:11px;line-height:1.5;color:#3e5361;background:transparent}
+.forms-files li>.lucide{color:#5c6f7c}
+.forms-files li>span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.forms-files li>small{font-size:10px;color:#5c6f7c;font-variant-numeric:tabular-nums;white-space:nowrap}
+.forms-files .icon-button{width:24px;height:24px;color:#5c6f7c;flex:none}
+.forms-files .icon-button:hover{color:#9a4e32;background:#fbf2ed}
+.forms-dialog .form-error{font-size:11px;color:#9a4e32;line-height:1.6;margin:12px 0 0;min-height:0}
+.forms-dialog .form-error:empty{display:none}
+.forms-dialog .dialog-footer{display:flex;align-items:center;gap:9px;padding:18px 0 0;margin-top:18px;border-top:1px solid #d9e1e6;background:none}
+.forms-dialog .dialog-footer .button{height:37px;font-size:12px;border-radius:8px}
+.forms-dialog .forms-shortcut{margin-right:auto;font-size:10px;letter-spacing:.1px;color:#5c6f7c}
+.forms-project-name{font-size:11px;color:#5c6f7c;line-height:1.6;margin:6px 0 0;max-width:460px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.forms-status{padding:10px 12px;font-size:11px;line-height:1.7;color:#7b633f;background:#fbf7ef;border-radius:5px;margin:-3px 0 17px}
+.forms-imported{margin-top:17px;background:#f7f9fa;padding:11px 12px;border-radius:6px}
+.forms-imported summary{display:flex;align-items:center;gap:7px;list-style:none;color:#3e5361;font-size:11px;cursor:pointer}
+.forms-imported summary::-webkit-details-marker{display:none}
+.forms-imported summary>span:nth-child(2){font-size:10px;color:#5c6f7c}
+.forms-imported summary>.lucide{margin-left:auto;color:#5c6f7c}
+.forms-imported[open] summary>.lucide{transform:rotate(180deg)}
+.forms-imported .forms-files{max-height:120px;margin-top:8px}
+.forms-dialog form[aria-busy=true] .forms-upload{pointer-events:none;opacity:.6}
+.forms-dialog form[aria-busy=true] .forms-type-choices{opacity:.6}
+@media(max-width:520px){.forms-dialog{padding:20px}.forms-branded-heading{gap:12px}.forms-branded-heading h2{padding-left:12px;font-size:17px}.forms-brand{width:110px;height:29px}.forms-brand img{width:170px;left:-30px;top:-29px}.forms-dialog .forms-shortcut{display:none}}

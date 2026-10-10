@@ -1,297 +1,120 @@
 'use strict';
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {staticServer,interceptProject,paint}=require('./visual_fixture.cjs');
 
-// Loads the service's embedded assets while intercepting every project API call.
-// Safe to run against a populated development service: no project data is written.
-// PWNMESH_WEB_URL=http://127.0.0.1:8000 node --test web/browser/workbench_details_browser_test.cjs
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
-const path = require('node:path');
-
-const created = '2026-09-24T02:00:00Z';
-const boardHead = '浏览器折叠验收的黑板记录开头。';
-const boardTail = '黑板记录末尾：展开后应完整可见。';
-const systemHead = '浏览器折叠验收的系统记录开头。';
-const systemTail = '系统记录末尾：展开后应完整可见。';
-const boardBody = boardHead + '\n' + '这是应折叠显示的详细证据内容。'.repeat(120) + '\n' + boardTail;
-const systemBody = systemHead + '\n' + '这是应折叠显示的执行错误详情。'.repeat(120) + '\n' + systemTail;
-
-function fixture() {
-  const project = {id:'ui-details-fixture',title:'日志与任务筛选浏览器验收',scenario:'ctf',status:'active',generation:0,created_at:created};
-  const facts = [
-    {id:'origin',description:'受控的浏览器测试输入',status:'input'},
-    {id:'long',description:boardBody,status:'valid'},
-    {id:'short',description:'简短的证据记录',status:'valid'},
-  ];
-  const steps = [
-    {id:'done',description:'已经完成的任务',status:'completed',from:['origin'],result:'long',support_valid:true},
-    {id:'running',description:'正在运行的任务',status:'running',from:['long'],depends_on:['done']},
-    {id:'pending',description:'等待执行的任务',status:'blocked',from:['short'],depends_on:['running'],blocked_by:['running']},
-    {id:'failed',description:'失败的任务',status:'failed',from:['origin']},
-  ].map(step => ({...step,goal_id:'goal',created_at:created}));
-  const state = {
-    graph:{project,facts,intents:[],hints:[]},revision:1,
-    goals:[{id:'goal',condition:'验证日志折叠、布局和状态筛选',status:'open',created_at:created}],
-    steps,fact_records:facts,findings:[],fact_relations:[],
-  };
-  const runs = [{
-    id:'long-system-run',project_id:project.id,generation:0,kind:'explore',intent:'failed',
-    status:'failed',created_at:created,updated_at:created,result:{error:systemBody},
-  }];
-  return {state,runs};
+const created='2026-09-24T02:00:00Z';
+const boardHead='浏览器折叠验收的黑板记录开头。',boardTail='黑板记录末尾：展开后应完整可见。';
+const systemHead='浏览器折叠验收的系统记录开头。',systemTail='系统记录末尾：展开后应完整可见。';
+const boardBody=boardHead+'\n'+'这是应折叠显示的详细证据内容。'.repeat(120)+'\n'+boardTail+' <script>literal-only</script>';
+const systemBody=systemHead+'\n'+'这是应折叠显示的执行错误详情。'.repeat(120)+'\n'+systemTail;
+function fixture(){
+  const project={id:'ui-details-fixture',title:'日志与任务筛选浏览器验收',scenario:'ctf',status:'active',generation:0,created_at:created};
+  const facts=[{id:'origin',description:'受控的浏览器测试输入',status:'input'},{id:'long',description:boardBody,status:'valid'},{id:'short',description:'简短的证据记录',status:'valid'}].map(fact=>({...fact,created_at:created}));
+  const steps=[{id:'done',description:'已经完成的任务',status:'completed',from:['origin'],result:'long',support_valid:true},{id:'running',description:'正在运行的任务',status:'running',from:['long'],depends_on:['done']},{id:'pending',description:'等待执行的任务',status:'blocked',from:['short'],depends_on:['running'],blocked_by:['running']},{id:'failed',description:'失败的任务',status:'failed',from:['origin']}].map(step=>({...step,goal_id:'goal',created_at:created}));
+  const text='<script>window.previewExecuted=true</script>\nGET /orders HTTP/1.1';
+  return {state:{graph:{project,facts,intents:[],hints:[]},revision:1,goals:[{id:'goal',condition:'验证日志折叠、布局和状态筛选',status:'open',created_at:created}],steps,fact_records:facts,findings:[],fact_relations:[]},
+    runs:[{id:'long-system-run',project_id:project.id,generation:0,kind:'explore',intent:'failed',status:'failed',created_at:created,updated_at:created,result:{error:systemBody}}],
+    inputs:[{id:'text',name:'request.http',size:Buffer.byteLength(text),path:'/workspace/inputs/request.http',sha256:'a'.repeat(64),created_at:created},{id:'binary',name:'client.apk',size:12,path:'/workspace/inputs/client.apk',sha256:'b'.repeat(64),created_at:created}],contents:{text,binary:Buffer.from([0,255,0])}};
 }
 
-test('workbench collapses long logs and filters cards without losing the canvas view', {
-  timeout:90000,
-  skip:process.env.PWNMESH_WEB_URL ? false : 'Set PWNMESH_WEB_URL to load the embedded workbench assets',
-}, async t => {
-  const base = new URL(process.env.PWNMESH_WEB_URL);
-  assert.ok(['http:','https:'].includes(base.protocol));
-  const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-  const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
-  const page = await browser.newPage({viewport:{width:1440,height:960},deviceScaleFactor:1});
-  page.setDefaultTimeout(10000);
-  const screenshots = path.resolve(__dirname,'../../tmp/web-workbench-details');
-  await fs.mkdir(screenshots,{recursive:true});
-  const {state,runs} = fixture(), errors = [], writes = [], assetErrors = [];
-  let stateUnavailable = false;
-  const projectPath = '/projects/' + state.graph.project.id;
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('response', response => {
-    if (new URL(response.url()).pathname.startsWith('/static/') && response.status() >= 400) assetErrors.push(response.url());
-  });
-  await page.route('**/*', async route => {
-    const request = route.request(), url = new URL(request.url()), pathname = url.pathname;
-    if (url.origin !== base.origin || !pathname.startsWith('/projects')) return route.continue();
-    if (request.method() !== 'GET') {
-      writes.push(request.method() + ' ' + pathname);
-      return route.fulfill({status:405,contentType:'application/json',body:JSON.stringify({detail:'Browser regression fixture is read-only'})});
-    }
-    let body;
-    if (pathname === '/projects') body = [state.graph.project];
-    else if (pathname === projectPath + '/state') {
-      if (stateUnavailable) return route.abort('failed');
-      body = state;
-    }
-    else if (pathname === projectPath + '/state/events') body = [];
-    else if (pathname === projectPath + '/executions') body = {items:runs,through:runs.length};
-    else if (pathname === projectPath + '/identity') body = {id:state.graph.project.id,generation:state.graph.project.generation};
-    else {
-      errors.push('Unexpected API read: ' + pathname);
-      return route.fulfill({status:404,contentType:'application/json',body:'{"detail":"Unknown fixture endpoint"}'});
-    }
-    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify(body)});
-  });
-  const waitPaint = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  const waitLayout = async () => {
-    await waitPaint();
-    await page.evaluate(() => Promise.allSettled(document.getAnimations()
-      .filter(animation => Number.isFinite(animation.effect?.getComputedTiming().endTime))
-      .map(animation => animation.finished)));
-    await waitPaint();
-  };
-  const boardLog = () => page.locator('.timeline-entry[data-log-id="state:fact:long"]');
-  const systemLog = () => page.locator('.system-entry').filter({hasText:systemHead});
-  const visibleCards = () => page.locator('#graph-host .graph-node:visible');
-  const view = () => page.evaluate(() => ({
-    camera:document.querySelector('#graph-host .graph-world').style.transform,
-    positions:[...document.querySelectorAll('#graph-host .graph-node')].map(node => [node.dataset.nodeKey,node.style.left,node.style.top]),
-  }));
+test('v5 workbench reads real-shaped logs, materials and results and preserves live canvas interactions',{
+  timeout:90000,skip:process.env.PWNMESH_WEB_URL||process.env.PLAYWRIGHT_MODULE?false:'Set PWNMESH_WEB_URL or PLAYWRIGHT_MODULE for workbench browser coverage',
+},async t=>{
+  const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),server=process.env.PWNMESH_WEB_URL?null:await staticServer();let browser;
+  try{
+    browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE||undefined});
+    const page=await browser.newPage({viewport:{width:1440,height:960},reducedMotion:'reduce'});page.setDefaultTimeout(12000);
+    const data=fixture(),state=data.state,errors=[],assetErrors=[];let unavailable=false;
+    page.on('pageerror',error=>errors.push(error.message));page.on('response',response=>{if(new URL(response.url()).pathname.startsWith('/static/')&&response.status()>=400)assetErrors.push(response.url());});
+    const requests=await interceptProject(page,data,{unavailable:()=>unavailable});
+    const base=process.env.PWNMESH_WEB_URL||server.url;
+    await page.goto(new URL('/#project/'+state.graph.project.id,base).href,{waitUntil:'networkidle'});
+    await page.waitForFunction(()=>document.querySelectorAll('#graph-host .graph-node').length===8);
+    await page.locator('#add-hint:not(:disabled)').waitFor();await paint(page);
+    const board=()=>page.locator('.timeline-entry[data-record="state:fact:long"]');
+    const system=()=>page.locator('.timeline-entry[data-record="execution:long-system-run"]');
+    const view=()=>page.evaluate(()=>({camera:document.querySelector('#graph-host .graph-world').style.transform,positions:[...document.querySelectorAll('#graph-host .graph-node')].map(node=>[node.dataset.nodeKey,node.style.left,node.style.top])}));
+    const closeReader=async()=>{await page.locator('.inspector-reader[open] [data-inspector-action="close"]').click();await page.locator('.inspector-reader[open]').waitFor({state:'hidden'});};
 
-  try {
-    await page.goto(new URL('/?project=' + state.graph.project.id,base).href,{waitUntil:'networkidle'});
-    await page.waitForFunction(() => document.querySelector('#toggle-running')?.disabled === false);
-    await page.waitForFunction(() => document.querySelectorAll('#graph-host .graph-node').length === 8);
-    await waitPaint();
-
-    await t.test('v5 project header and separated workspace panels fit desktop widths', async () => {
-      assert.equal(await page.locator('#project-goal').count(),0);
-      assert.equal(await page.locator('.canvas-help').count(),0);
-      assert.equal(await page.locator('#mobile-menu, #sidebar-scrim, #connection-state, #refresh-project, #about-button, #about-dialog').count(),0);
-      assert.ok(!(await page.locator('.main-pane').innerText()).includes('自由延展'));
-      for (const width of [1920,1440,1280,1024,800]) {
-        await page.setViewportSize({width,height:960}); await waitLayout();
-        const rectangles = await page.evaluate(() => ({
-          topbar:document.querySelector('.topbar').getBoundingClientRect().toJSON(),
-          breadcrumbs:document.querySelector('.breadcrumbs').getBoundingClientRect().toJSON(),
-          projectHeading:document.querySelector('.project-heading').getBoundingClientRect().toJSON(),
-          activityHeading:document.querySelector('.activity-heading').getBoundingClientRect().toJSON(),
-          graphTop:document.querySelector('.graph-stage').getBoundingClientRect().top,
-          tabsBottom:document.querySelector('.view-tabs').getBoundingClientRect().bottom,
-          sidebar:document.querySelector('.sidebar').getBoundingClientRect().toJSON(),
-          main:document.querySelector('.main-pane').getBoundingClientRect().toJSON(),
-          activity:document.querySelector('.activity-pane').getBoundingClientRect().toJSON(),
-          documentWidth:document.documentElement.scrollWidth,
-          bodyWidth:document.body.getBoundingClientRect().width,
-        }));
-        assert.equal(rectangles.topbar.height,0,'legacy navigation has no leftover whitespace');
-        assert.ok(rectangles.projectHeading.height >= 60 && rectangles.projectHeading.height <= 100,
-          'project identity fits in a compact independent header');
-        assert.ok(rectangles.projectHeading.bottom < rectangles.main.top,
-          'project header sits above the workspace panels');
-        assert.ok(Math.abs(rectangles.graphTop - rectangles.tabsBottom) <= 1,
-          `separators differ at ${width}px: ${JSON.stringify(rectangles)}`);
-        assert.equal(await page.locator('#sidebar').isVisible(),true,'project navigation remains visible');
-        assert.ok(rectangles.sidebar.left >= 0 && rectangles.sidebar.width > 0,'sidebar stays in the desktop layout');
-        assert.ok(rectangles.main.left > rectangles.sidebar.right && rectangles.main.left - rectangles.sidebar.right <= 24,'main pane is separated from sidebar by a small gutter');
-        assert.ok(rectangles.activity.left > rectangles.main.right && rectangles.activity.left - rectangles.main.right <= 24,'logs remain beside the canvas with a small gutter');
-        assert.ok(Math.abs(rectangles.activity.top - rectangles.main.top) <= 1,'logs never stack below the canvas');
-        if (width >= 1024) assert.ok(rectangles.documentWidth <= width + 1,`desktop overflow at ${width}px`);
-        else assert.ok(rectangles.bodyWidth >= 900,'narrow windows retain the desktop minimum width');
-        await fs.writeFile(path.join(screenshots,`layout-${width}.json`),JSON.stringify(rectangles,null,2));
-        await page.screenshot({path:path.join(screenshots,`workbench-${width}.png`),fullPage:true});
+    await t.test('long blackboard and execution logs fold, survive polling and expose safe full-text readers',async()=>{
+      for(const [article,head,tail] of [[board(),boardHead,boardTail],[system(),systemHead,systemTail]]){
+        assert.equal(await article.locator('details').getAttribute('open'),null);assert.match(await article.innerText(),new RegExp(head));assert.ok(!(await article.innerText()).includes(tail));
+        await article.locator('details > summary').click();assert.ok(await article.locator('details').evaluate(node=>node.open));assert.ok((await article.innerText()).includes(tail));
       }
-      await page.setViewportSize({width:1440,height:960}); await waitPaint();
+      assert.equal(await page.locator('.timeline-entry[data-record="state:fact:short"] details').count(),0);
+      state.revision++;state.graph.hints.push({id:'poll-marker',content:'轮询新增记录',created_at:'2026-09-24T02:01:00Z',creator:'user'});
+      await page.locator('.timeline-entry[data-record="hint:poll-marker"]').waitFor();
+      assert.ok(await board().locator('details').evaluate(node=>node.open));assert.ok(await system().locator('details').evaluate(node=>node.open));
+      await page.locator('#view-tab-result').click();await page.locator('#view-tab-graph').click();
+      assert.ok(await board().locator('details').evaluate(node=>node.open));assert.ok(await system().locator('details').evaluate(node=>node.open));
+      await page.locator('#activity-collapse-all').click();assert.equal(await page.locator('#activity-content details[open]').count(),0);
+      await page.locator('#activity-search').fill(boardTail);await page.waitForFunction(()=>document.querySelectorAll('.timeline-entry').length===1);
+      await board().locator('.log-title').click();assert.match(await page.locator('.inspector-reader[open] .inspector-reader-content').textContent(),/<script>literal-only<\/script>/);
+      assert.equal(await page.locator('.inspector-reader[open] script').count(),0);await closeReader();await page.locator('#activity-clear-search').click();
     });
 
-    await t.test('automatic polling reports network errors and restores actions after recovery', async () => {
-      const original = await view();
-      stateUnavailable = true;
-      try {
-        await page.locator('#workspace-error').waitFor({state:'visible'});
-        assert.ok((await page.locator('#workspace-error').innerText()).trim());
-        assert.equal(await page.locator('#toggle-running').isDisabled(),true);
-        assert.equal(await page.locator('#add-hint').isDisabled(),true);
-        // The error banner resizes the canvas and recenters its camera; graph coordinates stay intact.
-        assert.deepEqual((await view()).positions,original.positions,'network failures preserve the last rendered graph');
-      } finally {
-        stateUnavailable = false;
-      }
-      await page.locator('#workspace-error').waitFor({state:'hidden'});
-      await waitLayout();
-      assert.equal(await page.locator('#toggle-running').isDisabled(),false);
-      assert.equal(await page.locator('#add-hint').isDisabled(),false);
-      assert.deepEqual(await view(),original,'polling recovery preserves the canvas');
-    });
-
-    await t.test('long blackboard logs start collapsed, preserve expanded text through polling and tab switches', async () => {
-      const article = boardLog(), toggle = article.locator('.log-toggle');
-      assert.equal(await toggle.getAttribute('aria-expanded'),'false');
-      assert.ok((await article.innerText()).includes(boardHead));
-      assert.ok(!(await article.innerText()).includes(boardTail),'collapsed preview must conceal the tail');
-      assert.equal(await page.locator('.timeline-entry[data-log-id="state:fact:short"] .log-toggle').count(),0);
-      await toggle.click();
-      assert.equal(await toggle.getAttribute('aria-expanded'),'true');
-      assert.ok((await article.innerText()).includes(boardTail));
-      await article.evaluate(node => node.scrollIntoView({block:'start'}));
-      await page.screenshot({path:path.join(screenshots,'workbench-board-expanded.png'),fullPage:true});
-      const oldHeight = await article.evaluate(node => node.getBoundingClientRect().height);
-      state.revision++;
-      state.graph.hints.push({id:'poll-marker',content:'轮询新增记录',created_at:'2026-09-24T02:01:00Z',creator:'user'});
-      await page.locator('.timeline-entry[data-log-id="hint:poll-marker"]').waitFor();
-      assert.equal(await boardLog().locator('.log-toggle').getAttribute('aria-expanded'),'true');
-      await page.locator('#tab-result').click(); await page.locator('#tab-board').click();
-      assert.equal(await boardLog().locator('.log-toggle').getAttribute('aria-expanded'),'true');
-      assert.ok((await boardLog().innerText()).includes(boardTail));
-      await boardLog().locator('.log-toggle').click();
-      assert.equal(await boardLog().locator('.log-toggle').getAttribute('aria-expanded'),'false');
-      const previewHeight = await boardLog().evaluate(node => node.getBoundingClientRect().height);
-      assert.ok(previewHeight < oldHeight / 2,'collapse should meaningfully reduce a long entry height');
-    });
-
-    await t.test('system logs have independent accessible previews that survive refreshes', async () => {
-      await page.locator('#tab-system').click();
-      const toggle = systemLog().locator('.log-toggle');
-      assert.equal(await toggle.getAttribute('aria-expanded'),'false');
-      assert.ok((await systemLog().innerText()).includes(systemHead));
-      assert.ok(!(await systemLog().innerText()).includes(systemTail));
-      assert.equal(await page.locator('.system-entry').filter({hasText:'项目已创建'}).locator('.log-toggle').count(),0);
-      await toggle.click();
-      assert.equal(await systemLog().locator('.log-toggle').getAttribute('aria-expanded'),'true');
-      assert.ok((await systemLog().innerText()).includes(systemTail));
-      await systemLog().evaluate(node => node.scrollIntoView({block:'start'}));
-      await page.screenshot({path:path.join(screenshots,'workbench-system-expanded.png'),fullPage:true});
-      state.revision++;
-      runs.push({...runs[0],id:'poll-system-marker',result:{error:'轮询新增的简短错误'},updated_at:'2026-09-24T02:02:00Z'});
-      await page.locator('.system-entry').filter({hasText:'轮询新增的简短错误'}).waitFor();
-      assert.equal(await systemLog().locator('.log-toggle').getAttribute('aria-expanded'),'true');
-      await page.locator('#tab-board').click(); await page.locator('#tab-system').click();
-      assert.equal(await systemLog().locator('.log-toggle').getAttribute('aria-expanded'),'true');
-      await systemLog().locator('.log-toggle').click();
-      assert.ok(!(await systemLog().innerText()).includes(systemTail));
-    });
-
-    await t.test('project dependencies show readiness and navigable prerequisite details', async () => {
-      await page.locator('#tab-board').click();
-      const scope = page.locator('.graph-scope');
-      assert.equal(await scope.innerText(), '项目关系图'); assert.match(await scope.getAttribute('title'), /不包含 Worker/);
-      const dependency = page.locator('.graph-edge-hit[aria-label="执行依赖：已经完成的任务 → 正在运行的任务，依赖已满足"]');
-      assert.equal(await dependency.count(), 1);
-      await dependency.dispatchEvent('click'); await waitPaint();
-      const inspector = page.locator('#node-inspector');
-      assert.match(await inspector.innerText(), /前置步骤/); assert.match(await inspector.innerText(), /后续步骤/);
-      assert.match(await inspector.innerText(), /有效完成结果/);
-      await inspector.getByRole('button', {name:'正在运行的任务',exact:true}).click();
-      await inspector.getByRole('button', {name:'任务 · done',exact:true}).click();
-      assert.equal(await page.locator('[data-node-key="step:done"]').getAttribute('aria-pressed'), 'true');
-      await page.locator('#fit-graph').click(); await waitPaint();
-      await page.locator('[data-node-key="step:pending"]').click();
-      assert.match(await inspector.innerText(), /等待依赖/); assert.match(await inspector.innerText(), /等待前置步骤：running/);
-      await inspector.getByRole('button', {name:'清除节点或连线筛选'}).click(); await waitPaint();
-    });
-
-    await t.test('legend filters show matching cards and restore all cards without changing positions or camera', async () => {
-      await page.locator('#tab-board').click(); await waitPaint();
-      const original = await view();
-      assert.equal(await visibleCards().count(),8);
-      for (const [status,count] of [['done',4],['running',1],['pending',2]]) {
-        const button = page.locator(`[data-status-filter="${status}"]`);
-        await button.click(); await waitPaint();
-        assert.equal(await button.getAttribute('aria-pressed'),'true');
-        assert.equal(await visibleCards().count(),count,`${status} visible card count`);
-        assert.ok(await visibleCards().evaluateAll((nodes,status) => nodes.every(node => node.classList.contains(status)),status));
-        const edgeVisibility = await page.evaluate(() => {
-          const keys = new Set([...document.querySelectorAll('#graph-host .graph-node')].filter(node => !node.hidden).map(node => node.dataset.nodeKey));
-          return [...document.querySelectorAll('#graph-host .graph-edge-hit')].map(hit => {
-            const [,source,target] = JSON.parse(hit.dataset.edgeKey.slice('edge:'.length));
-            return {shown:getComputedStyle(hit.parentElement).display !== 'none',expected:keys.has(source) && keys.has(target)};
-          });
-        });
-        assert.ok(edgeVisibility.length > 0,'fixture must exercise graph relations');
-        assert.ok(edgeVisibility.every(edge => edge.shown === edge.expected),'edges must follow visibility of both endpoints');
-        assert.deepEqual(await view(),original,'filtering must preserve coordinates and camera');
-        await button.click(); await waitPaint();
-        assert.equal(await button.getAttribute('aria-pressed'),'false');
-        assert.equal(await visibleCards().count(),8);
-        assert.deepEqual(await view(),original);
+    await t.test('legend filters retain card positions and camera and reveal only connected visible edges',async()=>{
+      const original=await view();
+      for(const [status,count]of[['done',4],['running',1],['pending',2]]){
+        const button=page.locator('[data-filter="'+status+'"]');await button.click();await paint(page);
+        assert.equal(await button.getAttribute('aria-pressed'),'true');assert.equal(await page.locator('#graph-host .graph-node:visible').count(),count,status);
+        const valid=await page.evaluate(()=>{
+          const keys=new Set([...document.querySelectorAll('#graph-host .graph-node')].filter(node=>!node.hidden).map(node=>node.dataset.nodeKey));
+          return [...document.querySelectorAll('#graph-host .graph-edge-hit')].every(hit=>{const[,source,target]=JSON.parse(hit.dataset.edgeKey.slice(5));return (getComputedStyle(hit.parentElement).display!=='none')===(keys.has(source)&&keys.has(target));});
+        });assert.ok(valid);assert.deepEqual(await view(),original);
+        await button.click();await paint(page);assert.equal(await page.locator('#graph-host .graph-node:visible').count(),8);assert.deepEqual(await view(),original);
       }
     });
 
-    await t.test('following evidence reveals its card even when the selected status filter hides it', async () => {
-      const pending = page.locator('[data-status-filter="pending"]');
-      await pending.click(); await waitPaint();
-      assert.equal(await page.locator('[data-node-key="fact:long"]').isVisible(),false);
-      await boardLog().locator('.entry-node').last().click(); await waitPaint();
-      assert.equal(await pending.getAttribute('aria-pressed'),'false');
-      assert.equal(await visibleCards().count(),8);
-      assert.equal(await page.locator('[data-node-key="fact:long"]').isVisible(),true);
-      assert.equal(await page.locator('#node-inspector').isVisible(),true);
+    await t.test('dependency and node inspectors show the current relationship and safe complete evidence',async()=>{
+      const edge=page.locator('.graph-edge-hit[aria-label="执行依赖：已经完成的任务 → 正在运行的任务，依赖已满足"]');assert.equal(await edge.count(),1);
+      await edge.dispatchEvent('click');assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/依赖已满足/);assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/已经完成的任务/);await page.locator('#clear-selection').click();
+      await page.locator('[data-node-key="fact:long"]').dispatchEvent('click');await page.locator('.activity-pane [data-inspector-action="read"]').click();
+      assert.ok((await page.locator('.inspector-reader[open] .inspector-reader-content').textContent()).includes(boardTail));await closeReader();await page.locator('#clear-selection').click();
     });
 
-    await t.test('invalidated completion support refreshes cards, result edges and the selected inspector', async () => {
-      state.graph.project.orchestration_version = 1;
-      delete state.steps[0].support_valid; state.fact_records[1].support_invalid = true;
-      state.steps[1].blocked_by = ['done']; state.revision++;
-      await page.waitForFunction(() => document.querySelector('[data-node-key="step:done"]')?.classList.contains('invalid'));
-      const inspector = page.locator('#node-inspector');
-      assert.match(await inspector.innerText(), /有效 · 支持失效/);
-      const completed = page.locator('[data-node-key="step:done"]');
-      assert.match(await completed.getAttribute('aria-label'), /已完成 · 完成结果支持失效/);
-      const resultLabels = await page.locator('.graph-edge-hit').evaluateAll(nodes => nodes.filter(node => node.dataset.edgeKey === 'edge:' + JSON.stringify(['step_result','step:done','fact:long'])).map(node => node.getAttribute('aria-label')));
-      assert.equal(resultLabels.length, 1); assert.match(resultLabels[0], /支持已失效$/);
-      await completed.dispatchEvent('click'); await waitPaint();
-      assert.match(await inspector.innerText(), /已完成 · 完成结果支持失效/);
-      await page.locator('[data-status-filter="done"]').click(); await waitPaint();
-      assert.equal(await completed.isVisible(), false);
-      assert.equal(await page.locator('[data-node-key="fact:long"]').isVisible(), false);
-      assert.equal(await page.locator('[data-node-key="fact:short"]').isVisible(), true);
-      assert.equal(await inspector.isVisible(), false);
+    await t.test('polling errors disable mutations and recovery preserves the displayed graph',async()=>{
+      const original=await view();unavailable=true;
+      try{await page.waitForFunction(()=>document.querySelector('#add-hint')?.disabled);assert.ok((await page.locator('#toast').innerText()).trim());assert.deepEqual(await view(),original);}
+      finally{unavailable=false;}
+      await page.locator('#add-hint:not(:disabled)').waitFor();assert.deepEqual(await view(),original);
     });
 
-    assert.deepEqual(writes,[],'regression must never mutate the backing service');
-    assert.deepEqual(assetErrors,[]);
-    assert.deepEqual(errors,[]);
-  } finally {
-    await browser.close();
-  }
+    await t.test('materials open escaped previews and original downloads without fetching binary content',async()=>{
+      await page.locator('#view-tab-materials').click();assert.equal(await page.locator('.material-row').count(),2);
+      await page.locator('.material-row').filter({hasText:'request.http'}).click();
+      assert.match(await page.locator('.inspector-reader[open] .inspector-reader-content').textContent(),/GET \/orders HTTP\/1.1/);
+      assert.equal(await page.evaluate(()=>window.previewExecuted),undefined);assert.equal(await page.locator('.inspector-reader[open] script').count(),0);
+      assert.match(await page.locator('.inspector-reader[open] a[download]').getAttribute('href'),/\/inputs\/text$/);await closeReader();
+      await page.locator('.material-row').filter({hasText:'client.apk'}).focus();await page.keyboard.press('Enter');
+      assert.match(await page.locator('.inspector-reader[open] .inspector-reader-content').textContent(),/二进制文件/);
+      assert.equal(requests.reads.includes('/projects/'+state.graph.project.id+'/inputs/binary'),false);await closeReader();
+      await page.locator('[data-content-read="input:target"]').click();assert.match(await page.locator('.inspector-reader[open] .inspector-reader-content').textContent(),/受控的浏览器测试输入/);await closeReader();
+    });
+
+    await t.test('new findings appear after polling, expose evidence and locate their canvas card',async()=>{
+      await page.locator('#view-tab-result').click();assert.match(await page.locator('#project-view').innerText(),/暂无结果/);
+      state.findings.push({id:'finding-one',claim:'受控的结果记录',scope:'/orders',status:'verified',sources:['long'],created_at:created});state.revision++;
+      await page.locator('.result-card').waitFor();assert.match(await page.locator('.result-card').innerText(),/受控的结果记录/);
+      await page.locator('[data-content-read="result:finding-one"]').click();assert.ok((await page.locator('.inspector-reader[open] .inspector-reader-content').textContent()).includes(boardTail));await closeReader();
+      await page.locator('[data-focus="finding:finding-one"]').click();assert.equal(await page.locator('[data-node-key="finding:finding-one"]').getAttribute('aria-pressed'),'true');await page.locator('#clear-selection').click();
+      await page.locator('#project-manage').click();assert.match(await page.locator('#project-dialog').innerText(),/受控的浏览器测试输入/);assert.equal(await page.locator('#project-dialog [data-action="pause"]').isEnabled(),true);await page.locator('[data-close="project-dialog"]').click();
+    });
+
+    await t.test('invalidated completion support updates selected details, card colors and result edges',async()=>{
+      await page.locator('[data-node-key="fact:long"]').dispatchEvent('click');
+      state.graph.project.orchestration_version=1;delete state.steps[0].support_valid;state.fact_records[1].support_invalid=true;state.steps[1].blocked_by=['done'];state.revision++;
+      await page.waitForFunction(()=>document.querySelector('[data-node-key="step:done"]')?.classList.contains('invalid'));
+      assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/有效 · 支持失效/);
+      const completed=page.locator('[data-node-key="step:done"]');assert.match(await completed.getAttribute('aria-label'),/已完成 · 完成结果支持失效/);
+      const labels=await page.locator('.graph-edge-hit').evaluateAll(nodes=>nodes.filter(node=>node.dataset.edgeKey==='edge:'+JSON.stringify(['step_result','step:done','fact:long'])).map(node=>node.getAttribute('aria-label')));
+      assert.equal(labels.length,1);assert.match(labels[0],/支持已失效$/);
+      await completed.dispatchEvent('click');assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/已完成 · 完成结果支持失效/);
+      await page.locator('[data-filter="done"]').click();await paint(page);
+      assert.equal(await completed.isVisible(),false);assert.equal(await page.locator('[data-node-key="fact:long"]').isVisible(),false);assert.equal(await page.locator('[data-node-key="fact:short"]').isVisible(),true);assert.equal(await page.locator('.activity-pane .node-inspector').count(),0);
+    });
+
+    assert.deepEqual(requests.writes,[],'detail checks never mutate the backing service');assert.deepEqual(requests.unexpected,[]);assert.deepEqual(assetErrors,[]);assert.deepEqual(errors,[]);
+  }finally{if(browser)await browser.close();if(server)await server.close();}
 });

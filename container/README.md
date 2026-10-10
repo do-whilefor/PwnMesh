@@ -1,4 +1,39 @@
-# PwnMesh Kali Headless Worker 镜像
+# PwnMesh Worker 镜像
+
+## 轻量开发 Worker（默认）
+
+先跑通 Web 和项目流程时使用 `container/Dockerfile.dev`。它复用 `pwnmesh:dev` 的 Linux
+运行环境和同版本 Worker 二进制，提供 bash、curl、ripgrep、Git、Python 3 与独立 venv/pip。
+支持材料读取、脚本执行、HTTP 请求、证据文件和 SQLite 处理；不声明已安装 Kali、浏览器或云 CLI。
+
+在仓库根目录执行：
+
+```bash
+docker build -t pwnmesh:dev .
+docker compose --profile images build worker-image
+docker run --rm --pull never --network none \
+  --entrypoint /usr/local/share/pwnmesh/check-worker-dev.sh pwnmesh-worker:dev
+docker compose up -d server dispatcher
+```
+
+`worker-image` 默认构建轻量镜像，标签仍为 `pwnmesh-worker:dev`，与 `dispatch.example.yaml`
+的 `container.image` 一致。已有本地 `dispatch.yaml` 也应使用这个标签。
+`check-worker-dev.sh` 在构建时自动离线运行，实际检查 Python、TLS 证书、Git 提交、shell、搜索、SQLite
+以及 Python 本地 HTTP 服务与 curl 的往返。完整项目调度仍由真实 Docker 集成测试验证。
+
+构建时需访问 Debian 软件源。需要通过宿主机 7897 端口下载依赖时，可显式传递构建代理：
+
+```bash
+docker build --add-host host.docker.internal:host-gateway \
+  --build-arg HTTP_PROXY=http://host.docker.internal:7897 \
+  --build-arg HTTPS_PROXY=http://host.docker.internal:7897 \
+  -f container/Dockerfile.dev -t pwnmesh-worker:dev .
+```
+
+构建代理不会设为镜像运行时环境；项目代理由 Web 的模型接入设置控制。
+切换 Worker 镜像后，应先停止活动项目并保全工作目录；现有容器不会被静默删除或替换。
+
+## 完整 Kali Worker（按需构建）
 
 以官方 `kalilinux/kali-rolling` 为基础，安装 `kali-linux-headless` 元包及其必需工具依赖，
 再安装 pwntools、pymongo、AWS CLI v1、腾讯云 tccli、阿里云 aliyun，以及全局 Playwright CLI 和 Chromium。
@@ -14,16 +49,13 @@
 
 ```bash
 docker build -t pwnmesh:dev .
-docker build -f container/Dockerfile -t pwnmesh-worker:dev .
+docker build -f container/Dockerfile -t pwnmesh-worker:kali .
 ```
 
 使用其他控制镜像标签时，通过 `--build-arg PWNMESH_IMAGE=pwnmesh:<tag>` 指定。
 
-或通过 compose：
-
-```bash
-docker compose --profile images build worker-image
-```
+完整环境使用单独的 `pwnmesh-worker:kali` 标签，按需将 Dispatcher 的 `container.image`
+改为该标签；默认 Compose 不构建此环境。
 
 控制服务默认只接受 `localhost`、IP 地址及 `--host` 显式绑定的主机名作为 HTTP Host，
 拒绝未知域名，避免 DNS rebinding。Compose 已通过 `--allow-host server` 允许内部调度器访问。
@@ -75,7 +107,7 @@ Aliyun 从官方 GitHub Release 下载；升级 `ALIYUN_CLI_VERSION` 时，必�
 Node.js 和 npm 统一由 Kali APT 提供，提供 `node`、`npm`、`npx`；自检要求 Node.js 至少为 20。
 Playwright 按 `@playwright/cli@latest` 全局安装，构建时执行 `playwright-cli install`
 预装匹配的 Chromium。Docker 缓存可能复用先前解析的版本；需要重新获取 `latest` 时，
-使用 `docker build --no-cache -f container/Dockerfile -t pwnmesh-worker:dev .`，并重新运行下方自检。
+使用 `docker build --no-cache -f container/Dockerfile -t pwnmesh-worker:kali .`，并重新运行下方自检。
 
 ### apt 镜像源
 
@@ -85,7 +117,7 @@ Kali 官方 HTTPS 下载站；也支持中科大 USTC 等镜像源。缺省留�
 ```bash
 docker build -f container/Dockerfile \
   --build-arg KALI_MIRROR=https://kali.download/kali \
-  -t pwnmesh-worker:dev .
+  -t pwnmesh-worker:kali .
 ```
 
 该参数只改写 `sources.list.d/kali.sources` 的 `URIs` 字段，套件、组件与签名配置保持不变。
@@ -110,10 +142,10 @@ BSON 编解码、云 CLI 版本命令、由 groff-base 渲染的 AWS CLI 帮助�
 ```bash
 # 运行镜像内置的环境与运行结构检查
 docker run --rm --pull never --network none --init \
-  --entrypoint /usr/local/share/pwnmesh/check-worker.sh pwnmesh-worker:dev
+  --entrypoint /usr/local/share/pwnmesh/check-worker.sh pwnmesh-worker:kali
 
 # 验证镜像自身 ENTRYPOINT/CMD（等价于 pwnmesh worker --help）
-docker run --rm --pull never --network none pwnmesh-worker:dev
+docker run --rm --pull never --network none pwnmesh-worker:kali
 ```
 
 ### 客户端接口与静态分析

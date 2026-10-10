@@ -1,508 +1,499 @@
-(function () {
-  'use strict';
-  const data = window.PwnMeshData, api = new window.PwnMeshAPI.Client(), requests = new window.PwnMeshAPI.RequestScope();
-  const $ = id => document.getElementById(id), NS = 'http://www.w3.org/2000/svg';
-  const eventCache = new Map(), drafts = new Map(), expandedLogs = new Set();
-  let logBodyId = 0, mainView = 'canvas', materialVersion = 0, materialProject = '', materialItems = [];
-  let logQuery = '';
-  let projects = [], state = null, executions = [], events = [], logs = [], selectedId = '';
-  let selectedNode = null, selectedEdge = null, tab = 'board', systemFilter = 'all', logLimit = 300;
-  let timer, toastTimer, management = null, hintProjectId = '', mutating = false, connected = false;
-  let projectsSignature = '', activitySignature = '', workspaceSignature = '', workspaceVersion = 0, createDraft = false, updatingGraph = false;
-  let createFiles = [], hintFiles = [], createPending = null, createUncertain = false, hintFilesProjectId = '', inputReadVersion = 0;
-  try { selectedId = new URLSearchParams(location.search).get('project') || localStorage.getItem('pwnmesh.selected-project') || ''; } catch {}
-  const pathFor = id => '/projects/' + encodeURIComponent(id);
-  const current = () => state?.graph?.project || projects.find(project => project.id === selectedId);
-  const nodeKey = node => node ? node.key || node.type + ':' + node.id : '';
-  const cssStatus = status => status === 'stopped' ? 'paused' : status;
-  const scenarioIcon = project => ({pentest:'shield',audit:'code',ctf:'flag'})[project?.scenario] || 'graph';
-  const graph = new window.PwnMeshGraph($('graph-host'), {onSelect:selectNode, onSelectEdge:selectEdge});
-
-  function el(tag, cls, text) {
-    const node = document.createElement(tag); if (cls) node.className = cls; if (text !== undefined) node.textContent = text; return node;
+'use strict';
+(() => {
+  const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const icon = name => '<i data-lucide="'+name+'" aria-hidden="true"></i>';
+  const modelEntry = () => '<a id="model-entry" class="top-model-entry" href="#llm" data-nav="llm" title="模型接入">'+icon('plug')+'<span>模型接入</span><small id="model-summary" class="visually-hidden">未配置</small></a>';
+  const paintIcons = () => lucide.createIcons({attrs:{'stroke-width':1.6}});
+  const {fileSize} = PwnDemoModel;
+  const lifecycle = PwnDemoLifecycle;
+  const service = new PwnMeshService.Service(), projects = [];
+  let roundReadVersion = 0, materialReadVersion = 0;
+  let refreshTimer, refreshing = false, connected = false, lastSnapshot = '', pendingRefresh = false;
+  const statusLabels = {running:'探索中',done:'已完成',paused:'已暂停',pending:'待开始',terminated:'已终止'};
+  const types = {ctf:'CTF',audit:'代码审计',pentest:'渗透测试'};
+  const actionNames = {pause:'暂停',resume:'继续',restart:'重启',terminate:'终止',delete:'删除'};
+  const actionIcons = {pause:'pause',resume:'play',restart:'rotate-ccw',terminate:'square',delete:'trash-2'};
+  let graph = null, selectedNode = null, selectedEdge = null, viewTab = 'graph', toastTimer, disposeLLM, disposeInspector;
+  let selectedRun = 'current', menuProject = null, menuTrigger = null, command = null, mutating = false;
+  let disposeActivity, disposeRecord, activityRecords = new Map(), activityOrigin = null;
+  let llmReturn = null, returningFromLLM = false;
+  const activityStates = new Map();
+  function activityState() {
+    const p = viewed(), key = p.id+':'+(p.generation || 0);
+    if (!activityStates.has(key)) activityStates.set(key,{query:'',expanded:new Set(),scrollTop:0,revision:null});
+    return activityStates.get(key);
   }
-  function icon(name) {
-    const svg = document.createElementNS(NS, 'svg'), use = document.createElementNS(NS, 'use');
-    svg.setAttribute('class', 'icon'); svg.setAttribute('aria-hidden', 'true'); use.setAttribute('href', '#i-' + name); svg.append(use); return svg;
+  const route = () => {
+    const value = location.hash.slice(1);
+    return value === 'llm' || projects.some(p => value === 'project/'+p.id) ? value : projects[0] ? 'project/'+projects[0].id : 'empty';
+  };
+  const current = () => projects.find(p => p.id === route().split('/')[1]) || projects[0];
+  const viewed = () => selectedRun === 'current' ? current() : current()?.history.find(p => String(p.generation) === selectedRun) || current();
+  const timeNow = () => new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date());
+  const dateTime = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(value)) : '—';
+  const projectTimes = p => '<div class="project-times" aria-label="项目时间范围"><span><time id="project-created-at" title="创建时间" datetime="'+esc(p.createdAt || '')+'">'+dateTime(p.createdAt)+'</time></span><span class="project-time-separator" aria-hidden="true">～</span><span><time id="project-ended-at" '+(p.endedAt ? 'title="结束时间" datetime="'+esc(p.endedAt)+'"' : 'title="尚未结束"')+'>'+dateTime(p.endedAt)+'</time></span></div>';
+  const badge = p => '<span class="badge '+(p.archived ? 'paused' : p.status)+'"><i class="status-dot '+p.status+'"></i>'+(p.archived ? '已归档' : statusLabels[p.status])+'</span>';
+  function toast(message) { $('#toast').textContent = message; $('#toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('#toast').hidden = true; }, 3200); }
+  function closeMenu(restoreFocus = false) {
+    $('#project-menu').hidden = true;
+    menuTrigger?.setAttribute('aria-expanded','false');
+    if (restoreFocus) menuTrigger?.focus();
+    menuProject = null; menuTrigger = null;
   }
-  function timestamp(value) {
-    const time = el('time', '', data.formatTime(value)); if (value && Number.isFinite(Date.parse(value))) time.dateTime = value; return time;
+  function renderSidebar() {
+    const search = $('#project-search').value.trim().toLowerCase();
+    const list = projects.filter(p => (p.name+' '+p.target+' '+types[p.type]).toLowerCase().includes(search));
+    $('#project-count').textContent = search ? list.length+'/'+projects.length : String(projects.length);
+    $('#project-list').innerHTML = list.map(p => '<div class="project-row"><a class="project-item '+(route() === 'project/'+p.id ? 'selected' : '')+'" data-project-type="'+esc(p.type)+'" data-project-status="'+esc(p.status)+'" href="#project/'+p.id+'" '+(route() === 'project/'+p.id ? 'aria-current="page"' : '')+'><span class="project-copy"><strong title="'+esc(p.name)+'">'+esc(p.name)+'</strong><small class="project-meta"><span class="project-type">'+types[p.type]+'</span><span class="project-state"><i class="status-dot '+p.status+'"></i>'+statusLabels[p.status]+'</span></small></span></a><button class="icon-button project-more" data-project-menu="'+p.id+'" data-mutates aria-label="'+esc(p.name)+'的项目操作" aria-haspopup="menu" aria-expanded="false" title="项目操作">'+icon('ellipsis')+'</button></div>').join('') || '<div class="empty-state sidebar-empty">'+(projects.length ? '没有找到匹配的项目<button class="text-button" id="clear-search">清除搜索</button>' : '暂无项目')+'</div>';
+    $$('[data-nav]').forEach(a => { const active = route() === a.dataset.nav; a.classList.toggle('active',active); if (active) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
+    if ($('#model-summary')) $('#model-summary').textContent = PwnLLMDemo.summary();
+    if ($('#model-entry')) $('#model-entry').title = '模型接入 · '+PwnLLMDemo.summary();
+    const home = projects[0] ? '#project/'+projects[0].id : '#projects';
+    $('.brand').href = home;
+    updateBusy(); paintIcons();
   }
-  function toast(message) {
-    clearTimeout(toastTimer); $('toast').textContent = message; $('toast').hidden = false; toastTimer = setTimeout(() => { $('toast').hidden = true; }, 4500);
+  function updateBusy() { $$('[data-mutates]').forEach(b => { b.disabled = mutating || !connected || b.dataset.unavailable === 'true'; }); }
+  async function mutation(work) {
+    if (mutating) throw new Error('正在处理上一项操作，请稍后重试。');
+    mutating = true; clearTimeout(refreshTimer); service.cancel(); updateBusy();
+    try { return await work(); }
+    finally { mutating = false; updateBusy(); await refreshWorkspace(true); }
   }
-  function closeMenus() { document.querySelectorAll('.project-menu[open]').forEach(menu => { menu.open = false; }); }
-  function setConnection(ok, message = '') {
-    connected = ok;
-    $('workspace-error').hidden = !message; $('workspace-error').textContent = message; renderHeader(); renderProjects();
+  function projectFooter(p,state,completed) {
+    return '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+(viewTab === 'graph' ? [['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button data-filter="'+id+'" aria-pressed="false"><i class="legend-dot '+id+'"></i>'+title+'</button>').join('') : '')+'</div><div class="task-progress"><span>'+completed+' / '+state.steps.length+' 个任务</span><span class="progress-track"><i style="width:'+(state.steps.length ? completed/state.steps.length*100 : 0)+'%"></i></span></div></footer>';
   }
-  function renderProjects() {
-    const query = $('project-search').value.trim().toLocaleLowerCase();
-    $('project-count').textContent = projects.length; $('running-project-count').textContent = projects.filter(project => project.status === 'active').length;
-    const matches = projects.filter(project => (project.title + data.scenarioName(project.scenario)).toLocaleLowerCase().includes(query));
-    const signature = JSON.stringify([matches, selectedId, mutating, connected]); if (signature === projectsSignature) return; projectsSignature = signature;
-    $('project-list').replaceChildren(...matches.map(project => {
-      const row = el('div', 'project-row' + (project.id === selectedId ? ' selected' : '')); row.dataset.projectId = project.id;
-      const button = el('button', 'project-item'), mark = el('span', 'project-symbol'), copy = el('span', 'project-copy'), meta = el('small');
-      button.type = 'button'; button.dataset.projectId = project.id; button.title = project.title; button.disabled = mutating;
-      button.setAttribute('aria-current', String(project.id === selectedId)); button.setAttribute('aria-label', project.title + '，' + data.scenarioName(project.scenario)); mark.append(icon(scenarioIcon(project)));
-      meta.append(el('span', '', data.scenarioName(project.scenario)), el('i', 'status-dot ' + cssStatus(project.status)), el('span', '', data.statusName(project.status)));
-      const created = timestamp(project.created_at); created.className = 'project-created'; created.title = '项目创建时间（上海时区）';
-      copy.append(el('strong', '', project.title), meta, created); button.append(mark, copy); button.addEventListener('click', () => selectProject(project.id));
-      const menu = el('details', 'project-menu'), summary = el('summary'), panel = el('div', 'project-menu-panel');
-      summary.setAttribute('aria-label', '项目操作：' + project.title); summary.append(icon('more'));
-      const actions = project.status === 'active' ? ['pause','restart','terminate','delete'] : project.status === 'stopped' ? ['resume','restart','terminate','delete'] : ['restart','delete'];
-      const labels = {pause:'暂停项目',resume:'继续项目',restart:'重启项目',terminate:'终止项目',delete:'删除项目'}, icons = {pause:'pause',resume:'play',restart:'restart',terminate:'stop',delete:'trash'};
-      for (const action of actions) {
-        const item = el('button', action === 'delete' ? 'danger' : ''); item.type = 'button'; item.dataset.action = action; item.disabled = mutating || !connected;
-        item.append(icon(icons[action]), document.createTextNode(labels[action]));
-        item.addEventListener('click', () => { menu.open = false; if (action === 'pause' || action === 'resume') changeStatus(project.id, action); else confirmOperation(project.id, action); }); panel.append(item);
-      }
-      menu.append(summary, panel); menu.addEventListener('toggle', () => {
-        if (!menu.open) return; document.querySelectorAll('.project-menu[open]').forEach(other => { if (other !== menu) other.open = false; });
-        const rect = summary.getBoundingClientRect(); panel.style.left = Math.max(8, Math.min(innerWidth - 164, rect.right - 156)) + 'px'; panel.style.top = Math.max(8, Math.min(innerHeight - panel.offsetHeight - 8, rect.bottom + 5)) + 'px';
-      });
-      menu.addEventListener('keydown', event => { if (event.key === 'Escape') { menu.open = false; summary.focus(); } }); row.append(button, menu); return row;
-    }));
-    if (!matches.length) $('project-list').append(el('p', 'empty-projects', projects.length ? '没有找到匹配的项目。' : '还没有项目，创建一个开始探索。'));
+  function projectMarkup(p) {
+    const c = current(), history = selectedRun !== 'current';
+    const state = PwnDemoGraph.buildState(p), completed = state.steps.filter(s => s.status === 'completed').length;
+    const actions = history ? '<button class="button secondary" id="return-current">'+icon('arrow-left')+'返回当前轮</button>' :
+      '<button class="button secondary" id="add-hint" data-mutates data-unavailable="'+!lifecycle.canHint(c)+'" '+(!lifecycle.canHint(c) ? 'disabled title="重启后可补充信息"' : '')+'>'+icon('message-square-plus')+'补充信息</button>';
+    return '<section class="project-page"><header class="project-heading"><div class="project-heading-copy"><div class="title-row"><h1 title="'+esc(p.name)+'">'+esc(p.name)+'</h1>'+badge(p)+'</div><div class="project-description"><div class="project-identity">'+icon(p.type === 'audit' ? 'code-2' : p.type === 'ctf' ? 'flag' : 'globe')+'<span>'+esc(types[p.type])+'</span><i class="meta-divider"></i><span class="target-summary" title="'+esc(p.target)+'">'+esc(p.target)+'</span></div>'+projectTimes(p)+'</div></div><div class="heading-actions">'+modelEntry()+'</div></header>'+
+    '<div class="project-body"><section class="canvas-panel"><header class="canvas-header"><div class="view-tabs" role="tablist" aria-label="项目视图">'+[['graph','workflow','画布'],['materials','paperclip','材料'],['result','file-check-2','结果']].map(([id,i,title]) => '<button id="view-tab-'+id+'" data-view="'+id+'" role="tab" aria-selected="'+(viewTab === id)+'" aria-controls="project-view" tabindex="'+(viewTab === id ? '0' : '-1')+'" class="'+(viewTab === id ? 'active' : '')+'">'+icon(i)+title+(id === 'materials' ? '<small>'+p.files.length+'</small>' : '')+'</button>').join('')+'</div>'+
+    '<div class="workspace-actions">'+((c.history?.length || 0) ? '<select id="run-select" aria-label="查看项目轮次"><option value="current">当前轮 · '+(c.generation+1)+'</option>'+[...c.history].reverse().map(h => '<option value="'+h.generation+'" '+(selectedRun === String(h.generation) ? 'selected' : '')+'>第 '+(h.generation+1)+' 轮 · 已归档</option>').join('')+'</select>' : '')+'<button class="button secondary" id="project-manage" aria-haspopup="dialog">'+icon('sliders-horizontal')+'项目管理</button>'+actions+'</div></header>'+
+    '<div id="project-view" class="'+(viewTab === 'graph' ? 'graph-stage' : 'tab-content')+'" role="tabpanel" aria-labelledby="view-tab-'+viewTab+'">'+(viewTab === 'graph' ? '<div id="graph-host" class="graph-host"></div><div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小画布" title="缩小画布">'+icon('minus')+'</button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大画布" title="放大画布">'+icon('plus')+'</button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布" title="适应画布 · 0">'+icon('maximize')+'</button></div></div>' : viewTab === 'materials' ? materialsMarkup(p) : resultsMarkup(p,state))+'</div>'+projectFooter(p,state,completed)+'</section>'+
+    '<aside class="activity-pane" aria-labelledby="activity-title"><header class="activity-heading"><h2>'+icon('notebook-text')+'<span id="activity-title">黑板日志</span></h2><span id="activity-match-count" role="status" aria-live="polite"></span><button id="activity-collapse-all" class="icon-button" title="收起全部展开的日志" aria-label="收起全部展开的日志" hidden>'+icon('list-collapse')+'</button></header><div id="activity-toolbar"></div><div id="activity-content" class="activity-content" role="region" aria-labelledby="activity-title" tabindex="0"></div><button id="activity-to-latest" title="返回最新记录" hidden>'+icon('arrow-up')+'最新记录</button></aside></div></section>';
   }
-  function renderHeader() {
-    const project = current(), ended = project && ['completed','terminated'].includes(project.status);
-    $('breadcrumb-title').textContent = project?.title || '我的项目'; $('project-title').textContent = project?.title || (connected ? '准备好开始探索了吗？' : '正在加载项目');
-    $('project-type').replaceChildren(); if (project) $('project-type').append(icon(scenarioIcon(project)), document.createTextNode(data.scenarioName(project.scenario)));
-    $('project-title').title = project?.title || '';
-    $('project-info').disabled = !project;
-    $('project-status').textContent = project ? data.statusName(project.status) : ''; $('project-status').className = 'status-badge ' + cssStatus(project?.status || ''); $('project-status').hidden = !project;
-    $('round-label').textContent = project ? '第 ' + ((project.generation || 0) + 1) + ' 轮探索' : '新的探索';
-    const timing = data.projectTiming(state, executions), progress = data.taskProgress(state);
-    $('project-created-at').textContent = project ? '创建 ' + data.formatTime(project.created_at) : '';
-    if (project?.created_at) $('project-created-at').dateTime = project.created_at; else $('project-created-at').removeAttribute('datetime');
-    $('project-start').textContent = project ? '开始 ' + (timing.startedAt ? data.formatTime(timing.startedAt) : '尚未开始') : '等待创建项目';
-    if (timing.startedAt) $('project-start').dateTime = timing.startedAt; else $('project-start').removeAttribute('datetime');
-    $('project-end').textContent = ended ? '结束 ' + (timing.endedAt ? data.formatTime(timing.endedAt) : '未记录时间') : '';
-    const action = project?.status === 'stopped' ? 'resume' : ended ? 'restart' : 'pause', toggle = $('toggle-running');
-    toggle.dataset.action = action; toggle.replaceChildren(icon({pause:'pause',resume:'play',restart:'restart'}[action]), document.createTextNode({pause:'暂停',resume:'继续',restart:'重启'}[action])); toggle.disabled = !project || mutating || !connected;
-    $('add-hint').disabled = !project || ended || mutating || !connected; $('new-project').disabled = $('empty-create').disabled = mutating;
-    $('node-count').textContent = graph.getVisibleNodeCount() + ' 个节点'; $('task-progress').textContent = progress.completed + ' / ' + progress.total + ' 个任务已完成'; $('progress-fill').style.width = progress.total ? (progress.completed / progress.total * 100) + '%' : '0%';
-    const statusFilter = graph.getStatusFilter(), filterLabel = {done:'已完成',running:'运行中',pending:'待执行'}[statusFilter];
-    document.querySelectorAll('[data-status-filter]').forEach(button => { button.setAttribute('aria-pressed', String(button.dataset.statusFilter === statusFilter)); button.disabled = !state; });
-    $('canvas-caption').textContent = !project ? '从一个清晰的目标开始' : !state ? '正在读取任务图' : filterLabel ? '正在显示：' + filterLabel + ' · 再次点击恢复全部' : graph.getVisibleNodeCount() === 0 ? '当前轮尚未产生节点' : ({active:'探索正在展开',stopped:'探索已暂停，已有线索完整保留',completed:'项目已完成，查看结论与证据',terminated:'探索已终止，已有记录仍可查看'})[project.status] || data.statusName(project.status);
-    $('graph-empty').hidden = !!project; $('activity-live').textContent = project ? data.statusName(project.status) : '等待项目';
-    for (const id of ['zoom-in','zoom-out','fit-graph','arrange-graph']) $(id).disabled = !state || !graph.getVisibleNodeCount();
-    if (hintProjectId) {
-      const hinted = projects.find(item => item.id === hintProjectId), allowed = hinted && ['active','stopped'].includes(hinted.status); $('send-hint').disabled = !allowed || mutating || !connected;
-      $('hint-caption').textContent = !allowed ? '本轮已结束，重启后可继续补充提示' : hinted.status === 'stopped' ? '提示将保存，在继续运行后读取' : '提示将写入当前项目的黑板';
+  function materialsMarkup(p) {
+    return '<div class="section-heading"><h2 class="section-title">项目输入</h2></div><div class="project-inputs">'+[['target','起点 / 已知信息',p.target],['goal','终点 / 项目目标',p.goal]].map(([key,label,body]) => '<section class="content-card" data-content-key="'+key+'">'+contentHeader(label,'input:'+key)+'<p id="content-'+key+'" class="content-text is-collapsed">'+esc(body)+'</p></section>').join('')+'</div><div class="section-heading"><h2 class="section-title">材料</h2>'+(selectedRun === 'current' && lifecycle.canHint(p) ? '<button class="text-button" id="add-materials">'+icon('plus')+'添加材料</button>' : '')+'</div>'+
+    (p.files.map((f,index) => '<div class="material-row" role="button" tabindex="0" data-material="'+index+'" aria-label="查看材料：'+esc(f.name)+'">'+icon('file-text')+'<span><strong title="'+esc(f.name)+'">'+esc(f.name)+'</strong><small>'+fileSize(f.size)+'</small></span></div>').join('') || '<div class="empty-state">'+icon('folder-open')+'暂无材料</div>');
+  }
+  function findingBody(f,state) {
+    const fact = state.fact_records.find(r => r.id === f.sources?.[0]);
+    const step = state.steps.find(s => s.id === fact?.source_step_id);
+    return [f.support_valid === false ? '支持证据已失效，请核对来源。' : '',step?.detail?.body || fact?.description || f.reason || '',...(f.evidence || []).map(item => [item.path,item.excerpt].filter(Boolean).join('\n'))].filter(Boolean).join('\n\n');
+  }
+  function contentHeader(label,key) {
+    const id = 'content-'+key.split(':').pop();
+    return '<header class="content-heading"><h3>'+esc(label)+'</h3><div class="content-actions"><button class="text-button" data-content-toggle aria-expanded="false" aria-controls="'+id+'">展开全文'+icon('chevron-down')+'</button><button class="text-button" data-content-read="'+esc(key)+'" aria-haspopup="dialog">'+icon('maximize-2')+'放大阅读</button></div></header>';
+  }
+  function resultsMarkup(p,state) {
+    const result = PwnMeshData.buildResult(state,p.logs || []);
+    const summary = result.status === 'completed' ? '<article class="result-card content-card" data-content-key="completion">'+contentHeader('探索结论','completion:goal')+'<p id="content-goal" class="content-text is-collapsed">'+esc(result.summary)+'</p></article>' : result.status === 'unverified' ? '<article class="result-card"><p class="content-text">'+esc(result.notice)+'</p></article>' : '';
+    return '<div class="section-heading"><h2 class="section-title">'+(p.status === 'done' ? '探索结论' : '阶段性发现')+'</h2>'+(state.findings.length || result.status === 'completed' ? '<button id="export-results" class="text-button">'+icon('download')+'导出记录</button>' : '')+'</div>'+
+    (summary+state.findings.map(f => '<article class="result-card content-card" data-content-key="'+esc(f.id)+'">'+contentHeader('验证记录','result:'+f.id)+'<h3 class="result-title" title="'+esc(f.claim)+'">'+esc(f.claim)+'</h3><p class="result-scope">'+icon('code-2')+'<code>'+esc(f.scope)+'</code></p><p id="content-'+esc(f.id)+'" class="content-text is-collapsed">'+esc(findingBody(f,state))+'</p><button class="text-button result-locate" data-focus="finding:'+esc(f.id)+'">'+icon('locate-fixed')+'画布定位</button></article>').join('') || '<div class="empty-state">'+icon('file-search')+'暂无结果</div>');
+  }
+  function fitContentBodies() {
+    $$('.content-card').forEach(card => {
+      const body = card.querySelector('.content-text'), toggle = card.querySelector('[data-content-toggle]');
+      const line = parseFloat(getComputedStyle(body).lineHeight);
+      const expanded = toggle.getAttribute('aria-expanded') === 'true';
+      toggle.hidden = !expanded && body.scrollHeight <= line*5+2;
+    });
+  }
+  function readContent(key) {
+    const p = viewed(), [kind,id] = key.split(':');
+    if (kind === 'input') return openRecord({kind:'项目输入',title:id === 'target' ? '起点 / 已知信息' : '终点 / 项目目标',body:p[id],meta:[{label:'项目',value:p.name}]});
+    const state = PwnDemoGraph.buildState(p);
+    if (kind === 'completion') { const result=PwnMeshData.buildResult(state,p.logs || []); return openRecord({kind:'探索结论',title:'探索结论',body:result.summary || result.notice,meta:[{label:'项目',value:p.name}]}); }
+    const finding = state.findings.find(f => f.id === id);
+    if (finding) openRecord({kind:'探索结论',title:finding.claim,body:findingBody(finding,state),meta:[{label:'项目',value:p.name},{label:'范围',value:finding.scope}]},{onLocate:() => focusGraph('finding:'+finding.id)});
+  }
+  async function readMaterial(index) {
+    const p=viewed(), file=p?.files[index], version=++materialReadVersion, page=route();if(!file)return;
+    let body='二进制文件或超过 256 KiB 的材料，请下载原始文件查看。';
+    if(PwnMeshInputPreview.textFile(file)) {
+      const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),15000);
+      try{body=await PwnMeshInputPreview.read(PwnMeshInputPreview.downloadURL(p.id,file.id),{signal:controller.signal});}
+      catch(error){body=error.name==='AbortError'?'读取超时，请下载原始文件查看。':error.message;}
+      finally{clearTimeout(timer);}
     }
+    if(version!==materialReadVersion||viewed()?.id!==p.id||viewed()?.generation!==p.generation||route()!==page)return;
+    openRecord({kind:'项目材料',title:file.name,body,meta:[{label:'大小',value:fileSize(file.size)},{label:'导入时间',value:dateTime(file.created_at)},{label:'路径',value:file.path},{label:'SHA-256',value:file.sha256}]});
+    const footer=$('.inspector-reader[open] .inspector-reader-footer');
+    if(footer){const download=document.createElement('a');download.className='button secondary';download.href=PwnMeshInputPreview.downloadURL(p.id,file.id);download.download=file.name;download.innerHTML=icon('download')+'下载原始文件';footer.append(download);paintIcons();}
   }
-  function emptyPanel(title, body, name = 'file') { const panel = el('div', 'empty-panel'); panel.append(icon(name), el('h3', '', title), el('p', '', body)); return panel; }
-  function revealNode(ref) {
-    const node = graph.getNodes().find(item => nodeKey(item) === nodeKey(ref)); if (!node) return; tab = 'board'; graph.setStatusFilter('all'); renderHeader(); graph.selectNode(ref); graph.focusNode(node.key); renderActivity();
-  }
-  function evidenceButtons(references) {
-    const box = el('div', 'evidence-links'), keys = new Set(graph.getNodes().map(nodeKey));
-    for (const ref of references || []) {
-      const button = el('button', 'entry-node', data.nodeTypeName(ref.type) + ' · ' + ref.id); button.type = 'button'; button.disabled = !keys.has(nodeKey(ref));
-      button.title = button.disabled ? '当前图中没有此节点' : '查看关联节点'; button.addEventListener('click', () => revealNode(ref)); box.append(button);
+  function marked(value,query) {
+    const text = String(value || '');
+    if (!query) return esc(text);
+    let result = '', start = 0, at;
+    const lower = text.toLowerCase(), needle = query.toLowerCase();
+    while ((at = lower.indexOf(needle,start)) !== -1) {
+      result += esc(text.slice(start,at))+'<mark>'+esc(text.slice(at,at+query.length))+'</mark>';
+      start = at+query.length;
     }
-    return box;
+    return result+esc(text.slice(start));
   }
-  function artifacts(references) {
-    const box = el('div', 'evidence-artifacts');
-    for (const ref of references || []) {
-      const detail = el('details', 'evidence-artifact'); detail.append(el('summary', '', (ref.path || '证据摘录') + (ref.start_line ? ':' + ref.start_line : '')));
-      if (ref.run_id) detail.append(el('small', '', '执行 ' + ref.run_id)); detail.append(el('pre', '', ref.excerpt || '未记录摘录')); box.append(detail);
+  function logText(value,id,ui) {
+    const text = String(value || ''), query = ui.query.trim();
+    const hit = query ? text.toLowerCase().indexOf(query.toLowerCase()) : -1;
+    const start = Math.max(0,hit-25), preview = (start ? '…' : '')+text.slice(start,start+260)+(start+260 < text.length ? '…' : '');
+    const paragraphs = text.split(/\r?\n\s*\r?\n/).map(paragraph => '<p>'+marked(paragraph,query)+'</p>').join('');
+    return '<details class="log-long-content" data-log-id="'+esc(id)+'" '+(ui.expanded.has(id) ? 'open' : '')+'><summary><span class="log-text-preview">'+marked(preview,query)+'</span><span class="log-expand"><span class="log-label-closed">展开全文</span><span class="log-label-open">收起全文</span>'+icon('chevron-down')+'<button class="log-read-sticky" data-log-read="'+esc(id)+'" title="在独立窗口中阅读日志全文">'+icon('maximize-2')+'放大阅读</button></span></summary><div class="log-body">'+paragraphs+'</div></details>';
+  }
+  function fitLogBodies(host,ui) {
+    // Short records remain complete. Only content taller than four actual lines folds.
+    host.querySelectorAll('.log-long-content').forEach(detail => {
+      const body = detail.querySelector(':scope > .log-body'), probe = body.cloneNode(true);
+      Object.assign(probe.style,{position:'absolute',visibility:'hidden',pointerEvents:'none',width:detail.getBoundingClientRect().width+'px',margin:'0'});
+      detail.parentElement.append(probe);
+      const height = probe.getBoundingClientRect().height, lineHeight = parseFloat(getComputedStyle(probe).lineHeight);
+      probe.remove();
+      if (height <= lineHeight*4+1) { ui.expanded.delete(detail.dataset.logId); detail.replaceWith(body); }
+    });
+  }
+  function timelineEntry({id,phase,time,timestamp,title,body,evidence},ui) {
+    const clock = '<time datetime="'+esc(timestamp || '')+'" title="'+esc(timestamp ? dateTime(timestamp) : time)+'">'+esc(time)+'</time>';
+    const heading = '<div class="entry-title"><h3><button class="log-title" data-log-read="'+esc(id)+'" aria-label="阅读全文：'+esc(title)+'" aria-haspopup="dialog" title="查看完整日志"><span class="log-entry-title">'+marked(title,ui.query.trim())+'</span>'+icon('chevron-right')+'</button></h3></div>';
+    const content = [body,evidence].filter(Boolean).filter((value,index,array) => array.indexOf(value) === index).join('\n\n');
+    return '<article class="timeline-entry '+(phase === 'FINDING' ? 'is-finding' : '')+'" data-record="'+esc(id)+'" data-phase="'+esc(phase)+'"><div class="entry-headline">'+heading+'<div class="entry-meta">'+clock+'</div></div>'+(content ? logText(content,id,ui) : '')+'</article>';
+  }
+  function activityMarkup(entries,ui) {
+    return entries.length ? '<div class="log-stream">'+entries.map(entry => timelineEntry(entry,ui)).join('')+'</div>' : '';
+  }
+  function renderActivity() {
+    const host = $('#activity-content'); if (!host) return;
+    disposeActivity?.(); disposeActivity = null;
+    const p = viewed(), state = PwnDemoGraph.buildState(p);
+    disposeInspector?.(); disposeInspector = null;
+    const toolbar = $('#activity-toolbar'), latest = $('#activity-to-latest');
+    $('#activity-title').textContent = selectedNode ? '节点详情' : selectedEdge ? '关系详情' : '黑板日志';
+    toolbar.hidden = Boolean(selectedNode || selectedEdge); latest.hidden = true;
+    $('#activity-match-count').hidden = toolbar.hidden;
+    $('#activity-collapse-all').hidden = true;
+    if (selectedNode || selectedEdge) {
+      const nodeKey = selectedNode?.key;
+      host.innerHTML = PwnDemoInspector.render({node:selectedNode,edge:selectedEdge,canLocate:Boolean(nodeKey)});
+      paintIcons(); disposeInspector = PwnDemoInspector.bind(host,{toast,onLocate:nodeKey ? () => focusGraph(nodeKey) : undefined}); return;
     }
-    return box;
+    const entries = PwnDemoActivity.buildEntries(p,state);
+    const ui = activityState(), query = ui.query.trim().toLowerCase();
+    const revision = JSON.stringify(entries.map(({id,timestamp,title,body,evidence}) => [id,timestamp,title,body,evidence]));
+    if (ui.revision !== revision) { ui.revision = revision; ui.scrollTop = 0; }
+    activityRecords = new Map(entries.map(e => [e.id,e]));
+    const filtered = entries.filter(e => !query || [e.title,e.body,e.evidence].filter(Boolean).join('\n').toLowerCase().includes(query));
+    $('#activity-match-count').textContent = filtered.length+' 条'+(query ? '匹配' : '记录');
+    toolbar.innerHTML = '<div class="activity-search"><label for="activity-search" class="visually-hidden">搜索黑板日志全文</label>'+icon('search')+'<input id="activity-search" type="search" placeholder="搜索日志全文" value="'+esc(ui.query)+'" autocomplete="off"><button id="activity-clear-search" class="icon-button" aria-label="清除日志搜索" '+(!ui.query ? 'hidden' : '')+'>'+icon('x')+'</button></div>';
+    host.innerHTML = activityMarkup(filtered,ui) || '<div class="empty-state log-empty">'+icon('search')+'没有匹配的记录<button class="text-button" id="activity-reset">清除筛选</button></div>';
+    fitLogBodies(host,ui);
+    const sync = () => {
+      ui.scrollTop = host.scrollTop;
+      host.querySelectorAll('details[data-log-id]').forEach(el => { if (el.open) ui.expanded.add(el.dataset.logId); else ui.expanded.delete(el.dataset.logId); });
+      $('#activity-collapse-all').hidden = !host.querySelector('details[open]');
+      latest.hidden = host.scrollTop < 100;
+    };
+    host.scrollTop = ui.scrollTop; sync();
+    host.addEventListener('scroll',sync,{passive:true}); host.addEventListener('toggle',sync,true);
+    disposeActivity = () => { sync(); host.removeEventListener('scroll',sync); host.removeEventListener('toggle',sync,true); };
+    paintIcons();
   }
-  function renderInspector() {
-    const node = selectedNode && graph.getNodes().find(item => nodeKey(item) === nodeKey(selectedNode)), edge = selectedEdge && graph.getEdgeDetails(selectedEdge.id), host = $('node-inspector');
-    host.replaceChildren(); host.hidden = !node && !edge; host.dataset.selection = edge ? 'edge' : node ? 'node' : ''; if (!node && !edge) return;
-    const close = el('button', 'icon-button'); close.setAttribute('aria-label', '清除节点或连线筛选'); close.append(icon('close')); close.addEventListener('click', () => { selectedNode = null; selectedEdge = null; graph.selectNode(null); renderActivity(); }); host.append(close);
-    if (edge) {
-      host.append(el('h3', '', edge.label || edge.kind), el('small', 'inspector-status', (edge.label || edge.kind) + (edge.statusLabel ? ' / ' + edge.statusLabel : ''))); const endpoints = el('div', 'edge-endpoints');
-      for (const [label, endpoint] of [[edge.kind === 'step_dependency' ? '前置步骤' : '来源', edge.sourceNode], [edge.kind === 'step_dependency' ? '后续步骤' : '去向', edge.targetNode]]) {
-        if (!endpoint) continue; const row = el('div', 'edge-endpoint'), button = el('button', 'inspector-node-link', endpoint.title || endpoint.label || endpoint.id);
-        button.type = 'button'; button.addEventListener('click', () => revealNode(endpoint)); row.append(el('span', '', label), button); endpoints.append(row);
-      }
-      host.append(endpoints); if (edge.description) host.append(el('p', '', edge.description)); if (edge.invalid || edge.supportValid === false) host.append(el('p', 'evidence-warning', '此关系的证据支持已失效，请核对来源。'));
+  function resetActivityScroll() {
+    const ui = activityState();
+    disposeActivity?.(); disposeActivity = null;
+    ui.scrollTop = 0;
+  }
+  function collapseLog(detail) {
+    const host = $('#activity-content'), entry = detail.closest('.timeline-entry');
+    detail.open = false;
+    host.scrollTop += entry.getBoundingClientRect().top-host.getBoundingClientRect().top-6;
+    detail.querySelector('summary').focus({preventScroll:true});
+  }
+  function returnToActivity() {
+    selectedNode = null; selectedEdge = null;
+    if (graph) graph.selectNode(null); else renderActivity();
+    const source = activityOrigin && $$('.log-title').find(button => button.dataset.logRead === activityOrigin);
+    source?.focus({preventScroll:true}); activityOrigin = null;
+  }
+  function focusGraph(key,origin = null) {
+    if (!graph) { viewTab = 'graph'; render(); }
+    activityOrigin = origin;
+    graph.setStatusFilter('all');
+    $$('[data-filter]').forEach(el => { el.classList.remove('active'); el.setAttribute('aria-pressed','false'); });
+    graph.selectNode(key); graph.focusNode(key); $('#clear-selection')?.focus({preventScroll:true});
+  }
+  function openRecord(record,options = {}) {
+    materialReadVersion++;
+    disposeRecord?.();
+    const source = document.activeElement?.closest('[data-log-read]');
+    source?.classList.add('is-reading'); source?.setAttribute('aria-expanded','true');
+    disposeRecord = PwnDemoInspector.openRecord(record,{...options,toast,onClose:() => {
+      source?.classList.remove('is-reading'); source?.setAttribute('aria-expanded','false');
+      disposeRecord = null;
+    }});
+  }
+  function projectInfo(p) {
+    const dialog = $('#project-dialog');
+    const controls = lifecycle.actions(p).filter(action => ['pause','resume','terminate'].includes(action));
+    dialog.innerHTML = '<header class="dialog-header"><div><span class="dialog-eyebrow">项目资料与运行状态</span><h2 id="project-dialog-title">项目管理</h2></div><button class="icon-button" data-close="project-dialog" aria-label="关闭项目管理">'+icon('x')+'</button></header>'+
+      '<div class="project-info-body" tabindex="0" role="region" aria-label="项目资料"><div class="project-info-identity"><h3>'+esc(p.name)+'</h3>'+badge(p)+'</div><dl class="project-info-meta">'+[['项目类型',types[p.type]],['材料',p.files.length+' 份'],['创建时间',dateTime(p.createdAt)],['结束时间',dateTime(p.endedAt)]].map(([label,value]) => '<div><dt>'+label+'</dt><dd>'+esc(value)+'</dd></div>').join('')+'</dl>'+[['起点 / 已知信息',p.target],['终点 / 项目目标',p.goal]].map(([label,value]) => '<section class="project-info-section"><h3>'+label+'</h3><p>'+esc(value)+'</p></section>').join('')+'</div>'+
+      '<footer class="project-info-footer"><span>'+esc(p.archived ? '历史记录 · 仅供查看' : p.status === 'paused' ? '已暂停，现有记录已保留' : p.status === 'terminated' || p.status === 'done' ? '项目已结束，记录已保留' : '暂停可继续，终止保留记录')+'</span><div>'+controls.map(action => '<button class="button '+(action === 'terminate' ? 'danger-outline' : 'secondary')+'" data-action="'+action+'" data-action-project="'+esc(p.id)+'" data-mutates>'+icon(actionIcons[action])+actionNames[action]+'</button>').join('')+'</div></footer>';
+    paintIcons(); updateBusy();
+    if (!dialog.open) dialog.showModal();
+  }
+  function mountGraph(p) {
+    graph = PwnDemoGraph.create($('#graph-host'),p,{
+      onZoom: zoom => { if ($('#zoom-label')) $('#zoom-label').textContent = Math.round(zoom*100)+'%'; },
+      onSelect: node => { selectedNode = node; selectedEdge = null; renderActivity(); },
+      onSelectEdge: edge => { selectedEdge = edge && graph?.getEdgeDetails(edge.id); selectedNode = null; renderActivity(); }
+    });
+    $('#zoom-label').textContent = Math.round(graph.scale*100)+'%';
+  }
+  function render() {
+    materialReadVersion++;
+    closeMenu(); disposeRecord?.(); disposeActivity?.(); disposeActivity = null; disposeInspector?.(); disposeInspector = null; graph?.destroy(); graph = null; disposeLLM?.(); disposeLLM = null; selectedNode = null; selectedEdge = null;
+    activityOrigin = null;
+    const page = route(), p = viewed();
+    $('.topbar').hidden = page === 'llm' || Boolean(p);
+    $('.topbar').innerHTML = $('.topbar').hidden ? '' : modelEntry();
+    if (page === 'llm') {
+      const origin = projects.find(project => project.id === llmReturn?.id) || projects[0];
+      $('#main').innerHTML = PwnLLMDemo.render({returnLabel:origin ? '返回项目' : '返回工作台',projectName:origin?.name || ''});
+      disposeLLM = PwnLLMDemo.bind($('#main'),{onReturn:() => {
+        if (!origin) { location.hash = 'projects'; return; }
+        if (!llmReturn || llmReturn.id !== origin.id) llmReturn = {id:origin.id,view:'graph',run:'current',scrollTop:0};
+        returningFromLLM = true; location.hash = 'project/'+origin.id;
+      }});
+    } else if (!p) {
+      $('#main').innerHTML = '<section class="workspace-empty">'+icon('folder-open')+'<h1>创建第一个项目</h1><p>选择 CTF、代码审计或渗透测试，添加已知信息与目标。</p><button class="button primary" data-create>'+icon('plus')+'新建项目</button></section>';
     } else {
-      host.append(el('h3', '', node.title || node.label || node.id), el('p', '', node.description || ''), el('small', '', data.nodeTypeName(node.type) + ' / ' + window.PwnMeshGraphView.nodePresentation(node, null).statusLabel));
-      if (node.raw?.invalid_sources?.length) host.append(el('p', 'evidence-warning', '无效证据：' + node.raw.invalid_sources.join('、')));
-      if (node.type === 'step' && node.raw?.depends_on?.length) {
-        host.append(el('p', '', '前置步骤'), evidenceButtons(node.raw.depends_on.map(id => ({type:'step',id}))));
-        if (node.raw.blocked_by?.length) host.append(el('p', '', '等待前置步骤：' + node.raw.blocked_by.join('、')));
-      }
+      $('#main').innerHTML = projectMarkup(p); if (viewTab === 'graph') mountGraph(p); else fitContentBodies(); renderActivity();
     }
+    renderSidebar(); paintIcons();
   }
-  function logContent(source, id, parts) {
-    const content = el('div', 'log-content'), full = el('div', 'log-full'); full.append(...parts);
-    const text = parts.map(part => part.textContent).filter(Boolean).join('\n'), lines = text.split('\n');
-    const previewText = Array.from(lines.slice(0, 4).join('\n')).slice(0, 140).join('');
-    if (previewText === text) { content.append(full); return content; }
-    const key = JSON.stringify([selectedId, state?.graph?.project?.generation || 0, source, id]);
-    const preview = el('p', 'log-preview', previewText.trimEnd() + '…'), toggle = el('button', 'log-toggle');
-    full.id = 'log-body-' + (++logBodyId); toggle.type = 'button'; toggle.setAttribute('aria-controls', full.id);
-    const update = () => { const expanded = expandedLogs.has(key); full.hidden = !expanded; preview.hidden = expanded; toggle.setAttribute('aria-expanded', String(expanded)); toggle.textContent = expanded ? '收起' : '展开全文'; };
-    toggle.addEventListener('click', () => { if (expandedLogs.has(key)) expandedLogs.delete(key); else expandedLogs.add(key); update(); });
-    update(); content.append(preview, full, toggle); return content;
+  function openMenu(id,trigger) {
+    if (menuProject === id && menuTrigger === trigger) { closeMenu(); return; }
+    closeMenu();
+    const p = projects.find(p => p.id === id); if (!p || mutating) return;
+    menuProject = id; menuTrigger = trigger; trigger.setAttribute('aria-expanded','true');
+    const menu = $('#project-menu');
+    menu.innerHTML = lifecycle.actions(p).filter(action => ['restart','delete'].includes(action)).map(action => '<button role="menuitem" data-action="'+action+'" class="'+(action === 'delete' ? 'danger-item' : '')+'">'+icon(actionIcons[action])+actionNames[action]+'</button>').join('');
+    menu.hidden = false; paintIcons();
+    const box = trigger.getBoundingClientRect();
+    menu.style.left = Math.max(8,Math.min(box.right-menu.offsetWidth,innerWidth-menu.offsetWidth-8))+'px';
+    menu.style.top = Math.max(8,Math.min(box.bottom+6,innerHeight-menu.offsetHeight-8))+'px';
+    menu.querySelector('button')?.focus();
   }
-  function renderLog(log) {
-    const article = el('article', 'timeline-entry ' + log.level + (log.kind === 'model' ? ' conclusion' : '')); article.dataset.logId = log.id;
-    const read = el('button', 'icon-button read-log'); read.type = 'button'; read.setAttribute('aria-label', '阅读全文：' + log.title); read.append(icon('expand')); read.addEventListener('click', () => openReader(log.title, [log.body, log.scope && '范围：' + log.scope, log.code, log.worker && 'Worker：' + log.worker].filter(Boolean).join('\n\n'))); article.append(read);
-    const meta = el('div', 'entry-meta'); meta.append(el('span', 'entry-tag', log.kind === 'model' ? '关键结论' : data.phaseName(log.phase)), timestamp(log.time)); article.append(meta, el('h3', '', log.title));
-    const parts = [el('p', '', log.body || '')]; if (log.scope) parts.push(el('p', '', '范围：' + log.scope)); if (log.code) parts.push(el('pre', 'log-code', log.code));
-    article.append(logContent('board', log.id, parts)); if (log.worker) article.append(el('small', 'log-worker', log.worker));
-    if (log.truncated && !(log.body || '').includes('输出已截断')) article.append(el('p', 'evidence-warning', '输出已截断，内容不完整。'));
-    if (log.evidence?.length) article.append(evidenceButtons(log.evidence)); if (log.artifacts?.length) article.append(artifacts(log.artifacts)); if (log.node) article.append(evidenceButtons([log.node])); return article;
+  function confirmAction(id,action) {
+    const p = projects.find(p => p.id === id); if (!p || !lifecycle.actions(p).includes(action)) return;
+    command = {id,action,generation:p.generation,status:p.status};
+    $('#action-title').textContent = actionNames[action]+'项目';
+    $('#action-project').textContent = p.name;
+    $('#action-description').textContent = {restart:'归档当前轮，清空当前轮任务、执行记录与结论后重新开始。项目输入、材料、补充信息与历史轮次会保留。',terminate:'停止所有未完成任务并保留现有记录。目标不会标为完成，之后可重启。',delete:'删除这个项目及其全部历史记录，同时停止未完成任务。此操作无法撤销。'}[action];
+    $('#confirm-action').textContent = actionNames[action]+'项目';
+    $('#confirm-action').className = 'button '+(action === 'restart' ? 'primary' : 'danger-button');
+    $('#action-error').textContent = '';
+    $('#action-dialog').showModal();
   }
-  function renderBoard() {
-    $('activity-tools').append(el('span', '', selectedEdge ? '当前连线的关联记录' : selectedNode ? '当前节点的关联记录' : '探索过程与共享线索'), el('span', '', '最新在前'));
-    let entries = selectedNode ? data.filterLogs(logs, {node:selectedNode}) : logs;
-    if (selectedEdge) {
-      const detail = graph.getEdgeDetails(selectedEdge.id), ids = new Set(); for (const node of [detail?.sourceNode, detail?.targetNode]) if (node) for (const log of data.filterLogs(logs, {node})) ids.add(log.id); entries = logs.filter(log => ids.has(log.id));
-    }
-    entries = filterLogEntries(entries);
-    $('activity-count').textContent = entries.length + ' 条记录'; if (!entries.length) { $('activity-content').append(emptyPanel('还没有关联记录', '项目产生的决策、执行和证据会显示在这里。', 'message')); return; }
-    if (!selectedNode && !selectedEdge && !logQuery) {
-      const active = (state?.steps || []).filter(step => step.status === 'running');
-      if (active.length) {
-        const card = el('button', 'current-task-card'), meta = el('span', 'current-task-meta'); card.type = 'button';
-        meta.append(el('span', '', '正在执行'), el('small', '', active.length > 1 ? active.length + ' 项任务' : '当前任务'));
-        card.append(meta, el('strong', '', active[0].description), el('span', 'current-task-note', '点击查看任务状态与关联证据')); card.addEventListener('click', () => revealNode({type:'step',id:active[0].id})); $('activity-content').append(card, el('p', 'history-caption', '历史记录'));
-      }
-    }
-    const shown = entries.slice(-logLimit).reverse(); $('activity-content').append(...shown.map(renderLog));
-    if (entries.length > shown.length) { const more = el('button', 'button secondary more-logs', '显示更早记录（' + (entries.length - shown.length) + '）'); more.addEventListener('click', () => { logLimit += 300; renderActivity(); }); $('activity-content').append(more); }
-  }
-  function renderSystem(system) {
-    const filter = el('select'); filter.setAttribute('aria-label', '筛选系统日志');
-    for (const [value, label] of [['all','全部日志'],['http','LLM 错误'],['errors','全部错误']]) { const option = el('option', '', label); option.value = value; filter.append(option); }
-    filter.value = systemFilter; filter.addEventListener('change', () => { systemFilter = filter.value; renderActivity(); }); $('activity-tools').append(el('span', '', '系统运行记录'), filter);
-    $('activity-content').append(el('p', 'source-notice', system.unavailable.join('、') + '：暂未接入。'));
-    const entries = filterLogEntries(system.logs).filter(log => systemFilter === 'http' ? log.component === 'LLM' && log.level === 'error' : systemFilter !== 'errors' || log.level === 'error'); $('activity-count').textContent = entries.length + ' 条记录';
-    for (const log of entries.slice(-logLimit).reverse()) {
-      const article = el('article', 'system-entry ' + log.level), meta = el('div', 'system-meta'); article.dataset.logId = log.id; meta.append(icon('terminal'), el('span', '', log.component), timestamp(log.time)); article.append(meta, el('h3', '', log.title || ''), logContent('system', log.id, [el('p', '', log.body || '')]));
-      if (log.truncated) article.append(el('p', 'evidence-warning', '输出已截断，内容不完整。')); if (log.node) article.append(evidenceButtons([log.node])); $('activity-content').append(article);
-    }
-    if (entries.length > logLimit) { const more = el('button', 'button secondary more-logs', '显示更早记录（' + (entries.length - logLimit) + '）'); more.addEventListener('click', () => { logLimit += 300; renderActivity(); }); $('activity-content').append(more); }
-    if (!entries.length) $('activity-content').append(emptyPanel(systemFilter === 'http' ? 'LLM 请求日志暂未接入' : '暂无匹配的公开记录', '当前接口提供执行结果和黑板事件，无法据此确认全部组件或模型请求的状态。', 'terminal'));
-  }
-  function exportLinks() {
-    const box = el('div', 'export-links');
-    for (const [format, label, suffix] of [['yaml','导出项目','yaml'], ['timeline','导出时间线','txt']]) { const link = el('a', 'button secondary export-result'); link.href = pathFor(selectedId) + '/export?format=' + format; link.download = selectedId + '-' + format + '.' + suffix; link.append(icon('download'), document.createTextNode(label)); box.append(link); }
-    return box;
-  }
-  function renderResult(host = $('activity-content'), toolbar = $('activity-tools'), counter = $('activity-count')) {
-    const result = data.buildResult(state, logs); toolbar.append(el('span', '', '结论与证据'), el('span', '', result.status === 'completed' ? '本轮已完成' : '当前轮')); counter.textContent = result.findings.length + ' 项发现';
-    const titles = {completed:'探索已完成',terminated:'本轮已终止',pending:'答案正在探索中',unverified:'完成证据待核对'};
-    if (result.status === 'completed') { const header = el('div', 'result-header'), check = el('span', 'result-check'); check.append(icon('check')); header.append(check, el('h3', '', titles[result.status])); host.append(header, el('p', 'result-summary', result.summary)); }
-    else host.append(emptyPanel(titles[result.status] || titles.pending, result.notice || '当前轮还没有可确认的项目完成结论。'));
-    if (result.status === 'completed' && result.notice) host.append(el('p', 'source-notice', result.notice)); if (result.truncated) host.append(el('p', 'evidence-warning', '包含已截断输出，结论内容不完整。'));
-    if (result.findings.length) host.append(el('h3', 'result-subheading', '发现与支持证据'));
-    for (const finding of result.findings) { const article = el('article', 'finding' + (finding.supportValid === false ? ' invalid' : '')); article.append(el('h3', '', finding.claim), el('p', '', finding.statusLabel || data.statusName(finding.status))); if (finding.sources?.length) article.append(evidenceButtons(finding.sources)); host.append(article); }
-    if (result.conclusions.length) { host.append(el('h3', 'result-subheading', '单次执行结论'), el('p', 'source-notice', '执行结论不等于项目已完成，请结合目标和有效证据核对。')); host.append(...result.conclusions.map(renderLog)); }
-    host.append(exportLinks());
-  }
-  function renderActivity({reset = false} = {}) {
-    if (selectedNode && !graph.getNodes().some(node => nodeKey(node) === nodeKey(selectedNode))) selectedNode = null; if (selectedEdge && !graph.getEdgeDetails(selectedEdge.id)) selectedEdge = null;
-    const signature = JSON.stringify([tab, systemFilter, logQuery, workspaceVersion, nodeKey(selectedNode), selectedEdge?.id, logLimit]);
-    if (!reset && signature === activitySignature) return; activitySignature = signature; const content = $('activity-content'), previousTop = content.scrollTop;
-    const system = data.buildSystemLogs(logs);
-    content.replaceChildren(); $('activity-tools').replaceChildren(); renderInspector();
-    document.querySelectorAll('[data-tab]').forEach(button => { const active = button.dataset.tab === tab; button.setAttribute('aria-selected', String(active)); button.tabIndex = active ? 0 : -1; }); content.setAttribute('aria-labelledby', 'tab-' + tab);
-    const errors = system.logs.filter(log => log.level === 'error').length; $('system-alert').textContent = errors ? String(errors) : ''; $('system-alert').title = '本轮已记录的执行与系统错误';
-    if (!current()) { content.append(emptyPanel('等待新的探索', '创建项目后，这里会记录每一步决策与执行。', 'message')); $('activity-count').textContent = '0 条记录'; }
-    else if (tab === 'board') renderBoard(); else if (tab === 'system') renderSystem(system); else renderResult(); content.scrollTop = reset ? 0 : previousTop;
-  }
-  function selectNode(node) { selectedNode = node; if (node) { selectedEdge = null; if (!updatingGraph) tab = 'board'; } renderActivity({reset:!updatingGraph}); }
-  function selectEdge(edge) { selectedEdge = edge; if (edge) { selectedNode = null; if (!updatingGraph) tab = 'board'; } renderActivity({reset:!updatingGraph}); }
-  function updateGraph(value) { updatingGraph = true; try { graph.setState(value); } finally { updatingGraph = false; } }
-  function resetSelection(id) {
-    if (id !== selectedId) { hintFiles = []; hintFilesProjectId = ''; $('hint-files').value = ''; renderFiles('hint', hintFiles); }
-    materialVersion++; materialProject = ''; materialItems = []; $('material-count').textContent = '';
-    selectedId = id; state = null; executions = []; events = []; logs = []; selectedNode = null; selectedEdge = null; logLimit = 300; activitySignature = ''; workspaceSignature = '';
-    updateGraph(null); renderHeader(); renderActivity({reset:true}); renderMainView(); try { if (id) localStorage.setItem('pwnmesh.selected-project', id); else localStorage.removeItem('pwnmesh.selected-project'); } catch {}
-  }
-  async function selectProject(id) { if (mutating) return; window.PwnMeshModels?.close(); if (id !== selectedId || !state) resetSelection(id); closeMenus(); renderProjects(); await loadWorkspace(id); }
-  async function loadWorkspace(preferred = selectedId) {
-    if (mutating) return; clearTimeout(timer); const request = requests.begin(), options = {signal:request.signal}; let retryGeneration = false;
-    try {
-      const list = await api.request('/projects', options); if (!requests.current(request.version)) return;
-      projects = list.slice().sort((a,b) => String(b.created_at || '').localeCompare(String(a.created_at || '')) || b.id.localeCompare(a.id));
-      const target = projects.some(project => project.id === preferred) ? preferred : projects[0]?.id || ''; if (target !== selectedId) resetSelection(target); renderProjects();
-      if (!target) { state = null; executions = []; events = []; logs = []; updateGraph(null); renderActivity({reset:true}); setConnection(true); $('last-update').textContent = '刷新 ' + data.formatTime(new Date().toISOString()); return; }
-      const [nextState, runs] = await Promise.all([api.request(pathFor(target) + '/state', options), api.projectExecutions(pathFor(target), options)]); if (!requests.current(request.version)) return;
-      const generation = nextState.graph.project.generation || 0;
-      let cache = eventCache.get(target) || {after:0,events:[],generation};
-      // after may include events newer than this state snapshot. Only a state
-      // revision rollback (or a new generation) invalidates the saved history.
-      if (cache.generation !== generation || nextState.revision < (cache.stateRevision || 0)) cache = {after:0,events:[],generation};
-      const batch = []; let after = cache.after;
-      for (let page = 0; page < 5; page++) {
-        const nextEvents = await api.request(pathFor(target) + '/state/events?after=' + after, options); if (!requests.current(request.version)) return; if (!nextEvents.length) break;
-        const next = Math.max(...nextEvents.map(event => event.revision)); if (next <= after) break; batch.push(...nextEvents); after = next; if (nextEvents.length < 1000) break;
-      }
-      const latest = await api.request(pathFor(target) + '/identity', options); if (!requests.current(request.version)) return;
-      if ((latest.generation || 0) !== generation) { eventCache.delete(target); retryGeneration = true; return; }
-      cache = {after,generation,stateRevision:nextState.revision,events:cache.events.concat(batch)}; eventCache.set(target, cache);
-      if (state && (state.graph.project.generation || 0) !== generation) { selectedNode = null; selectedEdge = null; logLimit = 300; }
-      state = nextState; executions = runs.filter(run => (run.generation || 0) === generation); events = cache.events.filter(event => event.revision <= state.revision);
-      // Execution status can change without advancing the board revision.
-      const signature = JSON.stringify([state, events, executions]);
-      if (signature !== workspaceSignature) { workspaceSignature = signature; workspaceVersion++; logs = data.buildLogs(state, events, executions); updateGraph(state); renderActivity(); renderMainView(); }
-      setConnection(true); $('last-update').textContent = '刷新 ' + data.formatTime(new Date().toISOString());
-    } catch (error) { if (!requests.current(request.version)) return; setConnection(false, error.message + '。已显示的数据会保留，稍后自动重试。'); }
-    finally { if (requests.current(request.version)) timer = setTimeout(() => loadWorkspace(selectedId), retryGeneration ? 0 : document.hidden ? 10000 : 2500); }
-  }
-  function startMutation() {
-    mutating = true; clearTimeout(timer); requests.cancel(); closeMenus(); document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = true; }); lockInputs(); renderHeader(); renderProjects();
-  }
-  async function finishMutation() {
-    mutating = false; document.querySelectorAll('dialog [data-close]').forEach(button => { button.disabled = false; }); lockInputs(); renderHeader(); renderProjects(); await loadWorkspace(selectedId);
-  }
-  const mutationError = error => error.message + (error.status === 0 ? '；结果未确认，请先刷新核对，避免重复操作。' : error.status === 409 ? '；项目状态或轮次已变化，正在刷新数据。请关闭此窗口并重新确认操作。' : '');
-  async function changeStatus(id, action) {
-    const project = projects.find(item => item.id === id); if (mutating || !connected || !project || !['active','stopped'].includes(project.status)) return; startMutation();
-    try { await api.request(pathFor(id) + '/status', {method:'PUT',body:{status:action === 'pause' ? 'stopped' : 'active'}}); toast(action === 'pause' ? '项目已暂停，已有进度保留' : '项目已继续调度'); }
-    catch (error) { toast(mutationError(error)); } finally { await finishMutation(); }
-  }
-  function confirmOperation(id, action) {
-    const project = projects.find(item => item.id === id); if (!project || mutating || !connected) return; if (action === 'terminate' && !['active','stopped'].includes(project.status)) return;
-    management = {id,action,generation:project.generation || 0}; const title = {restart:'重启项目',terminate:'终止项目',delete:'删除项目'}[action]; $('confirm-title').textContent = title + '？'; $('confirm-error').textContent = ''; $('confirm-action').disabled = false;
-    $('confirm-message').textContent = action === 'restart' ? '将归档「' + project.title + '」的当前轮，并清空当前轮任务图、执行记录和结论重新开始。项目输入、创建时间、补充提示及历史轮次会保留。'
-      : action === 'terminate' ? '将终止「' + project.title + '」的未完成任务，保留现有记录。终止不会将目标标记为完成，后续可以重启。'
-      : '将删除「' + project.title + '」的项目记录，并取消未结束的执行。容器清理由后台处理，工作目录文件不会因此删除。';
-    $('confirm-action').textContent = title; $('confirm-action').className = 'button primary' + (action === 'restart' ? '' : ' danger-button'); $('confirm-dialog').showModal();
-  }
-  const fileSize = size => size >= 1048576 ? (size / 1048576).toFixed(1) + ' MiB' : size >= 1024 ? (size / 1024).toFixed(1) + ' KiB' : size + ' B';
-  function lockInputs() {
-    for (const id of ['create-name','create-origin','create-goal']) $(id).disabled = mutating || !!createPending || createUncertain;
-    document.querySelectorAll('#scenario-options input').forEach(input => { input.disabled = mutating || !!createPending || createUncertain; });
-    $('create-files').disabled = mutating || createUncertain; $('hint-files').disabled = $('hint-input').disabled = mutating;
-    $('submit-create').disabled = mutating || createUncertain;
-    renderFiles('create', createFiles); renderFiles('hint', hintFiles);
-  }
-  function renderFiles(prefix, queue) {
-    $(prefix + '-file-list').replaceChildren(...queue.map((item, index) => {
-      const row = el('li'), copy = el('span', 'input-file-copy', item.file.name);
-      copy.append(el('small', '', fileSize(item.file.size) + (item.result ? ' · 已导入' : ' · 待上传'))); row.append(copy);
-      if (!item.result) { const remove = el('button', '', '移除'); remove.type = 'button'; remove.disabled = mutating; remove.setAttribute('aria-label', '移除 ' + item.file.name); remove.addEventListener('click', () => { queue.splice(index, 1); renderFiles(prefix, queue); }); row.append(remove); }
-      return row;
-    }));
-  }
-  function validateFiles(queue) {
-    if (queue.length > 32) throw new Error('每项目最多导入 32 个文件。');
-    if (queue.some(item => item.file.size > 256 * 1048576)) throw new Error('每个文件不能超过 256 MiB。');
-    if (queue.reduce((size, item) => size + item.file.size, 0) > 512 * 1048576) throw new Error('每项目文件总大小不能超过 512 MiB。');
-  }
-  async function uploadFiles(id, prefix, queue) {
-    for (let index = 0; index < queue.length; index++) {
-      const item = queue[index]; if (item.result) continue;
-      $(prefix + '-progress').textContent = '正在上传 ' + (index + 1) + ' / ' + queue.length + '：' + item.file.name;
-      item.result = await api.uploadInput(pathFor(id), item.file); renderFiles(prefix, queue);
-    }
-    $(prefix + '-progress').textContent = queue.length ? '已导入 ' + queue.length + ' 个文件' : '';
-  }
-  async function loadInputs(id) {
-    const version = ++inputReadVersion; $('imported-inputs').replaceChildren(); $('imported-inputs-status').textContent = '正在读取材料列表…';
-    try {
-      const inputs = await api.request(pathFor(id) + '/inputs'); if (version !== inputReadVersion || hintProjectId !== id) return;
-      $('imported-inputs-status').textContent = inputs.length ? inputs.length + ' 个文件 · 保留原始材料用于核对' : '尚未导入文件';
-      $('imported-inputs').replaceChildren(...inputs.map(input => {
-        const row = el('li'), copy = el('span', 'input-file-copy', input.name);
-        copy.append(el('small', '', fileSize(input.size) + ' · ' + data.formatTime(input.created_at)), el('small', '', input.path), el('small', '', 'SHA-256: ' + input.sha256)); row.append(copy); return row;
-      }));
-    } catch (error) { if (version === inputReadVersion && hintProjectId === id) $('imported-inputs-status').textContent = '材料列表读取失败：' + error.message; }
-  }
-  function filterLogEntries(entries) {
-    if (!logQuery) return entries;
-    return entries.filter(entry => [entry.title, entry.body, entry.code, entry.worker, entry.scope, entry.phase, entry.component].filter(Boolean).join('\n').toLocaleLowerCase().includes(logQuery));
-  }
-  function openReader(title, content) {
-    $('reader-title').textContent = title || '查看内容'; $('reader-content').replaceChildren();
-    if (typeof content === 'string') $('reader-content').textContent = content; else $('reader-content').append(content);
-    $('reader-dialog').showModal();
-  }
-  function projectInput(name) {
-    const facts = state?.graph?.facts || [];
-    const fact = facts.find(item => item.id === name);
-    return fact?.content || fact?.description || fact?.value || current()?.[name] || '';
-  }
-  function showProjectInfo() {
-    const project = current(); if (!project) return;
-    const list = el('dl', 'project-info-grid');
-    for (const [label, value] of [['项目类型',data.scenarioName(project.scenario)],['起点 / 已知信息',projectInput('origin')],['终点 / 项目目标',projectInput('goal')],['项目状态',data.statusName(project.status)],['创建时间',data.formatTime(project.created_at)],['当前轮次',String((project.generation || 0) + 1)]]) {
-      const row = el('div'); row.append(el('dt', '', label), el('dd', '', value || '尚未记录')); list.append(row);
-    }
-    openReader(project.title, list);
-  }
-  function contentHeading(title, description) {
-    const header = el('header', 'content-heading'), copy = el('div'); copy.append(el('h2', '', title), el('p', '', description)); header.append(copy); return header;
-  }
-  function renderMaterials() {
-    const host = $('materials-view'); host.replaceChildren();
-    const heading = contentHeading('项目材料', '原始输入与上传文件，供 Agent 探索和证据核对。'), upload = el('button', 'button secondary');
-    upload.append(icon('paperclip'), document.createTextNode('添加材料')); upload.disabled = !current() || !['active','stopped'].includes(current()?.status) || mutating || !connected; upload.addEventListener('click', openHint); heading.append(upload); host.append(heading);
-    for (const [label,name] of [['起点 / 已知信息','origin'],['终点 / 项目目标','goal']]) {
-      const value = projectInput(name); if (!value) continue;
-      const card = el('article', 'project-summary-card'); card.append(el('h3', '', label), el('p', '', value)); host.append(card);
-    }
-    const list = el('div', 'material-list'); host.append(list);
-    if (materialProject !== selectedId) { list.append(emptyPanel('正在读取材料', '正在从项目服务读取原始文件清单。', 'paperclip')); return; }
-    if (!materialItems.length) { list.append(emptyPanel('尚未上传文件', '通过「添加材料」上传源码、请求记录、APK 或其他测试文件。', 'paperclip')); return; }
-    for (const input of materialItems) {
-      const card = el('article', 'material-card'), copy = el('div', 'material-card-copy'), actions = el('div', 'material-actions'), details = el('button', 'button secondary', '查看详情');
-      copy.append(el('h3', '', input.name), el('p', '', fileSize(input.size) + ' · ' + data.formatTime(input.created_at)), el('p', '', input.path));
-      details.addEventListener('click', () => openMaterialReader(input, selectedId));
-      const download = el('a', 'button secondary', '下载'); download.href = pathFor(selectedId) + '/inputs/' + encodeURIComponent(input.id); download.download = input.name; actions.append(details, download);
-      card.append(icon('file'), copy, actions); list.append(card);
-    }
-    $('material-count').textContent = materialItems.length ? String(materialItems.length) : '';
-  }
-  async function openMaterialReader(input, projectId) {
-    const content = el('div', 'material-reader'), meta = el('p', 'material-reader-meta');
-    meta.textContent = '大小：' + fileSize(input.size) + '\n导入时间：' + data.formatTime(input.created_at) + '\n路径：' + input.path + '\nSHA-256：' + input.sha256;
-    const download = el('a', 'button secondary', '下载原始文件'); download.href = pathFor(projectId) + '/inputs/' + encodeURIComponent(input.id); download.download = input.name;
-    content.append(meta, download); openReader(input.name, content);
-    if (!window.PwnMeshInputPreview?.textFile(input)) { content.append(el('p', 'source-notice', '二进制文件或超过 256 KiB 的材料请下载查看。')); return; }
-    const preview = el('pre', 'material-preview', '正在读取文件内容…'); content.append(preview);
-    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 15000);
-    $('reader-dialog').addEventListener('close', () => controller.abort(), {once:true});
-    try { preview.textContent = await window.PwnMeshInputPreview.read(download.href.startsWith('/') ? download.href : new URL(download.href).pathname, {signal:controller.signal}); }
-    catch (error) { if (!controller.signal.aborted) preview.textContent = error.message; else preview.textContent = '读取已取消或超时，请下载查看。'; }
-    finally { clearTimeout(timeout); }
-  }
-  async function readMaterials() {
-    const id = selectedId, version = ++materialVersion;
-    if (!id) { materialProject = ''; materialItems = []; renderMaterials(); return; }
-    renderMaterials();
-    try {
-      const inputs = await api.request(pathFor(id) + '/inputs');
-      if (selectedId !== id || version !== materialVersion) return;
-      materialProject = id; materialItems = inputs; renderMaterials();
-    } catch (error) {
-      if (selectedId !== id || version !== materialVersion) return;
-      $('materials-view').replaceChildren(contentHeading('项目材料', '文件清单暂时不可用'), emptyPanel('材料读取失败', error.message));
-      const retry = el('button', 'button secondary', '重试'); retry.addEventListener('click', readMaterials); $('materials-view').append(retry);
-    }
-  }
-  function renderMainView() {
-    if (mainView === 'results') {
-      const host = $('results-view'); host.replaceChildren(contentHeading('探索结果', '查看当前轮的结论、发现与支持证据。'));
-      if (current()) renderResult(host, el('div'), el('span')); else host.append(emptyPanel('尚未选择项目', '创建或选择项目后查看探索结果。'));
-    } else if (mainView === 'materials') {
-      if (materialProject === selectedId) renderMaterials(); else readMaterials();
-    }
-  }
-  function showView(view) {
-    mainView = view;
-    for (const [name, id] of [['canvas','graph-stage'],['materials','materials-view'],['results','results-view']]) {
-      $(id).hidden = name !== view; $('view-' + name).setAttribute('aria-selected', String(name === view)); $('view-' + name).tabIndex = name === view ? 0 : -1;
-    }
-    $('graph-legend').hidden = view !== 'canvas'; renderMainView();
-    if (view === 'canvas') graph.refreshViewport?.();
-  }
-  const viewNames = ['canvas','materials','results'];
-  for (const name of viewNames) {
-    const button = $('view-' + name); button.addEventListener('click', () => showView(name));
-    button.addEventListener('keydown', event => {
-      let index = viewNames.indexOf(name);
-      if (event.key === 'ArrowRight') index = (index + 1) % viewNames.length; else if (event.key === 'ArrowLeft') index = (index + viewNames.length - 1) % viewNames.length; else if (event.key === 'Home') index = 0; else if (event.key === 'End') index = viewNames.length - 1; else return;
-      event.preventDefault(); showView(viewNames[index]); $('view-' + viewNames[index]).focus();
+  async function performAction(id,action,{generation,status} = {}) {
+    return mutation(async () => {
+      roundReadVersion++;
+      const p = projects.find(p => p.id === id);
+      if (!p) throw new Error('项目已不存在，请关闭窗口并重新选择。');
+      if (generation !== undefined && (generation !== p.generation || status !== p.status)) throw new Error('项目状态已变化，请关闭窗口后重新确认。');
+      if (!lifecycle.actions(p).includes(action)) throw new Error('当前状态不支持此操作。');
+      const pendingCreate = action === 'delete' && service.pendingCreate?.created.project.id === id;
+      await service.change(id,action,generation ?? p.generation);
+      if (pendingCreate) forms.resetCreate();
+      if (action === 'delete') { graph?.forgetProject?.(id); if (current()?.id === id) location.hash = 'projects'; }
+      if (current()?.id === id) { selectedRun = 'current'; if (action === 'restart') viewTab = 'graph'; }
+      toast('项目已'+({pause:'暂停',resume:'继续',restart:'重启',terminate:'终止',delete:'删除'}[action]));
     });
   }
-  $('project-info').addEventListener('click', showProjectInfo);
-  $('log-search').addEventListener('input', () => { logQuery = $('log-search').value.trim().toLocaleLowerCase(); renderActivity({reset:true}); });
-  function openCreate() { if (mutating) return; window.PwnMeshModels?.close(); if (!createDraft) $('create-form').reset(); if (!createUncertain) $('create-error').textContent = ''; lockInputs(); $('create-dialog').showModal(); $('create-name').focus(); }
-  function openHint() {
-    const project = current(); if (!project || !['active','stopped'].includes(project.status) || mutating || !connected) return;
-    hintProjectId = project.id; if (hintFilesProjectId !== project.id) { hintFiles = []; $('hint-files').value = ''; $('hint-progress').textContent = ''; } hintFilesProjectId = project.id;
-    $('hint-project').textContent = project.title; $('hint-input').value = drafts.get(project.id) || ''; $('hint-error').textContent = ''; $('hint-input').removeAttribute('aria-invalid'); renderFiles('hint', hintFiles); renderHeader(); $('hint-dialog').showModal(); $('hint-input').focus(); loadInputs(project.id);
-  }
-  data.SCENARIOS.forEach((item,index) => {
-    const choice = el('label', 'scenario-choice'), radio = el('input'), card = el('span', 'scenario-card'); radio.type = 'radio'; radio.name = 'scenario'; radio.value = item.id; radio.defaultChecked = index === 0; radio.checked = index === 0;
-    card.append(icon(scenarioIcon({scenario:item.id})), el('strong', '', item.name), el('small', '', item.description)); choice.append(radio, card); $('scenario-options').append(choice);
-  });
-  $('create-form').addEventListener('input', () => { createDraft = true; $('create-error').textContent = ''; });
-  for (const prefix of ['create','hint']) $(prefix + '-files').addEventListener('change', () => {
-    if (mutating) return; const queue = prefix === 'create' ? createFiles : hintFiles;
-    const additions = Array.from($(prefix + '-files').files || [], file => ({file}));
-    try { validateFiles(queue.concat(additions)); queue.push(...additions); $(prefix + '-error').textContent = ''; if (prefix === 'create') createDraft = true; }
-    catch (error) { $(prefix + '-error').textContent = error.message; }
-    $(prefix + '-files').value = ''; renderFiles(prefix, queue);
-  });
-  $('create-form').addEventListener('submit', async event => {
-    event.preventDefault(); if (mutating || $('submit-create').disabled || createUncertain) return; let started = false, creating = false;
+  async function refreshWorkspace(force = false, preferred) {
+    clearTimeout(refreshTimer);
+    if (mutating && !force) return;
+    if (refreshing) { pendingRefresh = true; if (force) service.cancel(); return; }
+    refreshing = true;
+    const id = preferred ?? (location.hash.startsWith('#project/') ? location.hash.slice(9) : current()?.id || '');
     try {
-      const payload = createPending?.payload || data.validateProject({title:$('create-name').value,origin:$('create-origin').value,goal:$('create-goal').value,scenario:new FormData($('create-form')).get('scenario')}); validateFiles(createFiles);
-      createDraft = true; $('submit-create').disabled = true; $('create-error').textContent = ''; startMutation(); started = true;
-      let created;
-      if (createPending) created = createPending.created;
-      else { creating = true; created = await api.request('/projects', {method:'POST',body:createFiles.length ? {...payload,start_paused:true} : payload}); creating = false; if (createFiles.length) createPending = {created,payload}; }
-      if (createPending) { await uploadFiles(created.project.id, 'create', createFiles); await api.request(pathFor(created.project.id) + '/status', {method:'PUT',body:{status:'active'}}); }
-      createPending = null; createFiles = []; createDraft = false; $('create-progress').textContent = ''; $('create-dialog').close(); $('create-form').reset(); $('project-search').value = ''; tab = 'board'; resetSelection(created.project.id); toast('项目已创建');
-    } catch (error) {
-      if (creating && error.status === 0) createUncertain = true;
-      $('create-error').textContent = createPending ? error.message + '；项目已保存，已导入文件会保留。重试将继续此项目，上传完成后启动。' : createUncertain ? '创建结果未确认，已停止重试以避免重复项目。请关闭窗口，在项目列表核对；有附件的项目会保持暂停，可在「补充提示」中继续上传。核对完成后刷新页面。' : mutationError(error);
-    } finally { lockInputs(); if (started) await finishMutation(); }
-  });
-  $('confirm-form').addEventListener('submit', async event => {
-    event.preventDefault(); if (!management || mutating || $('confirm-action').disabled) return; const command = {...management}; let requireConfirm = false; $('confirm-action').disabled = true; startMutation();
-    try {
-      if (command.action === 'delete') await api.request(pathFor(command.id), {method:'DELETE'}); else await api.request(pathFor(command.id) + '/' + command.action, {method:'POST',body:{expected_generation:command.generation}});
-      $('confirm-dialog').close(); eventCache.delete(command.id);
-      if (command.action === 'delete') {
-        drafts.delete(command.id); graph.forgetProject?.(command.id); if (selectedId === command.id) resetSelection('');
-        if (createPending?.created.project.id === command.id) {
-          createPending = null; createFiles = []; createDraft = false; $('create-form').reset(); $('create-files').value = '';
-          $('create-progress').textContent = ''; $('create-error').textContent = '';
+      const before = current()?.id, result = await service.refresh(id); if (!result) return;
+      projects.splice(0,projects.length,...result.projects); connected = true;
+      const p = current(), signature = JSON.stringify([p?.id,p?.generation,p?.state,p?.logs,p?.files,p?.history.map(h=>[h.generation,h.archivedAt])]);
+      if (route() !== 'llm' && (!p || before !== p.id || !$('.project-page'))) render();
+      else if (route() !== 'llm' && signature !== lastSnapshot) {
+        if (selectedRun !== 'current' && !p.history.some(h=>String(h.generation)===selectedRun && h.state)) selectedRun = 'current';
+        const shown = viewed(), holder = document.createElement('div'); holder.innerHTML = projectMarkup(shown);
+        $('.project-heading')?.replaceWith(holder.querySelector('.project-heading'));
+        $('.workspace-actions')?.replaceWith(holder.querySelector('.workspace-actions'));
+        if (graph) graph.setState(PwnDemoGraph.buildState(shown));
+        else {
+          const container = $('#project-view'), top = container?.scrollTop || 0;
+          const expanded = $$('.content-card').filter(card=>card.querySelector('[data-content-toggle]')?.getAttribute('aria-expanded')==='true').map(card=>card.dataset.contentKey);
+          if (container) { container.innerHTML = viewTab === 'materials' ? materialsMarkup(shown) : resultsMarkup(shown,PwnDemoGraph.buildState(shown)); fitContentBodies(); expanded.forEach(key=>$$('.content-card').find(card=>card.dataset.contentKey===key)?.querySelector('[data-content-toggle]')?.click()); container.scrollTop = top; }
         }
+        const state=PwnDemoGraph.buildState(shown), footer=document.createElement('div'); footer.innerHTML=projectFooter(shown,state,state.steps.filter(step=>step.status==='completed').length); $('.canvas-footer')?.replaceWith(footer.firstElementChild);
+        const filter=graph?.getStatusFilter(); $$('[data-filter]').forEach(button=>{button.classList.toggle('active',button.dataset.filter===filter);button.setAttribute('aria-pressed',String(button.dataset.filter===filter));});
+        const input=document.activeElement?.id==='activity-search'?document.activeElement:null, selection=input&&[input.selectionStart,input.selectionEnd]; renderActivity(); if(input&&$('#activity-search')){$('#activity-search').focus({preventScroll:true});$('#activity-search').setSelectionRange(...selection);}
       }
-      else if (command.id === selectedId) { selectedNode = null; selectedEdge = null; graph.selectNode(null); if (command.action === 'restart') resetSelection(command.id); }
-      toast({delete:'项目记录已删除',restart:'项目已重启，旧轮已归档',terminate:'项目已终止，记录已保留'}[command.action]);
-    } catch (error) { requireConfirm = [0,409].includes(error.status); $('confirm-error').textContent = mutationError(error); }
-    finally { $('confirm-action').disabled = requireConfirm; await finishMutation(); }
+      lastSnapshot = signature; renderSidebar();
+      if(p)try{localStorage.setItem('pwnmesh.selected-project',p.id);}catch{}
+    } catch(error) { if (error.name !== 'AbortError' && !service.scope.controller?.signal.aborted) { connected = false; toast(error.message); updateBusy(); } }
+    finally { refreshing = false; const retry=pendingRefresh; pendingRefresh=false;refreshTimer=setTimeout(()=>refreshWorkspace(true),retry?0:document.hidden?10000:2500); }
+  }
+  async function selectRound(value) {
+    const p=current(),version=++roundReadVersion; if(!p)return;
+    if(value==='current'){selectedRun=value;render();return;}
+    try{await service.archive(p,Number(value));if(version!==roundReadVersion||current()?.id!==p.id||route()!=='project/'+p.id)return;selectedRun=value;render();$('#run-select')?.focus();}
+    catch(error){if(version===roundReadVersion){toast(error.message);if($('#run-select'))$('#run-select').value=selectedRun;}}
+  }
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshWorkspace(true);});
+  window.addEventListener('pagehide',()=>{clearTimeout(refreshTimer);service.cancel();graph?.destroy();});
+  window.addEventListener('pageshow',event=>{if(event.persisted){render();refreshWorkspace(true);}});
+  const forms = PwnDemoForms.bind({
+    getProject:id => projects.find(p => p.id === id), toast,
+    onCreate:values => mutation(async () => {
+      const id = await service.create(values); $('#project-search').value = ''; selectedRun = 'current'; viewTab = 'graph';
+      location.hash = 'project/'+id; await refreshWorkspace(true,id); $('#project-list').scrollTop = 0; toast('项目已创建并开始');
+    }),
+    onHint:(id,values) => mutation(async () => {
+      const p = projects.find(p => p.id === id); if (!p || !lifecycle.canHint(p)) throw new Error('项目已结束，重启后可补充信息。');
+      await service.hint(id,values); if (current()?.id === id) selectedRun = 'current'; toast(p.status === 'paused' ? '补充已保存，继续后读取' : '补充已添加');
+    })
   });
-  $('confirm-dialog').addEventListener('close', () => { management = null; });
-  $('hint-input').addEventListener('input', () => { $('hint-error').textContent = ''; $('hint-input').removeAttribute('aria-invalid'); if (hintProjectId) drafts.set(hintProjectId, $('hint-input').value); });
-  $('hint-dialog').addEventListener('close', () => { if (hintProjectId) drafts.set(hintProjectId, $('hint-input').value); hintProjectId = ''; inputReadVersion++; });
-  $('hint-form').addEventListener('submit', async event => {
-    event.preventDefault(); if (!hintProjectId || mutating || $('send-hint').disabled) return; const id = hintProjectId, content = $('hint-input').value.trim();
-    if ((!content && !hintFiles.length) || content.length > 32768) { $('hint-error').textContent = content ? '提示不能超过 32768 个字符。' : '请输入补充提示或选择测试材料。'; $('hint-input').setAttribute('aria-invalid', 'true'); return; }
-    drafts.set(id, $('hint-input').value); startMutation();
-    try {
-      if (hintFiles.length) {
-        $('hint-progress').textContent = '正在提交 ' + hintFiles.length + ' 个文件及补充说明…';
-        await api.uploadInputs(pathFor(id), hintFiles.map(item => item.file), content);
-      } else if (content) await api.request(pathFor(id) + '/hints', {method:'POST',body:{content,creator:'user'}});
-      hintFiles = []; $('hint-progress').textContent = ''; $('hint-input').value = ''; drafts.delete(id); $('hint-dialog').close(); materialProject = ''; materialVersion++; selectedNode = null; selectedEdge = null; graph.selectNode(null); tab = 'board'; toast('补充材料已保存');
+  function exportResults() {
+    const p = viewed(), state = PwnDemoGraph.buildState(p);
+    const body = '# '+p.name+'\n\nPwnMesh 项目记录 · 第 '+((p.generation || 0)+1)+' 轮\n\n'+(PwnMeshData.buildResult(state,p.logs || []).summary || '')+'\n\n'+state.findings.map(f => '## '+f.claim+'\n\n范围：'+f.scope+'\n\n'+findingBody(f,state)).join('\n\n');
+    const url = URL.createObjectURL(new Blob([body],{type:'text/markdown;charset=utf-8'})), link = document.createElement('a');
+    link.href = url; link.download = p.name.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100)+'-第'+((p.generation || 0)+1)+'轮.md';
+    link.click(); setTimeout(() => URL.revokeObjectURL(url),1000); toast('记录已导出');
+  }
+  document.addEventListener('click',event => {
+    if (event.target.closest('[data-nav="llm"]') && route().startsWith('project/')) {
+      llmReturn = {id:current().id,view:viewTab,run:selectedRun,scrollTop:$('#project-view')?.scrollTop || 0,expanded:$$('.content-card').filter(card => card.querySelector('[data-content-toggle]')?.getAttribute('aria-expanded') === 'true').map(card => card.dataset.contentKey)};
     }
-    catch (error) { $('hint-progress').textContent = ''; $('hint-error').textContent = mutationError(error); loadInputs(id); } finally { await finishMutation(); }
+    const summary = event.target.closest('.log-long-content > summary');
+    if (summary && event.target.closest('[data-log-read]')) event.preventDefault();
+    else if (summary?.parentElement.open) { event.preventDefault(); collapseLog(summary.parentElement); return; }
+    const material = event.target.closest('[data-material]'); if (material) { readMaterial(Number(material.dataset.material)); return; }
+    const b = event.target.closest('button'); if (!b || b.disabled) return; const d = b.dataset;
+    if ('contentToggle' in d) {
+      const card = b.closest('.content-card'), body = card.querySelector('.content-text'), expanded = b.getAttribute('aria-expanded') !== 'true';
+      b.setAttribute('aria-expanded',String(expanded)); body.classList.toggle('is-collapsed',!expanded);
+      b.innerHTML = (expanded ? '收起全文' : '展开全文')+icon('chevron-down'); paintIcons();
+      if (!expanded) { const container = $('#project-view'); container.scrollTop += card.getBoundingClientRect().top-container.getBoundingClientRect().top-16; b.focus({preventScroll:true}); }
+      return;
+    }
+    if ('contentRead' in d) return readContent(d.contentRead);
+    if ('projectMenu' in d) return openMenu(d.projectMenu,b);
+    if (b.id === 'project-manage') return projectInfo(viewed());
+    if ('logRead' in d) {
+      const record = activityRecords.get(d.logRead); if (!record) return;
+      return openRecord({title:record.title,kind:'黑板日志',body:[record.body,record.evidence].filter(Boolean).join('\n\n'),meta:[{label:'项目',value:viewed().name},{label:'时间',value:record.timestamp ? dateTime(record.timestamp) : record.time}]},{onLocate:record.key ? () => focusGraph(record.key,record.id) : undefined});
+    }
+    if (d.action) {
+      const id = d.actionProject || menuProject; closeMenu();
+      if (['pause','resume'].includes(d.action)) performAction(id,d.action).then(() => { if ($('#project-dialog').open) { projectInfo(projects.find(p => p.id === id)); $('#project-dialog [data-action]')?.focus({preventScroll:true}); } }).catch(e => toast(e.message));
+      else { $('#project-dialog').close(); confirmAction(id,d.action); } return;
+    }
+    if ('create' in d) { closeMenu(); return forms.openCreate(); }
+    if (d.close === 'action-dialog') { if (!mutating) $('#action-dialog').close(); return; }
+    if (d.close === 'project-dialog') { if (!mutating) $('#project-dialog').close(); return; }
+    if (d.view) { viewTab = d.view; render(); $('#view-tab-'+viewTab).focus(); return; }
+    if (d.focus) return focusGraph(d.focus);
+    if (d.filter && graph) { const next = graph.getStatusFilter() === d.filter ? 'all' : d.filter; graph.setStatusFilter(next); $$('[data-filter]').forEach(el => { el.classList.toggle('active',el.dataset.filter === next); el.setAttribute('aria-pressed',String(el.dataset.filter === next)); }); return; }
+    if (b.id === 'clear-search') { $('#project-search').value = ''; renderSidebar(); $('#project-search').focus(); }
+    if (b.id === 'zoom-in') graph?.zoom(1.18);
+    if (b.id === 'zoom-out') graph?.zoom(1/1.18);
+    if (b.id === 'fit-graph') graph?.fit();
+    if (b.id === 'clear-selection') return returnToActivity();
+    if (b.id === 'add-hint' || b.id === 'add-materials') forms.openHint(current().id);
+    if (b.id === 'return-current') { roundReadVersion++; selectedRun = 'current'; render(); }
+    if (b.id === 'activity-to-latest') $('#activity-content').scrollTop = 0;
+    if (b.id === 'activity-clear-search' || b.id === 'activity-reset') {
+      resetActivityScroll(); activityState().query = '';
+      renderActivity(); $('#activity-search').focus();
+    }
+    if (b.id === 'activity-collapse-all') {
+      resetActivityScroll(); activityState().expanded.clear(); renderActivity(); $('#activity-search').focus();
+    }
+    if (b.id === 'export-results') exportResults();
   });
-  $('hint-input').addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); $('hint-form').requestSubmit(); } });
-  $('new-project').addEventListener('click', openCreate); $('empty-create').addEventListener('click', openCreate); $('add-hint').addEventListener('click', openHint);
-  document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => { if (!mutating) $(button.dataset.close).close(); })); document.querySelectorAll('dialog').forEach(dialog => dialog.addEventListener('cancel', event => { if (mutating) event.preventDefault(); }));
-  $('project-search').addEventListener('input', renderProjects);
-  $('toggle-running').addEventListener('click', () => { const project = current(); if (!project) return; const action = $('toggle-running').dataset.action; if (action === 'restart') confirmOperation(project.id, action); else changeStatus(project.id, action); });
-  document.querySelectorAll('[data-tab]').forEach(button => {
-    button.addEventListener('click', () => { tab = button.dataset.tab; renderActivity({reset:true}); }); button.addEventListener('keydown', event => {
-      const tabs = [...document.querySelectorAll('[data-tab]')]; let index = tabs.indexOf(button);
-      if (event.key === 'ArrowRight') index = (index + 1) % tabs.length; else if (event.key === 'ArrowLeft') index = (index + tabs.length - 1) % tabs.length; else if (event.key === 'Home') index = 0; else if (event.key === 'End') index = tabs.length - 1; else return;
-      event.preventDefault(); tabs[index].click(); tabs[index].focus();
-    });
+  $('#project-search').addEventListener('input',() => { closeMenu(); renderSidebar(); });
+  function applyActivitySearch(input) {
+    if (!input.isConnected) return;
+    const start = input.selectionStart, end = input.selectionEnd;
+    resetActivityScroll(); activityState().query = input.value; renderActivity();
+    const replacement = $('#activity-search'); replacement.focus({preventScroll:true}); replacement.setSelectionRange(start,end);
+  }
+  document.addEventListener('input',event => {
+    if (event.target.id === 'activity-search' && !event.isComposing) applyActivitySearch(event.target);
   });
-  $('zoom-out').addEventListener('click', () => graph.zoomBy(1 / 1.15)); $('zoom-in').addEventListener('click', () => graph.zoomBy(1.15)); $('fit-graph').addEventListener('click', () => graph.fit()); $('arrange-graph').addEventListener('click', () => { graph.arrange(); toast('已重新随机分布节点'); });
-  document.querySelectorAll('[data-status-filter]').forEach(button => button.addEventListener('click', () => {
-    graph.setStatusFilter(graph.getStatusFilter() === button.dataset.statusFilter ? 'all' : button.dataset.statusFilter); renderHeader();
-  }));
-  $('graph-host').addEventListener('graphzoom', event => { $('zoom-label').textContent = Math.round(event.detail.zoom * 100) + '%'; });
-  document.addEventListener('pointerdown', event => { if (!event.target.closest('.project-menu')) closeMenus(); }); window.addEventListener('resize', closeMenus);
-  document.addEventListener('keydown', event => {
-    if (event.target.closest('input,textarea,select,[contenteditable="true"]') || document.querySelector('dialog[open]') || event.ctrlKey || event.metaKey || event.altKey || event.repeat) return;
-    if (event.key === 'Escape') { graph.selectNode(null); closeMenus(); } else if (event.key.toLowerCase() === 'n') { event.preventDefault(); openCreate(); }
-    else if (event.key === '/') { event.preventDefault(); $('project-search').focus(); }
+  document.addEventListener('compositionend',event => {
+    if (event.target.id === 'activity-search') applyActivitySearch(event.target);
   });
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadWorkspace(selectedId); });
-  window.addEventListener('pagehide', event => { clearTimeout(timer); clearTimeout(toastTimer); requests.cancel(); if (!event.persisted) graph.destroy(); }); window.addEventListener('pageshow', event => { if (event.persisted) loadWorkspace(selectedId); });
-  renderHeader(); renderActivity(); loadWorkspace(selectedId);
-}());
+  document.addEventListener('change',event => {
+    if (event.target.id === 'run-select') selectRound(event.target.value);
+  });
+  $('#action-form').addEventListener('submit',async event => {
+    event.preventDefault(); if (!command || mutating) return;
+    const operation = {...command};
+    const buttons = [...$('#action-dialog').querySelectorAll('button,input')];
+    buttons.forEach(b => b.disabled = true); $('#confirm-action').textContent = '处理中…'; $('#action-error').textContent = '';
+    try { await performAction(operation.id,operation.action,operation); $('#action-dialog').close(); }
+    catch (e) { $('#action-error').textContent = e.message + ([0,409].includes(e.status) ? '；请关闭窗口，刷新后重新确认。' : ''); if ([0,409].includes(e.status)) command = null; }
+    finally { buttons.forEach(b => b.disabled = false); $('#confirm-action').textContent = actionNames[operation.action]+'项目'; }
+  });
+  $('#action-dialog').addEventListener('cancel',event => { if (mutating) event.preventDefault(); });
+  $('#action-dialog').addEventListener('close',() => { command = null; });
+  $('#project-dialog').addEventListener('cancel',event => { if (mutating) event.preventDefault(); });
+  $('#project-dialog').addEventListener('close',() => { if (!$('#action-dialog').open) $('#project-manage')?.focus({preventScroll:true}); });
+  document.addEventListener('pointerdown',event => { if (!event.target.closest('#project-menu,[data-project-menu]')) closeMenu(); });
+  let resizeTimer;
+  window.addEventListener('resize',() => {
+    closeMenu(); clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      fitContentBodies();
+      if (!$('#activity-content') || selectedNode || selectedEdge || $('dialog[open]')) return;
+      const input = document.activeElement?.id === 'activity-search' ? document.activeElement : null;
+      const selection = input && [input.selectionStart,input.selectionEnd];
+      renderActivity();
+      if (input) { $('#activity-search').focus({preventScroll:true}); $('#activity-search').setSelectionRange(...selection); }
+    },150);
+  });
+  $('#project-list').addEventListener('scroll',() => closeMenu());
+  document.addEventListener('keydown',event => {
+    if(event.target.matches('[data-material]') && ['Enter',' '].includes(event.key)){event.preventDefault();readMaterial(Number(event.target.dataset.material));return;}
+    if (event.target.id === 'activity-search' && event.key === 'Escape') {
+      event.preventDefault(); resetActivityScroll(); activityState().query = ''; renderActivity(); $('#activity-search').focus(); return;
+    }
+    if (!$('#project-menu').hidden && ['ArrowDown','ArrowUp','Home','End','Escape','Tab'].includes(event.key)) {
+      if (['Escape','Tab'].includes(event.key)) { closeMenu(event.key === 'Escape'); if (event.key === 'Escape') event.preventDefault(); return; }
+      const items = [...$('#project-menu').querySelectorAll('button')], index = items.indexOf(document.activeElement);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length-1 : (index+(event.key === 'ArrowDown' ? 1 : -1)+items.length)%items.length;
+      event.preventDefault(); items[next]?.focus(); return;
+    }
+    const tab = event.target.closest('[role=tab]');
+    if (tab && ['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) {
+      const tabs = [...tab.parentElement.querySelectorAll('[role=tab]')], index = tabs.indexOf(tab);
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length-1 : (index+(event.key === 'ArrowRight' ? 1 : -1)+tabs.length)%tabs.length;
+      event.preventDefault(); tabs[next].click(); document.getElementById(tabs[next].id)?.focus(); return;
+    }
+    if (event.target.closest('input,textarea,select,[contenteditable]') || $('dialog[open]') || event.ctrlKey || event.metaKey || event.altKey) return;
+    if (event.key === 'n' || event.key === 'N') { event.preventDefault(); forms.openCreate(); }
+    if (event.key === '/') { event.preventDefault(); $('#project-search').focus(); }
+    if (event.key === 'Escape' && (selectedNode || selectedEdge)) returnToActivity();
+  });
+  window.addEventListener('hashchange',() => {
+    roundReadVersion++;
+    if (returningFromLLM && route() === 'project/'+llmReturn?.id) {
+      returningFromLLM = false; selectedRun = llmReturn.run; viewTab = llmReturn.view; render();
+      $$('.content-card').filter(card => llmReturn.expanded?.includes(card.dataset.contentKey)).forEach(card => card.querySelector('[data-content-toggle]')?.click());
+      if ($('#project-view')) $('#project-view').scrollTop = llmReturn.scrollTop;
+      $('#model-entry')?.focus({preventScroll:true});
+    } else { returningFromLLM = false; selectedRun = 'current'; viewTab = 'graph'; render(); }
+    refreshWorkspace(true,location.hash.startsWith('#project/') ? location.hash.slice(9) : current()?.id);
+  });
+  window.addEventListener('llm-updated',renderSidebar);
+  try { if (!location.hash) { const id = new URLSearchParams(location.search).get('project') || localStorage.getItem('pwnmesh.selected-project'); if (id) history.replaceState(null,'','#project/'+id); } } catch {}
+  render(); refreshWorkspace(true,location.hash.startsWith('#project/') ? location.hash.slice(9) : '');
+})();

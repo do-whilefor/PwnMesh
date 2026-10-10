@@ -5,130 +5,76 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'">
-  <title>PwnMesh · 任务工作台</title>
+  <title>PwnMesh · 安全探索工作台</title>
   <link rel="icon" href="/static/brand.png" type="image/png">
-  <link rel="stylesheet" href="/static/style.css">
-  <link rel="stylesheet" href="/static/workbench.css">
-  <link rel="stylesheet" href="/static/models.css">
   <link rel="stylesheet" href="/static/graph.css">
-  <script defer src="/static/api.js"></script><script defer src="/static/data.js"></script><script defer src="/static/graph-data.js"></script>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/llm.css">
+  <link rel="stylesheet" href="/static/shell.css">
+  <link rel="stylesheet" href="/static/blackboard.css">
+  <link rel="stylesheet" href="/static/forms.css">
+  <link rel="stylesheet" href="/static/inspector.css">
+  <script defer src="/static/lucide.min.js"></script>
+  <script defer src="/static/api.js"></script>
+  <script defer src="/static/data.js"></script>
+  <script defer src="/static/service.js"></script>
+  <script defer src="/static/input-preview.js"></script>
+  <script defer src="/static/model.js"></script>
+  <script defer src="/static/lifecycle.js"></script>
+  <script defer src="/static/forms.js"></script>
+  <script defer src="/static/graph-data.js"></script>
   <script defer src="/static/layout.js"></script>
   <script defer src="/static/canvas.js"></script>
   <script defer src="/static/routing.js"></script>
   <script defer src="/static/graph-view.js"></script>
   <script defer src="/static/graph.js"></script>
-  <script defer src="/static/input-preview.js"></script>
-  <script defer src="/static/app.js"></script>
+  <script defer src="/static/graph-adapter.js"></script>
   <script defer src="/static/models.js"></script>
+  <script defer src="/static/llm.js"></script>
+  <script defer src="/static/inspector.js"></script>
+  <script defer src="/static/activity-data.js"></script>
+  <script defer src="/static/app.js"></script>
 </head>
 <body>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs>
-    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
-    <symbol id="i-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
-    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></symbol>
-    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m9 5 6 7-6 7"/></symbol>
-    <symbol id="i-shield" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></symbol>
-    <symbol id="i-code" viewBox="0 0 24 24"><path d="m8 7-5 5 5 5m8-10 5 5-5 5m-3-13-2 16"/></symbol>
-    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M5 21V4c5-4 9 4 14 0v10c-5 4-9-4-14 0"/></symbol>
-    <symbol id="i-graph" viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="18" cy="5" r="2"/><circle cx="18" cy="19" r="2"/><path d="m7 11 9-5M7 13l9 5"/></symbol>
-    <symbol id="i-fit" viewBox="0 0 24 24"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/><rect x="8" y="8" width="8" height="8" rx="1"/></symbol>
-    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M6 18 18 6"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V3m0 0c4-3 8 3 12 0v10c-4 3-8-3-12 0"/></symbol>
+    <symbol id="i-node" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="15" width="6" height="6" rx="1.5"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol>
-    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r=".7"/><circle cx="12" cy="12" r=".7"/><circle cx="19" cy="12" r=".7"/></symbol>
-    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></symbol>
-    <symbol id="i-pause" viewBox="0 0 24 24"><path d="M9 5v14M15 5v14"/></symbol>
-    <symbol id="i-play" viewBox="0 0 24 24"><path d="m8 5 11 7-11 7V5Z"/></symbol>
-    <symbol id="i-restart" viewBox="0 0 24 24"><path d="M3 4v6h6M3 10a9 9 0 1 1 1 9"/></symbol>
-    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/></symbol>
-    <symbol id="i-message" viewBox="0 0 24 24"><path d="M20 15a3 3 0 0 1-3 3H8l-5 3V6a3 3 0 0 1 3-3h11a3 3 0 0 1 3 3v9ZM7 8h9M7 12h6"/></symbol>
-    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M12 19V5m-6 6 6-6 6 6"/></symbol>
-    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="m4 6 6 6-6 6m9 0h7"/></symbol>
-    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H5v18h14V8Zm0 0v5h5M8 12h8M8 16h6"/></symbol>
-    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
-    <symbol id="i-node" viewBox="0 0 24 24"><path d="m12 3 9 5v8l-9 5-9-5V8ZM3 8l9 5 9-5m-9 5v8"/></symbol>
-    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></symbol>
     <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol>
-    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 3v5m6-5v5M7 8h10v4a5 5 0 0 1-10 0V8Zm5 9v5"/></symbol>
-    <symbol id="i-paperclip" viewBox="0 0 24 24"><path d="m8 13 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l9-9a6 6 0 0 1 9 9l-8 8"/></symbol>
-    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M14 3h7v7m0-7-8 8M10 21H3v-7m0 7 8-8"/></symbol>
-    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v6m0-10v.1"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6ZM12 8v5m0 3h.01"/></symbol>
   </defs></svg>
-
-  <aside class="sidebar" id="sidebar" aria-label="项目导航">
-    <a class="brand" href="/" aria-label="PwnMesh 工作台"><span class="brand-art"><img src="/static/brand.png" alt="PwnMesh"></span></a>
-    <button class="button primary create-button" id="new-project"><svg class="icon"><use href="#i-plus"/></svg>新建项目<kbd>N</kbd></button>
-    <label class="project-search"><svg class="icon"><use href="#i-search"/></svg><input type="search" id="project-search" placeholder="搜索项目…" aria-label="搜索项目"><kbd>/</kbd></label>
-    <div class="sidebar-label"><span class="project-list-heading">项目<span id="project-count">0</span></span><span class="running-total" aria-live="polite"><i class="status-dot active" aria-hidden="true"></i><span id="running-project-count">0</span>运行中</span></div>
-    <nav class="project-list" id="project-list" aria-label="项目列表"></nav>
+  <aside class="sidebar" aria-label="工作空间导航">
+    <a class="brand" href="#projects" aria-label="PwnMesh 工作台"><span class="brand-art"><img src="/static/brand.png" alt="PwnMesh"></span></a>
+    <button class="button primary create-button" data-create><i data-lucide="plus"></i>新建项目<kbd>N</kbd></button>
+    <label class="project-search"><i data-lucide="search"></i><input id="project-search" type="search" aria-label="搜索项目" placeholder="搜索项目"><kbd>/</kbd></label>
+    <div class="nav-caption"><span>项目</span><span id="project-count">0</span></div>
+    <nav id="project-list" aria-label="项目列表"></nav>
   </aside>
-
   <div class="workbench">
-    <header class="topbar" hidden><div class="breadcrumbs"><span>工作空间</span><strong id="breadcrumb-title">工作台</strong></div></header>
-    <p class="workspace-error" id="workspace-error" role="alert" hidden></p>
-    <header class="project-heading">
-      <div class="project-heading-copy">
-        <div class="title-row"><h1 id="project-title">工作台</h1><button class="icon-button project-info-button" id="project-info" aria-label="查看项目信息"><svg class="icon"><use href="#i-chevron"/></svg></button><span class="status-badge" id="project-status"></span></div>
-        <div class="project-meta"><div class="project-type" id="project-type"></div><span class="round-label" id="round-label">第 1 轮探索</span><span><time id="project-created-at"></time></span><span class="project-start-info"><time id="project-start"></time></span><span id="project-end"></span></div>
-      </div>
-      <div class="header-controls"><button class="button compact secondary" id="toggle-running"></button><button class="button compact secondary" id="add-hint"><svg class="icon"><use href="#i-message"/></svg>补充信息</button><button class="button compact secondary" id="open-models"><svg class="icon"><use href="#i-plug"/></svg>模型接入</button></div>
-    </header>
-    <div class="workspace" id="project-workspace">
-      <main class="main-pane">
-        <nav class="view-tabs" role="tablist" aria-label="项目视图"><button id="view-canvas" data-view="canvas" role="tab" aria-selected="true" aria-controls="graph-stage"><svg class="icon"><use href="#i-graph"/></svg>画布</button><button id="view-materials" tabindex="-1" data-view="materials" role="tab" aria-selected="false" aria-controls="materials-view"><svg class="icon"><use href="#i-paperclip"/></svg>材料<span id="material-count"></span></button><button id="view-results" tabindex="-1" data-view="results" role="tab" aria-selected="false" aria-controls="results-view"><svg class="icon"><use href="#i-file"/></svg>结果</button><span class="view-node-count" id="node-count"></span></nav>
-        <section class="graph-stage" id="graph-stage" aria-label="项目业务与步骤依赖图">
-          <div class="canvas-caption"><span class="graph-scope" tabindex="0" title="显示目标、步骤、事实与发现的关系，不包含 Worker 单次运行内的任务图。" aria-label="项目关系图：显示目标、步骤、事实与发现的关系，不包含 Worker 单次运行内的任务图。">项目关系图</span><span class="status-dot"></span><span id="canvas-caption">探索正在展开</span></div>
-          <div id="graph-host" class="graph-host"></div>
-          <div class="graph-empty" id="graph-empty" hidden><img src="/static/brand.png" alt=""><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" id="empty-create">创建项目</button></div>
-          <div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小任务图"><svg class="icon"><use href="#i-minus"/></svg></button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大任务图"><svg class="icon"><use href="#i-plus"/></svg></button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布"><svg class="icon"><use href="#i-fit"/></svg></button><button class="icon-button" id="arrange-graph" aria-label="重新随机分布" title="重新随机分布"><svg class="icon"><use href="#i-restart"/></svg></button></div></div>
-        </section>
-        <section class="project-content" id="materials-view" role="tabpanel" aria-labelledby="view-materials" hidden></section>
-        <section class="project-content" id="results-view" role="tabpanel" aria-labelledby="view-results" hidden></section>
-        <div class="graph-legend" id="graph-legend" role="group" aria-label="按状态筛选卡片"><button type="button" data-status-filter="done" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot done" aria-hidden="true"></i>已完成</button><button type="button" data-status-filter="running" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot running" aria-hidden="true"></i>运行中</button><button type="button" data-status-filter="pending" aria-pressed="false" aria-controls="graph-host"><i class="legend-dot pending" aria-hidden="true"></i>待执行</button><span class="legend-guide">点击节点与连线查看来源</span><div class="graph-progress"><span id="task-progress"></span><div class="progress-track"><i id="progress-fill"></i></div></div></div>
-      </main>
-      <aside class="activity-pane" aria-label="运行观察">
-        <div class="activity-top">
-        <header class="activity-heading"><h2><svg class="icon"><use href="#i-file"/></svg>黑板日志</h2><span id="activity-live">等待连接</span></header>
-        <div class="activity-tabs" role="tablist" aria-label="运行信息"><button id="tab-board" data-tab="board" role="tab" aria-controls="activity-content" aria-selected="true">黑板日志</button><button id="tab-system" data-tab="system" role="tab" aria-controls="activity-content" aria-selected="false" tabindex="-1">系统日志<span class="tab-alert" id="system-alert"></span></button><button id="tab-result" data-tab="result" role="tab" aria-controls="activity-content" aria-selected="false" tabindex="-1">最终结果</button></div>
-        </div>
-        <label class="activity-search"><svg class="icon"><use href="#i-search"/></svg><input id="log-search" type="search" placeholder="搜索日志全文" aria-label="搜索日志全文"></label>
-        <div class="activity-body">
-        <div class="activity-tools" id="activity-tools"></div>
-        <div class="node-inspector" id="node-inspector" hidden></div>
-        <section class="activity-content" id="activity-content" role="tabpanel" aria-labelledby="tab-board" tabindex="0"></section>
-        </div>
-        <footer class="activity-footer"><span id="last-update">等待刷新</span><span id="activity-count"></span></footer>
-      </aside>
-    </div>
+    <header class="topbar" hidden></header>
+    <main id="main"></main>
   </div>
-
-  <section id="models-page" class="models-page" hidden aria-label="模型接入"></section>
-  <dialog id="reader-dialog" class="reader-dialog" aria-labelledby="reader-title"><header class="dialog-heading"><h2 id="reader-title"></h2><button type="button" class="icon-button" data-close="reader-dialog" aria-label="关闭内容阅读器"><svg class="icon"><use href="#i-close"/></svg></button></header><div id="reader-content"></div></dialog>
   <dialog id="create-dialog" aria-labelledby="create-title">
-    <form id="create-form"><header class="dialog-heading"><div><span class="dialog-kicker">开始新的探索</span><h2 id="create-title">创建项目</h2></div><button type="button" class="icon-button" data-close="create-dialog" aria-label="关闭创建项目"><svg class="icon"><use href="#i-close"/></svg></button></header>
-      <fieldset class="scenario-field"><legend>项目类型</legend><div class="scenario-options" id="scenario-options"></div></fieldset>
-      <label class="field-label" for="create-name">项目名称</label><input id="create-name" name="title" required maxlength="200" placeholder="例如：认证服务安全评估" autocomplete="off">
-      <label class="field-label" for="create-origin">起点 / 已知信息</label><textarea id="create-origin" name="origin" required maxlength="32768" rows="2" placeholder="目标地址、代码位置，或你已经掌握的线索"></textarea>
-      <label class="field-label" for="create-goal">终点 / 项目目标</label><textarea id="create-goal" name="goal" required maxlength="32768" rows="2" placeholder="希望解决什么问题？怎样算完成？"></textarea>
-      <label class="field-label" for="create-files">测试材料（可选）</label><input id="create-files" type="file" multiple aria-describedby="create-files-help">
-      <p id="create-files-help" class="hint-caption">APK、HAR、HTTP 请求、源码压缩包、配置或其他文件。目录请先打包；文件保留原样，不会自动解压。每个文件最多 256 MiB，每项目最多 32 个文件、共 512 MiB。</p>
-      <ul id="create-file-list" class="input-files"></ul><p id="create-progress" class="hint-caption" role="status" aria-live="polite"></p>
-      <p class="form-error" id="create-error" role="alert"></p><footer class="dialog-footer"><span>保存至 PwnMesh 服务</span><button class="button secondary" type="button" data-close="create-dialog">取消</button><button class="button primary" type="submit" id="submit-create">创建并开始<svg class="icon"><use href="#i-chevron"/></svg></button></footer>
+    <form id="create-form" novalidate>
+      <header class="dialog-header"><h2 id="create-title">新建项目</h2><button type="button" class="icon-button" data-close="create-dialog" aria-label="关闭创建项目"><i data-lucide="x"></i></button></header>
+      <div class="type-choices" aria-label="项目类型"><label><input type="radio" name="type" value="ctf"><span><i data-lucide="flag"></i>CTF</span></label><label><input type="radio" name="type" value="audit"><span><i data-lucide="code-2"></i>代码审计</span></label><label><input type="radio" name="type" value="pentest" checked><span><i data-lucide="shield-check"></i>渗透测试</span></label></div>
+      <label class="field-label" for="project-name">项目名称</label><input id="project-name" name="name" maxlength="200" placeholder="例如：核心业务 API 安全评估" required>
+      <label class="field-label" for="project-target">起点 / 已知信息</label><textarea id="project-target" name="target" rows="2" maxlength="32768" placeholder="目标地址、代码位置，或已掌握的线索" required></textarea>
+      <label class="field-label" for="project-goal">终点 / 项目目标</label><textarea id="project-goal" name="goal" rows="2" maxlength="32768" placeholder="希望验证什么？怎样算完成？" required></textarea>
+      <label class="field-label" for="project-files">测试材料 <span>可选</span></label><label class="upload-zone" for="project-files"><i data-lucide="paperclip"></i><span>选择源码、HAR 或其他测试材料<small>单个文件 ≤ 256 MiB · 保留原始文件并上传至项目</small></span><input id="project-files" type="file" multiple></label><ul id="selected-files" class="file-list"></ul>
+      <p id="create-error" class="form-error" role="alert"></p><footer class="dialog-footer"><button type="button" class="button secondary" data-close="create-dialog">取消</button><button type="submit" class="button primary">创建并开始</button></footer>
     </form>
   </dialog>
-  <dialog id="hint-dialog" aria-labelledby="hint-title" aria-describedby="hint-project hint-caption">
-    <form id="hint-form" novalidate>
-      <header class="dialog-heading"><div><span id="hint-project" class="dialog-kicker"></span><h2 id="hint-title">补充提示</h2></div><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充提示"><svg class="icon"><use href="#i-close"/></svg></button></header>
-      <label class="field-label" for="hint-input">补充背景，或调整探索方向</label>
-      <textarea id="hint-input" rows="5" maxlength="32768" placeholder="告诉 Agent 优先关注什么，或补充新的线索…" aria-label="补充提示内容" aria-describedby="hint-error" autofocus></textarea>
-      <label class="field-label" for="hint-files">添加测试材料（可单独上传）</label><input id="hint-files" type="file" multiple aria-describedby="hint-files-help">
-      <p id="hint-files-help" class="hint-caption">支持 APK、HAR、HTTP 请求、源码压缩包、配置和其他文件；目录请先打包。每个文件最多 256 MiB，每项目最多 32 个文件、共 512 MiB。</p>
-      <ul id="hint-file-list" class="input-files"></ul><p id="hint-progress" class="hint-caption" role="status" aria-live="polite"></p>
-      <details class="imported-inputs"><summary>已导入的测试材料</summary><p id="imported-inputs-status" class="hint-caption" role="status"></p><ul id="imported-inputs" class="input-files"></ul></details>
-      <p id="hint-caption" class="hint-caption">提示将写入当前项目的黑板</p><p id="hint-error" class="form-error" role="alert"></p>
-      <footer class="dialog-footer"><span>Ctrl / ⌘ + Enter 发送</span><button type="button" class="button secondary" data-close="hint-dialog">取消</button><button type="submit" class="button primary" id="send-hint">发送补充<svg class="icon"><use href="#i-arrow"/></svg></button></footer>
-    </form>
-  </dialog>
-  <dialog id="confirm-dialog" class="small-dialog" aria-labelledby="confirm-title"><form id="confirm-form"><header class="dialog-heading"><h2 id="confirm-title"></h2><button type="button" class="icon-button" data-close="confirm-dialog" aria-label="关闭操作确认"><svg class="icon"><use href="#i-close"/></svg></button></header><p id="confirm-message"></p><p class="form-error" id="confirm-error" role="alert"></p><footer class="dialog-footer"><button class="button secondary" type="button" data-close="confirm-dialog">取消</button><button class="button primary" type="submit" id="confirm-action">确认</button></footer></form></dialog>
-  <div class="toast" id="toast" role="status" hidden></div>
+  <dialog id="hint-dialog" aria-labelledby="hint-title"><form id="hint-form"><header class="dialog-header"><h2 id="hint-title">补充信息</h2><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充信息"><i data-lucide="x"></i></button></header><textarea id="hint-text" rows="5" maxlength="32768" aria-label="补充信息" placeholder="补充线索、范围或需要关注的问题…" required></textarea><p class="form-error" id="hint-error" role="alert"></p><footer class="dialog-footer"><button type="button" class="button secondary" data-close="hint-dialog">取消</button><button type="submit" class="button primary">添加</button></footer></form></dialog>
+  <div id="project-menu" class="project-menu-popover" role="menu" aria-label="项目操作" hidden></div>
+  <dialog id="project-dialog" aria-labelledby="project-dialog-title"></dialog>
+  <dialog id="action-dialog" aria-labelledby="action-title" aria-describedby="action-description"><form id="action-form">
+    <header class="dialog-header"><h2 id="action-title"></h2><button type="button" class="icon-button" data-close="action-dialog" aria-label="关闭项目操作"><i data-lucide="x"></i></button></header>
+    <p id="action-project"></p><p id="action-description"></p>
+    <p id="action-error" class="form-error" role="alert"></p>
+    <footer class="dialog-footer"><button type="button" class="button secondary" data-close="action-dialog">取消</button><button type="submit" class="button primary" id="confirm-action"></button></footer>
+  </form></dialog>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>

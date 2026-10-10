@@ -239,12 +239,6 @@
       this.statusFilter = next; this.cancelPendingFit(); this.clearHiddenSelection(); this.scheduleDraw();
     }
     getStatusFilter() { return this.statusFilter; }
-    arrange() {
-      if (this.destroyed || !this.project) return;
-      this.cancelDrag(); this.cancelPendingFit(); const saved = this.projectLayouts.get(this.cacheKey()); saved.seed++;
-      Object.assign(saved, mergePositions(this.nodes, new Map(), {seed: this.cacheKey() + ':' + saved.seed})); this.positions = saved.positions;
-      this.scheduleDraw(); this.fit();
-    }
     transform() {
       this.world.style.transform = `translate(${this.tx}px,${this.ty}px) scale(${this.scale})`; this.saveView();
       this.host.dispatchEvent(new this.window.CustomEvent('graphzoom', {detail: {zoom: this.scale}}));

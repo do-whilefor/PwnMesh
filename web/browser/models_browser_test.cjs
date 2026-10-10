@@ -37,41 +37,43 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
     assert.deepEqual(await api('/projects'),[],'use a dedicated empty test database');
     await page.goto(base.href,{waitUntil:'networkidle'});
     await t.test('configuration survives reload and never returns the token',async () => {
-      await page.locator('#open-models').click(); await page.locator('#llm-url').fill(endpoint);
+      await page.locator('#model-entry').click(); await page.waitForFunction(() => !document.querySelector('.llm-test')?.disabled); await page.locator('#llm-url').fill(endpoint);
       await page.locator('#llm-model').fill('controlled-anthropic'); await page.locator('#llm-key').fill('qa-secret-only');
       await page.locator('#llm-connection-mode').selectOption('direct');
-      const saved = responseFor('/model-settings','PUT'); await page.locator('#llm-save').click(); assert.ok((await saved).ok());
+      const probe = responseFor('/model-settings/test'); await page.locator('.llm-test').click(); assert.equal((await (await probe).json()).ok,true);
+      const saved = responseFor('/model-settings','PUT'); await page.locator('.llm-save').click(); assert.ok((await saved).ok());
       const settings = await api('/model-settings'); assert.equal(settings.model,'controlled-anthropic'); assert.equal(settings.has_token,true);
       assert.ok(!JSON.stringify(settings).includes('qa-secret-only'));
-      await page.reload({waitUntil:'networkidle'}); await page.locator('#open-models').click();
+      await page.reload({waitUntil:'networkidle'});
       await page.waitForFunction(value => document.getElementById('llm-url')?.value === value,endpoint);
       assert.equal(await page.locator('#llm-key').inputValue(),'');
     });
     await t.test('simulation performs both tool rounds and reports upstream rejection',async () => {
-      const checked = responseFor('/model-settings/test'); await page.locator('#llm-test').click();
+      requests.length = 0;
+      const checked = responseFor('/model-settings/test'); await page.locator('.llm-test').click();
       const result = await (await checked).json(); assert.equal(result.ok,true,result.message); assert.equal(requests.length,2);
       assert.ok(requests.every(req => req.url === '/anthropic/v1/messages' && req.authorized && req.version === '2023-06-01'));
       assert.equal(requests[0].input.model,'controlled-anthropic');
       assert.ok(requests[1].input.messages.at(-1).content.some(block => block.type === 'tool_result' && block.tool_use_id === 'check-1'));
-      rejectModel = true; const failed = responseFor('/model-settings/test'); await page.locator('#llm-test').click();
+      rejectModel = true; const failed = responseFor('/model-settings/test'); await page.locator('.llm-test').click();
       assert.equal((await (await failed).json()).ok,false);
-      await page.waitForFunction(() => /失败|错误|401/.test(document.getElementById('llm-status')?.textContent || ''));
-      assert.ok(!(await page.locator('#llm-status').innerText()).includes('qa-secret-only'));
-      rejectModel = false; await page.locator('#llm-return').click();
+      await page.waitForFunction(() => /失败|错误|401/.test(document.querySelector('.llm-status')?.textContent || ''));
+      assert.ok(!(await page.locator('.llm-status').innerText()).includes('qa-secret-only'));
+      rejectModel = false; await page.locator('.llm-back').click();
     });
     await t.test('material upload persists original bytes and unfinished results stay unfinished',async () => {
       const graph = await api('/projects','POST',{title:'V5 真实材料验收',origin:'Controlled local input only',goal:'Verify material persistence',scenario:'audit',start_paused:true});
       owned.push(graph.project.id); const projectPath = '/projects/' + encodeURIComponent(graph.project.id);
-      await page.goto(new URL('?project=' + graph.project.id,base).href,{waitUntil:'networkidle'});
+      await page.goto(new URL('#project/' + graph.project.id,base).href,{waitUntil:'networkidle'});
       await page.locator('#add-hint').click(); const payload = Buffer.from('Controlled local evidence.\nNo external target.\n');
       await page.locator('#hint-files').setInputFiles({name:'evidence.txt',mimeType:'text/plain',buffer:payload});
-      const uploaded = responseFor(projectPath + '/inputs/batch','POST'); await page.locator('#send-hint').click(); assert.ok((await uploaded).ok());
+      const uploaded = responseFor(projectPath + '/inputs/batch','POST'); await page.locator('#hint-form button[type="submit"]').click(); assert.ok((await uploaded).ok());
       await page.locator('#hint-dialog').waitFor({state:'hidden'}); await page.reload({waitUntil:'networkidle'});
-      await page.locator('#view-materials').click(); await page.getByText('evidence.txt',{exact:true}).first().waitFor();
+      await page.locator('#view-tab-materials').click(); await page.getByText('evidence.txt',{exact:true}).first().waitFor();
       const inputs = await api(projectPath + '/inputs'); assert.equal(inputs.length,1);
       const downloaded = await fetch(new URL(projectPath + '/inputs/' + encodeURIComponent(inputs[0].id),base));
       assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),payload);
-      await page.locator('#view-results').click(); assert.ok(!/已完成|已验证漏洞/.test(await page.locator('#results-view').innerText()));
+      await page.locator('#view-tab-result').click(); assert.ok(!/已完成|已验证漏洞/.test(await page.locator('#project-view').innerText()));
     });
     assert.deepEqual(errors,[]);
   } finally {

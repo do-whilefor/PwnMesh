@@ -1,19 +1,23 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const {staticServer} = require('./visual_fixture.cjs');
 
 // Run against the embedded assets in a disposable Linux pwnmesh serve instance.
 // PWNMESH_WEB_URL=http://127.0.0.1:18767 node --test web/browser/canvas_browser_test.cjs
 // Browser dependencies stay outside the product's zero-build static bundle.
 test('embedded canvas handles live graph changes and unrestricted pointer movement', {
-  skip: process.env.PWNMESH_WEB_URL ? false : 'Set PWNMESH_WEB_URL to load the embedded canvas assets', timeout:90000
+  skip: process.env.PWNMESH_WEB_URL || process.env.PLAYWRIGHT_MODULE ? false : 'Set PWNMESH_WEB_URL or PLAYWRIGHT_MODULE to load the canvas assets', timeout:90000
 }, async t => {
   const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
   const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
   t.after(() => browser.close());
+  const server = process.env.PWNMESH_WEB_URL ? null : await staticServer();
+  if (server) t.after(() => server.close());
   const page = await browser.newPage({viewport:{width:1440,height:960}});
   const errors = [];
   page.on('pageerror',error => errors.push(error.message));
-  await page.goto(process.env.PWNMESH_WEB_URL);
+  await page.route('**/projects',route => route.fulfill({contentType:'application/json',body:'[]'}));
+  await page.goto(process.env.PWNMESH_WEB_URL || server.url);
   await page.waitForFunction(() => typeof window.PwnMeshGraph === 'function');
   await page.evaluate(() => {
     const host = document.createElement('div'); host.id = 'canvas-probe';

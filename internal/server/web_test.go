@@ -1,6 +1,7 @@
 package server
 
 import (
+	"io/fs"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"pwnmesh/web"
 )
 
 func TestWorkbenchServesDocumentWithSameOriginPolicy(t *testing.T) {
@@ -23,7 +26,7 @@ func TestWorkbenchServesDocumentWithSameOriginPolicy(t *testing.T) {
 				t.Fatalf("workspace content type = %q", response.Header().Get("Content-Type"))
 			}
 			html := response.Body.String()
-			for _, want := range []string{"<title>PwnMesh · 任务工作台</title>", `src="/static/brand.png"`, "保存至 PwnMesh 服务", `id="graph-host"`, `id="view-materials"`, `id="view-results"`, `id="open-models"`} {
+			for _, want := range []string{"<title>PwnMesh · 安全探索工作台</title>", `src="/static/brand.png"`, `id="main"`, `id="project-list"`, `id="create-form"`, `id="project-dialog"`, `id="i-target"`} {
 				if !strings.Contains(html, want) {
 					t.Errorf("PwnMesh workspace is missing %q", want)
 				}
@@ -100,16 +103,37 @@ func TestWorkbenchLoadsEmbeddedCanvasAssets(t *testing.T) {
 	}
 	for _, name := range []string{
 		"api.js", "data.js", "graph-data.js", "canvas.js", "layout.js", "routing.js",
-		"graph-view.js", "graph.js", "app.js", "style.css", "graph.css", "brand.png", "workbench.css", "models.js", "models.css",
+		"graph-view.js", "graph.js", "app.js", "style.css", "graph.css", "brand.png", "models.js", "llm.js", "llm.css", "shell.css", "blackboard.css", "forms.css", "inspector.css", "lucide.min.js",
 	} {
 		if !loaded["/static/"+name] {
 			t.Errorf("workspace does not load %s", name)
 		}
 	}
 	for endpoint := range loaded {
-		if strings.Contains(endpoint, "/vendor/") || strings.HasSuffix(endpoint, "/model.js") {
+		if strings.Contains(endpoint, "/vendor/") || strings.HasSuffix(endpoint, "/graph-demo.js") || strings.HasSuffix(endpoint, "/workbench.css") || strings.HasSuffix(endpoint, "/models.css") {
 			t.Errorf("workspace loads a replaced renderer or demo data source: %s", endpoint)
 		}
+	}
+}
+
+func TestWorkbenchEmbedsNestedVisualAssets(t *testing.T) {
+	handler := New(nil)
+	err := fs.WalkDir(web.Files, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/"+name, nil))
+		if response.Code != http.StatusOK || response.Body.Len() == 0 {
+			t.Errorf("embedded file %s: HTTP %d, bytes %d", name, response.Code, response.Body.Len())
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -138,6 +162,7 @@ func TestClassicInterfaceIsUnavailable(t *testing.T) {
 		"/static/vendor/elk.bundled.js", "/static/vendor/cytoscape-elk.js",
 		"/static/vendor/cytoscape.min.js", "/static/vendor/dagre.min.js",
 		"/static/vendor/cytoscape-dagre.js", "/static/pwnmesh.svg",
+		"/static/workbench.css", "/static/models.css",
 	} {
 		t.Run(path, func(t *testing.T) {
 			for _, method := range []string{http.MethodGet, http.MethodHead} {

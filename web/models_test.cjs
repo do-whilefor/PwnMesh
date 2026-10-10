@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {validate,parseProxy,providerFor,canReuseToken,mount} = require('./static/models.js');
+const {validate,parseProxy,providerFor,canReuseToken} = require('./static/models.js');
 const defaults = {base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',token:'test-only-key',connection_mode:'direct',reasoning_effort:''};
 test('model setup uses Anthropic and retains a server-side token only when one exists', () => {
   const result = validate(defaults,false); assert.equal(result.protocol,'anthropic'); assert.equal(result.proxy_url,'');
@@ -45,7 +45,7 @@ test('model browser blocks cross-origin saved credentials and clears provider dr
   const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
   try {
     const page = await browser.newPage({viewport:{width:1440,height:1000}});
-    await page.setContent('<button id="open-models">模型接入</button><section id="models-page" hidden></section>');
+    await page.setContent('<main id="main"></main>');
     await page.evaluate(() => {
       window.modelCalls = [];
       window.PwnMeshAPI = {Client:class {async request(path,options={}) {
@@ -55,24 +55,68 @@ test('model browser blocks cross-origin saved credentials and clears provider dr
       }}};
     });
     await page.addScriptTag({path:require('node:path').join(__dirname,'static/models.js')});
-    await page.locator('#open-models').click(); await page.waitForFunction(() => !document.getElementById('llm-test').disabled);
+    await page.addScriptTag({path:require('node:path').join(__dirname,'static/llm.js')});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host);});
+    await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     await page.locator('#llm-url').fill('https://api.deepseek.com/another-path');
-    await page.locator('#llm-model').fill('another-model'); await page.locator('#llm-test').click();
+    await page.locator('#llm-model').fill('another-model'); await page.locator('.llm-test').click();
     assert.equal(await page.evaluate(() => modelCalls.filter(item => item.path.endsWith('/test')).length),1);
     assert.equal(await page.evaluate(() => modelCalls.at(-1).options.body.token),'');
-    await page.locator('#llm-key').fill('old-provider-draft'); await page.locator('[data-provider="kimi"]').click();
+    await page.locator('#llm-key').fill('old-provider-draft'); await page.locator('[data-llm-provider="kimi"]').click();
     assert.equal(await page.locator('#llm-key').inputValue(),'');
     assert.match(await page.locator('#llm-key').getAttribute('placeholder'),/新的 API Key/);
-    await page.locator('#llm-test').click(); assert.match(await page.locator('#llm-status').textContent(),/新的 API Key/);
-    await page.locator('#llm-save').click();
+    await page.locator('.llm-test').click(); assert.match(await page.locator('.llm-status').textContent(),/新的 API Key/);
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
     assert.equal(await page.evaluate(() => modelCalls.length),2,'cross-origin empty-key actions must not send requests');
-    await page.locator('#llm-key').fill('new-provider-draft'); await page.locator('#llm-test').click();
+    await page.locator('#llm-key').fill('new-provider-draft'); await page.locator('.llm-test').click();
     assert.equal(await page.evaluate(() => modelCalls.at(-1).options.body.token),'new-provider-draft');
     assert.equal(await page.evaluate(() => modelCalls.at(-1).options.body.base_url),'https://api.kimi.com/coding');
     await page.locator('#llm-url').fill('https://api.kimi.com/new-path'); assert.equal(await page.locator('#llm-key').inputValue(),'new-provider-draft');
     await page.locator('#llm-url').fill('https://new.example.test/anthropic'); assert.equal(await page.locator('#llm-key').inputValue(),'');
-    await page.locator('#llm-test').click(); assert.equal(await page.evaluate(() => modelCalls.length),3);
+    await page.locator('.llm-test').click(); assert.equal(await page.evaluate(() => modelCalls.length),3);
     await page.locator('#llm-url').fill('https://api.deepseek.com/anthropic');
     assert.match(await page.locator('#llm-key').getAttribute('placeholder'),/留空保留/);
   } finally { await browser.close(); }
+});
+
+test('the Demo model form only saves a successful real probe and cancels stale work on return', {
+  timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE for model form integration',
+}, async () => {
+  const {chromium} = require(process.env.PLAYWRIGHT_MODULE);
+  const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
+  try {
+    const page = await browser.newPage();await page.setContent('<main id="main"></main>');
+    const errors = [];page.on('pageerror',error => errors.push(error.message));
+    await page.evaluate(() => {
+      window.calls = [];window.probeOK = false;
+      window.PwnMeshAPI = {Client:class {async request(path,options={}) {
+        window.calls.push({path,body:options.body});
+        if (path.endsWith('/test')) return {ok:window.probeOK,message:window.probeOK ? 'tools verified' : 'upstream 401'};
+        return {has_token:true,base_url:'https://api.deepseek.com/anthropic',model:options.body?.model || 'deepseek-flash',connection_mode:'direct',reasoning_effort:'high'};
+      }}};
+    });
+    for (const name of ['models.js','llm.js']) await page.addScriptTag({path:require('node:path').join(__dirname,'static',name)});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host,{onReturn:() => host.replaceChildren()});});
+    await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
+    await page.locator('#llm-model').fill('saved-model');await page.locator('.llm-test').click();
+    assert.match(await page.locator('.llm-status').textContent(),/失败.*401/);
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.evaluate(() => {window.probeOK = true;});await page.locator('.llm-test').click();
+    assert.equal(await page.locator('.llm-save').isEnabled(),true);
+    await page.locator('#llm-key').fill('changed-after-verification');
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.locator('.llm-test').click();await page.locator('.llm-save').click();
+    assert.equal(await page.locator('#llm-key').inputValue(),'');
+    assert.equal(await page.locator('.llm-return').isVisible(),true);
+    assert.equal(await page.evaluate(() => calls.at(-1).body.token),'changed-after-verification');
+    await page.locator('#llm-key').fill('leave-page-secret');await page.locator('.llm-back').click();
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host);});
+    await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
+    assert.equal(await page.locator('#llm-key').inputValue(),'');
+    assert.equal(await page.locator('#llm-model').inputValue(),'saved-model');
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.evaluate(() => {document.getElementById('main').innerHTML = '<section>project</section>';});
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    assert.deepEqual(errors,[],'leaving via project navigation must release the detached form safely');
+  } finally {await browser.close();}
 });

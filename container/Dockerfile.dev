@@ -1,0 +1,21 @@
+# Small Linux worker for Web development and project execution.
+ARG PWNMESH_IMAGE=pwnmesh:dev
+FROM ${PWNMESH_IMAGE}
+
+ENV PWNMESH_WORKER_ENVIRONMENT=debian-dev \
+    PYTHONUNBUFFERED=1 \
+    PATH="/opt/pwnmesh-venv/bin:${PATH}"
+
+RUN apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=2 update \
+    && apt-get install -y --no-install-recommends \
+        bash ca-certificates curl ripgrep git python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/pwnmesh-venv
+
+COPY container/check-worker-dev.sh /usr/local/share/pwnmesh/check-worker-dev.sh
+RUN chmod 0755 /usr/local/share/pwnmesh/check-worker-dev.sh
+WORKDIR /workspace
+RUN --network=none /usr/local/share/pwnmesh/check-worker-dev.sh
+
+ENTRYPOINT ["/usr/local/bin/pwnmesh"]
+CMD ["worker", "--help"]

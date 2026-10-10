@@ -1,58 +1,43 @@
-/* V5 canvas: entity colors identify cards, relation colors identify connectors. */
-.graph-viewport{position:absolute;inset:0;overflow:hidden;touch-action:none;cursor:grab}
-.graph-viewport.is-panning{cursor:grabbing}
-.graph-world{position:absolute;transform-origin:0 0}
-.graph-edges{position:absolute;inset:0;overflow:visible;z-index:1;pointer-events:none}
+/* Card appearance stays in style.css; connectors sit beneath opaque cards. */
+.graph-edges{z-index:1;pointer-events:none}
 .graph-nodes{position:absolute;inset:0;z-index:2;pointer-events:none}
-.graph-node{position:absolute;width:148px;height:78px;min-height:78px;box-sizing:border-box;padding:10px 11px;text-align:left;border:1px solid #cdd9e1;border-radius:8px;background:#fff;box-shadow:0 2px 5px #2e465008;touch-action:none;user-select:none;cursor:grab;pointer-events:auto;opacity:1;transition:border-color .16s,box-shadow .16s}
-.graph-node.fact{--node-bg:#f3f8ff;--node-border:#bfd1ed;--node-accent:#466f9a;--node-title:#2b445e;--node-ring:#6f9dcc26}
-.graph-node.task{--node-bg:#f7f4ff;--node-border:#cfbfee;--node-accent:#785e9a;--node-title:#473660;--node-ring:#927abf26}
-.graph-node.goal{--node-bg:#edf8f4;--node-border:#a8d6c4;--node-accent:#327461;--node-title:#245546;--node-ring:#4b9c8026}
-.graph-node.subgoal{--node-bg:#f2faf7;--node-border:#bddbca;--node-accent:#4b7f68;--node-title:#365e4c;--node-ring:#699e8226}
-.graph-node.finding{--node-bg:#fff7e8;--node-border:#e6cca0;--node-accent:#906329;--node-title:#65491f;--node-ring:#c79b5126}
-.graph-node.start{--node-bg:#344960;--node-border:#344960;--node-accent:#d5e0ef;--node-title:#f6f9fd;--node-ring:#6c8caf30}
-.graph-node[data-view-type]{background:var(--node-bg,#fff);border-color:var(--node-border,#cdd9e1);border-width:1px;box-shadow:0 2px 5px #2e465008}
-.graph-node[data-view-type]:hover,.graph-node[data-view-type].lineage{border-color:var(--node-accent,#6b8092)}
-.graph-node[data-view-type]:hover{box-shadow:0 3px 9px #344e5d10}
-.graph-node[data-view-type].selected{border-color:var(--node-accent,#6b8092);box-shadow:0 0 0 3px var(--node-ring,#6b809226)}
-.graph-node[data-view-type].dim{border-color:var(--node-border,#cdd9e1);box-shadow:none}
-.graph-node.pending,.graph-node[data-view-type].invalid{border-style:dashed}
-.graph-node[hidden]{display:none}
-.node-top{display:flex;justify-content:space-between;align-items:center;gap:4px;margin-bottom:8px}
-.node-kind{display:flex;align-items:center;gap:4px;flex:none;font-size:10px}
-.node-kind .icon{width:13px;height:13px}
-.node-status{display:flex;align-items:center;gap:3px;font-size:10px;color:#5c6f7c}
-.graph-node .node-status{min-width:0;max-width:72px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.graph-node .node-status>span{overflow:hidden;text-overflow:ellipsis}
-.node-status .icon{width:11px;height:11px;color:#486b57}
-.node-title{font-size:13px;line-height:1.6;max-height:42px;font-weight:700;letter-spacing:0;white-space:normal;overflow:hidden;text-overflow:ellipsis;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2}
-.node-subtitle{display:none!important}
-.graph-node[data-view-type] .node-title,.graph-node[data-view-type].dim .node-title{color:var(--node-title,#273743)}
-.graph-node[data-view-type] .node-kind,.graph-node[data-view-type].dim .node-kind{color:var(--node-accent,#5c6f7c)}
-.graph-node.fact:not(.invalid) .node-status,.graph-node.start .node-status{display:none}
-.graph-node.task.done .node-status>span{display:none}
-.graph-node[data-view-type].running .node-status{color:#9a4e32}
-.node-running-dot{width:4px;height:4px;border-radius:50%;background:#ef815f;box-shadow:none}
-.graph-node[data-view-type].invalid .node-status{color:#a1545e}
-.graph-edge{fill:none;stroke:var(--edge-color,#7b8b9e);stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}
-.graph-edges .graph-edge[data-edge-kind]{stroke:var(--edge-color,#7b8b9e)}
-.graph-edge.done{stroke-dasharray:none}
-.graph-edge.running{stroke-width:1.6;stroke-dasharray:5 5;animation:none}
-.graph-edge.pending{stroke-dasharray:4 5}
-.graph-edge.paused{stroke-dasharray:7 4 1 4}
-.graph-edge.invalid{stroke-dasharray:3 5}
-.graph-edge.lineage{stroke-width:1.9}
-.graph-edge.selected,.graph-edge.invalid.selected{stroke-width:2.3}
-.graph-edge.dim{opacity:.28}
+.graph-node{pointer-events:auto;opacity:1}
+.graph-node.lineage{border-color:#8fa17a}
+.graph-node.selected{border-color:#bc6043;box-shadow:0 0 0 3px #bc60431c,0 4px 12px #34342f08}
+.graph-node.dim{opacity:1;box-shadow:none;border-color:#dcd9ce}
+.graph-node.dim .node-title,.graph-node.dim .node-kind,.graph-node.dim .node-status,.graph-node.dim .node-subtitle{color:#5c6f7c}
+.graph-node.start.dim{border-color:#292a25}
+.graph-node.start.dim .node-title{color:#e8e6dc}
+.graph-edge{fill:none;stroke:#b0aea5;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}
+.graph-edge.done{stroke:#8fa17a;stroke-dasharray:none}
+.graph-edge.running{stroke:#d97757;stroke-width:1.7;stroke-dasharray:8 5;animation:edge-process-flow .85s linear 6}
+.graph-edge.pending{stroke:#b0aea5;stroke-dasharray:4 5}
+.graph-edge.paused{stroke:#b38548;stroke-dasharray:7 4 1 4}
+.graph-edge.cancelled{stroke:#a39c91;stroke-dasharray:2 5}
+.graph-edge.lineage{stroke-width:1.8}
+.graph-edge.selected{stroke:#bc6043;stroke-width:2.3}
+.graph-edge.dim{opacity:.2}
 .graph-edge-hit{fill:none;stroke:transparent;stroke-width:12;vector-effect:non-scaling-stroke;pointer-events:stroke;cursor:pointer;outline:none}
-.graph-edge-hit:focus-visible{stroke:var(--edge-color,#7b8b9e);stroke-opacity:.16}
-.graph-edge-label{visibility:hidden;opacity:0;pointer-events:none;font-family:var(--font);font-size:12px;font-weight:500;fill:var(--edge-color,#5c6f7c);stroke:#f2f6f8;stroke-width:5;paint-order:stroke;stroke-linejoin:round;cursor:pointer;user-select:none}
-.graph-edges .graph-edge-label[data-edge-kind]{fill:var(--edge-color,#5c6f7c)}
+.graph-edge-hit:focus-visible{stroke:#bc60432b;stroke-width:12}
+.graph-edge-label{visibility:hidden;opacity:0;pointer-events:none;font-family:var(--font);font-size:16px;font-weight:500;fill:#716e64;stroke:#f2f1eb;stroke-width:5;paint-order:stroke;stroke-linejoin:round;cursor:pointer;user-select:none}
 .graph-edge-label.is-revealed,.graph-edge-label.selected{visibility:visible;opacity:1;pointer-events:all}
+.graph-edge-label.running,.graph-edge-label.selected{fill:#b76145}
+.graph-edge-label.paused{fill:#92743f}
+.graph-edge-label:hover{fill:#a54f36}
 .graph-source-port{pointer-events:none}
-.graph-data-empty{position:absolute;inset:0;display:grid;place-items:center;color:#5c6f7c;pointer-events:none;font-size:14px}
-.graph-data-warning{position:absolute;left:50%;top:10px;transform:translateX(-50%);max-width:90%;padding:5px 9px;border:1px solid #e8dcc7;border-radius:5px;background:#faf4e8;color:#7d5b29;font-size:11px;pointer-events:none;z-index:3}
+@keyframes edge-process-flow{to{stroke-dashoffset:-26}}
+@media(prefers-reduced-motion:reduce){.graph-edge.running{animation:none}}
+.graph-data-empty{position:absolute;inset:0;display:grid;place-items:center;color:#716e64;pointer-events:none;font-size:14px}
+.graph-data-warning{position:absolute;left:50%;top:10px;transform:translateX(-50%);max-width:90%;padding:5px 9px;border:1px solid #e8dcc7;border-radius:5px;background:#faf4e8;color:#92743f;font-size:11px;pointer-events:none;z-index:3}
 .graph-data-empty[hidden],.graph-data-warning[hidden]{display:none}
 .graph-screen-reader{position:absolute;width:1px;height:1px;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.graph-node.invalid{border-color:#b18748;background:#faf4e8}
+.graph-node.invalid .node-status{color:#7d5b29}
+.graph-node .node-status{max-width:88px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.graph-node .node-status>span{overflow:hidden;text-overflow:ellipsis}
+.graph-edge.invalid{stroke:#b18748;stroke-dasharray:3 5}
+.graph-edge-label.invalid{fill:#7d5b29}
+.graph-edge.invalid.selected{stroke:#bc6043}
+.graph-node.invalid.selected{border-color:#bc6043}
 .canvas-caption .graph-scope{pointer-events:auto;cursor:help}
 .graph-scope:focus-visible{outline:2px solid #bc6043;outline-offset:3px}

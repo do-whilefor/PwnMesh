@@ -1,0 +1,72 @@
+/* Full journal content, with a steady reading rhythm beside the canvas. */
+:root{--activity:250px}
+@media(min-width:1700px){:root{--activity:270px}}
+.activity-pane{position:relative;min-width:0;background:#fff;border-color:#d7e3ee;border-radius:12px}
+.activity-pane .activity-heading{height:56px;padding:0 18px;gap:10px;flex:none;border-bottom:0;background:#fff}
+.activity-pane .activity-heading h2{display:flex;align-items:center;gap:8px;font-size:15px;font-weight:700;line-height:23px;letter-spacing:0;color:#273743}
+.activity-pane .activity-heading h2 .lucide{width:17px;height:17px;color:#647682;stroke-width:1.6}
+.activity-pane #activity-match-count{flex:none;margin-left:auto;padding:3px 7px;border-radius:6px;background:#f1f4f6;font-size:11px;font-weight:400;line-height:19px;color:#5c6f7c;white-space:nowrap;font-variant-numeric:tabular-nums}
+.activity-pane #activity-toolbar{flex:none;padding:0 16px 16px;background:#fff}
+.activity-pane .activity-search{height:35px;gap:8px;padding:0 10px;border:1px solid #d7e3ee;border-radius:8px;background:#fff;color:#5f7f9c}
+.activity-pane .activity-search:focus-within{border-color:#9dbbda;background:#fff;box-shadow:0 0 0 2px #e6eff9}
+.activity-pane .activity-search>.lucide{width:14px;height:14px}
+.activity-pane .activity-search input{font-size:12px;line-height:20px;color:#3e5361}
+.activity-pane .activity-search input::placeholder{color:#5c6f7c}
+.activity-pane .activity-content{min-width:0;padding:0 16px 38px;overflow-x:hidden;overflow-y:auto;scrollbar-width:none;scrollbar-gutter:auto;scroll-padding-top:12px;outline-offset:-3px;background:#fff}
+.activity-pane .activity-content::-webkit-scrollbar{display:none;width:0;height:0}
+.activity-pane .activity-content:focus-visible{outline:1px solid #acc5dc;border-radius:8px}
+
+/* Titles keep their own reading action; body text remains in the journal. */
+.activity-pane .timeline-entry{position:relative;display:block;min-width:0;padding:0;margin:0;border:0;border-radius:0;background:transparent;box-shadow:none}
+.activity-pane .entry-headline{display:flex;align-items:flex-start;gap:8px;margin:0 0 5px;min-width:0}
+.activity-pane .entry-title{display:flex;align-items:flex-start;flex:1;min-width:0;margin:0;gap:0}
+.activity-pane .timeline-entry h3{display:block;flex:1;min-width:0;margin:0;overflow:visible;font-size:14px;font-weight:700;line-height:22px;letter-spacing:0;color:#273743;overflow-wrap:anywhere}
+.activity-pane .log-title{display:flex;align-items:center;gap:6px;width:calc(100% + 6px);max-width:none;min-height:26px;margin:0 0 0 -6px;padding:2px 6px;border:0;border-radius:6px;background:transparent;color:inherit;font:inherit;text-align:left;overflow:hidden;transform:none}
+.activity-pane .log-title>.log-entry-title{display:-webkit-box;flex:1;min-width:0;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden;overflow-wrap:anywhere;white-space:normal}
+.activity-pane .log-title>.lucide{display:block;flex:none;width:12px;height:12px;color:#5f7f9c}
+.activity-pane .log-stream .log-title>.lucide{display:none}
+.activity-pane .log-title:hover,.activity-pane .log-title:focus-visible,.activity-pane .log-title.is-reading{background:#f0f5fb;color:#273743}
+.activity-pane .log-title:focus-visible{outline:2px solid #dfb69f;outline-offset:1px}
+.activity-pane .entry-meta,.activity-pane .entry-meta time{flex:none;margin:0;font-size:11px;font-weight:400;line-height:26px;letter-spacing:0;color:#5c6f7c;white-space:nowrap;font-variant-numeric:tabular-nums}
+.activity-pane .timeline-entry .log-body,.activity-pane .timeline-entry .log-body p,.activity-pane .timeline-entry .log-text-preview{font-size:13px;font-weight:400;line-height:23px;letter-spacing:0;color:#3e5361;overflow-wrap:anywhere}
+.activity-pane .timeline-entry .log-body{max-width:100%}
+.activity-pane .timeline-entry .log-body p{margin:0 0 10px;white-space:pre-wrap}
+.activity-pane .timeline-entry .log-body p:last-child{margin-bottom:0}
+.activity-pane .log-long-content{min-width:0;font-size:13px;line-height:23px;color:#3e5361}
+.activity-pane .log-long-content>summary{display:block;list-style:none;cursor:pointer}
+.activity-pane .log-long-content>summary::-webkit-details-marker{display:none}
+.activity-pane .log-long-content>summary:focus-visible{outline:2px solid #dfb69f;outline-offset:2px;border-radius:4px}
+.activity-pane .log-text-preview{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:4;max-height:92px;margin:0;overflow:hidden;white-space:normal}
+.activity-pane .log-expand{display:flex;align-items:center;gap:5px;min-height:29px;margin:5px 0 0;padding:0;background:transparent;font-size:11px;font-weight:400;line-height:21px;color:var(--accent)}
+.activity-pane .log-expand>.lucide{width:12px;height:12px;flex:none}
+.activity-pane .log-read-sticky{display:none;align-items:center;gap:5px;margin-left:auto;padding:3px 0;min-height:29px;border-radius:4px;background:transparent;font-size:11px;font-weight:400;line-height:21px;color:#5c6f7c;white-space:nowrap}
+.activity-pane .log-read-sticky>.lucide{width:12px;height:12px}
+.activity-pane .log-read-sticky:hover{color:var(--accent)}
+.activity-pane .log-long-content[open]>summary{position:sticky;top:0;z-index:2;margin:0 0 10px;border-bottom:1px solid #d9e1e6;background:#fff;box-shadow:0 -3px 0 #fff}
+.activity-pane .log-long-content[open] .log-text-preview{display:none}
+.activity-pane .log-long-content[open] .log-expand{margin:0;padding:3px 0;color:var(--accent)}
+.activity-pane .log-long-content[open] .log-expand>.lucide{transform:rotate(180deg)}
+.activity-pane .log-long-content[open] .log-read-sticky{display:inline-flex}
+.activity-pane .log-long-content:not([open]) .log-label-open,.activity-pane .log-long-content[open] .log-label-closed{display:none}
+
+/* One newest-first timeline; findings keep title and marker emphasis. */
+.activity-pane .timeline-entry[data-phase="INPUT"]{--log-marker:#6d93c2;--log-marker-soft:#eaf1fa}
+.activity-pane .timeline-entry[data-phase="DISCOVER"]{--log-marker:#538fac;--log-marker-soft:#e8f3f8}
+.activity-pane .timeline-entry[data-phase="EXECUTE"]{--log-marker:#9077b9;--log-marker-soft:#f1ecf8}
+.activity-pane .timeline-entry[data-phase="CONTEXT"]{--log-marker:#4d9a8e;--log-marker-soft:#e7f4f0}
+.activity-pane .timeline-entry[data-phase="WORKSPACE"]{--log-marker:#68978a;--log-marker-soft:#edf5f1}
+.activity-pane .timeline-entry[data-phase="FINDING"]{--log-marker:var(--accent);--log-marker-soft:#fff1e8}
+.activity-pane .log-stream>.timeline-entry{padding:0 0 23px 19px;margin:0;border:0;background:transparent}
+.activity-pane .log-stream>.timeline-entry:last-child{padding-bottom:3px}
+.activity-pane .log-stream>.timeline-entry:before{content:'';position:absolute;top:10px;left:1px;width:7px;height:7px;border:1px solid var(--log-marker,#8aa1b5);border-radius:50%;background:var(--log-marker-soft,#eef3f8);box-shadow:0 0 0 3px #fff;z-index:1}
+.activity-pane .log-stream>.timeline-entry:after{content:'';display:block;position:absolute;left:4px;top:20px;bottom:-5px;width:1px;background:#d9e4ed}
+.activity-pane .log-stream>.timeline-entry:last-child:after{display:none}
+.activity-pane .log-stream>.is-finding:before{top:9px;left:1px;width:7px;height:7px;border:0;border-radius:1px;background:var(--accent);transform:rotate(45deg)}
+.activity-pane .log-stream .is-finding .log-title{color:var(--accent)}
+.activity-pane .log-stream .is-finding .log-title:hover,.activity-pane .log-stream .is-finding .log-title:focus-visible,.activity-pane .log-stream .is-finding .log-title.is-reading{background:#fff5ee;color:var(--accent)}
+
+.activity-pane .log-empty{padding:44px 10px;font-size:12px;line-height:21px;color:#5c6f7c;gap:11px}
+.activity-pane #activity-to-latest{bottom:15px;padding:7px 12px;border-color:#d7e3ee;background:#f7faff;color:#4f7192;box-shadow:0 4px 15px #344e5d0d;font-size:11px}
+.activity-pane .activity-content mark{padding:0;border-radius:2px;background:#fff0d8;color:var(--accent)}
+.activity-pane .node-inspector{padding:0 3px 14px}
+@media(prefers-reduced-motion:reduce){.activity-pane .log-title,.activity-pane .log-expand>.lucide{transition:none}.activity-pane .log-long-content[open]>.log-body{animation:none}}

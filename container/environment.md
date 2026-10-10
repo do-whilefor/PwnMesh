@@ -1,5 +1,8 @@
 # PwnMesh Worker 环境
 
+本文描述按需构建的完整 `pwnmesh-worker:kali` 环境。默认轻量开发镜像 `pwnmesh-worker:dev`
+仅提供 Python/venv、Git、bash、curl、ripgrep 等基础工具；构建和自检见 [README.md](README.md)。
+
 - 基于官方 Kali rolling 镜像（`linux/amd64`），安装 `kali-linux-headless` 元包及其必需工具依赖，使用 Go `pwnmesh worker` 执行 Agent Loop。
 - `/workspace` 是同一项目共享的工作目录；`/home/kali/workspace` 指向同一目录，且已初始化为 git 仓库。
 - `/workspace/.pwnmesh/runs/<run-id>` 保存单次执行的任务、会话和工具输出。

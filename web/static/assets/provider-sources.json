@@ -1,0 +1,74 @@
+{
+  "package": "LobeHub lobe-icons",
+  "license": "MIT",
+  "repository": "https://github.com/lobehub/lobe-icons",
+  "revision": "master; individual file SHA-256 values recorded below",
+  "files": [
+    {
+      "local": "provider-deepseek.svg",
+      "upstream": "packages/static-svg/icons/deepseek-color.svg",
+      "note": "Unmodified LobeHub DeepSeek Color mark, using the blue encoded by the upstream SVG.",
+      "sha256": "DEBA5F98A5C1796E20FCAC3149BCD7EB8A32F0BDD04D048819400B1F28BD1439",
+      "source_url": "https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/deepseek-color.svg",
+      "retrieved_from": "https://cdn.jsdelivr.net/gh/lobehub/lobe-icons@master/packages/static-svg/icons/deepseek-color.svg",
+      "colors": [
+        "#4D6BFE"
+      ]
+    },
+    {
+      "local": "provider-glm.svg",
+      "upstream": "packages/static-svg/icons/zhipu-color.svg",
+      "note": "Unmodified LobeHub Zhipu Color mark. Retains the existing GLM provider mapping to Zhipu / BigModel; not replaced with the separate Z.ai product mark.",
+      "sha256": "8174E65FF71647D5C705C920C953A82BD723D9E3E42887BDD4FFC9DFE51207A0",
+      "source_url": "https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/zhipu-color.svg",
+      "retrieved_from": "https://cdn.jsdelivr.net/gh/lobehub/lobe-icons@master/packages/static-svg/icons/zhipu-color.svg",
+      "colors": [
+        "#3859FF"
+      ]
+    },
+    {
+      "local": "provider-kimi.svg",
+      "upstream": "packages/static-svg/icons/kimi-color.svg",
+      "note": "Light-surface adaptation of the LobeHub Kimi Color mark: original paths and blue accent retained; the white K is changed to #17191C and displayed on a transparent background without a CSS tile.",
+      "sha256": "8D4F25BDF458CF671667AA875067AB21F5E146B0818FABDC7D493EDE997D7D59",
+      "source_url": "https://raw.githubusercontent.com/lobehub/lobe-icons/master/packages/static-svg/icons/kimi-color.svg",
+      "retrieved_from": "https://cdn.jsdelivr.net/gh/lobehub/lobe-icons@master/packages/static-svg/icons/kimi-color.svg",
+      "colors": [
+        "#1783FF",
+        "#17191C"
+      ]
+    }
+  ],
+  "presets": [
+    {
+      "provider": "DeepSeek",
+      "base_url": "https://api.deepseek.com/anthropic",
+      "model": "deepseek-flash",
+      "references": [
+        "tmp/pwn-web-demo/v3/app.js:42",
+        "tmp/pwn-web-demo/v4/app.js:42"
+      ]
+    },
+    {
+      "provider": "GLM",
+      "base_url": "https://open.bigmodel.cn/api/anthropic",
+      "model": "glm-5.3",
+      "references": [
+        "https://docs.bigmodel.cn/cn/coding-plan/tool/claude",
+        "refer/ARTEX-main/sidequestion/VALIDATION.md:72"
+      ],
+      "verification": "Official Claude integration documentation explicitly contains this Anthropic endpoint and GLM-5.3. No model request was made."
+    },
+    {
+      "provider": "Kimi",
+      "base_url": "https://api.kimi.com/coding",
+      "model": "kimi-for-coding",
+      "references": [
+        "refer/pi-main/packages/ai/src/providers/kimi-coding.ts:11",
+        "refer/pi-main/packages/ai/test/anthropic-auth-token.test.ts:81",
+        "refer/pi-main/packages/ai/scripts/generate-models.ts:2368"
+      ]
+    }
+  ],
+  "notes": "Local SVGs are based on LobeHub Color variants under the existing MIT license. DeepSeek and Zhipu are unmodified; Kimi keeps the original geometry and blue accent with a dark K for light surfaces. This local Kimi color adaptation is not an independently certified official variant. Sources were retrieved via jsDelivr. Presets remain editable demo values; no model API requests or credentials were used."
+}

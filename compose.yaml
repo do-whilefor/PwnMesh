@@ -3,7 +3,7 @@ services:
     profiles: [images]
     build:
       context: .
-      dockerfile: container/Dockerfile
+      dockerfile: container/Dockerfile.dev
     image: pwnmesh-worker:dev
     entrypoint: ["/bin/true"]
   server:

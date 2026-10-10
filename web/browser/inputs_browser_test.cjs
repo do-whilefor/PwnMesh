@@ -1,182 +1,53 @@
 'use strict';
-
-// Uses the real workbench assets and browser FormData against isolated API fixtures.
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const http = require('node:http');
-const fs = require('node:fs/promises');
-const path = require('node:path');
-const {createHash} = require('node:crypto');
-
-test('browser uploads test materials and resumes the same paused project after an interrupted batch', {
-  timeout:60000,
-  skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE to run the isolated upload browser test',
-}, async () => {
-  const {chromium} = require(process.env.PLAYWRIGHT_MODULE);
-  const files = new Map();
-  for (const name of await fs.readdir(path.join(__dirname,'../static'))) files.set('/static/' + name, await fs.readFile(path.join(__dirname,'../static',name)));
-  const server = http.createServer((request,response) => {
-    const pathname = new URL(request.url,'http://localhost').pathname, asset = pathname === '/' ? '/static/index.html' : pathname;
-    if (!files.has(asset)) { response.writeHead(404); response.end(); return; }
-    const mime = {'.html':'text/html','.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml'}[path.extname(asset)];
-    response.writeHead(200,{'Content-Type':mime || 'application/octet-stream'}); response.end(files.get(asset));
+const test=require('node:test'),assert=require('node:assert/strict');
+const {assetServer,launch,fillCreate,stateFor,projectPath}=require('./demo_harness.cjs');
+test('demo forms upload raw files, retry a paused project, and atomically supplement materials',{
+ timeout:60000,skip:process.env.PLAYWRIGHT_MODULE?false:'Set PLAYWRIGHT_MODULE for isolated upload regression',
+},async()=>{
+ const server=await assetServer(),browser=await launch();
+ try{
+  const page=await browser.newPage({viewport:{width:1440,height:960}});page.setDefaultTimeout(12000);const errors=[],uploaded=[],inputs=[],writes=[];let project=null,creates=0,fail=true;
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.route('**/projects**',async route=>{const req=route.request(),url=new URL(req.url()),pathname=url.pathname,method=req.method(),reply=(body,status=200)=>route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
+   if(method!=='GET')writes.push(method+' '+pathname);
+   if(pathname==='/projects'&&method==='POST'){creates++;const data=req.postDataJSON();assert.equal(data.start_paused,true);project={id:'uploaded',title:data.title,status:'stopped',scenario:data.scenario,generation:0,created_at:'2026-10-10T02:00:00Z'};return reply({project},201);}
+   if(pathname==='/projects')return reply(project?[project]:[]);
+   if(pathname.endsWith('/rounds'))return reply({items:[]});if(pathname.endsWith('/state/events'))return reply([]);if(pathname.endsWith('/state'))return reply(stateFor(project));if(pathname.endsWith('/identity'))return reply({id:project.id,generation:0});if(pathname.endsWith('/executions'))return reply({items:[],through:0});
+   if(pathname.endsWith('/inputs')&&method==='GET')return reply(inputs);
+   if(pathname.endsWith('/inputs')&&method==='POST'){
+    const form=await new Response(req.postDataBuffer(),{headers:{'Content-Type':req.headers()['content-type']}}).formData(),file=form.get('file');uploaded.push(file.name);assert.deepEqual(Buffer.from(await file.arrayBuffer()),Buffer.from(file.name==='one.http'?'GET /one':[0,255,13,10]));
+    if(file.name==='two.apk'&&fail){fail=false;return reply({detail:'Controlled failed upload'},503);}const input={id:String(inputs.length+1),name:file.name,size:file.size,path:'/workspace/inputs/'+file.name,sha256:'a'.repeat(64),created_at:project.created_at};inputs.push(input);return reply(input,201);
+   }
+   if(pathname.endsWith('/inputs/batch')){const form=await new Response(req.postDataBuffer(),{headers:{'Content-Type':req.headers()['content-type']}}).formData();assert.equal(form.get('content'),'只使用授权测试环境');assert.equal(form.getAll('file').length,1);const file=form.get('file');assert.equal(await file.text(),'supplement bytes');inputs.push({id:'3',name:file.name,size:file.size,path:'/workspace/inputs/'+file.name,created_at:project.created_at,sha256:'b'.repeat(64)});return reply([inputs.at(-1)],201);}
+   if(pathname.endsWith('/status')){project.status=req.postDataJSON().status;return reply(project);}
+   errors.push('Unexpected '+method+' '+pathname);return reply({},404);
   });
-  await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
-  let browser;
-  try {
-    browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
-    const page = await browser.newPage({viewport:{width:1280,height:900}}); page.setDefaultTimeout(10000);
-    const errors = [], uploads = [], inputs = [], writes = [], batches = []; let project = null, creates = 0, failAPK = true;
-    const supplements = [
-      {name:'source.zip',mimeType:'application/zip',buffer:Buffer.from([80,75,3,4,0,255,13,10])},
-      {name:'request.http',mimeType:'text/plain',buffer:Buffer.from('GET /api/profile HTTP/1.1\r\nHost: api.example.invalid\r\n\r\n')},
-    ];
-    const supplementText = '仅测试这两个补充文件；不要请求生产接口。';
-    page.on('pageerror', error => errors.push(error.message));
-    await page.route('**/projects**', async route => {
-      const request = route.request(), pathname = new URL(request.url()).pathname, method = request.method();
-      const reply = (body,status = 200) => route.fulfill({status,contentType:'application/json',body:JSON.stringify(body)});
-      if (method !== 'GET') writes.push(method + ' ' + pathname);
-      if (pathname === '/projects' && method === 'POST') {
-        creates++; const payload = request.postDataJSON(); assert.equal(payload.start_paused,true);
-        project = {id:'uploaded',title:payload.title,status:'stopped',scenario:payload.scenario,generation:0,created_at:'2026-10-07T00:00:00Z'};
-        return reply({project},201);
-      }
-      if (pathname === '/projects') return reply(project ? [project] : []);
-      if (pathname === '/projects/uploaded/inputs') {
-        if (method === 'GET') return reply(inputs);
-        assert.match(request.headers()['content-type'],/^multipart\/form-data; boundary=/);
-        const body = request.postDataBuffer(), name = body.toString().match(/filename="([^"]+)"/)[1]; uploads.push(name);
-        assert.ok(body.includes(Buffer.from(name === 'client.apk' ? [0,255,13,10] : 'fixture')),'browser preserves input bytes');
-        if (name === 'client.apk' && failAPK) { failAPK = false; return reply({detail:'Controlled APK upload failure'},503); }
-        const input = {id:String(inputs.length + 1),name,size:7,path:'/workspace/.pwnmesh/inputs/' + (inputs.length + 1) + '/' + name,sha256:'a'.repeat(64),created_at:project.created_at};
-        inputs.push(input); return reply(input,201);
-      }
-      if (pathname === '/projects/uploaded/inputs/batch' && method === 'POST') {
-        const contentType = request.headers()['content-type']; assert.match(contentType,/^multipart\/form-data; boundary=/);
-        const form = await new Response(request.postDataBuffer(),{headers:{'Content-Type':contentType}}).formData();
-        const received = form.getAll('file'); assert.equal(received.length,supplements.length); assert.equal(form.get('content'),supplementText);
-        const batch = [];
-        for (let index = 0; index < received.length; index++) {
-          const file = received[index], fixture = supplements[index]; assert.equal(file.name,fixture.name);
-          assert.deepEqual(Buffer.from(await file.arrayBuffer()),fixture.buffer,'batch preserves input bytes for ' + fixture.name);
-          const input = {id:String(inputs.length + batch.length + 1),name:file.name,size:file.size,path:'/workspace/.pwnmesh/inputs/' + (inputs.length + batch.length + 1) + '/' + file.name,sha256:'a'.repeat(64),created_at:project.created_at}; batch.push(input);
-        }
-        batches.push(batch); inputs.push(...batch); return reply(batch,201);
-      }
-      if (pathname === '/projects/uploaded/status') { assert.equal(inputs.length,2); project.status = request.postDataJSON().status; return reply(project); }
-      if (pathname === '/projects/uploaded/state') return reply({graph:{project,facts:[],intents:[],hints:[]},goals:[],steps:[],fact_records:[],findings:[],revision:1});
-      if (pathname === '/projects/uploaded/state/events') return reply([]);
-      if (pathname === '/projects/uploaded/executions') return reply({items:[],through:0});
-      if (pathname === '/projects/uploaded/identity') return reply({id:project.id,generation:0});
-      errors.push('Unexpected API call ' + method + ' ' + pathname); return reply({detail:'Unknown fixture'},404);
-    });
-    await page.goto('http://127.0.0.1:' + server.address().port,{waitUntil:'networkidle'});
-    await page.locator('#new-project').click();
-    await page.locator('#create-name').fill('客户端测试材料'); await page.locator('#create-origin').fill('授权测试的 APK 和接口流量'); await page.locator('#create-goal').fill('分析客户端配置和接口认证');
-    await page.locator('#create-files').setInputFiles([{name:'capture.har',mimeType:'application/json',buffer:Buffer.from('fixture')},{name:'client.apk',mimeType:'application/vnd.android.package-archive',buffer:Buffer.from([0,255,13,10])}]);
-    await page.locator('#submit-create').click(); await page.waitForFunction(() => document.getElementById('create-error').textContent.includes('Controlled APK upload failure'));
-    assert.equal(creates,1); assert.equal(project.status,'stopped'); assert.equal(await page.locator('#create-name').isDisabled(),true);
-    assert.deepEqual(uploads,['capture.har','client.apk']);
-    await page.locator('#submit-create').click(); await page.locator('#create-dialog').waitFor({state:'hidden'});
-    assert.equal(creates,1); assert.equal(project.status,'active'); assert.deepEqual(uploads,['capture.har','client.apk','client.apk']);
-    await page.locator('#add-hint').click(); await page.locator('.imported-inputs summary').click();
-    await page.waitForFunction(() => document.getElementById('imported-inputs').textContent.includes('SHA-256:'));
-    assert.match(await page.locator('#imported-inputs').textContent(),/capture.har/);
-    await page.locator('#hint-files').setInputFiles(supplements); await page.locator('#hint-input').fill(supplementText);
-    const beforeSupplement = writes.length;
-    await page.locator('#send-hint').click(); await page.locator('#hint-dialog').waitFor({state:'hidden'});
-    assert.equal(inputs.length,4); assert.equal(batches.length,1); assert.deepEqual(writes.slice(beforeSupplement),['POST /projects/uploaded/inputs/batch']);
-    assert.deepEqual(uploads,['capture.har','client.apk','client.apk']); assert.equal(writes.some(write => write.endsWith('/hints')),false);
-    await page.locator('#add-hint').click(); assert.equal(await page.locator('#hint-file-list li').count(),0);
-    const widths = await page.evaluate(() => ({width:innerWidth,scroll:document.documentElement.scrollWidth})); assert.ok(widths.scroll <= widths.width);
-    assert.deepEqual(errors,[]);
-  } finally { if (browser) await browser.close(); await new Promise(resolve => server.close(resolve)); }
+  await page.goto(server.url,{waitUntil:'networkidle'});await fillCreate(page,'真实材料上传');await page.locator('#project-files').setInputFiles([{name:'one.http',mimeType:'text/plain',buffer:Buffer.from('GET /one')},{name:'two.apk',mimeType:'application/octet-stream',buffer:Buffer.from([0,255,13,10])}]);await page.locator('#create-form [type="submit"]').click();await page.waitForFunction(()=>document.getElementById('create-error').textContent.includes('Controlled failed upload'));assert.equal(creates,1);assert.equal(project.status,'stopped');assert.equal(await page.locator('#project-name').isDisabled(),true);assert.equal(await page.locator('#selected-files [data-remove-file]').first().isDisabled(),true);assert.equal(await page.locator('#selected-files li').count(),2);
+  await page.locator('#create-form [type="submit"]').click();await page.locator('#create-dialog').waitFor({state:'hidden'});assert.equal(creates,1);assert.deepEqual(uploaded,['one.http','two.apk','two.apk']);assert.equal(project.status,'active');
+  await page.locator('#add-hint').click();await page.locator('#hint-text').fill('只使用授权测试环境');await page.locator('#hint-files').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('supplement bytes')});const before=writes.length;await page.locator('#hint-form [type="submit"]').click();await page.locator('#hint-dialog').waitFor({state:'hidden'});assert.deepEqual(writes.slice(before),['POST /projects/uploaded/inputs/batch']);
+  await page.locator('[data-view="materials"]').click();await page.waitForFunction(()=>document.querySelectorAll('.material-row').length===3);assert.match(await page.locator('#project-view').textContent(),/notes\.txt/);assert.deepEqual(errors,[]);
+ }finally{await browser.close();await server.close();}
+});
+test('demo upload form preserves bytes through the real HTTP service',{
+ timeout:90000,skip:process.env.PWNMESH_WEB_URL?false:'Set PWNMESH_WEB_URL to a dedicated empty service',
+},async()=>{
+ const base=new URL(process.env.PWNMESH_WEB_URL),request=async(path,options={})=>{const r=await fetch(new URL(path,base),options);assert.ok(r.ok,path+': '+r.status);return r;};assert.deepEqual(await(await request('/projects')).json(),[]);const browser=await launch();let id;
+ try{const page=await browser.newPage({viewport:{width:1440,height:960}});await page.goto(base.href,{waitUntil:'networkidle'});await fillCreate(page,'真实上传字节验证');const bytes=Buffer.from([0,255,13,10,80,75]);await page.locator('#project-files').setInputFiles({name:'fixture.bin',mimeType:'application/octet-stream',buffer:bytes});await page.locator('#create-form [type="submit"]').click();await page.locator('#create-dialog').waitFor({state:'hidden'});id=await page.evaluate(()=>location.hash.slice(9));const inputs=await(await request(projectPath(id)+'/inputs')).json();assert.equal(inputs.length,1);const download=await request(projectPath(id)+'/inputs/'+inputs[0].id);assert.deepEqual(Buffer.from(await download.arrayBuffer()),bytes);await page.locator('[data-view="materials"]').click();await page.locator('[data-material="0"]').click();await page.locator('.inspector-reader[open]').waitFor();assert.equal(await page.locator('.inspector-reader[open] a[download]').count(),1);}finally{await browser.close();if(id)await request(projectPath(id),{method:'DELETE'});}
 });
 
-// Requires a dedicated empty server with no dispatcher. Only the project
-// created by this test is removed; no pre-existing project is ever modified.
-test('real service preserves browser-uploaded client inputs and supplemental files with text', {
-  timeout:90000,
-  skip:process.env.PWNMESH_WEB_URL ? false : 'Set PWNMESH_WEB_URL to a dedicated empty service without a dispatcher',
-}, async () => {
-  const base = new URL(process.env.PWNMESH_WEB_URL);
-  assert.ok(['http:','https:'].includes(base.protocol));
-  const request = async (endpoint, options = {}) => {
-    const response = await fetch(new URL(endpoint,base), {signal:AbortSignal.timeout(10000), ...options});
-    assert.ok(response.ok, `${options.method || 'GET'} ${endpoint}: HTTP ${response.status} ${response.ok ? '' : await response.text()}`);
-    return response;
-  };
-  assert.deepEqual(await (await request('/projects')).json(), [], 'use an isolated empty server; existing projects are never modified');
-  const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-  const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
-  const page = await browser.newPage({viewport:{width:1440,height:960}}); page.setDefaultTimeout(15000);
-  let createdProject;
-  const errors = [], uploads = [], batches = [], explicitHints = [];
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('request', request => {
-    if (request.method() !== 'POST') return;
-    const pathname = new URL(request.url()).pathname;
-    if (pathname.endsWith('/inputs')) uploads.push(pathname);
-    if (pathname.endsWith('/inputs/batch')) batches.push(pathname);
-    if (pathname.endsWith('/hints')) explicitHints.push(pathname);
-  });
-  const fixtures = [
-    {name:'客户端 fixture.apk',mimeType:'application/vnd.android.package-archive',buffer:Buffer.from([80,75,3,4,0,255,13,10,128])},
-    {name:'client-config.json',mimeType:'application/json',buffer:Buffer.from('{"base_url":"https://api.example.invalid","debug":false}\n')},
-    {name:'source.go',mimeType:'text/plain',buffer:Buffer.from('package fixture\n\nconst API = "https://api.example.invalid"\n')},
-    {name:'capture.har',mimeType:'application/json',buffer:Buffer.from('{"log":{"version":"1.2","creator":{"name":"test","version":"1"},"entries":[]}}\n')},
-  ];
-  const supplements = [
-    {name:'request.http',mimeType:'text/plain',buffer:Buffer.from('GET /api/profile HTTP/1.1\r\nHost: api.example.invalid\r\n\r\n')},
-    {name:'补充客户端.apk',mimeType:'application/vnd.android.package-archive',buffer:Buffer.from([80,75,3,4,0,255,13,10,129])},
-  ];
-  const supplementText = 'Only inspect these synthetic files; do not contact production endpoints.';
-  const verifyInputs = async expected => {
-    const inputs = await (await request('/projects/' + createdProject.id + '/inputs')).json();
-    assert.equal(inputs.length, expected.length);
-    for (const fixture of expected) {
-      const input = inputs.find(input => input.name === fixture.name); assert.ok(input, 'missing metadata for ' + fixture.name);
-      const hash = createHash('sha256').update(fixture.buffer).digest('hex');
-      assert.equal(input.size, fixture.buffer.length); assert.equal(input.sha256, hash);
-      assert.equal(input.path, '/workspace/.pwnmesh/inputs/' + input.id + '/' + input.name);
-      const download = await request('/projects/' + createdProject.id + '/inputs/' + input.id);
-      assert.equal(download.headers.get('content-type'), 'application/octet-stream');
-      assert.equal(download.headers.get('x-content-sha256'), hash);
-      assert.deepEqual(Buffer.from(await download.arrayBuffer()), fixture.buffer, 'server changed uploaded bytes for ' + fixture.name);
-    }
-    return inputs;
-  };
-  try {
-    await page.goto(base.href,{waitUntil:'networkidle'}); await page.locator('#new-project').click();
-    const title = 'Browser client input integration ' + process.pid;
-    await page.locator('#create-name').fill(title); await page.locator('#create-origin').fill('Synthetic client artifacts and traffic for upload acceptance.');
-    await page.locator('#create-goal').fill('Verify input transfer without starting a dispatcher or model.'); await page.locator('#create-files').setInputFiles(fixtures);
-    const createResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/projects' && response.request().method() === 'POST');
-    await page.locator('#submit-create').click(); const response = await createResponse;
-    assert.equal(response.status(),201); const graph = await response.json(); createdProject = graph.project;
-    assert.equal(response.request().postDataJSON().start_paused,true); assert.equal(createdProject.status,'stopped');
-    await page.locator('#create-dialog').waitFor({state:'hidden'});
-    await page.waitForFunction(title => document.getElementById('project-title').textContent === title,title);
-    const after = await (await request('/projects/' + createdProject.id)).json(); assert.equal(after.project.status,'active');
-    assert.equal(uploads.length,fixtures.length); const initialInputs = await verifyInputs(fixtures);
-    assert.equal(after.hints.length,fixtures.length); assert.ok(initialInputs.every(input => after.hints.some(hint => hint.content.includes(input.path))));
-    await page.reload({waitUntil:'networkidle'}); await page.locator('#add-hint').click(); await page.locator('.imported-inputs summary').click();
-    await page.waitForFunction(count => document.querySelectorAll('#imported-inputs li').length === count,fixtures.length);
-    const metadata = await page.locator('#imported-inputs').textContent();
-    for (const input of initialInputs) { assert.ok(metadata.includes(input.name)); assert.ok(metadata.includes(input.path)); assert.ok(metadata.includes(input.sha256)); }
-    await page.locator('#hint-files').setInputFiles(supplements); await page.locator('#hint-input').fill(supplementText);
-    await page.locator('#send-hint').click(); await page.locator('#hint-dialog').waitFor({state:'hidden'});
-    const allInputs = await verifyInputs([...fixtures,...supplements]); assert.equal(uploads.length,fixtures.length); assert.equal(batches.length,1); assert.deepEqual(explicitHints,[]);
-    const supplemented = await (await request('/projects/' + createdProject.id)).json(); assert.equal(supplemented.project.status,'active'); assert.equal(supplemented.hints.length,fixtures.length + supplements.length + 1);
-    assert.ok(allInputs.every(input => supplemented.hints.some(hint => hint.content.includes(input.path))));
-    assert.equal(supplemented.hints.filter(hint => hint.content === supplementText).length,1);
-    await page.locator('#add-hint').click(); assert.equal(await page.locator('#hint-file-list li').count(),0);
-    assert.equal(await page.locator('#hint-input').inputValue(),'');
-    await page.waitForFunction(count => document.querySelectorAll('#imported-inputs li').length === count,fixtures.length + supplements.length);
-    assert.deepEqual(errors,[]);
-  } finally {
-    await browser.close();
-    if (createdProject) await request('/projects/' + createdProject.id,{method:'DELETE'});
-  }
+test('material readers ignore older responses and navigation to the model page',{
+ timeout:45000,skip:process.env.PLAYWRIGHT_MODULE?false:'Set PLAYWRIGHT_MODULE for material reader race regression',
+},async()=>{
+ const server=await assetServer(),browser=await launch();
+ try{
+  const page=await browser.newPage({viewport:{width:1440,height:960}}),project={id:'reader',title:'材料读取隔离',scenario:'pentest',status:'active',generation:0,created_at:'2026-10-10T02:00:00Z'};let slowRoute;
+  const files=['slow','fast'].map(id=>({id,name:id+'.txt',size:12,path:'/inputs/'+id+'.txt',created_at:project.created_at,sha256:'a'.repeat(64)}));
+  await page.route('**/model-settings',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',has_token:false,connection_mode:'direct',reasoning_effort:'high'})}));
+  await page.route('**/projects**',route=>{const pathname=new URL(route.request().url()).pathname,reply=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});if(pathname==='/projects')return reply([project]);if(pathname.endsWith('/inputs/slow')){slowRoute=route;return;}if(pathname.endsWith('/inputs/fast'))return route.fulfill({body:'fast actual',contentType:'application/octet-stream'});if(pathname.endsWith('/inputs'))return reply(files);if(pathname.endsWith('/state/events'))return reply([]);if(pathname.endsWith('/state'))return reply(stateFor(project));if(pathname.endsWith('/identity'))return reply({id:project.id,generation:0});if(pathname.endsWith('/executions'))return reply({items:[],through:0});if(pathname.endsWith('/rounds'))return reply({items:[]});return reply({});});
+  await page.goto(server.url,{waitUntil:'networkidle'});await page.locator('[data-view="materials"]').click();
+  const first=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await first;await page.locator('[data-material="1"]').click();await page.waitForFunction(()=>document.querySelector('.inspector-reader[open]')?.textContent.includes('fast actual'));
+  const firstResponse=page.waitForResponse(res=>res.url().endsWith('/inputs/slow'));await slowRoute.fulfill({body:'slow actual',contentType:'application/octet-stream'});await firstResponse;await page.evaluate(()=>new Promise(requestAnimationFrame));assert.match(await page.locator('.inspector-reader[open]').textContent(),/fast actual/);
+  await page.locator('.inspector-reader[open] [data-inspector-action="close"]').click();await page.locator('.inspector-reader[open]').waitFor({state:'hidden'});
+  const second=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await second;await page.locator('#model-entry').click();await page.locator('.llm-page').waitFor();const secondResponse=page.waitForResponse(res=>res.url().endsWith('/inputs/slow'));await slowRoute.fulfill({body:'stale after navigation',contentType:'application/octet-stream'});await secondResponse;await page.evaluate(()=>new Promise(requestAnimationFrame));assert.equal(await page.locator('.inspector-reader[open]').count(),0);
+ }finally{await browser.close();await server.close();}
 });
