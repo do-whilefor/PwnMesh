@@ -37,7 +37,7 @@
               <div class="llm-field"><label for="llm-proxy-port">端口</label><input id="llm-proxy-port" name="proxyPort" value="${esc(proxy.port)}" inputmode="numeric" placeholder="7897"${state.connection.mode === 'direct' ? ' disabled' : ''}></div>
               <p class="llm-field-hint">代理地址需能从服务端访问。Docker 访问宿主机代理可用 host.docker.internal。</p>
             </div>
-            <p class="llm-field-hint">全局配置，适用于所有项目的新任务；模型与 Worker 的 HTTP(S) 请求共用此连接方式。</p>
+            <p class="llm-field-hint">全局配置，适用于所有项目的新任务；用于模型连接，并同步给支持代理环境变量的 Worker 工具。</p>
           </div>
         </section>
         <div class="llm-status" role="status" aria-live="polite"></div>
@@ -196,7 +196,6 @@
       serverSettings = settings;saved = settings.has_token ? fromServer(settings) : null;loaded = true;busy = false;
       fill(dirty && draft ? draft : fromServer(settings));
       query('.llm-summary-status').textContent = dirty ? '未保存' : saved ? '已保存' : '待配置';
-      status('',dirty ? '已恢复未保存的草稿，请重新连接测试。' : '');
     }).catch(error => {if (!disposed) {busy = false;status('error','配置读取失败：'+error.message+'。返回项目后可重新打开重试。');sync();}});
     return cleanup;
   }
