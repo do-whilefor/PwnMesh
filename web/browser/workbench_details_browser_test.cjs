@@ -56,9 +56,15 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
 
     await t.test('legend filters retain card positions and camera and reveal only connected visible edges',async()=>{
       const original=await view();
+      await page.evaluate(()=>{window.pollingGraphHost=document.querySelector('#graph-host');});
       for(const [status,count]of[['done',4],['running',1],['pending',2]]){
         const button=page.locator('[data-filter="'+status+'"]');await button.click();await paint(page);
         assert.equal(await button.getAttribute('aria-pressed'),'true');assert.equal(await page.locator('#graph-host .graph-node:visible').count(),count,status);
+        state.graph.project.title='轮询更新项目标题 '+status;state.revision++;
+        await page.waitForFunction(title=>document.querySelector('.project-heading h1')?.textContent===title,state.graph.project.title);
+        assert.equal(await page.evaluate(()=>window.pollingGraphHost===document.querySelector('#graph-host')),true,'polling must retain the mounted canvas');
+        assert.equal(await button.getAttribute('aria-pressed'),'true','polling must retain the active status filter');
+        assert.equal(await page.locator('#project-manage').isEnabled(),true);
         const valid=await page.evaluate(()=>{
           const keys=new Set([...document.querySelectorAll('#graph-host .graph-node')].filter(node=>!node.hidden).map(node=>node.dataset.nodeKey));
           return [...document.querySelectorAll('#graph-host .graph-edge-hit')].every(hit=>{const[,source,target]=JSON.parse(hit.dataset.edgeKey.slice(5));return (getComputedStyle(hit.parentElement).display!=='none')===(keys.has(source)&&keys.has(target));});

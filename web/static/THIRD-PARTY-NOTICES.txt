@@ -3,6 +3,9 @@ PwnMesh Web third-party notices
 Lucide v1.8.0
 Local file: lucide.min.js
 Source: https://github.com/lucide-icons/lucide
+Modification: Generated subset of 42 icons; original rendering helpers and createIcons implementation are unchanged.
+Regeneration: node web/build-icons.cjs <lucide@1.8.0 package directory or pristine dist/umd/lucide.min.js>
+Upstream UMD SHA-256: ab85225ecc1daa2033607856f03dd2dabcbc08e2d260a5b97e17c690aa929766
 
 ISC License
 

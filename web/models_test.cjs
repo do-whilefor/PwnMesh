@@ -123,6 +123,8 @@ test('model form only saves after a successful probe and discards unsaved drafts
     assert.equal(await page.locator('.llm-save').isDisabled(),true);
     assert.equal(await page.locator('.llm-summary-status').textContent(),'已保存');
     assert.equal(await page.evaluate(() => calls.at(-1).body.token),'changed-after-verification');
+    assert.equal(await page.evaluate(() => calls.at(-1).body.protocol),'anthropic');
+    assert.equal(await page.evaluate(() => calls.filter(call => call.path.endsWith('/test')).every(call => call.body.protocol === 'anthropic')),true);
     await page.locator('#llm-connection-mode').selectOption('proxy');
     assert.equal(await page.locator('.llm-proxy-fields').isVisible(),true);
     await page.locator('#llm-effort').selectOption('high');

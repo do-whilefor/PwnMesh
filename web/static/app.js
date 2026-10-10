@@ -59,25 +59,37 @@
     try { return await work(); }
     finally { mutating = false; updateBusy(); await refreshWorkspace(true); }
   }
-  function projectFooter(state,completed) {
-    return '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+(viewTab === 'graph' ? [['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button data-filter="'+id+'" aria-pressed="false"><i class="legend-dot '+id+'"></i>'+title+'</button>').join('') : '')+'</div><div class="task-progress"><span>'+completed+' / '+state.steps.length+' 个任务</span><span class="progress-track"><i style="width:'+(state.steps.length ? completed/state.steps.length*100 : 0)+'%"></i></span></div></footer>';
+  function projectHeading(p) {
+    return p ? '<header class="project-heading"><div class="project-heading-copy"><div class="title-row"><h1 title="'+esc(p.name)+'">'+esc(p.name)+'</h1>'+badge(p)+'</div><div class="project-description"><div class="project-identity">'+icon(p.type === 'audit' ? 'code-2' : p.type === 'ctf' ? 'flag' : 'globe')+'<span>'+esc(types[p.type])+'</span><i class="meta-divider"></i><span class="target-summary" title="'+esc(p.target)+'">'+esc(p.target)+'</span></div>'+projectTimes(p)+'</div></div><div class="heading-actions">'+modelEntry()+'</div></header>' : '<header class="project-heading"><div class="project-heading-copy empty-project-heading" aria-hidden="true"><div class="title-row"><h1>工作台</h1></div><div class="project-description"><span>尚未创建项目</span></div></div><div class="heading-actions">'+modelEntry()+'</div></header>';
   }
-  function projectMarkup(p) {
-    const c = current(), history = selectedRun !== 'current';
-    const state = PwnDemoGraph.buildState(p), completed = state.steps.filter(s => s.status === 'completed').length;
+  function workspaceActions(c = current()) {
+    if (!c) return '<div class="workspace-actions"><button class="button secondary" disabled>'+icon('sliders-horizontal')+'项目管理</button><button class="button secondary" disabled>'+icon('message-square-plus')+'补充信息</button></div>';
+    const history = selectedRun !== 'current';
     const actions = history ? '<button class="button secondary" id="return-current">'+icon('arrow-left')+'返回当前轮</button>' :
       '<button class="button secondary" id="add-hint" data-mutates data-unavailable="'+!lifecycle.canHint(c)+'" '+(!lifecycle.canHint(c) ? 'disabled title="'+(c.readOnly ? '历史项目只读，请新建项目继续' : '重启后可补充信息')+'"' : '')+'>'+icon('message-square-plus')+'补充信息</button>';
-    return '<section class="project-page"><header class="project-heading"><div class="project-heading-copy"><div class="title-row"><h1 title="'+esc(p.name)+'">'+esc(p.name)+'</h1>'+badge(p)+'</div><div class="project-description"><div class="project-identity">'+icon(p.type === 'audit' ? 'code-2' : p.type === 'ctf' ? 'flag' : 'globe')+'<span>'+esc(types[p.type])+'</span><i class="meta-divider"></i><span class="target-summary" title="'+esc(p.target)+'">'+esc(p.target)+'</span></div>'+projectTimes(p)+'</div></div><div class="heading-actions">'+modelEntry()+'</div></header>'+
-    '<div class="project-body"><section class="canvas-panel"><header class="canvas-header"><div class="view-tabs" role="tablist" aria-label="项目视图">'+[['graph','workflow','画布'],['materials','paperclip','材料'],['result','file-check-2','结果']].map(([id,i,title]) => '<button id="view-tab-'+id+'" data-view="'+id+'" role="tab" aria-selected="'+(viewTab === id)+'" aria-controls="project-view" tabindex="'+(viewTab === id ? '0' : '-1')+'" class="'+(viewTab === id ? 'active' : '')+'">'+icon(i)+title+(id === 'materials' ? '<small>'+p.files.length+'</small>' : '')+'</button>').join('')+'</div>'+
-    '<div class="workspace-actions">'+((c.history?.length || 0) ? '<select id="run-select" aria-label="查看项目轮次"><option value="current">当前轮 · '+(c.generation+1)+'</option>'+[...c.history].reverse().map(h => '<option value="'+h.generation+'" '+(selectedRun === String(h.generation) ? 'selected' : '')+'>第 '+(h.generation+1)+' 轮 · 已归档</option>').join('')+'</select>' : '')+'<button class="button secondary" id="project-manage" aria-haspopup="dialog">'+icon('sliders-horizontal')+'项目管理</button>'+actions+'</div></header>'+
-    '<div id="project-view" class="'+(viewTab === 'graph' ? 'graph-stage' : 'tab-content')+'" role="tabpanel" aria-labelledby="view-tab-'+viewTab+'">'+(viewTab === 'graph' ? '<div id="graph-host" class="graph-host"></div><div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小画布" title="缩小画布">'+icon('minus')+'</button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大画布" title="放大画布">'+icon('plus')+'</button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布" title="适应画布 · 0">'+icon('maximize')+'</button></div></div>' : viewTab === 'materials' ? materialsMarkup(p) : resultsMarkup(p,state))+'</div>'+projectFooter(state,completed)+'</section>'+
+    return '<div class="workspace-actions">'+((c.history?.length || 0) ? '<select id="run-select" aria-label="查看项目轮次"><option value="current">当前轮 · '+(c.generation+1)+'</option>'+[...c.history].reverse().map(h => '<option value="'+h.generation+'" '+(selectedRun === String(h.generation) ? 'selected' : '')+'>第 '+(h.generation+1)+' 轮 · 已归档</option>').join('')+'</select>' : '')+'<button class="button secondary" id="project-manage" aria-haspopup="dialog">'+icon('sliders-horizontal')+'项目管理</button>'+actions+'</div>';
+  }
+  function projectTabs(p) {
+    const active = p ? viewTab : 'graph';
+    return '<div class="view-tabs" role="tablist" aria-label="项目视图">'+[['graph','workflow','画布'],['materials','paperclip','材料'],['result','file-check-2','结果']].map(([id,i,title]) => '<button id="view-tab-'+id+'" '+(p ? 'data-view="'+id+'" ' : '')+'role="tab" aria-selected="'+(active === id)+'" aria-controls="project-view" '+(p ? 'tabindex="'+(active === id ? '0' : '-1')+'" ' : '')+'class="'+(active === id ? 'active' : '')+'"'+(p ? '' : ' disabled')+'>'+icon(i)+title+(id === 'materials' ? '<small>'+(p ? p.files.length : 0)+'</small>' : '')+'</button>').join('')+'</div>';
+  }
+  function zoomControls(disabled = false) {
+    return '<div class="canvas-bottom"><div class="zoom-controls">'+[['zoom-out','minus','缩小画布'],['zoom-in','plus','放大画布'],['fit-graph','maximize','适应画布']].map(([id,name,label],index) => (index === 1 ? '<span'+(disabled ? '' : ' id="zoom-label"')+'>100%</span>' : index === 2 ? '<i></i>' : '')+'<button class="icon-button" '+(disabled ? '' : 'id="'+id+'" ')+'aria-label="'+label+'" '+(disabled ? 'disabled' : 'title="'+label+(id === 'fit-graph' ? ' · 0' : '')+'"')+'>'+icon(name)+'</button>').join('')+'</div></div>';
+  }
+  function projectFooter(total,completed,disabled = false) {
+    return '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+(disabled || viewTab === 'graph' ? [['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button '+(disabled ? 'disabled' : 'data-filter="'+id+'" aria-pressed="false"')+'><i class="legend-dot '+id+'"></i>'+title+'</button>').join('') : '')+'</div><div class="task-progress"><span>'+completed+' / '+total+' 个任务</span><span class="progress-track"><i style="width:'+(total ? completed/total*100 : 0)+'%"></i></span></div></footer>';
+  }
+  function projectMarkup(p) {
+    const state = PwnDemoGraph.buildState(p), completed = state.steps.filter(s => s.status === 'completed').length;
+    return '<section class="project-page">'+projectHeading(p)+
+    '<div class="project-body"><section class="canvas-panel"><header class="canvas-header">'+projectTabs(p)+workspaceActions()+'</header>'+
+    '<div id="project-view" class="'+(viewTab === 'graph' ? 'graph-stage' : 'tab-content')+'" role="tabpanel" aria-labelledby="view-tab-'+viewTab+'">'+(viewTab === 'graph' ? '<div id="graph-host" class="graph-host"></div>'+zoomControls() : viewTab === 'materials' ? materialsMarkup(p) : resultsMarkup(p,state))+'</div>'+projectFooter(state.steps.length,completed)+'</section>'+
     '<aside class="activity-pane" aria-labelledby="activity-title"><header class="activity-heading"><h2>'+icon('notebook-text')+'<span id="activity-title">黑板日志</span></h2><span id="activity-match-count" role="status" aria-live="polite"></span><button id="activity-collapse-all" class="icon-button" title="收起全部展开的日志" aria-label="收起全部展开的日志" hidden>'+icon('list-collapse')+'</button></header><div id="activity-toolbar"></div><div id="activity-content" class="activity-content" role="region" aria-labelledby="activity-title" tabindex="0"></div><button id="activity-to-latest" title="返回最新记录" hidden>'+icon('arrow-up')+'最新记录</button></aside></div></section>';
   }
   function emptyWorkspaceMarkup() {
-    return '<section class="project-page empty-project-page"><header class="project-heading"><div class="project-heading-copy empty-project-heading" aria-hidden="true"><div class="title-row"><h1>工作台</h1></div><div class="project-description"><span>尚未创建项目</span></div></div><div class="heading-actions">'+modelEntry()+'</div></header>'+
-      '<div class="project-body"><section class="canvas-panel"><header class="canvas-header"><div class="view-tabs" role="tablist" aria-label="项目视图">'+[['graph','workflow','画布'],['materials','paperclip','材料'],['result','file-check-2','结果']].map(([id,i,title]) => '<button id="view-tab-'+id+'" role="tab" aria-selected="'+(id === 'graph')+'" aria-controls="project-view" class="'+(id === 'graph' ? 'active' : '')+'" disabled>'+icon(i)+title+(id === 'materials' ? '<small>0</small>' : '')+'</button>').join('')+'</div><div class="workspace-actions"><button class="button secondary" disabled>'+icon('sliders-horizontal')+'项目管理</button><button class="button secondary" disabled>'+icon('message-square-plus')+'补充信息</button></div></header>'+
-      '<div id="project-view" class="graph-stage" role="tabpanel" aria-labelledby="view-tab-graph"><div id="graph-host" class="graph-host"></div><div class="canvas-empty-state"><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" data-create>'+icon('plus')+'新建项目</button></div><div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" aria-label="缩小画布" disabled>'+icon('minus')+'</button><span>100%</span><button class="icon-button" aria-label="放大画布" disabled>'+icon('plus')+'</button><i></i><button class="icon-button" aria-label="适应画布" disabled>'+icon('maximize')+'</button></div></div></div>'+
-      '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+[['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button disabled><i class="legend-dot '+id+'"></i>'+title+'</button>').join('')+'</div><div class="task-progress"><span>0 / 0 个任务</span><span class="progress-track"><i style="width:0%"></i></span></div></footer></section>'+
+    return '<section class="project-page empty-project-page">'+projectHeading()+
+      '<div class="project-body"><section class="canvas-panel"><header class="canvas-header">'+projectTabs()+workspaceActions(null)+'</header>'+
+      '<div id="project-view" class="graph-stage" role="tabpanel" aria-labelledby="view-tab-graph"><div id="graph-host" class="graph-host"></div><div class="canvas-empty-state"><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" data-create>'+icon('plus')+'新建项目</button></div>'+zoomControls(true)+'</div>'+projectFooter(0,0,true)+'</section>'+
       '<aside class="activity-pane" aria-labelledby="activity-title"><header class="activity-heading"><h2>'+icon('notebook-text')+'<span id="activity-title">黑板日志</span></h2><span id="activity-match-count">0 条记录</span></header><div id="activity-toolbar"><div class="activity-search"><label for="activity-search" class="visually-hidden">搜索黑板日志全文</label>'+icon('search')+'<input id="activity-search" type="search" placeholder="搜索日志全文" disabled></div></div><div id="activity-content" class="activity-content" role="region" aria-labelledby="activity-title" tabindex="0"></div></aside></div></section>';
   }
   function materialsMarkup(p) {
@@ -225,8 +237,12 @@
     if (!graph) { viewTab = 'graph'; render(); }
     activityOrigin = origin;
     graph.setStatusFilter('all');
-    $$('[data-filter]').forEach(el => { el.classList.remove('active'); el.setAttribute('aria-pressed','false'); });
+    syncStatusFilter();
     graph.selectNode(key); graph.focusNode(key); $('#clear-selection')?.focus({preventScroll:true});
+  }
+  function syncStatusFilter() {
+    const filter = graph?.getStatusFilter();
+    $$('[data-filter]').forEach(button => { const active = button.dataset.filter === filter; button.classList.toggle('active',active); button.setAttribute('aria-pressed',String(active)); });
   }
   function openRecord(record,options = {}) {
     materialReadVersion++;
@@ -327,17 +343,17 @@
       if (route() !== 'llm' && ((!p && !$('.empty-project-page')) || before !== p?.id || !$('.project-page'))) render();
       else if (route() !== 'llm' && p && signature !== lastSnapshot) {
         if (selectedRun !== 'current' && !p.history.some(h=>String(h.generation)===selectedRun && h.state)) selectedRun = 'current';
-        const shown = viewed(), holder = document.createElement('div'); holder.innerHTML = projectMarkup(shown);
+        const shown = viewed(), state = PwnDemoGraph.buildState(shown), holder = document.createElement('div'); holder.innerHTML = projectHeading(shown)+workspaceActions();
         $('.project-heading')?.replaceWith(holder.querySelector('.project-heading'));
         $('.workspace-actions')?.replaceWith(holder.querySelector('.workspace-actions'));
-        if (graph) graph.setState(PwnDemoGraph.buildState(shown));
+        if (graph) graph.setState(state);
         else {
           const container = $('#project-view'), top = container?.scrollTop || 0;
           const expanded = $$('.content-card').filter(card=>card.querySelector('[data-content-toggle]')?.getAttribute('aria-expanded')==='true').map(card=>card.dataset.contentKey);
-          if (container) { container.innerHTML = viewTab === 'materials' ? materialsMarkup(shown) : resultsMarkup(shown,PwnDemoGraph.buildState(shown)); fitContentBodies(); expanded.forEach(key=>$$('.content-card').find(card=>card.dataset.contentKey===key)?.querySelector('[data-content-toggle]')?.click()); container.scrollTop = top; }
+          if (container) { container.innerHTML = viewTab === 'materials' ? materialsMarkup(shown) : resultsMarkup(shown,state); fitContentBodies(); expanded.forEach(key=>$$('.content-card').find(card=>card.dataset.contentKey===key)?.querySelector('[data-content-toggle]')?.click()); container.scrollTop = top; }
         }
-        const state=PwnDemoGraph.buildState(shown), footer=document.createElement('div'); footer.innerHTML=projectFooter(state,state.steps.filter(step=>step.status==='completed').length); $('.canvas-footer')?.replaceWith(footer.firstElementChild);
-        const filter=graph?.getStatusFilter(); $$('[data-filter]').forEach(button=>{button.classList.toggle('active',button.dataset.filter===filter);button.setAttribute('aria-pressed',String(button.dataset.filter===filter));});
+        const footer=document.createElement('div'); footer.innerHTML=projectFooter(state.steps.length,state.steps.filter(step=>step.status==='completed').length); $('.canvas-footer')?.replaceWith(footer.firstElementChild);
+        syncStatusFilter();
         const input=document.activeElement?.id==='activity-search'?document.activeElement:null, selection=input&&[input.selectionStart,input.selectionEnd]; renderActivity(); if(input&&$('#activity-search')){$('#activity-search').focus({preventScroll:true});$('#activity-search').setSelectionRange(...selection);}
       }
       lastSnapshot = signature; renderSidebar();
@@ -405,7 +421,7 @@
     if (d.close === 'project-dialog') { if (!mutating) $('#project-dialog').close(); return; }
     if (d.view) { viewTab = d.view; render(); $('#view-tab-'+viewTab).focus(); return; }
     if (d.focus) return focusGraph(d.focus);
-    if (d.filter && graph) { const next = graph.getStatusFilter() === d.filter ? 'all' : d.filter; graph.setStatusFilter(next); $$('[data-filter]').forEach(el => { el.classList.toggle('active',el.dataset.filter === next); el.setAttribute('aria-pressed',String(el.dataset.filter === next)); }); return; }
+    if (d.filter && graph) { graph.setStatusFilter(graph.getStatusFilter() === d.filter ? 'all' : d.filter); syncStatusFilter(); return; }
     if (b.id === 'clear-search') { $('#project-search').value = ''; renderSidebar(); $('#project-search').focus(); }
     if (b.id === 'zoom-in') graph?.zoom(1.18);
     if (b.id === 'zoom-out') graph?.zoom(1/1.18);

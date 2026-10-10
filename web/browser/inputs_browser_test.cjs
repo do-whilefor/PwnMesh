@@ -22,7 +22,12 @@ test('production forms render accessible dialogs, retry uploads, and atomically 
    if(pathname.endsWith('/status')){project.status=req.postDataJSON().status;return reply(project);}
    errors.push('Unexpected '+method+' '+pathname);return reply({},404);
   });
-  await page.goto(server.url,{waitUntil:'networkidle'});await fillCreate(page,'真实材料上传');
+  await page.goto(server.url,{waitUntil:'networkidle'});
+  assert.deepEqual(await page.locator('.view-tabs [role="tab"]').evaluateAll(tabs=>tabs.map(tab=>({disabled:tab.disabled,selected:tab.getAttribute('aria-selected')}))),[{disabled:true,selected:'true'},{disabled:true,selected:'false'},{disabled:true,selected:'false'}]);
+  assert.equal(await page.locator('.zoom-controls button:disabled').count(),3);
+  assert.equal(await page.locator('.legend button:disabled').count(),3);
+  assert.match(await page.locator('.task-progress').textContent(),/0 \/ 0 个任务/);
+  await fillCreate(page,'真实材料上传');
   assert.ok(await page.getByRole('dialog',{name:'新建项目',exact:true}).isVisible());
   assert.equal(await page.getByLabel('项目名称',{exact:true}).inputValue(),'真实材料上传');
   await page.locator('#project-files').setInputFiles([{name:'one.http',mimeType:'text/plain',buffer:Buffer.from('GET /one')},{name:'two.apk',mimeType:'application/octet-stream',buffer:Buffer.from([0,255,13,10])}]);await page.locator('#create-form [type="submit"]').click();await page.waitForFunction(()=>document.getElementById('create-error').textContent.includes('Controlled failed upload'));assert.equal(creates,1);assert.equal(project.status,'stopped');assert.equal(await page.locator('#project-name').isDisabled(),true);assert.equal(await page.locator('#selected-files [data-remove-file]').first().isDisabled(),true);assert.equal(await page.locator('#selected-files li').count(),2);

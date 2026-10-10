@@ -2,12 +2,12 @@
   'use strict';
 
   const helpers = window.PwnMeshModelSettings;
-  const providers = Object.fromEntries(Object.entries(helpers.providers).map(([id,preset]) => [id,{...preset,url:preset.base_url}]));
+  const providers = helpers.providers;
   const bindings = new WeakMap();
   const efforts = { low: '低 / 更快响应', high: '高 / 深入推理', max: '最高 / 充分推理' };
   let saved = null;
-  const providerDefaults = () => Object.fromEntries(Object.entries(providers).map(([id, preset]) => [id, { url: preset.url, model: preset.model }]));
-  const defaults = () => ({ provider: 'deepseek', protocol: 'anthropic', url: providers.deepseek.url, model: providers.deepseek.model, reasoningEffort: helpers.defaultReasoningEffort, connection: { mode: 'direct' } });
+  const providerDefaults = () => Object.fromEntries(Object.entries(providers).map(([id, preset]) => [id, { url: preset.base_url, model: preset.model }]));
+  const defaults = () => ({ provider: 'deepseek', url: providers.deepseek.base_url, model: providers.deepseek.model, reasoningEffort: helpers.defaultReasoningEffort, connection: { mode: 'direct' } });
   const entryState = state => ({...state,reasoningEffort:helpers.defaultReasoningEffort,connection:{mode:'direct'}});
   const esc = (value) => String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
   const providerIcon = (id, className = '') => providers[id].icon ? `<img class="${className}" src="${providers[id].icon}" alt="" aria-hidden="true">` : `<i class="${className}" data-lucide="settings-2" aria-hidden="true"></i>`;
@@ -47,7 +47,7 @@
   const origin = (value) => { try { return new URL(value).origin; } catch { return ''; } };
   function fromServer(settings) {
     const proxy = helpers.parseProxy(settings.proxy_url);
-    return {provider: helpers.providerFor(settings.base_url), protocol:'anthropic', url:settings.base_url,
+    return {provider: helpers.providerFor(settings.base_url), url:settings.base_url,
       model:settings.model, reasoningEffort:settings.reasoning_effort || helpers.defaultReasoningEffort,
       connection:settings.connection_mode === 'proxy' ? {mode:'proxy',...proxy} : {mode:'direct'}};
   }
@@ -62,7 +62,7 @@
     const controller = new AbortController(), options = {signal:controller.signal};
     const field = name => form.elements.namedItem(name), query = selector => host.querySelector(selector);
     const icons = () => window.lucide?.createIcons({attrs:{'stroke-width':1.6}});
-    const current = () => ({provider,protocol:'anthropic',url:field('url').value.trim(),model:field('model').value.trim(),
+    const current = () => ({provider,url:field('url').value.trim(),model:field('model').value.trim(),
       reasoningEffort:field('reasoningEffort').value, connection:field('connectionMode').value === 'proxy'
         ? {mode:'proxy',protocol:field('proxyProtocol').value,host:field('proxyHost').value.trim(),port:field('proxyPort').value.trim()}
         : {mode:'direct'}});
