@@ -88,8 +88,5 @@
     }
     return routes;
   }
-  function routeEdge(sourceId, targetId, positions, options = {}) {
-    return connect(sourceId, targetId, geometry(positions, options));
-  }
-  return { routeEdge, routeEdges };
+  return { routeEdges };
 });

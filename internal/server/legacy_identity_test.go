@@ -20,9 +20,22 @@ func TestRegisteredStepOperationsBindRequestIdentity(t *testing.T) {
 					f.request("POST", f.base()+"/intents/"+f.intent+"/release", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)
 				}
 				before := f.state()
-				f.request("POST", f.base()+"/intents/"+f.intent+"/"+op, map[string]string{"worker": "unregistered-worker", "description": "Unbound result"}, true, http.StatusForbidden, nil)
-				if !reflect.DeepEqual(before, f.state()) {
-					t.Fatal("mismatched identity changed the Step or published a Fact")
+				for _, test := range []struct {
+					name   string
+					worker any
+					status int
+				}{
+					{"mismatched", "unregistered-worker", http.StatusForbidden},
+					{"empty", "", http.StatusUnprocessableEntity},
+					{"null", nil, http.StatusUnprocessableEntity},
+					{"non-string", 123, http.StatusUnprocessableEntity},
+				} {
+					t.Run(test.name, func(t *testing.T) {
+						f.request("POST", f.base()+"/intents/"+f.intent+"/"+op, map[string]any{"worker": test.worker, "description": "Unbound result"}, true, test.status, nil)
+						if !reflect.DeepEqual(before, f.state()) {
+							t.Fatal("invalid identity changed the Step or published a Fact")
+						}
+					})
 				}
 			})
 		}

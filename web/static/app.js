@@ -30,6 +30,7 @@
   };
   const current = () => projects.find(p => p.id === route().split('/')[1]) || projects[0];
   const viewed = () => selectedRun === 'current' ? current() : current()?.history.find(p => String(p.generation) === selectedRun) || current();
+  const projectState = project => project.state || {graph:{project:project.raw || {},facts:[],intents:[],hints:[]},goals:[],steps:[],fact_records:[],findings:[],fact_relations:[],revision:0};
   const dateTime = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(value)) : '—';
   const projectTimes = p => '<div class="project-times" aria-label="项目时间范围"><span><time id="project-created-at" title="创建时间" datetime="'+esc(p.createdAt || '')+'">'+dateTime(p.createdAt)+'</time></span><span class="project-time-separator" aria-hidden="true">～</span><span><time id="project-ended-at" '+(p.endedAt ? 'title="结束时间" datetime="'+esc(p.endedAt)+'"' : 'title="尚未结束"')+'>'+dateTime(p.endedAt)+'</time></span></div>';
   const badge = p => '<span class="badge '+(p.archived || p.readOnly ? 'paused' : p.status)+'"><i class="status-dot '+p.status+'"></i>'+(p.archived ? '已归档' : p.readOnly ? '历史项目 · 只读' : statusLabels[p.status])+'</span>';
@@ -80,7 +81,7 @@
     return '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+(disabled || viewTab === 'graph' ? [['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button '+(disabled ? 'disabled' : 'data-filter="'+id+'" aria-pressed="false"')+'><i class="legend-dot '+id+'"></i>'+title+'</button>').join('') : '')+'</div><div class="task-progress"><span>'+completed+' / '+total+' 个任务</span><span class="progress-track"><i style="width:'+(total ? completed/total*100 : 0)+'%"></i></span></div></footer>';
   }
   function projectMarkup(p) {
-    const state = PwnDemoGraph.buildState(p), completed = state.steps.filter(s => s.status === 'completed').length;
+    const state = projectState(p), completed = state.steps.filter(s => s.status === 'completed').length;
     return '<section class="project-page">'+projectHeading(p)+
     '<div class="project-body"><section class="canvas-panel"><header class="canvas-header">'+projectTabs(p)+workspaceActions()+'</header>'+
     '<div id="project-view" class="'+(viewTab === 'graph' ? 'graph-stage' : 'tab-content')+'" role="tabpanel" aria-labelledby="view-tab-'+viewTab+'">'+(viewTab === 'graph' ? '<div id="graph-host" class="graph-host"></div>'+zoomControls() : viewTab === 'materials' ? materialsMarkup(p) : resultsMarkup(p,state))+'</div>'+projectFooter(state.steps.length,completed)+'</section>'+
@@ -122,7 +123,7 @@
   function readContent(key) {
     const p = viewed(), [kind,id] = key.split(':');
     if (kind === 'input') return openRecord({kind:'项目输入',title:id === 'target' ? '起点 / 已知信息' : '终点 / 项目目标',body:p[id],meta:[{label:'项目',value:p.name}]});
-    const state = PwnDemoGraph.buildState(p);
+    const state = projectState(p);
     if (kind === 'completion') { const result=PwnMeshData.buildResult(state,p.logs || []); return openRecord({kind:'探索结论',title:'探索结论',body:result.summary || result.notice,meta:[{label:'项目',value:p.name}]}); }
     const finding = state.findings.find(f => f.id === id);
     if (finding) openRecord({kind:'探索结论',title:finding.claim,body:findingBody(finding,state),meta:[{label:'项目',value:p.name},{label:'范围',value:finding.scope}]},{onLocate:() => focusGraph('finding:'+finding.id)});
@@ -264,11 +265,13 @@
     if (!dialog.open) dialog.showModal();
   }
   function mountGraph(p) {
-    graph = PwnDemoGraph.create($('#graph-host'),p,{
-      onZoom: zoom => { if ($('#zoom-label')) $('#zoom-label').textContent = Math.round(zoom*100)+'%'; },
+    const host = $('#graph-host');
+    graph = new PwnMeshGraph(host,{
       onSelect: node => { selectedNode = node; selectedEdge = null; renderActivity(); },
       onSelectEdge: edge => { selectedEdge = edge && graph?.getEdgeDetails(edge.id); selectedNode = null; renderActivity(); }
     });
+    graph.listen(host,'graphzoom',event => { if ($('#zoom-label')) $('#zoom-label').textContent = Math.round(event.detail.zoom*100)+'%'; });
+    graph.setState(projectState(p));
     $('#zoom-label').textContent = Math.round(graph.scale*100)+'%';
   }
   function render() {
@@ -343,7 +346,7 @@
       if (route() !== 'llm' && ((!p && !$('.empty-project-page')) || before !== p?.id || !$('.project-page'))) render();
       else if (route() !== 'llm' && p && signature !== lastSnapshot) {
         if (selectedRun !== 'current' && !p.history.some(h=>String(h.generation)===selectedRun && h.state)) selectedRun = 'current';
-        const shown = viewed(), state = PwnDemoGraph.buildState(shown), holder = document.createElement('div'); holder.innerHTML = projectHeading(shown)+workspaceActions();
+        const shown = viewed(), state = projectState(shown), holder = document.createElement('div'); holder.innerHTML = projectHeading(shown)+workspaceActions();
         $('.project-heading')?.replaceWith(holder.querySelector('.project-heading'));
         $('.workspace-actions')?.replaceWith(holder.querySelector('.workspace-actions'));
         if (graph) graph.setState(state);
@@ -382,7 +385,7 @@
     })
   });
   function exportResults() {
-    const p = viewed(), state = PwnDemoGraph.buildState(p);
+    const p = viewed(), state = projectState(p);
     const body = '# '+p.name+'\n\nPwnMesh 项目记录 · 第 '+((p.generation || 0)+1)+' 轮\n\n'+(PwnMeshData.buildResult(state,p.logs || []).summary || '')+'\n\n'+state.findings.map(f => '## '+f.claim+'\n\n范围：'+f.scope+'\n\n'+findingBody(f,state)).join('\n\n');
     const url = URL.createObjectURL(new Blob([body],{type:'text/markdown;charset=utf-8'})), link = document.createElement('a');
     link.href = url; link.download = p.name.replace(/[<>:"/\\|?*\x00-\x1f]/g,'_').slice(0,100)+'-第'+((p.generation || 0)+1)+'轮.md';

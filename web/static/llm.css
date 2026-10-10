@@ -56,7 +56,6 @@
 .llm-key-toggle:hover{background:#f3f6f7;color:#3e5361}
 .llm-effort{display:grid;grid-template-columns:minmax(0,1fr) 190px;align-items:center;gap:18px;margin:1px 0 0;padding:4px 0}
 .llm-effort-description>label{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;line-height:1.4;color:#3e5361}
-.llm-effort-description>label>span{font-size:11px;font-weight:400;color:#5c6f7c}
 .llm-effort-description>.llm-field-hint{margin-top:5px}
 .llm-network{margin:12px 0 0}
 .llm-network-row{display:grid;grid-template-columns:minmax(0,1fr) 190px;align-items:center;gap:18px}
@@ -73,11 +72,10 @@
 .llm-actions>div{display:flex;align-items:center;gap:10px}
 .llm-actions button{display:flex;align-items:center;justify-content:center;gap:7px;white-space:nowrap;height:37px;border-radius:8px;font-family:inherit;font-size:12px;cursor:pointer;padding:0 14px;transition:background .15s,border-color .15s}
 
-
 .llm-test{background:#f4f6f7;border:1px solid transparent;color:#3e5361}
 .llm-test:hover{background:#eaf0f3}
-.llm-save,.llm-return{background:var(--accent,#ee805f);border:1px solid transparent;color:#fff}
-.llm-save:hover:not(:disabled),.llm-return:hover:not(:disabled){background:var(--accent-hover,#df6947)}
+.llm-save{background:var(--accent,#ee805f);border:1px solid transparent;color:#fff}
+.llm-save:hover:not(:disabled){background:var(--accent-hover,#df6947)}
 .llm-actions [hidden]{display:none}
 .llm-actions button:disabled{cursor:default;opacity:1;background:#edf1f4;border-color:#d9e1e6;color:#5c6f7c}
 .llm-actions .llm-save:disabled{background:var(--accent,#ee805f);color:#fff;opacity:.45}

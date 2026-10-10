@@ -94,7 +94,8 @@ test('model form only saves after a successful probe and discards unsaved drafts
     const page = await browser.newPage();await page.setContent('<main id="main"></main>');
     const errors = [];page.on('pageerror',error => errors.push(error.message));
     await page.evaluate(() => {
-      window.calls = [];window.probeOK = false;
+      window.calls = [];window.probeOK = false;window.returns = [];window.savedSummaries = [];
+      window.addEventListener('llm-updated',() => window.savedSummaries.push(PwnLLMDemo.summary()));
       window.modelState = {has_token:true,base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',connection_mode:'direct',reasoning_effort:'max'};
       window.PwnMeshAPI = {Client:class {async request(path,options={}) {
         window.calls.push({path,body:options.body});
@@ -104,7 +105,7 @@ test('model form only saves after a successful probe and discards unsaved drafts
       }}};
     });
     for (const name of ['models.js','llm.js']) await page.addScriptTag({path:require('node:path').join(__dirname,'static',name)});
-    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host,{onReturn:() => host.replaceChildren()});});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host,{onReturn:() => {window.returns.push(host.querySelector('#llm-key').value);host.replaceChildren();}});});
     await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     assert.equal(await page.locator('#llm-effort').inputValue(),'max');
     assert.equal(await page.locator('.llm-proxy-fields').isVisible(),false);
@@ -122,6 +123,7 @@ test('model form only saves after a successful probe and discards unsaved drafts
     assert.equal(await page.locator('.llm-save').isVisible(),true);
     assert.equal(await page.locator('.llm-save').isDisabled(),true);
     assert.equal(await page.locator('.llm-summary-status').textContent(),'已保存');
+    assert.deepEqual(await page.evaluate(() => savedSummaries),['DeepSeek · saved-model']);
     assert.equal(await page.evaluate(() => calls.at(-1).body.token),'changed-after-verification');
     assert.equal(await page.evaluate(() => calls.at(-1).body.protocol),'anthropic');
     assert.equal(await page.evaluate(() => calls.filter(call => call.path.endsWith('/test')).every(call => call.body.protocol === 'anthropic')),true);
@@ -141,6 +143,7 @@ test('model form only saves after a successful probe and discards unsaved drafts
     await page.locator('#llm-url').fill('https://api.deepseek.com/draft');await page.locator('#llm-model').fill('draft-model');
     await page.locator('#llm-effort').selectOption('low');
     await page.locator('#llm-key').fill('leave-page-secret');await page.locator('.llm-back').click();
+    assert.deepEqual(await page.evaluate(() => returns),[''],'return callback runs once, after the key is cleared');
     await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host);});
     await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     assert.equal(await page.locator('#llm-key').inputValue(),'');

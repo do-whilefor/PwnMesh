@@ -53,7 +53,7 @@
       if(!this.pendingCreate){
         let created;try{created=await this.api.request('/projects',{method:'POST',body:values.files.length?{...payload,start_paused:true}:payload});}
         catch(error){if(error.status===0){this.uncertainCreate=true;error.message+='；创建结果未确认，请关闭窗口核对项目列表，避免重复创建。';error.uncertainCreate=true;}throw error;}
-        this.pendingCreate={created,payload,files:values.files.slice(),uploaded:0};
+        this.pendingCreate={created,files:values.files.slice(),uploaded:0};
       }
       const pending=this.pendingCreate,id=pending.created.project.id;
       try{
@@ -76,5 +76,5 @@
       const value={...snapshotView(records.state[0],records.event,records.execution,summary.files,summary),archived:true,endedAt:summary.archivedAt,history:[]};Object.assign(summary,value);const latest=this.projects.find(p=>p.id===project.id)?.history.find(p=>p.generation===generation);if(latest&&latest!==summary)Object.assign(latest,value);return latest||summary;
     }
   }
-  return {Service,projectView,snapshotView,pathFor};
+  return {Service,projectView,snapshotView};
 });

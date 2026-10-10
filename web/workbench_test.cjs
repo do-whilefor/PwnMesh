@@ -35,7 +35,18 @@ test('form drafts retain actual File objects, isolate file arrays and validate t
  const hint=drafts.getHint('a');assert.equal(hint.files[0],file);hint.files.length=0;assert.equal(drafts.getHint('a').files[0],file);
  assert.match(model.validateFiles([{name:'large.zip',size:257*1048576}]),/256/);assert.match(model.validateFiles(Array.from({length:33},(_,i)=>({name:i+'.txt',size:1}))),/32/);
 });
-test('real log projection preserves timestamps and evidence rather than fixture narrative',()=>{const activity=require('./static/activity-data.js'),p={logs:[{id:'x',title:'Real event',body:'evidence',time:stamp,node:{type:'fact',id:'proof'},artifacts:[{path:'file.txt',excerpt:'actual'}]}]};const entries=activity.buildEntries(p);assert.equal(entries.length,1);assert.equal(entries[0].timestamp,stamp);assert.equal(entries[0].key,'fact:proof');assert.match(entries[0].evidence,/actual/);assert.deepEqual(activity.buildEntries({}),[]);});
+test('real log projection preserves timestamps, evidence and visible phase labels',()=>{
+ const activity=require('./static/activity-data.js'),p={logs:[
+  {id:'x',title:'Real event',body:'evidence',time:stamp,node:{type:'fact',id:'proof'},artifacts:[{path:'file.txt',excerpt:'actual'}]},
+  {id:'error',level:'error',phase:'Execute'},
+  {id:'finding',node:{type:'finding',id:'result'},level:'error'},
+  {id:'model',phase:'Model'}
+ ]};
+ const entries=activity.buildEntries(p),entry=entries.find(item=>item.id==='x');
+ assert.equal(entry.timestamp,stamp);assert.equal(entry.key,'fact:proof');assert.match(entry.evidence,/actual/);
+ assert.deepEqual(entries.map(item=>[item.id,item.phase]),[['model','Model'],['finding','FINDING'],['error','ERROR'],['x','WORKSPACE']]);
+ assert.deepEqual(activity.buildEntries({}),[]);
+});
 
 test('archive hydration survives a concurrent live refresh without losing the selected round',async()=>{
  const oldState=snapshot('a',0),liveState=snapshot('a',1),api=fixture({a:liveState}),original=api.request.bind(api),gate=deferred();

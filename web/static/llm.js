@@ -51,11 +51,11 @@
       model:settings.model, reasoningEffort:settings.reasoning_effort || helpers.defaultReasoningEffort,
       connection:settings.connection_mode === 'proxy' ? {mode:'proxy',...proxy} : {mode:'direct'}};
   }
-  function bind(host, {onReturn} = {}) {
+  function bind(host, {onReturn = () => {}} = {}) {
     bindings.get(host)?.();
     const form = host.querySelector('.llm-form');
     if (!form) return;
-    let provider = (saved || defaults()).provider, verified = false, busy = false, loaded = false, dirty = false;
+    let provider = (saved || defaults()).provider, verified = false, busy = false, loaded = false;
     const providerDrafts = providerDefaults();
     let proxyDraft = helpers.parseProxy(serverSettings?.proxy_url);
     let generation = 0, disposed = false, request = null, keyOrigin = '';
@@ -71,10 +71,9 @@
       query('.llm-status').innerHTML = message ? `<i data-lucide="${kind === 'success' ? 'circle-check' : kind === 'error' ? 'circle-alert' : kind === 'pending' ? 'loader-circle' : 'info'}"></i><span>${esc(message)}</span>` : '';
       icons();
     };
-    const remember = (changed = true) => {
+    const remember = () => {
       providerDrafts[provider] = {url:field('url').value,model:field('model').value};
       proxyDraft = {protocol:field('proxyProtocol').value,host:field('proxyHost').value,port:field('proxyPort').value};
-      if (changed) dirty = true;
     };
     const sync = () => {
       const state = current(), proxy = state.connection.mode === 'proxy';
@@ -134,7 +133,7 @@
       const choice = event.target.closest('[data-llm-provider]');
       if (choice && !busy && loaded) {
         const selected = choice.dataset.llmProvider;if (selected === provider) return;
-        remember(false);fill({...current(),provider:selected,...providerDrafts[selected]});remember();invalidate();sync();return;
+        remember();fill({...current(),provider:selected,...providerDrafts[selected]});invalidate();sync();return;
       }
       if (event.target.closest('.llm-key-toggle')) {
         const reveal = field('key').type === 'password';field('key').type = reveal ? 'text' : 'password';
@@ -164,9 +163,9 @@
       try {
         const result = await api.request('/model-settings',{method:'PUT',body,signal:request.signal});
         if (disposed || version !== generation) return;
-        serverSettings = result;proxyDraft = helpers.parseProxy(result.proxy_url);saved = fromServer(result);dirty = false;verified = false;fill(saved);
+        serverSettings = result;proxyDraft = helpers.parseProxy(result.proxy_url);saved = fromServer(result);verified = false;fill(saved);
         query('.llm-summary-status').textContent = '已保存';status('success','配置已保存，新启动的任务将使用此配置；运行中的任务保持原配置。');
-        window.dispatchEvent(new CustomEvent('llm-updated',{detail:{provider:providers[saved.provider].name,model:saved.model,connection:{...saved.connection}}}));
+        window.dispatchEvent(new Event('llm-updated'));
       } catch(error) {if (!disposed && version === generation) status('error','保存失败：'+error.message);}
       finally {if (!disposed && version === generation) {busy = false;request = null;sync();}}
     },options);
@@ -178,8 +177,7 @@
     const observer = new MutationObserver(() => {if (!form.isConnected) cleanup();});
     host.addEventListener('click',event => {
       if (!event.target.closest('[data-llm-return]')) return;
-      const detail = {saved:Boolean(saved && !dirty),draftRetained:false};cleanup();
-      if (typeof onReturn === 'function') onReturn(detail);else window.dispatchEvent(new CustomEvent('llm-return',{detail}));
+      cleanup();onReturn();
     },options);
     observer.observe(host,{childList:true,subtree:true});bindings.set(host,cleanup);
     busy = true;sync();status('','');
@@ -189,7 +187,7 @@
       proxyDraft = helpers.parseProxy(settings.proxy_url);
       serverSettings = settings;saved = settings.has_token ? fromServer(settings) : null;loaded = true;busy = false;
       const state = entryState(fromServer(settings));
-      dirty = Boolean(saved && (saved.reasoningEffort !== state.reasoningEffort || saved.connection.mode !== state.connection.mode));
+      const dirty = saved && (saved.reasoningEffort !== state.reasoningEffort || saved.connection.mode !== state.connection.mode);
       fill(state);
       query('.llm-summary-status').textContent = dirty ? '未保存' : saved ? '已保存' : '待配置';
     }).catch(error => {if (!disposed) {busy = false;status('error','配置读取失败：'+error.message+'。返回项目后可重新打开重试。');sync();}});

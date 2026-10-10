@@ -35,7 +35,7 @@
     const kind = node.key === 'fact:origin' ? 'start' : node.key === endKey ? 'goal' : node.type === 'step' ? 'task' : node.type === 'goal' ? 'subgoal' : node.type;
     const invalid = supportProblem(node);
     const statusLabel = (STATES[node.status] || node.status) + (invalid ? ' · ' + invalid : '');
-    return {kind, label: node.key === 'fact:goal' ? '目标输入' : KINDS[kind] || node.type, status: visualStatus(node), statusLabel, subtitle: node.key === 'fact:origin' ? '项目原始输入' : node.key === 'fact:goal' ? '用户定义的目标输入' : invalid ? '证据支持需要复核' : node.type === 'goal' ? node.raw?.parent_id ? '下级目标条件' : '项目根目标条件' : node.type === 'finding' ? '发现与证据' : node.description || node.id};
+    return {kind, label: node.key === 'fact:goal' ? '目标输入' : KINDS[kind] || node.type, status: visualStatus(node), statusLabel};
   }
   function projectGeometry(nodes, positions, width = 148, height = 78) {
     return new Map(nodes.filter(node => positions.has(node.key)).map(node => [node.key, {...positions.get(node.key), width, height}]));
@@ -93,5 +93,5 @@
     const rotation = angle > Math.PI / 2 ? angle - Math.PI : angle < -Math.PI / 2 ? angle + Math.PI : angle;
     return {text: label, x: point.x + Math.sin(rotation) * 12, y: point.y - Math.cos(rotation) * 12, angle: rotation * 180 / Math.PI};
   }
-  return {STATES, KINDS, edgeKey, visualStatus, nodePresentation, projectGeometry, describeEdge, collectSelection, placeEdgeLabel};
+  return {edgeKey, visualStatus, nodePresentation, projectGeometry, describeEdge, collectSelection, placeEdgeLabel};
 });

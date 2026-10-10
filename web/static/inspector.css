@@ -1,7 +1,6 @@
 .activity-content:has(>.node-inspector){overflow-x:hidden;min-width:0;overscroll-behavior:contain}
 .node-inspector{min-width:0;padding-bottom:14px}
 .node-inspector .selection-header{position:sticky;top:0;z-index:4;height:38px;padding:0 0 10px;gap:10px;align-items:center;background:#fff}
-.node-inspector .selection-header>span{font-size:10px;color:#5c6f7c}
 .inspector-icon{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
 .inspector-back{padding:3px 0;display:inline-flex;align-items:center;gap:5px;color:#5c6f7c;font-size:11px}
 .inspector-back:hover{color:var(--accent)}

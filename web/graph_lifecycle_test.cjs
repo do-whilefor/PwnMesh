@@ -69,6 +69,10 @@ test('updated text invalidates no geometry but refreshes cached-edge labels, det
   graph.setState(value); h.flush();
   assert.equal(graph.edgeRouteCache, cache); assert.equal(graph.edgeElements.get(edge.id).hit, hit);
   assert.match(hit.getAttribute('aria-label'), /<img/); assert.match(graph.edgeElements.get(edge.id).title.textContent, /new explanation/);
+  const card = graph.cards.get('fact:origin');
+  assert.equal(card.parts.title.textContent, '<img src=x onerror=alert(1)>');
+  assert.equal(card.getAttribute('aria-label'), '起点：<img src=x onerror=alert(1)>，输入');
+  assert.equal(card.title, '起点 · 输入\n<img src=x onerror=alert(1)>');
   assert.equal(selected.at(-1).description, '<img src=x onerror=alert(1)>');
   graph.project.edgeIndex.get(edge.id).label = 'updated relation'; graph.scheduleDraw(); h.flush(); assert.equal(graph.edgeElements.get(edge.id).label.textContent, 'updated relation');
   graph.destroy();
@@ -218,7 +222,10 @@ test('status filtering hides cards and disconnected edges without changing graph
     assert.equal(entry.group.style.display, expected); assert.equal(entry.label.style.display, expected);
   }
   graph.setStatusFilter('running'); h.flush(); assert.deepEqual(visibleKeys(), ['step:work']);
-  graph.setFilter('fact'); h.flush(); assert.deepEqual(visibleKeys(), ['step:work']); assert.ok(graph.cards.get('step:work').classList.contains('dim'));
+  graph.selectNode('step:work'); h.flush(); assert.deepEqual(visibleKeys(), ['step:work']);
+  assert.equal(graph.cards.get('step:work').classList.contains('dim'), false);
+  assert.equal(graph.cards.get('fact:origin').classList.contains('lineage'), true);
+  assert.equal(graph.cards.get('fact:old').classList.contains('dim'), true);
   graph.setStatusFilter('pending'); h.flush(); assert.deepEqual(visibleKeys(), ['step:queued']);
   graph.setStatusFilter('all'); h.flush(); assert.equal(graph.getVisibleNodeCount(), 8);
   assert.ok([...graph.edgeElements.values()].every(entry => entry.group.style.display === '' && entry.label.style.display === ''));

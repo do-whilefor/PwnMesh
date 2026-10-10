@@ -53,5 +53,5 @@
     };
   }
   function fileSize(bytes){if(bytes>=MiB)return (bytes/MiB).toFixed(1)+' MiB';if(bytes>=1024)return (bytes/1024).toFixed(1)+' KiB';return bytes+' B';}
-  return {validateFiles,validateProject,validateHint,isProjectClosed,createFormDrafts,PROJECT_TYPES,fileSize,MiB};
+  return {validateFiles,validateProject,validateHint,isProjectClosed,createFormDrafts,PROJECT_TYPES,fileSize};
 });

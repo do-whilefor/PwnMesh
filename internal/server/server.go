@@ -550,19 +550,12 @@ func (s *Server) intentAction(t *b.Tx, q *request, r *http.Request) (int, any, e
 	}
 	worker := q.text("worker")
 	fence := decisionFence(r)
-	// Check before reading description to preserve the HTTP error precedence.
-	if err := intentIdentity(fence, r.PathValue("iid"), worker); err != nil {
-		return 0, nil, err
+	project, intent := r.PathValue("pid"), r.PathValue("iid")
+	if fence.Run != "" && (fence.Lease != "explore" || fence.Run != worker || fence.Intent != intent) {
+		return 0, nil, b.Err(403, "Step operations require the matching Execute identity")
 	}
 	if q.err != nil {
 		return 0, nil, q.err
-	}
-	return changeIntent(t, r.PathValue("pid"), r.PathValue("iid"), fence, op, worker)
-}
-
-func changeIntent(t *b.Tx, project, intent string, fence b.ExecutionFence, op, worker string) (int, any, error) {
-	if err := intentIdentity(fence, intent, worker); err != nil {
-		return 0, nil, err
 	}
 	g, err := t.Load(project)
 	if err != nil {
@@ -617,12 +610,6 @@ func changeIntent(t *b.Tx, project, intent string, fence b.ExecutionFence, op, w
 	return 0, nil, b.Err(404, "Intent not found")
 }
 
-func intentIdentity(fence b.ExecutionFence, intent, worker string) error {
-	if fence.Run != "" && (fence.Lease != "explore" || fence.Run != worker || fence.Intent != intent) {
-		return b.Err(403, "Step operations require the matching Execute identity")
-	}
-	return nil
-}
 func (s *Server) complete(_ *b.Tx, _ *request, _ *http.Request) (int, any, error) {
 	return 0, nil, b.Err(403, "Project completion requires a reviewed primary-agent decision batch")
 }

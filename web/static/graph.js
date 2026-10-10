@@ -24,8 +24,8 @@
       this.positions = new Map(); this.nodeGeometry = new Map(); this.projectLayouts = new Map();
       this.cards = new Map(); this.edgeElements = new Map(); this.listeners = [];
       this.selected = null; this.selectedEdge = null; this.scale = 1; this.tx = 0; this.ty = 0;
-      this.project = null; this.projectId = null; this.generation = null; this.nodes = []; this.edges = []; this.diagnostics = [];
-      this.drag = null; this.filter = 'all'; this.statusFilter = 'all'; this.direction = 'upstream'; this.destroyed = false;
+      this.project = null; this.projectId = null; this.nodes = []; this.edges = []; this.diagnostics = [];
+      this.drag = null; this.statusFilter = 'all'; this.destroyed = false;
       this.panFrame = null; this.panTime = null; this.fitFrame = null; this.drawFrame = null; this.clickTimer = null;
       this.viewport = this.el('div', 'graph-viewport'); this.viewport.tabIndex = 0;
       this.viewport.setAttribute('role', 'group'); this.viewport.setAttribute('aria-label', '项目业务与步骤依赖图。点击节点追踪上游，方向键移动节点，加减号缩放，0 适应画布，Escape 清除选择。');
@@ -87,11 +87,11 @@
       for (const [savedKey, saved] of this.projectLayouts) if (saved.projectId === mapped.projectId && saved.generation !== mapped.generation) this.projectLayouts.delete(savedKey);
       let saved = this.projectLayouts.get(key);
       const fresh = !saved;
-      if (!saved) saved = {projectId: mapped.projectId, generation: mapped.generation, positions: new Map(), seed: 0};
+      if (!saved) saved = {projectId: mapped.projectId, generation: mapped.generation, positions: new Map()};
       const firstNodes = !saved.positions.size && mapped.nodes.length > 0;
-      Object.assign(saved, mergePositions(mapped.nodes, saved.positions, {seed: key + ':' + saved.seed}));
+      Object.assign(saved, mergePositions(mapped.nodes, saved.positions, {seed: key + ':0'}));
       this.projectLayouts.set(key, saved); this.positions = saved.positions;
-      this.project = mapped; this.projectId = mapped.projectId; this.generation = mapped.generation;
+      this.project = mapped; this.projectId = mapped.projectId;
       this.nodes = mapped.nodes; this.edges = mapped.edges; this.diagnostics = mapped.diagnostics;
       if (this.drag?.id && !mapped.nodeIndex.has(this.drag.id)) this.cancelDrag();
       if (changed || !mapped.nodeIndex.has(this.selected)) this.selected = null;
@@ -119,8 +119,8 @@
           card = this.el('button', 'graph-node'); card.type = 'button'; card.dataset.nodeKey = node.key; card.dataset.nodeId = node.id;
           const top = this.el('span', 'node-top'), kind = this.el('span', 'node-kind'), status = this.el('span', 'node-status');
           const kindText = this.el('span', ''), statusText = this.el('span', ''); kind.append(kindText); status.append(statusText); top.append(kind, status);
-          const title = this.el('strong', 'node-title'), subtitle = this.el('span', 'node-subtitle'); card.append(top, title, subtitle);
-          card.parts = {kind, kindText, status, statusText, title, subtitle}; this.cards.set(node.key, card); this.nodeHost.append(card);
+          const title = this.el('strong', 'node-title'); card.append(top, title);
+          card.parts = {kind, kindText, status, statusText, title}; this.cards.set(node.key, card); this.nodeHost.append(card);
         }
         const shape = nodePresentation(node, endKey), stamp = JSON.stringify([node.label, shape]);
         if (stamp === card.stamp) continue;
@@ -130,7 +130,7 @@
         card.title = shape.label + ' · ' + shape.statusLabel + '\n' + (node.description || node.id);
         card.parts.kind.replaceChildren(this.icon(({start: 'flag', task: 'node', fact: 'file', goal: 'target', subgoal: 'target', finding: 'shield'})[shape.kind] || 'node'), card.parts.kindText);
         card.parts.kindText.textContent = shape.label; card.parts.statusText.textContent = shape.statusLabel;
-        card.parts.title.textContent = node.label || node.id; card.parts.subtitle.textContent = shape.subtitle;
+        card.parts.title.textContent = node.label || node.id;
         card.parts.status.replaceChildren();
         if (shape.status === 'done') card.parts.status.append(this.icon('check'));
         if (shape.status === 'running') card.parts.status.append(this.el('i', 'node-running-dot'));
@@ -160,12 +160,11 @@
       this.syncGeometry(); this.updateBounds();
       this.empty.hidden = this.getVisibleNodeCount() > 0;
       this.empty.textContent = this.statusFilter === 'all' ? '暂无图节点' : '暂无' + ({done: '已完成', running: '运行中', pending: '待执行'})[this.statusFilter] + '节点';
-      const selection = collectSelection(this.project, this.selected, this.selectedEdge, this.direction);
+      const selection = collectSelection(this.project, this.selected, this.selectedEdge);
       for (const [key, card] of this.cards) {
         const node = this.project.nodeIndex.get(key), related = selection.nodeIds.has(key);
-        const matches = this.filter === 'all' || node.type === this.filter || (this.filter === 'start' && key === 'fact:origin');
         card.hidden = !this.isNodeVisible(node);
-        card.classList.toggle('selected', this.selected === key); card.classList.toggle('lineage', selection.active && related); card.classList.toggle('dim', (selection.active && !related) || !matches);
+        card.classList.toggle('selected', this.selected === key); card.classList.toggle('lineage', selection.active && related); card.classList.toggle('dim', selection.active && !related);
         card.setAttribute('aria-pressed', String(this.selected === key));
       }
       const signature = JSON.stringify([this.edges.map(edge => [edge.id, edge.source, edge.target]), [...this.nodeGeometry]]);
@@ -221,8 +220,6 @@
       if (hadNode) this.onSelect(null); this.onSelectEdge(clone(this.project?.edgeIndex.get(key)));
     }
     clearSelection() { this.selected = null; this.selectedEdge = null; this.scheduleDraw(); this.onSelect(null); this.onSelectEdge(null); }
-    setTraceDirection(direction) { this.direction = direction === 'downstream' ? 'downstream' : 'upstream'; this.scheduleDraw(); }
-    setFilter(type) { this.filter = ['goal', 'step', 'fact', 'finding', 'start'].includes(type) ? type : 'all'; this.scheduleDraw(); }
     isNodeVisible(node) { return !!node && (this.statusFilter === 'all' || nodePresentation(node, null).status === this.statusFilter); }
     isEdgeVisible(edge) { return !!edge && this.isNodeVisible(this.project?.nodeIndex.get(edge.source)) && this.isNodeVisible(this.project?.nodeIndex.get(edge.target)); }
     clearHiddenSelection(notify = true) {
@@ -266,7 +263,6 @@
       if (this.pendingFit || !previous.width || !previous.height) { this.fit(); return; }
       this.tx += (size.width - previous.width) / 2; this.ty += (size.height - previous.height) / 2; this.transform(); this.syncDragToView();
     }
-    refreshViewport() { this.resize(); }
     syncDragToView() {
       if (this.drag?.id) this.updateDraggedNode();
       else if (this.drag) { this.drag.ox = this.tx; this.drag.oy = this.ty; this.drag.x = this.drag.lastX; this.drag.y = this.drag.lastY; }
@@ -345,5 +341,5 @@
       this.viewport.remove(); this.empty.remove(); this.warning.remove(); this.live.remove(); this.cards.clear(); this.edgeElements.clear(); this.projectLayouts.clear();
     }
   }
-  return {PwnMeshGraph, mapState, resolveNodeKey};
+  return {PwnMeshGraph};
 });

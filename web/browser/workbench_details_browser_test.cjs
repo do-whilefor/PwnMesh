@@ -37,6 +37,39 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
     const view=()=>page.evaluate(()=>({camera:document.querySelector('#graph-host .graph-world').style.transform,positions:[...document.querySelectorAll('#graph-host .graph-node')].map(node=>[node.dataset.nodeKey,node.style.left,node.style.top])}));
     const closeReader=async()=>{await page.locator('.inspector-reader[open] [data-inspector-action="close"]').click();await page.locator('.inspector-reader[open]').waitFor({state:'hidden'});};
 
+    await t.test('desktop navigation, canvas and journal retain their layout across the wide-screen breakpoint',async()=>{
+      for(const width of [1440,1699,1700,1920]){
+        await page.setViewportSize({width,height:960});await paint(page);
+        const layout=await page.evaluate(()=>{
+          const rect=selector=>{const r=document.querySelector(selector).getBoundingClientRect();return {left:r.left,right:r.right,width:r.width};};
+          return {sidebar:rect('.sidebar'),canvas:rect('.canvas-panel'),journal:rect('.activity-pane'),
+            gap:getComputedStyle(document.querySelector('.project-body')).columnGap,
+            titleSize:getComputedStyle(document.querySelector('.title-row h1')).fontSize,
+            projectSize:getComputedStyle(document.querySelector('.project-copy strong')).fontSize,
+            journalTextSize:getComputedStyle(document.querySelector('.log-text-preview')).fontSize};
+        });
+        assert.equal(layout.sidebar.width,width>=1700?240:226);
+        assert.equal(layout.journal.width,width>=1700?270:250);
+        assert.equal(layout.gap,'12px');assert.equal(layout.canvas.left-layout.sidebar.right,12);
+        assert.equal(layout.journal.left-layout.canvas.right,12);assert.equal(width-layout.journal.right,12);
+        assert.ok(layout.canvas.width>500,'the canvas keeps useful space beside the journal');
+        assert.equal(layout.titleSize,'20px');assert.equal(layout.projectSize,'13px');assert.equal(layout.journalTextSize,'13px');
+      }
+      await page.setViewportSize({width:1440,height:960});await paint(page);
+    });
+
+    await t.test('zoom controls and percentage stay synchronized after returning to the canvas',async()=>{
+      const zoom=()=>page.evaluate(()=>({scale:new DOMMatrixReadOnly(getComputedStyle(document.querySelector('.graph-world')).transform).a,label:document.querySelector('#zoom-label').textContent}));
+      for(let visit=0;visit<2;visit++){
+        const before=await zoom();assert.equal(before.label,Math.round(before.scale*100)+'%');
+        await page.locator('#zoom-in').click();await paint(page);const enlarged=await zoom();
+        assert.ok(enlarged.scale>before.scale);assert.equal(enlarged.label,Math.round(enlarged.scale*100)+'%');
+        await page.locator('#zoom-out').click();await paint(page);const restored=await zoom();
+        assert.ok(Math.abs(restored.scale-before.scale)<0.00001);assert.equal(restored.label,Math.round(restored.scale*100)+'%');
+        if(visit===0){await page.locator('#view-tab-materials').click();await page.locator('#view-tab-graph').click();await paint(page);}
+      }
+    });
+
     await t.test('long blackboard and execution logs fold, survive polling and expose safe full-text readers',async()=>{
       for(const [article,head,tail] of [[board(),boardHead,boardTail],[system(),systemHead,systemTail]]){
         assert.equal(await article.locator('details').getAttribute('open'),null);assert.match(await article.innerText(),new RegExp(head));assert.ok(!(await article.innerText()).includes(tail));

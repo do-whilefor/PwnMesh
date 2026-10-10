@@ -4,7 +4,7 @@
 .graph-node{pointer-events:auto;opacity:1}
 
 .graph-node.dim{opacity:1;box-shadow:none}
-.graph-node.dim .node-title,.graph-node.dim .node-kind,.graph-node.dim .node-status,.graph-node.dim .node-subtitle{color:#5c6f7c}
+.graph-node.dim .node-title,.graph-node.dim .node-kind,.graph-node.dim .node-status{color:#5c6f7c}
 .graph-node.start.dim{border-color:#292a25}
 
 .graph-edge{fill:none;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke;pointer-events:none}
@@ -20,8 +20,7 @@
 .graph-edge-label.paused{fill:#92743f}
 .graph-edge-label:hover{fill:#a54f36}
 .graph-source-port{pointer-events:none}
-@keyframes edge-process-flow{to{stroke-dashoffset:-26}}
-@media(prefers-reduced-motion:reduce){.graph-edge.running{animation:none}}
+
 .graph-data-empty{position:absolute;inset:0;display:grid;place-items:center;color:#716e64;pointer-events:none;font-size:14px}
 .graph-data-warning{position:absolute;left:50%;top:10px;transform:translateX(-50%);max-width:90%;padding:5px 9px;border:1px solid #e8dcc7;border-radius:5px;background:#faf4e8;color:#92743f;font-size:11px;pointer-events:none;z-index:3}
 .graph-data-empty[hidden],.graph-data-warning[hidden]{display:none}

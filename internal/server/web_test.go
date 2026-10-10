@@ -165,7 +165,7 @@ func TestClassicInterfaceIsUnavailable(t *testing.T) {
 		"/static/vendor/elk.bundled.js", "/static/vendor/cytoscape-elk.js",
 		"/static/vendor/cytoscape.min.js", "/static/vendor/dagre.min.js",
 		"/static/vendor/cytoscape-dagre.js", "/static/pwnmesh.svg",
-		"/static/workbench.css", "/static/models.css",
+		"/static/workbench.css", "/static/models.css", "/static/graph-adapter.js",
 		"/static/mark.svg", "/static/provider-deepseek.svg", "/static/provider-glm.svg",
 		"/static/provider-kimi.svg", "/static/provider-sources.json", "/static/LICENSE-lobe-icons.txt",
 	} {
