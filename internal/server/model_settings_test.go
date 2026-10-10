@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -142,11 +143,16 @@ func TestModelSettingsAPISecretPersistenceAndValidation(t *testing.T) {
 	if err != nil || saved.Token != "secret-fixture-only" {
 		t.Fatal("empty token destroyed saved secret")
 	}
-	for _, body := range []string{`{"protocol":"openai"}`, `{"connection_mode":"vpn"}`, `{"unknown":true}`, `null`, `{} {}`, `{"base_url":"https://user:secret@invalid"}`, `{"request_timeout":0}`} {
-		response := modelSettingsRequest(t, handler, "PUT", "/model-settings", body)
-		if response.Code != 422 {
-			t.Errorf("invalid settings accepted (%s): %d", body, response.Code)
+	for _, body := range []string{`{"protocol":"openai"}`, `{"connection_mode":"vpn"}`, `{"unknown":true}`, `null`, `{} {}`, `{"base_url":"https://user:secret@invalid"}`, `{"request_timeout":0}`, `{"base_url":"https://models.invalid:0","token":"replacement"}`, `{"base_url":"https://models.invalid:65536","token":"replacement"}`, `{"proxy_url":"http://proxy.invalid:0"}`, `{"proxy_url":"socks5h://proxy.invalid:65536"}`} {
+		for method, route := range map[string]string{"PUT": "/model-settings", "POST": "/model-settings/test"} {
+			response := modelSettingsRequest(t, handler, method, route, body)
+			if response.Code != 422 {
+				t.Errorf("invalid %s settings accepted (%s): %d", method, body, response.Code)
+			}
 		}
+	}
+	if current, _, err := modelconfig.Read(path); err != nil || current != saved {
+		t.Fatal("invalid save or test changed the persisted configuration")
 	}
 	request := httptest.NewRequest("PUT", "/model-settings", strings.NewReader(`{"model":"cross-origin"}`))
 	request.Header.Set("Origin", "https://attacker.invalid")
@@ -158,44 +164,74 @@ func TestModelSettingsAPISecretPersistenceAndValidation(t *testing.T) {
 }
 
 func TestModelSimulationUsesMessagesToolRoundTripWithoutSavingDraft(t *testing.T) {
-	calls := 0
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls++
-		if r.URL.Path != "/anthropic/v1/messages" || r.Header.Get("x-api-key") != "draft-secret" || r.Header.Get("anthropic-version") != "2023-06-01" {
-			t.Error("simulation used wrong protocol or credentials")
-		}
-		var payload struct {
-			Messages []agent.Message    `json:"messages"`
-			Tools    []agent.Definition `json:"tools"`
-			Stream   bool               `json:"stream"`
-			Model    string             `json:"model"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Error(err)
-		}
-		if !payload.Stream || payload.Model != "draft-model" || len(payload.Tools) != 1 || payload.Tools[0].Name != "connection_check" {
-			t.Error("simulation bypassed worker provider request")
-		}
-		w.Header().Set("Content-Type", "application/json")
-		if calls == 1 {
-			_, _ = w.Write([]byte(`{"role":"assistant","content":[{"type":"tool_use","id":"check-1","name":"connection_check","input":{"ready":true}}],"stop_reason":"tool_use"}`))
-			return
-		}
-		if len(payload.Messages) != 3 || payload.Messages[2].Content[0].ToolUseID != "check-1" {
-			t.Error("simulation omitted matching tool receipt")
-		}
-		_, _ = w.Write([]byte(`{"role":"assistant","content":[{"type":"text","text":"PWNMESH_OK"}],"stop_reason":"end_turn"}`))
-	}))
-	defer upstream.Close()
-	path := filepath.Join(t.TempDir(), "settings.json")
-	handler := NewWithModelSettings(nil, path)
-	body, _ := json.Marshal(map[string]any{"token": "draft-secret", "base_url": upstream.URL + "/anthropic", "model": "draft-model", "connection_mode": "direct"})
-	response := modelSettingsRequest(t, handler, "POST", "/model-settings/test", string(body))
-	if response.Code != 200 || !strings.Contains(response.Body.String(), `"ok":true`) || calls != 2 {
-		t.Fatalf("simulation failed: %d %s, calls=%d", response.Code, response.Body.String(), calls)
-	}
-	if _, found, err := modelconfig.Read(path); err != nil || found {
-		t.Fatal("test persisted unsaved draft")
+	for _, mode := range []string{"direct", "proxy"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := 0
+			upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.IsAbs() != (mode == "proxy") || mode == "proxy" && r.URL.Host != "models.invalid" {
+					t.Error("simulation did not follow the configured connection mode")
+				}
+				if r.URL.Path != "/anthropic/v1/messages" || r.Header.Get("x-api-key") != "draft-secret" || r.Header.Get("anthropic-version") != "2023-06-01" {
+					t.Error("simulation used wrong protocol or credentials")
+				}
+				var payload struct {
+					Messages []agent.Message    `json:"messages"`
+					Tools    []agent.Definition `json:"tools"`
+					Stream   bool               `json:"stream"`
+					Model    string             `json:"model"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+				}
+				if !payload.Stream || payload.Model != "draft-model" {
+					t.Error("simulation bypassed worker provider request")
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if calls == 1 {
+					if len(payload.Tools) != 1 || payload.Tools[0].Name != "connection_check" {
+						t.Error("simulation omitted its protocol tool")
+					}
+					_, _ = w.Write([]byte(`{"role":"assistant","content":[{"type":"tool_use","id":"check-1","name":"connection_check","input":{"ready":true}}],"stop_reason":"tool_use"}`))
+					return
+				}
+				if len(payload.Messages) != 3 || payload.Messages[2].Content[0].ToolUseID != "check-1" {
+					t.Error("simulation omitted matching tool receipt")
+					return
+				}
+				var receipt string
+				if json.Unmarshal(payload.Messages[2].Content[0].Content, &receipt) != nil || !strings.HasPrefix(receipt, "PWNMESH_OK_") || strings.Contains(payload.Messages[0].Text(), receipt) || len(payload.Tools) != 0 {
+					t.Error("simulation did not challenge tool-result consumption without more tools")
+				}
+				_ = json.NewEncoder(w).Encode(agent.Message{Role: "assistant", Content: []agent.Block{{Type: "text", Text: receipt}}, StopReason: "end_turn"})
+			}))
+			// A wildcard listener stays in this test's network namespace; unlike a
+			// loopback proxy, it must not be rewritten to the Docker host by the provider.
+			listener, err := net.Listen("tcp4", "0.0.0.0:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = upstream.Listener.Close()
+			upstream.Listener = listener
+			upstream.Start()
+			defer upstream.Close()
+			t.Setenv("HTTP_PROXY", "http://ambient.invalid:7897")
+			t.Setenv("HTTPS_PROXY", "http://ambient.invalid:7897")
+			path := filepath.Join(t.TempDir(), "settings.json")
+			handler := NewWithModelSettings(nil, path)
+			base := upstream.URL + "/anthropic"
+			if mode == "proxy" {
+				base = "http://models.invalid/anthropic"
+			}
+			body, _ := json.Marshal(map[string]any{"token": "draft-secret", "base_url": base, "model": "draft-model", "connection_mode": mode, "proxy_url": upstream.URL})
+			response := modelSettingsRequest(t, handler, "POST", "/model-settings/test", string(body))
+			if response.Code != 200 || !strings.Contains(response.Body.String(), `"ok":true`) || calls != 2 {
+				t.Fatalf("simulation failed: %d %s, calls=%d", response.Code, response.Body.String(), calls)
+			}
+			if _, found, err := modelconfig.Read(path); err != nil || found {
+				t.Fatal("test persisted unsaved draft")
+			}
+		})
 	}
 }
 
@@ -212,5 +248,37 @@ func TestModelSimulationRejectsFalseSuccessAndRedactsUpstreamError(t *testing.T)
 		if response.Code != 200 || !strings.Contains(response.Body.String(), `"ok":false`) || strings.Contains(response.Body.String(), "secret-should-not-be-echoed") {
 			t.Fatalf("false success or leaked error: %d %s", response.Code, response.Body.String())
 		}
+	}
+	for _, scenario := range []string{"canned_receipt", "extra_argument", "wrong_role"} {
+		t.Run(scenario, func(t *testing.T) {
+			calls := 0
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				w.Header().Set("Content-Type", "application/json")
+				response := agent.Message{Role: "assistant", Content: []agent.Block{{Type: "tool_use", ID: "check-1", Name: "connection_check", Input: json.RawMessage(`{"ready":true}`)}}, StopReason: "tool_use"}
+				if calls == 1 {
+					switch scenario {
+					case "extra_argument":
+						response.Content[0].Input = json.RawMessage(`{"ready":true,"ignored":true}`)
+					case "wrong_role":
+						response.Role = "user"
+					}
+				} else {
+					response.Content = []agent.Block{{Type: "text", Text: "PWNMESH_OK"}}
+					response.StopReason = "end_turn"
+				}
+				_ = json.NewEncoder(w).Encode(response)
+			}))
+			defer upstream.Close()
+			body, _ := json.Marshal(map[string]any{"token": "fixture-secret", "base_url": upstream.URL, "connection_mode": "direct"})
+			response := modelSettingsRequest(t, New(nil), "POST", "/model-settings/test", string(body))
+			wantCalls := 1
+			if scenario == "canned_receipt" {
+				wantCalls = 2
+			}
+			if response.Code != 200 || !strings.Contains(response.Body.String(), `"ok":false`) || calls != wantCalls {
+				t.Fatalf("invalid probe passed or kept calling: %d %s, calls=%d", response.Code, response.Body.String(), calls)
+			}
+		})
 	}
 }

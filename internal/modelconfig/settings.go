@@ -87,6 +87,12 @@ func (s Settings) Validate(requireToken bool) error {
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("base_url must be an HTTP(S) URL without credentials, query or fragment")
 	}
+	if u.Port() != "" {
+		port, err := strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return errors.New("base_url port must be between 1 and 65535")
+		}
+	}
 	if strings.TrimSpace(s.Model) == "" || len(s.Model) > 200 {
 		return errors.New("model is required and must not exceed 200 characters")
 	}

@@ -16,6 +16,9 @@ func TestProxyURLMapsOnlyHostLoopbackInContainers(t *testing.T) {
 		{"http://localhost:7897", true, "http://host.docker.internal:7897"},
 		{"socks5h://[::1]:7897", true, "socks5h://host.docker.internal:7897"},
 		{"https://proxy.example:8443", true, "https://proxy.example:8443"},
+		{"http://proxy.example:1", false, "http://proxy.example:1"},
+		{"socks5://proxy.example:65535", false, "socks5://proxy.example:65535"},
+		{"socks5h://proxy.example", false, "socks5h://proxy.example"},
 		{"http://127.0.0.1:7897", false, "http://127.0.0.1:7897"},
 	} {
 		got, err := ProxyURL(tc.raw, tc.container)
@@ -23,7 +26,7 @@ func TestProxyURLMapsOnlyHostLoopbackInContainers(t *testing.T) {
 			t.Errorf("ProxyURL(%s)=%s, %v", tc.raw, got, err)
 		}
 	}
-	for _, raw := range []string{"", "ftp://proxy:7897", "http://user:secret@proxy:7897", "http://proxy:7897/path", "http://proxy:7897?token=secret"} {
+	for _, raw := range []string{"", "ftp://proxy:7897", "http://user:secret@proxy:7897", "http://proxy:7897/path", "http://proxy:7897?token=secret", "http://proxy:0", "https://proxy:65536", "socks5://proxy:99999999999999999999999"} {
 		if _, err := ProxyURL(raw, true); err == nil {
 			t.Errorf("accepted invalid proxy %q", raw)
 		}

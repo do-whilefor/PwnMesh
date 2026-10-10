@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +16,12 @@ func ProxyURL(raw string, container bool) (string, error) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "socks5" && u.Scheme != "socks5h") || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("proxy_url must be an HTTP(S) or SOCKS5 URL without credentials, path or query")
+	}
+	if u.Port() != "" {
+		port, err := strconv.Atoi(u.Port())
+		if err != nil || port < 1 || port > 65535 {
+			return "", errors.New("proxy_url port must be between 1 and 65535")
+		}
 	}
 	if container && (strings.EqualFold(u.Hostname(), "localhost") || net.ParseIP(u.Hostname()).IsLoopback()) {
 		host := "host.docker.internal"
