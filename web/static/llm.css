@@ -39,7 +39,7 @@
   .llm-select-wrap select,.llm-select-wrap select::picker(select){appearance:base-select}
   .llm-select-wrap select{display:flex;align-items:center;cursor:pointer}
   .llm-select-wrap select::picker-icon{display:none}
-  .llm-select-wrap select::picker(select){min-width:anchor-size(width);margin-block:6px;padding:5px;border:1px solid #e1e7eb;border-radius:10px;background:#fff;color:#3e5361;box-shadow:0 8px 30px #293c4517;font:inherit}
+  .llm-select-wrap select::picker(select){inset:auto;top:anchor(bottom);left:anchor(left);position-area:none;position-try-fallbacks:none;min-width:anchor-size(width);margin:6px 0 0;padding:5px;border:1px solid #e1e7eb;border-radius:10px;background:#fff;color:#3e5361;box-shadow:0 8px 30px #293c4517;font:inherit}
   .llm-select-wrap option{display:flex;align-items:center;gap:8px;min-height:35px;padding:8px 10px;border:0;border-radius:6px;background:transparent;cursor:pointer;font-size:13px}
   .llm-select-wrap option:hover,.llm-select-wrap option:focus{background:#f3f6f8;outline:none}
   .llm-select-wrap option:checked{background:#fff2eb;color:#9a4e32}
