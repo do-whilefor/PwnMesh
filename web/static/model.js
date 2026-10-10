@@ -7,7 +7,6 @@
     Object.freeze({value:'pentest',label:'渗透测试',icon:'shield-check'})
   ]);
   const asText=value=>typeof value==='string'?value:'';
-  const fileMetadata=file=>file;
   function validateFiles(files=[],existing=[]){
     if(!Array.isArray(files)||!Array.isArray(existing))return '请选择有效的文件。';
     const all=[...existing,...files];
@@ -41,15 +40,15 @@
   }
   function createFormDrafts(){
     const emptyCreate=()=>({name:'',target:'',goal:'',type:'pentest',files:[]});
-    const clone=draft=>({...draft,files:draft.files.map(fileMetadata)});
+    const clone=draft=>({...draft,files:draft.files.slice()});
     let create=emptyCreate();
     const hints=new Map();
     return {
       getCreate:()=>clone(create),
-      setCreate:value=>{create={name:asText(value.name),target:asText(value.target),goal:asText(value.goal),type:value.type,files:value.files.map(fileMetadata)};},
+      setCreate:value=>{create={name:asText(value.name),target:asText(value.target),goal:asText(value.goal),type:value.type,files:value.files.slice()};},
       clearCreate:()=>{create=emptyCreate();},
       getHint:id=>clone(hints.get(id)||{text:'',files:[]}),
-      setHint:(id,value)=>{hints.set(id,{text:asText(value.text),files:value.files.map(fileMetadata)});},
+      setHint:(id,value)=>{hints.set(id,{text:asText(value.text),files:value.files.slice()});},
       clearHint:id=>hints.delete(id)
     };
   }

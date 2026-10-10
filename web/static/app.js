@@ -5,13 +5,13 @@
   const icon = name => '<i data-lucide="'+name+'" aria-hidden="true"></i>';
   const modelEntry = () => '<a id="model-entry" class="top-model-entry" href="#llm" data-nav="llm" title="模型接入">'+icon('plug')+'<span>模型接入</span><small id="model-summary" class="visually-hidden">未配置</small></a>';
   const paintIcons = () => lucide.createIcons({attrs:{'stroke-width':1.6}});
-  const {fileSize} = PwnDemoModel;
+  const {fileSize, PROJECT_TYPES} = PwnDemoModel;
   const lifecycle = PwnDemoLifecycle;
   const service = new PwnMeshService.Service(), projects = [];
   let roundReadVersion = 0, materialReadVersion = 0;
   let refreshTimer, refreshing = false, connected = false, lastSnapshot = '', pendingRefresh = false;
   const statusLabels = {running:'探索中',done:'已完成',paused:'已暂停',pending:'待开始',terminated:'已终止'};
-  const types = {ctf:'CTF',audit:'代码审计',pentest:'渗透测试'};
+  const types = Object.fromEntries(PROJECT_TYPES.map(({value,label}) => [value,label]));
   const actionNames = {pause:'暂停',resume:'继续',restart:'重启',terminate:'终止',delete:'删除'};
   const actionIcons = {pause:'pause',resume:'play',restart:'rotate-ccw',terminate:'square',delete:'trash-2'};
   let graph = null, selectedNode = null, selectedEdge = null, viewTab = 'graph', toastTimer, disposeLLM, disposeInspector;
@@ -30,7 +30,6 @@
   };
   const current = () => projects.find(p => p.id === route().split('/')[1]) || projects[0];
   const viewed = () => selectedRun === 'current' ? current() : current()?.history.find(p => String(p.generation) === selectedRun) || current();
-  const timeNow = () => new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false}).format(new Date());
   const dateTime = value => value && Number.isFinite(Date.parse(value)) ? new Intl.DateTimeFormat('sv-SE',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hourCycle:'h23'}).format(new Date(value)) : '—';
   const projectTimes = p => '<div class="project-times" aria-label="项目时间范围"><span><time id="project-created-at" title="创建时间" datetime="'+esc(p.createdAt || '')+'">'+dateTime(p.createdAt)+'</time></span><span class="project-time-separator" aria-hidden="true">～</span><span><time id="project-ended-at" '+(p.endedAt ? 'title="结束时间" datetime="'+esc(p.endedAt)+'"' : 'title="尚未结束"')+'>'+dateTime(p.endedAt)+'</time></span></div>';
   const badge = p => '<span class="badge '+(p.archived || p.readOnly ? 'paused' : p.status)+'"><i class="status-dot '+p.status+'"></i>'+(p.archived ? '已归档' : p.readOnly ? '历史项目 · 只读' : statusLabels[p.status])+'</span>';
@@ -60,7 +59,7 @@
     try { return await work(); }
     finally { mutating = false; updateBusy(); await refreshWorkspace(true); }
   }
-  function projectFooter(p,state,completed) {
+  function projectFooter(state,completed) {
     return '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+(viewTab === 'graph' ? [['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button data-filter="'+id+'" aria-pressed="false"><i class="legend-dot '+id+'"></i>'+title+'</button>').join('') : '')+'</div><div class="task-progress"><span>'+completed+' / '+state.steps.length+' 个任务</span><span class="progress-track"><i style="width:'+(state.steps.length ? completed/state.steps.length*100 : 0)+'%"></i></span></div></footer>';
   }
   function projectMarkup(p) {
@@ -71,7 +70,7 @@
     return '<section class="project-page"><header class="project-heading"><div class="project-heading-copy"><div class="title-row"><h1 title="'+esc(p.name)+'">'+esc(p.name)+'</h1>'+badge(p)+'</div><div class="project-description"><div class="project-identity">'+icon(p.type === 'audit' ? 'code-2' : p.type === 'ctf' ? 'flag' : 'globe')+'<span>'+esc(types[p.type])+'</span><i class="meta-divider"></i><span class="target-summary" title="'+esc(p.target)+'">'+esc(p.target)+'</span></div>'+projectTimes(p)+'</div></div><div class="heading-actions">'+modelEntry()+'</div></header>'+
     '<div class="project-body"><section class="canvas-panel"><header class="canvas-header"><div class="view-tabs" role="tablist" aria-label="项目视图">'+[['graph','workflow','画布'],['materials','paperclip','材料'],['result','file-check-2','结果']].map(([id,i,title]) => '<button id="view-tab-'+id+'" data-view="'+id+'" role="tab" aria-selected="'+(viewTab === id)+'" aria-controls="project-view" tabindex="'+(viewTab === id ? '0' : '-1')+'" class="'+(viewTab === id ? 'active' : '')+'">'+icon(i)+title+(id === 'materials' ? '<small>'+p.files.length+'</small>' : '')+'</button>').join('')+'</div>'+
     '<div class="workspace-actions">'+((c.history?.length || 0) ? '<select id="run-select" aria-label="查看项目轮次"><option value="current">当前轮 · '+(c.generation+1)+'</option>'+[...c.history].reverse().map(h => '<option value="'+h.generation+'" '+(selectedRun === String(h.generation) ? 'selected' : '')+'>第 '+(h.generation+1)+' 轮 · 已归档</option>').join('')+'</select>' : '')+'<button class="button secondary" id="project-manage" aria-haspopup="dialog">'+icon('sliders-horizontal')+'项目管理</button>'+actions+'</div></header>'+
-    '<div id="project-view" class="'+(viewTab === 'graph' ? 'graph-stage' : 'tab-content')+'" role="tabpanel" aria-labelledby="view-tab-'+viewTab+'">'+(viewTab === 'graph' ? '<div id="graph-host" class="graph-host"></div><div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小画布" title="缩小画布">'+icon('minus')+'</button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大画布" title="放大画布">'+icon('plus')+'</button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布" title="适应画布 · 0">'+icon('maximize')+'</button></div></div>' : viewTab === 'materials' ? materialsMarkup(p) : resultsMarkup(p,state))+'</div>'+projectFooter(p,state,completed)+'</section>'+
+    '<div id="project-view" class="'+(viewTab === 'graph' ? 'graph-stage' : 'tab-content')+'" role="tabpanel" aria-labelledby="view-tab-'+viewTab+'">'+(viewTab === 'graph' ? '<div id="graph-host" class="graph-host"></div><div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小画布" title="缩小画布">'+icon('minus')+'</button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大画布" title="放大画布">'+icon('plus')+'</button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布" title="适应画布 · 0">'+icon('maximize')+'</button></div></div>' : viewTab === 'materials' ? materialsMarkup(p) : resultsMarkup(p,state))+'</div>'+projectFooter(state,completed)+'</section>'+
     '<aside class="activity-pane" aria-labelledby="activity-title"><header class="activity-heading"><h2>'+icon('notebook-text')+'<span id="activity-title">黑板日志</span></h2><span id="activity-match-count" role="status" aria-live="polite"></span><button id="activity-collapse-all" class="icon-button" title="收起全部展开的日志" aria-label="收起全部展开的日志" hidden>'+icon('list-collapse')+'</button></header><div id="activity-toolbar"></div><div id="activity-content" class="activity-content" role="region" aria-labelledby="activity-title" tabindex="0"></div><button id="activity-to-latest" title="返回最新记录" hidden>'+icon('arrow-up')+'最新记录</button></aside></div></section>';
   }
   function emptyWorkspaceMarkup() {
@@ -172,7 +171,7 @@
     if (!viewed()) return;
     const host = $('#activity-content'); if (!host) return;
     disposeActivity?.(); disposeActivity = null;
-    const p = viewed(), state = PwnDemoGraph.buildState(p);
+    const p = viewed();
     disposeInspector?.(); disposeInspector = null;
     const toolbar = $('#activity-toolbar'), latest = $('#activity-to-latest');
     $('#activity-title').textContent = selectedNode ? '节点详情' : selectedEdge ? '关系详情' : '黑板日志';
@@ -184,7 +183,7 @@
       host.innerHTML = PwnDemoInspector.render({node:selectedNode,edge:selectedEdge,canLocate:Boolean(nodeKey)});
       paintIcons(); disposeInspector = PwnDemoInspector.bind(host,{toast,onLocate:nodeKey ? () => focusGraph(nodeKey) : undefined}); return;
     }
-    const entries = PwnDemoActivity.buildEntries(p,state);
+    const entries = PwnDemoActivity.buildEntries(p);
     const ui = activityState(), query = ui.query.trim().toLowerCase();
     const revision = JSON.stringify(entries.map(({id,timestamp,title,body,evidence}) => [id,timestamp,title,body,evidence]));
     if (ui.revision !== revision) { ui.revision = revision; ui.scrollTop = 0; }
@@ -312,7 +311,7 @@
       if (pendingCreate) forms.resetCreate();
       if (action === 'delete') { graph?.forgetProject?.(id); if (current()?.id === id) location.hash = 'projects'; }
       if (current()?.id === id) { selectedRun = 'current'; if (action === 'restart') viewTab = 'graph'; }
-      toast('项目已'+({pause:'暂停',resume:'继续',restart:'重启',terminate:'终止',delete:'删除'}[action]));
+      toast('项目已'+actionNames[action]);
     });
   }
   async function refreshWorkspace(force = false, preferred) {
@@ -337,7 +336,7 @@
           const expanded = $$('.content-card').filter(card=>card.querySelector('[data-content-toggle]')?.getAttribute('aria-expanded')==='true').map(card=>card.dataset.contentKey);
           if (container) { container.innerHTML = viewTab === 'materials' ? materialsMarkup(shown) : resultsMarkup(shown,PwnDemoGraph.buildState(shown)); fitContentBodies(); expanded.forEach(key=>$$('.content-card').find(card=>card.dataset.contentKey===key)?.querySelector('[data-content-toggle]')?.click()); container.scrollTop = top; }
         }
-        const state=PwnDemoGraph.buildState(shown), footer=document.createElement('div'); footer.innerHTML=projectFooter(shown,state,state.steps.filter(step=>step.status==='completed').length); $('.canvas-footer')?.replaceWith(footer.firstElementChild);
+        const state=PwnDemoGraph.buildState(shown), footer=document.createElement('div'); footer.innerHTML=projectFooter(state,state.steps.filter(step=>step.status==='completed').length); $('.canvas-footer')?.replaceWith(footer.firstElementChild);
         const filter=graph?.getStatusFilter(); $$('[data-filter]').forEach(button=>{button.classList.toggle('active',button.dataset.filter===filter);button.setAttribute('aria-pressed',String(button.dataset.filter===filter));});
         const input=document.activeElement?.id==='activity-search'?document.activeElement:null, selection=input&&[input.selectionStart,input.selectionEnd]; renderActivity(); if(input&&$('#activity-search')){$('#activity-search').focus({preventScroll:true});$('#activity-search').setSelectionRange(...selection);}
       }

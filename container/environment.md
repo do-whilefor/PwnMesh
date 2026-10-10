@@ -1,7 +1,7 @@
 # PwnMesh Worker 环境
 
 本文描述按需构建的完整 `pwnmesh-worker:kali` 环境。默认轻量开发镜像 `pwnmesh-worker:dev`
-仅提供 Python/venv、Git、bash、curl、ripgrep 等基础工具；构建和自检见 [README.md](README.md)。
+仅提供 Python/venv、Git、bash、curl、ripgrep 等基础工具；构建定义见 [Dockerfile.dev](Dockerfile.dev)，离线自检见 [check-worker-dev.sh](check-worker-dev.sh)。
 
 - 基于官方 Kali rolling 镜像（`linux/amd64`），安装 `kali-linux-headless` 元包及其必需工具依赖，使用 Go `pwnmesh worker` 执行 Agent Loop。
 - `/workspace` 是同一项目共享的工作目录；`/home/kali/workspace` 指向同一目录，且已初始化为 git 仓库。
@@ -59,7 +59,7 @@ Node.js 和 npm 由 Kali APT 安装，提供 `node`、`npm`、`npx`；自检要�
 
 浏览器文件位于 `/opt/ms-playwright`；`/usr/local/bin/pwnmesh-chromium` 指向该版本的 Chromium。环境变量默认选择 Chromium、无头模式和 `sandbox=false`，适配镜像默认的 root 用户。CLI 通过 `PLAYWRIGHT_MCP_EXECUTABLE_PATH` 使用固定入口，可在任意工作目录运行，无需再次安装浏览器。
 
-`latest` 在安装层实际执行时解析；Docker 缓存命中时沿用已有版本。更新方式和离线验证命令见仓库中的 `container/README.md`。
+`latest` 在安装层实际执行时解析；Docker 缓存命中时沿用已有版本。安装步骤见 [Dockerfile](Dockerfile)；需要重新解析版本时，在仓库根目录执行 `docker build --no-cache -f container/Dockerfile -t pwnmesh-worker:kali .`（先构建 `pwnmesh:dev`）。离线检查内容见 [check-worker.sh](check-worker.sh)，构建后执行 `docker run --rm --pull never --network none --init --entrypoint /usr/local/share/pwnmesh/check-worker.sh pwnmesh-worker:kali`。
 
 ## 安装范围
 

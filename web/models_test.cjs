@@ -85,7 +85,7 @@ test('model browser blocks cross-origin saved credentials and clears provider dr
   } finally { await browser.close(); }
 });
 
-test('the Demo model form only saves a successful real probe and cancels stale work on return', {
+test('model form only saves after a successful probe and discards unsaved drafts on return', {
   timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE for model form integration',
 }, async () => {
   const {chromium} = require(process.env.PLAYWRIGHT_MODULE);
@@ -125,6 +125,7 @@ test('the Demo model form only saves a successful real probe and cancels stale w
     assert.equal(await page.evaluate(() => calls.at(-1).body.token),'changed-after-verification');
     await page.locator('#llm-connection-mode').selectOption('proxy');
     assert.equal(await page.locator('.llm-proxy-fields').isVisible(),true);
+    await page.locator('#llm-effort').selectOption('high');
     for (const [protocol,label] of Object.entries(proxyProtocols)) {
       await page.locator('#llm-proxy-protocol').selectOption(protocol);
       await page.locator('#llm-proxy-host').fill('proxy.test');
@@ -135,17 +136,21 @@ test('the Demo model form only saves a successful real probe and cancels stale w
       assert.equal(await page.evaluate(() => calls.at(-1).body.proxy_url),protocol+'://proxy.test:8443');
     }
     await page.locator('#llm-proxy-host').fill('draft-proxy.test');await page.locator('#llm-proxy-port').fill('1081');
-    await page.locator('#llm-connection-mode').selectOption('direct');
+    await page.locator('#llm-url').fill('https://api.deepseek.com/draft');await page.locator('#llm-model').fill('draft-model');
+    await page.locator('#llm-effort').selectOption('low');
     await page.locator('#llm-key').fill('leave-page-secret');await page.locator('.llm-back').click();
     await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host);});
     await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     assert.equal(await page.locator('#llm-key').inputValue(),'');
+    assert.equal(await page.locator('#llm-url').inputValue(),'https://api.deepseek.com/anthropic');
     assert.equal(await page.locator('#llm-model').inputValue(),'saved-model');
     assert.equal(await page.locator('#llm-connection-mode').inputValue(),'direct');
+    assert.equal(await page.locator('#llm-effort').inputValue(),'max');
+    assert.equal(await page.locator('.llm-proxy-fields').isVisible(),false);
     await page.locator('#llm-connection-mode').selectOption('proxy');
     assert.equal(await page.locator('#llm-proxy-protocol').inputValue(),'socks5h');
-    assert.equal(await page.locator('#llm-proxy-host').inputValue(),'draft-proxy.test');
-    assert.equal(await page.locator('#llm-proxy-port').inputValue(),'1081');
+    assert.equal(await page.locator('#llm-proxy-host').inputValue(),'proxy.test');
+    assert.equal(await page.locator('#llm-proxy-port').inputValue(),'8443');
     assert.equal(await page.locator('.llm-save').isDisabled(),true);
     await page.evaluate(() => {document.getElementById('main').innerHTML = '<section>project</section>';});
     await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
