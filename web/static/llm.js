@@ -184,7 +184,7 @@
       if (typeof onReturn === 'function') onReturn(detail);else window.dispatchEvent(new CustomEvent('llm-return',{detail}));
     },options);
     observer.observe(host,{childList:true,subtree:true});bindings.set(host,cleanup);
-    busy = true;sync();status('pending','正在读取服务端配置…');
+    busy = true;sync();status('','');
     request = new AbortController();
     api.request('/model-settings',{signal:request.signal}).then(settings => {
       if (disposed) return;
