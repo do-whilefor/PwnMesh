@@ -103,7 +103,7 @@ func TestRepeatedPlanDoesNotCreateOrReprioritizeStep(t *testing.T) {
 		if err := json.Unmarshal(repeated.Result, &step); err != nil {
 			t.Fatal(err)
 		}
-		if step.Priority != 7 || step.Status != "open" {
+		if step.Priority != 7 || step.Status != "open" || len(step.From) != 2 || step.From[0] != "f001" || step.From[1] != "f002" {
 			t.Fatalf("repeated add changed existing task: %+v", step)
 		}
 	}

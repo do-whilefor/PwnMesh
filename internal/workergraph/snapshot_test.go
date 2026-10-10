@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -76,20 +78,38 @@ func TestValidateSnapshotIsReadOnlyAndChecksBindings(t *testing.T) {
 }
 
 func TestNodeDefinitionSHA256MatchesRunWithoutMutatingDependencies(t *testing.T) {
-	node := Node{ID: "join", Kind: "function", DependsOn: []Dependency{{ID: "b"}, {ID: "a"}}, Run: func(context.Context, Input) (Output, error) { return Output{}, nil }}
+	node := Node{ID: "join", Kind: "function", DependsOn: []Dependency{{ID: "a_1"}, {ID: "a.1"}, {ID: "a-1"}, {ID: "a"}, {ID: "A"}, {ID: "1"}}, Run: func(context.Context, Input) (Output, error) { return Output{}, nil }}
+	original := slices.Clone(node.DependsOn)
 	digest := NodeDefinitionSHA256(node)
-	if node.DependsOn[0].ID != "b" {
+	if !reflect.DeepEqual(node.DependsOn, original) {
 		t.Fatal("hashing reordered caller-owned dependencies")
 	}
-	definition := Definition{Version: "v1", Nodes: []Node{node, {ID: "a", Kind: "function", Run: node.Run}, {ID: "b", Kind: "function", Run: node.Run}}}
-	checkpoint, err := Run(context.Background(), definition, Options{RunID: "test", Dir: t.TempDir(), Parallelism: 2})
+	definition := Definition{Version: "v1", Nodes: []Node{node}}
+	for _, dependency := range node.DependsOn {
+		definition.Nodes = append(definition.Nodes, Node{ID: dependency.ID, Kind: "function", Run: node.Run})
+	}
+	options := Options{RunID: "test", Dir: t.TempDir(), Parallelism: 2}
+	checkpoint, err := Run(context.Background(), definition, options)
 	if err != nil {
 		t.Fatal(err)
 	}
+	var ids []string
 	for _, state := range checkpoint.Nodes {
+		ids = append(ids, state.ID)
 		if state.ID == "join" && state.DefinitionSHA256 != digest {
 			t.Fatal("exported node hash differs from Run")
 		}
+	}
+	if !reflect.DeepEqual(ids, []string{"1", "A", "a", "a-1", "a.1", "a_1", "join"}) {
+		t.Fatalf("checkpoint ID order changed: %v", ids)
+	}
+	slices.Reverse(node.DependsOn)
+	slices.Reverse(definition.Nodes)
+	if NodeDefinitionSHA256(node) != digest {
+		t.Fatal("dependency permutation changed node identity")
+	}
+	if err := ValidateSnapshot(definition, options, checkpoint); err != nil {
+		t.Fatalf("definition permutation invalidated saved snapshot: %v", err)
 	}
 }
 

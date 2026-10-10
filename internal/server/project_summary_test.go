@@ -13,7 +13,7 @@ import (
 func TestProjectListSummariesExpireLeasesWithoutLoadingGraph(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	old := f.store.Now().Add(-time.Minute).Format(time.RFC3339)
-	var want board.Graph
+	var want board.Summary
 	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
 		g, err := tx.Load(f.project)
 		if err != nil {
@@ -28,9 +28,8 @@ func TestProjectListSummariesExpireLeasesWithoutLoadingGraph(t *testing.T) {
 		if err := tx.Save(g); err != nil {
 			return err
 		}
-		want = g
+		want = board.Summary{Project: g.Project, FactCount: len(g.Facts), IntentCount: 3, Working: 1, Unclaimed: 1, HintCount: len(g.Hints)}
 		want.Project.Reason = nil
-		want.Intents[0].Worker = nil
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -45,7 +44,7 @@ func TestProjectListSummariesExpireLeasesWithoutLoadingGraph(t *testing.T) {
 	}
 	var got []board.Summary
 	f.request("GET", "/projects", nil, false, http.StatusOK, &got)
-	if !reflect.DeepEqual(got, []board.Summary{want.Summarize()}) {
-		t.Fatalf("list changed its public projection: got=%+v want=%+v", got, want.Summarize())
+	if !reflect.DeepEqual(got, []board.Summary{want}) {
+		t.Fatalf("list changed its public projection: got=%+v want=%+v", got, want)
 	}
 }

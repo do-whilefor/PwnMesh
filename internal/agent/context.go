@@ -133,11 +133,6 @@ func budgetError(message string) error {
 	return &ModelError{Kind: ErrorBudget, Err: errors.New(message)}
 }
 
-func (l *Loop) compact(ctx context.Context) error {
-	_, err := l.compactRequest(ctx, false)
-	return err
-}
-
 // The size belongs only to this prepared request. Reuse it for observation in
 // the same turn, avoiding a second full serialization without caching history.
 func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, resultErr error) {

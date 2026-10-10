@@ -113,13 +113,8 @@ func healthRequestFailure(err error) error {
 		kind = "configuration"
 	case errors.As(err, &status) && (status.Status == 400 || status.Status == 404 || status.Status == 405 || status.Status == 415 || status.Status == 422):
 		kind = "incompatible"
-	case errors.As(err, &model):
-		switch model.Kind {
-		case agent.ErrorTransport, agent.ErrorRateLimit, agent.ErrorUnavailable:
-			kind = "transient"
-		case agent.ErrorContextOverflow, agent.ErrorBudget:
-			kind = "unverified"
-		}
+	case errors.As(err, &model) && (model.Kind == agent.ErrorTransport || model.Kind == agent.ErrorRateLimit || model.Kind == agent.ErrorUnavailable):
+		kind = "transient"
 	}
 	return &healthFailure{Kind: kind, Err: err}
 }

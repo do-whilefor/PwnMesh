@@ -77,6 +77,9 @@ func TestExecutionPendingKeysetExcludesHistoryAndKeepsCleanup(t *testing.T) {
 			if e.ID != fmt.Sprintf("run-%03d", n) || !e.Pending() {
 				t.Fatalf("keyset order lost: %+v", e)
 			}
+			if e.ProjectID != "p" || e.Namespace != "ns" || e.Kind != "reason" || e.Intent != "" || e.Lease != "planner@"+e.ID {
+				t.Fatalf("pending execution identity lost: %+v", e)
+			}
 		}
 		// A transition between pages must not shift an offset and skip a run.
 		if _, err := tx.Exec("UPDATE xloom_executions SET status='cancelled' WHERE id='run-000'"); err != nil {

@@ -41,7 +41,7 @@ func (c *Client) ensureProxyHost(ctx context.Context, name, raw string) error {
 			return nil
 		}
 	}
-	if _, err = c.exec(ctx, name, []string{"getent", "hosts", "host.docker.internal"}, nil, io.Discard); err == nil {
+	if err = c.exec(ctx, name, []string{"getent", "hosts", "host.docker.internal"}, nil, io.Discard); err == nil {
 		return nil
 	}
 	if ctx.Err() != nil {
@@ -70,7 +70,7 @@ func (c *Client) ensureProxyHost(ctx context.Context, name, raw string) error {
 	}
 	// The only variable is a parsed IP passed as an argv value, never shell text.
 	const repair = `if ! getent hosts host.docker.internal >/dev/null 2>&1; then printf '\n%s\thost.docker.internal\n' "$1" >> /etc/hosts; fi; getent hosts host.docker.internal >/dev/null`
-	if _, err = c.exec(ctx, name, []string{"/bin/sh", "-c", repair, "pwnmesh-proxy-host", ip.String()}, nil, io.Discard); err != nil {
+	if err = c.exec(ctx, name, []string{"/bin/sh", "-c", repair, "pwnmesh-proxy-host", ip.String()}, nil, io.Discard); err != nil {
 		return errors.New("cannot add Docker host alias to existing worker; preserve its workspace and migrate the container with host.docker.internal:host-gateway")
 	}
 	return nil

@@ -75,6 +75,39 @@ data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text
 	}
 }
 
+func TestStreamRejectsOutOfSequenceBlocksWithoutChangingAcceptedContent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		indexes []int
+	}{
+		{"negative", []int{-1}},
+		{"missing first", []int{1}},
+		{"duplicate", []int{0, 0}},
+		{"gap", []int{0, 2}},
+		{"backward", []int{0, 1, 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stream strings.Builder
+			stream.WriteString("data: {\"type\":\"message_start\"}\n\n")
+			for n, index := range tc.indexes {
+				fmt.Fprintf(&stream, "data: {\"type\":\"content_block_start\",\"index\":%d,\"content_block\":{\"type\":\"text\",\"text\":\"block-%d\"}}\n\n", index, n)
+			}
+			message, err := consumeSSE(context.Background(), strings.NewReader(stream.String()), nil)
+			if err == nil || err.Error() != "invalid content block index" {
+				t.Fatalf("out-of-sequence block accepted: %v", err)
+			}
+			if len(message.Content) != len(tc.indexes)-1 {
+				t.Fatalf("invalid block changed accepted content: %+v", message.Content)
+			}
+			for n, block := range message.Content {
+				if block.Type != "text" || block.Text != fmt.Sprintf("block-%d", n) {
+					t.Fatalf("accepted block %d changed: %+v", n, block)
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkConsumeSSETextFragments(b *testing.B) {
 	for _, field := range []string{"text", "thinking", "signature"} {
 		b.Run(field, func(b *testing.B) {

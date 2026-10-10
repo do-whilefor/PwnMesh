@@ -179,7 +179,7 @@ func TestModelBridgeLargeRequestSummaryAndPartialTypedErrors(t *testing.T) {
 				if err := json.Unmarshal(raw, &event); err != nil {
 					return 0, err
 				}
-				if event.Type != "model_request" || !modelrpc.ValidRequestID(event.Request.RequestID) || len(raw) <= 128<<10 {
+				if event.Type != "model_request" || !ValidGraphRequestID(event.Request.RequestID) || len(raw) <= 128<<10 {
 					return 0, errors.New("invalid large model request")
 				}
 				calls++
@@ -271,7 +271,7 @@ func TestModelBridgeMissingResponseUsesPhaseDeadlineAndCancels(t *testing.T) {
 	defer cancel()
 	started := time.Now()
 	_, err = p.Generate(ctx, []agent.Message{agent.Text("user", "fixture")}, nil, nil)
-	if !errors.Is(err, context.DeadlineExceeded) || !modelrpc.ValidRequestID(request.Request.RequestID) || canceled.RequestID != request.Request.RequestID {
+	if !errors.Is(err, context.DeadlineExceeded) || !ValidGraphRequestID(request.Request.RequestID) || canceled.RequestID != request.Request.RequestID {
 		t.Fatalf("missing response did not cancel the request: %v", err)
 	}
 	deadline, _ := ctx.Deadline()

@@ -605,7 +605,10 @@ func TestOrchestrationRejectsLegacyRegistrationAndOversizedCuration(t *testing.T
 		requireAPIStatus(t, err, 422)
 	}
 	f.do(func(tx *Tx) error {
-		requireAPIStatus(t, tx.CheckLegacyConclusion("p", "unregistered"), 409)
+		_, err := tx.ConcludeEvidenceStep("p", worker.Fence(), "", nil)
+		requireAPIStatus(t, err, 422)
+		_, err = tx.ConcludeEvidenceStep("p", worker.Fence(), "origin", nil)
+		requireAPIStatus(t, err, 409)
 		return nil
 	})
 	curator, _ := f.curator("oversized")

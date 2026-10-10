@@ -41,8 +41,8 @@ func TestTitleUpdatesOnlyTitleAndPreservesState(t *testing.T) {
 	if board.DecisionStateVersion(after) == version {
 		t.Fatal("renaming did not invalidate the prior decision input")
 	}
-	for _, title := range []any{" ", nil, 42} {
-		response := f.request("PUT", f.base()+"/title", map[string]any{"title": title}, false, http.StatusUnprocessableEntity, nil)
+	for _, body := range []map[string]any{{}, {"title": " "}, {"title": nil}, {"title": 42}} {
+		response := f.request("PUT", f.base()+"/title", body, false, http.StatusUnprocessableEntity, nil)
 		if !strings.Contains(response, "must be a non-empty string") || !reflect.DeepEqual(f.state(), after) {
 			t.Fatal("invalid title lost its validation error or changed the project")
 		}

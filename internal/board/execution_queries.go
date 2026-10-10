@@ -34,10 +34,6 @@ type ExecutionSummary struct {
 	OpenCount        int    `json:"open_count"`
 }
 
-func (e ExecutionSummary) Fence() ExecutionFence {
-	return ExecutionFence{Run: e.Lease, Lease: e.Kind, Intent: e.Intent}
-}
-
 func (e ExecutionSummary) Pending() bool {
 	return e.Status == "prepared" || e.Status == "running" || e.Status == "retryable" || e.Status == "result_pending"
 }

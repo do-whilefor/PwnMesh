@@ -372,10 +372,7 @@ func consumeSSE(ctx context.Context, reader io.Reader, emit agent.Emit) (agent.M
 			if !started || e.Index != len(m.Content) || e.Index > 4096 {
 				return errors.New("invalid content block index")
 			}
-			for len(m.Content) <= e.Index {
-				m.Content = append(m.Content, agent.Block{})
-			}
-			m.Content[e.Index] = e.Block
+			m.Content = append(m.Content, e.Block)
 			text := &blockText{}
 			text.text.WriteString(e.Block.Text)
 			text.thinking.WriteString(e.Block.Thinking)

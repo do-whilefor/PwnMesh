@@ -173,7 +173,7 @@ func TestHealthPreservesFailureClassificationAndCancellation(t *testing.T) {
 		want string
 	}{
 		{agent.ErrorTransport, "transient"}, {agent.ErrorRateLimit, "transient"}, {agent.ErrorUnavailable, "transient"},
-		{agent.ErrorProvider, "unverified"}, {agent.ErrorContextOverflow, "unverified"},
+		{agent.ErrorProvider, "unverified"}, {agent.ErrorContextOverflow, "unverified"}, {agent.ErrorBudget, "unverified"},
 	} {
 		t.Run(string(tc.kind), func(t *testing.T) {
 			cause := &agent.ModelError{Kind: tc.kind, Err: errors.New("fixture")}
@@ -211,9 +211,11 @@ func TestHealthPreservesFailureClassificationAndCancellation(t *testing.T) {
 			t.Fatalf("explicit HTTP protocol rejection was not retained: %d", status)
 		}
 	}
-	overflow := &agent.ModelError{Kind: agent.ErrorContextOverflow, Err: &provider.HTTPError{Status: 400}}
-	if !errors.As(healthRequestFailure(overflow), &failure) || failure.Kind != "unverified" {
-		t.Fatal("a bounded probe's overflow was treated as backend incompatibility")
+	for _, kind := range []agent.ErrorKind{agent.ErrorContextOverflow, agent.ErrorBudget} {
+		bounded := &agent.ModelError{Kind: kind, Err: &provider.HTTPError{Status: 400}}
+		if !errors.As(healthRequestFailure(bounded), &failure) || failure.Kind != "unverified" || !errors.Is(failure, bounded) {
+			t.Fatalf("a bounded probe's %s was treated as backend incompatibility: %v", kind, failure)
+		}
 	}
 	if !errors.As(healthRequestFailure(errors.New("unknown response failure")), &failure) || failure.Kind != "unverified" {
 		t.Fatal("an unknown failure claimed backend incompatibility")

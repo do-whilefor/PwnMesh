@@ -11,6 +11,20 @@ import (
 
 // Keep the previous /projects read path as a compatibility oracle and benchmark
 // baseline, including the project ordering and graph hydration it performed.
+func legacyGraphSummary(g Graph) Summary {
+	s := Summary{Project: g.Project, FactCount: len(g.Facts), IntentCount: len(g.Intents), HintCount: len(g.Hints)}
+	for _, i := range g.Intents {
+		if i.ConcludedAt == nil {
+			if i.Worker == nil {
+				s.Unclaimed++
+			} else {
+				s.Working++
+			}
+		}
+	}
+	return s
+}
+
 func legacyProjectSummaries(tx *Tx) ([]Summary, error) {
 	ids, err := tx.IDs()
 	if err != nil {
@@ -22,7 +36,7 @@ func legacyProjectSummaries(tx *Tx) ([]Summary, error) {
 		if err != nil {
 			return nil, err
 		}
-		summaries = append(summaries, graph.Summarize())
+		summaries = append(summaries, legacyGraphSummary(graph))
 	}
 	return summaries, nil
 }

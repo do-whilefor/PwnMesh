@@ -52,7 +52,7 @@ func (c *Client) stageInputs(ctx context.Context, name string, j worker.Job) err
 	}
 	for _, f := range j.InputFiles {
 		var output bytes.Buffer
-		_, err := c.exec(ctx, name, []string{"/bin/sh", "-c", `test -f "$1" && test ! -L "$1" && exec sha256sum -- "$1"`, "input-check", f.Path}, nil, &output)
+		err := c.exec(ctx, name, []string{"/bin/sh", "-c", `test -f "$1" && test ! -L "$1" && exec sha256sum -- "$1"`, "input-check", f.Path}, nil, &output)
 		if err == nil && strings.HasPrefix(output.String(), f.SHA256+" ") {
 			continue
 		}
@@ -93,14 +93,14 @@ func (c *Client) archiveInput(ctx context.Context, name string, f board.InputFil
 	}
 	err = errors.Join(err, writeErr, closeErr)
 	if err == nil {
-		_, err = c.exec(ctx, name, []string{"mv", "-fT", "--", f.Path + ".partial", f.Path}, nil, io.Discard)
+		err = c.exec(ctx, name, []string{"mv", "-fT", "--", f.Path + ".partial", f.Path}, nil, io.Discard)
 	}
 	if err != nil {
 		// A canceled transfer must not replace the original or leave a partial
 		// input behind. Cleanup needs its own bounded cancellation lifetime.
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 		defer cancel()
-		_, cleanupErr := c.exec(cleanup, name, []string{"rm", "-f", "--", f.Path + ".partial"}, nil, io.Discard)
+		cleanupErr := c.exec(cleanup, name, []string{"rm", "-f", "--", f.Path + ".partial"}, nil, io.Discard)
 		return errors.Join(err, cleanupErr)
 	}
 	return nil

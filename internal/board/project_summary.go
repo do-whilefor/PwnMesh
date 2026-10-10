@@ -2,8 +2,8 @@ package board
 
 // ProjectSummaries reads the list projection without materializing graph
 // descriptions, evidence or intent sources. Aggregate each table once rather
-// than loading every project's graph separately. Counts retain Summarize's
-// legacy meaning: concluded_at, not to_fact_id, determines open work.
+// than loading every project's graph separately. Counts retain their legacy
+// meaning: concluded_at, not to_fact_id, determines open work.
 func (t *Tx) ProjectSummaries() ([]Summary, error) {
 	rows, err := t.Query(`WITH
 fact_counts AS (SELECT project_id,COUNT(*) AS total FROM facts GROUP BY project_id),

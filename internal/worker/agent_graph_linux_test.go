@@ -120,7 +120,9 @@ func TestMixedGraphOwnsIndependentLoopsAndParentRemainsOnlyPublisher(t *testing.
 
 func TestAgentGraphRespectsParentDeadlineAndFailureRoute(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
-	parentDeadline := time.Now().Add(time.Second)
+	// Check deadline inheritance, not disk/scheduler speed under race detection.
+	// Leave enough time for the failed node's dependent route to settle.
+	parentDeadline := time.Now().Add(30 * time.Second)
 	var sawDeadline time.Time
 	o := Options{RunDir: dir, graphDeadline: parentDeadline, graphProvider: func(string) (agent.Provider, error) {
 		return scenarioProvider(func(ctx context.Context, _ []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {

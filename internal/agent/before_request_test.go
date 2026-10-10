@@ -344,8 +344,8 @@ func TestContextDataCompactionSaveFailurePreservesOriginalView(t *testing.T) {
 		}
 		return failure
 	}
-	err := loop.compact(context.Background())
-	if !errors.Is(err, failure) || saves != 1 || loop.Checkpoint != checkpointPointer || !reflect.DeepEqual(*loop.Checkpoint, checkpoint) || !reflect.DeepEqual(loop.History, history) {
+	size, err := loop.compactRequest(context.Background(), false)
+	if !errors.Is(err, failure) || size != -1 || saves != 1 || loop.Checkpoint != checkpointPointer || !reflect.DeepEqual(*loop.Checkpoint, checkpoint) || !reflect.DeepEqual(loop.History, history) {
 		t.Fatalf("failed save changed the original view/checkpoint: err=%v saves=%d history=%v checkpoint=%+v", err, saves, reflect.DeepEqual(loop.History, history), loop.Checkpoint)
 	}
 }

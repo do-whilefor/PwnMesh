@@ -49,13 +49,6 @@ type Job struct {
 	Workspace             string                   `json:"workspace"`
 }
 
-func (j Job) openCount() int {
-	if j.InputSnapshot != nil {
-		return j.InputSnapshot.OpenCount
-	}
-	return j.Graph.OpenCount()
-}
-
 type Result struct {
 	RepairCheck  *RepairCheck     `json:"repair_check,omitempty"`
 	Type         string           `json:"type"`

@@ -251,12 +251,6 @@ func (r *request) text(key string) string {
 	}
 	return v
 }
-func (r *request) optional(key string) *string {
-	if r.fields[key] == nil {
-		return nil
-	}
-	return b.Ptr(r.text(key))
-}
 func (r *request) integer(key string) int {
 	var str string
 	switch v := r.fields[key].(type) {

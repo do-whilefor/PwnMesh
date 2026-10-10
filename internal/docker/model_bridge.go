@@ -21,18 +21,17 @@ import (
 // Each bridge is bound to one launch. Only the dispatcher sees the upstream
 // endpoint and credentials; worker messages cannot choose either of them.
 type modelBridge struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	job         worker.Job
-	model       *provider.Anthropic
-	deliver     func(context.Context, modelrpc.Response) error
-	fail        func(error)
-	mu          sync.Mutex
-	active      map[string]context.CancelFunc
-	seen        map[string]bool
-	wg          sync.WaitGroup
-	outstanding int
-	slots       chan struct{}
+	ctx     context.Context
+	cancel  context.CancelFunc
+	job     worker.Job
+	model   *provider.Anthropic
+	deliver func(context.Context, modelrpc.Response) error
+	fail    func(error)
+	mu      sync.Mutex
+	active  map[string]context.CancelFunc
+	seen    map[string]bool
+	wg      sync.WaitGroup
+	slots   chan struct{}
 }
 
 func configuredModel(w config.Worker, j worker.Job) (*provider.Anthropic, error) {
@@ -204,17 +203,11 @@ func (b *modelBridge) start(r modelrpc.Request) error {
 		cancel = func() { shorten(); original() }
 	}
 	b.seen[r.RequestID], b.active[r.RequestID] = true, cancel
-	b.outstanding++
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
 		defer cancel()
-		defer func() {
-			b.mu.Lock()
-			b.outstanding--
-			b.mu.Unlock()
-			<-b.slots
-		}()
+		defer func() { <-b.slots }()
 		response := b.generate(ctx, r)
 		// Free the model slot before publishing its response. The worker can
 		// issue its next turn as soon as mv publishes, before Docker exec exits.
@@ -316,7 +309,6 @@ func (c *Client) modelDelivery(name, runDir string) func(context.Context, modelr
 		if err = c.archive(ctx, name, target+".tmp", raw); err != nil {
 			return err
 		}
-		_, err = c.exec(ctx, name, []string{"/bin/mv", "-T", "--", target + ".tmp", target}, nil, io.Discard)
-		return err
+		return c.exec(ctx, name, []string{"/bin/mv", "-T", "--", target + ".tmp", target}, nil, io.Discard)
 	}
 }

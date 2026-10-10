@@ -274,7 +274,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 			return "", errors.New("graph action is not allowed in this task mode")
 		}
 		if o.curation != nil {
-			return o.curation.action(ctx, a)
+			return o.curation.action(ctx, a.Payload)
 		}
 		if o.decision != nil {
 			var metadata struct {

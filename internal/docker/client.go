@@ -259,21 +259,21 @@ func (c *Client) archive(ctx context.Context, name, target string, data []byte) 
 }
 
 // exec starts without TTY; Docker frames stdout/stderr with an 8-byte header.
-func (c *Client) exec(ctx context.Context, name string, argv, env []string, out io.Writer) (string, error) {
+func (c *Client) exec(ctx context.Context, name string, argv, env []string, out io.Writer) error {
 	var created struct {
 		ID string `json:"Id"`
 	}
 	err := c.json(ctx, "POST", "/containers/"+url.PathEscape(name)+"/exec", map[string]any{"AttachStdout": true, "AttachStderr": true, "Tty": false, "Cmd": argv, "Env": env, "WorkingDir": "/workspace"}, &created)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if created.ID == "" {
-		return "", errors.New("Docker returned an empty exec ID")
+		return errors.New("Docker returned an empty exec ID")
 	}
 	data := strings.NewReader(`{"Detach":false,"Tty":false}`)
 	res, err := c.request(ctx, "POST", "/exec/"+created.ID+"/start", data, "application/json")
 	if err != nil {
-		return created.ID, err
+		return err
 	}
 	defer res.Body.Close()
 	for {
@@ -283,18 +283,18 @@ func (c *Client) exec(ctx context.Context, name string, argv, env []string, out 
 			break
 		}
 		if err != nil {
-			return created.ID, err
+			return err
 		}
 		size := binary.BigEndian.Uint32(header[4:])
 		if size > 32<<20 {
-			return created.ID, errors.New("oversized Docker stream frame")
+			return errors.New("oversized Docker stream frame")
 		}
 		destination := out
 		if header[0] != 1 {
 			destination = io.Discard
 		}
 		if _, err = io.CopyN(destination, res.Body, int64(size)); err != nil {
-			return created.ID, err
+			return err
 		}
 	}
 	var info struct {
@@ -303,17 +303,17 @@ func (c *Client) exec(ctx context.Context, name string, argv, env []string, out 
 	}
 	for {
 		if err = c.json(ctx, "GET", "/exec/"+created.ID+"/json", nil, &info); err != nil {
-			return created.ID, err
+			return err
 		}
 		if !info.Running {
 			if info.Exit != 0 {
-				return created.ID, fmt.Errorf("worker process exited with code %d", info.Exit)
+				return fmt.Errorf("worker process exited with code %d", info.Exit)
 			}
-			return created.ID, nil
+			return nil
 		}
 		select {
 		case <-ctx.Done():
-			return created.ID, ctx.Err()
+			return ctx.Err()
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
@@ -472,7 +472,7 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	bridge := newModelBridge(bridgeCtx, p, j, c.modelDelivery(name, path.Dir(target)), abortBridge)
 	defer bridge.close()
 	sink := &resultSink{graph: c.graphBridge(bridgeCtx, name, path.Dir(target), j), model: bridge.start, cancelModel: bridge.stop}
-	_, err = c.exec(bridgeCtx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--job", target}, env, sink)
+	err = c.exec(bridgeCtx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--job", target}, env, sink)
 	if bridgeCtx.Err() != nil && ctx.Err() == nil {
 		err = context.Cause(bridgeCtx)
 	}
@@ -501,8 +501,7 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 func (c *Client) interrupt(name, runDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	_, err := c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--interrupt", runDir}, nil, io.Discard)
-	return err
+	return c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--interrupt", runDir}, nil, io.Discard)
 }
 func (c *Client) cancel(name, runDir string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)

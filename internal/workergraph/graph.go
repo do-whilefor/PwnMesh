@@ -5,6 +5,7 @@
 package workergraph
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -152,7 +153,7 @@ func prepare(d Definition, o Options) ([]Node, string, error) {
 		return nil, "", errors.New("graph requires a version, run identity, checkpoint directory, bounded JSON input, 1..64 nodes and parallelism 1..16")
 	}
 	nodes := append([]Node(nil), d.Nodes...)
-	slices.SortFunc(nodes, func(a, b Node) int { return compareID(a.ID, b.ID) })
+	slices.SortFunc(nodes, func(a, b Node) int { return cmp.Compare(a.ID, b.ID) })
 	byID := map[string]Node{}
 	var definitions []nodeDefinition
 	for n := range nodes {
@@ -165,7 +166,7 @@ func prepare(d Definition, o Options) ([]Node, string, error) {
 		}
 		node.Input = append(json.RawMessage(nil), node.Input...)
 		node.DependsOn = append([]Dependency(nil), node.DependsOn...)
-		slices.SortFunc(node.DependsOn, func(a, b Dependency) int { return compareID(a.ID, b.ID) })
+		slices.SortFunc(node.DependsOn, func(a, b Dependency) int { return cmp.Compare(a.ID, b.ID) })
 		for i, dependency := range node.DependsOn {
 			if dependency.ID == node.ID || i > 0 && dependency.ID == node.DependsOn[i-1].ID {
 				return nil, "", errors.New("self or duplicate graph dependency")
@@ -206,16 +207,6 @@ func prepare(d Definition, o Options) ([]Node, string, error) {
 	return ordered, hash(definitions), nil
 }
 
-func compareID(a, b string) int {
-	if a < b {
-		return -1
-	}
-	if a > b {
-		return 1
-	}
-	return 0
-}
-
 // Prefer ready work that unlocks the longest remaining dependency chain. IDs
 // only break ties, so an unrelated leaf cannot consume every parallel slot
 // merely because its name sorts first. This is a bounded unit-cost heuristic,
@@ -240,7 +231,7 @@ func schedulingOrder(nodes []Node, states map[string]*NodeState) []Node {
 		if depth[a.ID] != depth[b.ID] {
 			return depth[b.ID] - depth[a.ID]
 		}
-		return compareID(a.ID, b.ID)
+		return cmp.Compare(a.ID, b.ID)
 	})
 	return ordered
 }
@@ -394,7 +385,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		byID[node.ID] = node
 		checkpoint.Nodes = append(checkpoint.Nodes, NodeState{ID: node.ID, Kind: node.Kind, DefinitionSHA256: hash(describe(node)), Status: "pending"})
 	}
-	slices.SortFunc(checkpoint.Nodes, func(a, b NodeState) int { return compareID(a.ID, b.ID) })
+	slices.SortFunc(checkpoint.Nodes, func(a, b NodeState) int { return cmp.Compare(a.ID, b.ID) })
 	resumed := false
 	if raw, readErr := os.ReadFile(filepath.Join(options.Dir, "graph.json")); readErr == nil {
 		var saved Checkpoint
@@ -517,7 +508,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 			}
 		}
 		checkpoint.DefinitionSHA256 = signature
-		slices.SortFunc(checkpoint.Nodes, func(a, b NodeState) int { return compareID(a.ID, b.ID) })
+		slices.SortFunc(checkpoint.Nodes, func(a, b NodeState) int { return cmp.Compare(a.ID, b.ID) })
 		for i := range checkpoint.Nodes {
 			states[checkpoint.Nodes[i].ID] = &checkpoint.Nodes[i]
 		}

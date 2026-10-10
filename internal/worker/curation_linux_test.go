@@ -244,6 +244,10 @@ func TestOrchestrationRuntimePermissionsAndCandidateEvidence(t *testing.T) {
 func TestCuratorSchemaAndPayloadBoundary(t *testing.T) {
 	j := curationJob(t)
 	o := Options{RunDir: t.TempDir()}
+	o.Output = &draftTestBridge{dir: o.RunDir, handle: func(request GraphRequest) (any, error) {
+		t.Fatalf("invalid curation input reached the bridge: %+v", request)
+		return nil, nil
+	}}
 	if err := ConfigureRuntimeTools(j, &o); err != nil {
 		t.Fatal(err)
 	}
@@ -289,8 +293,53 @@ func TestCuratorSchemaAndPayloadBoundary(t *testing.T) {
 	if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"curate","payload":{"through_revision":8,"groups":[]}}`)); err == nil || !strings.Contains(err.Error(), "immutable") {
 		t.Fatalf("model replaced its input boundary: %v", err)
 	}
-	if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"step","idempotency_key":"key","payload":{}}`)); err == nil {
-		t.Fatal("direct invocation bypassed role capability")
+	for _, op := range []string{"step", "fact", "candidate", "fact_relation", "curation_request"} {
+		if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"`+op+`","idempotency_key":"key","payload":{"groups":[]}}`)); err == nil {
+			t.Fatalf("direct invocation bypassed curator capability: %s", op)
+		}
+	}
+}
+
+func TestCuratorUncertainReceiptRecoversBeforeAnotherMutation(t *testing.T) {
+	for _, firstReceipt := range []string{`{"state_version":"VERSION"}`, `{"committed":false,"state_version":"VERSION"}`, `null`, `{"committed":"yes","state_version":"VERSION"}`} {
+		t.Run(firstReceipt, func(t *testing.T) {
+			j := curationJob(t)
+			o := Options{RunDir: t.TempDir()}
+			writes, reads := 0, 0
+			o.Output = &draftTestBridge{dir: o.RunDir, handle: func(request GraphRequest) (any, error) {
+				switch request.Op {
+				case "graph_action":
+					writes++
+					if request.Action.Op != "curate" || request.Action.IdempotencyKey != j.RunID+":curate" {
+						t.Fatalf("curator changed its mutation identity: %+v", request)
+					}
+					return json.RawMessage(strings.ReplaceAll(firstReceipt, "VERSION", j.curationVersion())), nil
+				case "curate_receipt":
+					reads++
+					return board.StateActionResult{Committed: true, StateVersion: j.curationVersion()}, nil
+				default:
+					t.Fatalf("unexpected curator request: %+v", request)
+					return nil, nil
+				}
+			}}
+			if err := ConfigureRuntimeTools(j, &o); err != nil {
+				t.Fatal(err)
+			}
+			action := snapshotRuntimeTool(t, o, "graph_action")
+			input := json.RawMessage(`{"op":"curate","payload":{"groups":[]}}`)
+			if _, err := action.Execute(context.Background(), input); err == nil {
+				t.Fatal("uncommitted or malformed response finished curation")
+			}
+			if _, done := o.curation.result(); done {
+				t.Fatal("uncertain response became a committed result")
+			}
+			if _, err := action.Execute(context.Background(), input); err != nil {
+				t.Fatal(err)
+			}
+			if _, done := o.curation.result(); !done || writes != 1 || reads != 1 {
+				t.Fatalf("recovery repeated the mutation: committed=%v writes=%d reads=%d", done, writes, reads)
+			}
+		})
 	}
 }
 

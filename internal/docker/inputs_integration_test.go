@@ -134,7 +134,7 @@ func TestDockerUploadedInputsRoundTrip(t *testing.T) {
 	readStaged := func() []byte {
 		t.Helper()
 		var output bytes.Buffer
-		if _, err := c.exec(ctx, name, []string{"cat", "--", input.Path}, nil, &output); err != nil {
+		if err := c.exec(ctx, name, []string{"cat", "--", input.Path}, nil, &output); err != nil {
 			t.Fatal(err)
 		}
 		return output.Bytes()
@@ -152,7 +152,7 @@ func TestDockerUploadedInputsRoundTrip(t *testing.T) {
 	}
 	// Workers may alter their local copies; the next staging restores the
 	// original input without changing the board's immutable evidence.
-	if _, err = c.exec(ctx, name, []string{"sh", "-c", `chmod u+w "$1" && printf changed > "$1"`, "input-test", input.Path}, nil, io.Discard); err != nil {
+	if err = c.exec(ctx, name, []string{"sh", "-c", `chmod u+w "$1" && printf changed > "$1"`, "input-test", input.Path}, nil, io.Discard); err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(readStaged(), []byte("changed")) {
@@ -171,7 +171,7 @@ func TestDockerUploadedInputsRoundTrip(t *testing.T) {
 		if !bytes.Equal(readStaged(), payload) {
 			t.Fatal("failed download replaced the original input")
 		}
-		if _, err = c.exec(ctx, name, []string{"sh", "-c", `test ! -e "$1" && test ! -L "$1"`, "input-test", input.Path + ".partial"}, nil, io.Discard); err != nil {
+		if err = c.exec(ctx, name, []string{"sh", "-c", `test ! -e "$1" && test ! -L "$1"`, "input-test", input.Path + ".partial"}, nil, io.Discard); err != nil {
 			t.Fatalf("failed download left a partial input: %v", err)
 		}
 	}

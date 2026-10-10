@@ -1,40 +1,6 @@
 package board
 
-import (
-	"database/sql"
-	"encoding/json"
-	"errors"
-)
-
-// CheckLegacyConclusion prevents an immutable version-two job from bypassing
-// its evidence contract through the compatibility description-only endpoint.
-func (t *Tx) CheckLegacyConclusion(project, worker string) error {
-	g, err := t.Load(project)
-	if err != nil {
-		return err
-	}
-	if g.Project.OrchestrationVersion == 1 {
-		return Err(409, "orchestration version 1 requires the registered evidence completion protocol")
-	}
-	var raw []byte
-	err = t.QueryRow("SELECT job FROM xloom_executions WHERE project_id=? AND lease=?", project, worker).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var job struct {
-		Version int `json:"result_contract_version"`
-	}
-	if err = json.Unmarshal(raw, &job); err != nil {
-		return err
-	}
-	if job.Version >= 2 {
-		return Err(409, "registered evidence-contract execution must conclude through its final result")
-	}
-	return nil
-}
+import "encoding/json"
 
 // ConcludeEvidenceStep shares the process-fact command and validations. Its
 // caller commits this mutation and the execution receipt in one transaction.

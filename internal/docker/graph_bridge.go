@@ -82,7 +82,6 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j work
 		if err = c.archive(ctx, name, tmp, raw); err != nil {
 			return err
 		}
-		_, err = c.exec(ctx, name, []string{"/bin/mv", "-T", "--", tmp, target}, nil, io.Discard)
-		return err
+		return c.exec(ctx, name, []string{"/bin/mv", "-T", "--", tmp, target}, nil, io.Discard)
 	}
 }

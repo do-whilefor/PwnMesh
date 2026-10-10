@@ -341,8 +341,12 @@ func TestSummaryQuotesSurviveCompactionCheckpointAndFurtherCompaction(t *testing
 		saved, err = json.Marshal(savedState{history, checkpoint})
 		return err
 	}
-	if err := l.compact(context.Background()); err != nil {
+	size, err := l.compactRequest(context.Background(), false)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if size != l.Checkpoint.LastCompaction.AfterBytes {
+		t.Fatalf("prepared request size = %d; committed size = %d", size, l.Checkpoint.LastCompaction.AfterBytes)
 	}
 	first := l.Checkpoint.LastCompaction.Quotes[0]
 	var restored savedState
@@ -411,7 +415,7 @@ func TestSummaryQuotesSurviveCompactionCheckpointAndFurtherCompaction(t *testing
 		}
 		return Text("assistant", `{"notes":"Continue using the original response.","quotes":[{"source":"c1q0","start_line":1,"end_line":1}]}`), nil
 	})
-	if err := l.compact(context.Background()); err != nil {
+	if _, err := l.compactRequest(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	record := l.Checkpoint.LastCompaction
@@ -462,8 +466,8 @@ func TestSummaryCompactionFailureDoesNotAdvanceSavedState(t *testing.T) {
 					committed++
 				}
 			}
-			if err := l.compact(context.Background()); err == nil {
-				t.Fatal("failed compaction was accepted")
+			if size, err := l.compactRequest(context.Background(), false); err == nil || size != -1 {
+				t.Fatalf("failed compaction was accepted: size=%d err=%v", size, err)
 			}
 			after, _ := json.Marshal(struct {
 				History    []Message
@@ -484,7 +488,7 @@ func TestSummaryCompactionFailureDoesNotAdvanceSavedState(t *testing.T) {
 			l.Provider = summaryTestProvider(func([]Message) (Message, error) {
 				return Text("assistant", `{"notes":"Recovered.","quotes":[{"source":"m3b0","start_line":2,"end_line":2}]}`), nil
 			})
-			if err := l.compact(context.Background()); err != nil {
+			if _, err := l.compactRequest(context.Background(), false); err != nil {
 				t.Fatalf("rolled-back checkpoint could not continue: %v", err)
 			}
 			if l.Checkpoint.LastCompaction.ID != 1 || l.Checkpoint.LastCompaction.Status != "committed" || committed != 1 || len(l.Checkpoint.LastCompaction.Quotes) != 1 {
@@ -507,7 +511,7 @@ func TestSummaryLegacyCheckpointRemainsUnverifiedAndUnquotable(t *testing.T) {
 		}
 		return Text("assistant", `{"notes":"Recheck the original source before using values.","quotes":[]}`), nil
 	})
-	if err := l.compact(context.Background()); err != nil {
+	if _, err := l.compactRequest(context.Background(), false); err != nil {
 		t.Fatal(err)
 	}
 	if l.Checkpoint.LastCompaction.PreviousID != 2 || l.Checkpoint.CompactionCount != 3 || len(l.Checkpoint.LastCompaction.Quotes) != 0 || !strings.HasPrefix(l.History[1].Text(), summaryViewPrefix) {

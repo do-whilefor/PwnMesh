@@ -58,10 +58,10 @@ func TestModelBridgeBoundsPendingDeliveriesAndReadmitsAfterRelease(t *testing.T)
 		waitDelivery(r.RequestID)
 	}
 	bridge.mu.Lock()
-	active, pending := len(bridge.active), bridge.outstanding
+	active, pending := len(bridge.active), len(bridge.slots)
 	bridge.mu.Unlock()
 	if active != 0 || pending != 32 {
-		t.Fatalf("expected only 32 pending deliveries, got active=%d outstanding=%d", active, pending)
+		t.Fatalf("expected only 32 pending deliveries, got active=%d slots=%d", active, pending)
 	}
 	admitted := make(chan error, 1)
 	go func() { admitted <- bridge.start(request(33)) }()
@@ -108,10 +108,10 @@ func TestModelBridgeBoundsPendingDeliveriesAndReadmitsAfterRelease(t *testing.T)
 		t.Fatal("close did not join admitted deliveries")
 	}
 	bridge.mu.Lock()
-	active, pending = len(bridge.active), bridge.outstanding
+	active, pending = len(bridge.active), len(bridge.slots)
 	_, late := bridge.seen[request(34).RequestID]
 	bridge.mu.Unlock()
-	if active != 0 || pending != 0 || len(bridge.slots) != 0 || late {
-		t.Fatalf("close left or admitted work: active=%d outstanding=%d slots=%d late=%v", active, pending, len(bridge.slots), late)
+	if active != 0 || pending != 0 || late {
+		t.Fatalf("close left or admitted work: active=%d slots=%d late=%v", active, pending, late)
 	}
 }

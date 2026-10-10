@@ -3,9 +3,7 @@ package modelrpc
 
 import (
 	"context"
-	"encoding/hex"
 	"errors"
-	"strings"
 	"time"
 
 	"pwnmesh/internal/agent"
@@ -78,9 +76,4 @@ func (e *Error) Err() error {
 		err = &agent.ModelError{Kind: e.Kind, Err: err}
 	}
 	return err
-}
-
-func ValidRequestID(id string) bool {
-	raw, err := hex.DecodeString(id)
-	return err == nil && len(raw) == 16 && strings.ToLower(id) == id
 }
