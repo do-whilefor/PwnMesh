@@ -39,6 +39,9 @@ button svg.lucide,button svg.icon,a svg.lucide{pointer-events:none}
 .canvas-panel,.activity-pane{box-shadow:none;border-color:#e2e7ea}.canvas-header{border-color:#e9edf0}.view-tabs{gap:25px}.view-tabs button{color:#5c6f7c;font-size:12px;gap:6px}.view-tabs button .lucide{width:14px;height:14px}.view-tabs button.active{font-weight:700;color:#273743}.view-tabs button.active:after{height:2px;border-radius:2px;background:#e99575}.view-tabs button small{background:#f0f4f6;color:#5c6f7c;min-width:16px;text-align:center}
 .canvas-footer{height:32px;border-color:#edf0f2}.legend{gap:10px}.legend button{font-size:10px;color:#5c6f7c}.legend button:hover,.legend button.active{background:#f1f5f6;color:#3e5361}.legend-dot{background:#9aafa7;width:4px;height:4px}.legend-dot.running{background:#df967c}.legend-dot.pending{border-color:#bdc9cf}.task-progress{font-size:10px;color:#5c6f7c}.progress-track{background:#edf1f3;width:38px;height:2px}.progress-track i{background:#dea389}
 .graph-stage{background:#f2f6f8;background-image:radial-gradient(#dce5ea .5px,transparent .5px);background-size:22px 22px}
+.canvas-empty-state{position:absolute;inset:0;display:grid;place-content:center;justify-items:center;gap:8px;padding:32px;text-align:center;color:var(--muted)}
+.canvas-empty-state h2{margin:0;font-size:18px;line-height:26px;font-weight:700;color:var(--ink)}
+.canvas-empty-state p{max-width:360px;margin:0;font-size:12px;line-height:20px}
 /* Type colors identify nodes; state stays in labels, line styles and selection rings. */
 .graph-node{border:1px solid #cdd9e1;border-radius:8px;padding:10px 11px;box-shadow:0 2px 5px #2e465008}
 .graph-node.fact{--node-bg:#f3f8ff;--node-border:#bfd1ed;--node-accent:#466f9a;--node-title:#2b445e;--node-ring:#6f9dcc26}
@@ -140,6 +143,7 @@ dialog{padding:25px;border-color:#e2e9ed;border-radius:14px;box-shadow:0 20px 65
 .project-body{gap:var(--workspace-gap)}
 .project-heading{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:22px;min-height:72px;flex:none;margin:0 0 var(--workspace-gap);padding:11px 16px;border:1px solid #e2e7ea;border-radius:12px;background:#fff}
 .project-heading-copy{min-width:0;display:grid;gap:5px}
+.project-heading-copy.empty-project-heading{visibility:hidden;min-height:49px}
 .project-heading .title-row{margin:0;min-width:0;gap:10px}.project-heading .title-row h1{font-size:20px;line-height:26px}
 .project-heading .project-description{min-width:0;margin:0;line-height:18px;font-size:11px;gap:18px;overflow:visible}
 .project-identity{display:flex;align-items:center;gap:6px;min-width:0;max-width:42%;flex:0 1 auto}
@@ -158,7 +162,7 @@ dialog{padding:25px;border-color:#e2e9ed;border-radius:14px;box-shadow:0 20px 65
 .project-row .project-item{min-height:62px;padding:10px 34px 10px 10px;margin:0 0 5px;gap:0;border-radius:9px}
 .project-row .project-item:hover{background:#eef2f9;border-color:#dce5f0}
 .project-row .project-item.selected{background:#fff1ea;border-color:#f0d9cc}
-.project-row .project-copy strong{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;white-space:normal;overflow-wrap:anywhere;font-size:13px;line-height:19px;font-weight:400;color:#273743}
+.project-row .project-copy strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;line-height:19px;font-weight:400;color:#273743}
 .project-row .project-item.selected .project-copy strong{color:#9a4e32}
 .project-copy .project-meta{display:flex;align-items:center;gap:10px;margin-top:6px;font-size:10px;line-height:15px;overflow:visible;color:#5c6f7c}
 .project-meta .project-type{color:#5c6f7c}

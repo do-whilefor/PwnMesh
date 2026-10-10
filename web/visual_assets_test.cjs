@@ -10,7 +10,7 @@ const root = path.join(__dirname,'static');
 const accepted = {
   "style.css": "e1d8264039a608ed891db19010dcbee4d32b901dca8987885a0b78cac1a25891",
   "llm.css": "d4133924a1950253ac498be990f36dc3ff6cc74673a690329c5f2bf7e328db04",
-  "shell.css": "a37b8c2ad42daa635751a9818ea46e343357bf9aa3544d223d1407c684b7a58e",
+  "shell.css": "1958b368426087ba16bd7ef7938cb55b30e923f0995cea03f51cd597dc22e04e",
   "blackboard.css": "fc7d88685b4e2462c47c71bd144d66902f57aab588a6f9b7bdb4b37263b23c4e",
   "forms.css": "81c75f23362d42389f8cf1fc29c5053a6b1329b8657c9f6b47169c7e884dbeab",
   "inspector.css": "b0447e4c09b8716d4e4f14dca2d2a86ad0308a218238dbb9c8787af649ab46a8",

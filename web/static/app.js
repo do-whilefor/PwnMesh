@@ -74,6 +74,13 @@
     '<div id="project-view" class="'+(viewTab === 'graph' ? 'graph-stage' : 'tab-content')+'" role="tabpanel" aria-labelledby="view-tab-'+viewTab+'">'+(viewTab === 'graph' ? '<div id="graph-host" class="graph-host"></div><div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" id="zoom-out" aria-label="缩小画布" title="缩小画布">'+icon('minus')+'</button><span id="zoom-label">100%</span><button class="icon-button" id="zoom-in" aria-label="放大画布" title="放大画布">'+icon('plus')+'</button><i></i><button class="icon-button" id="fit-graph" aria-label="适应画布" title="适应画布 · 0">'+icon('maximize')+'</button></div></div>' : viewTab === 'materials' ? materialsMarkup(p) : resultsMarkup(p,state))+'</div>'+projectFooter(p,state,completed)+'</section>'+
     '<aside class="activity-pane" aria-labelledby="activity-title"><header class="activity-heading"><h2>'+icon('notebook-text')+'<span id="activity-title">黑板日志</span></h2><span id="activity-match-count" role="status" aria-live="polite"></span><button id="activity-collapse-all" class="icon-button" title="收起全部展开的日志" aria-label="收起全部展开的日志" hidden>'+icon('list-collapse')+'</button></header><div id="activity-toolbar"></div><div id="activity-content" class="activity-content" role="region" aria-labelledby="activity-title" tabindex="0"></div><button id="activity-to-latest" title="返回最新记录" hidden>'+icon('arrow-up')+'最新记录</button></aside></div></section>';
   }
+  function emptyWorkspaceMarkup() {
+    return '<section class="project-page empty-project-page"><header class="project-heading"><div class="project-heading-copy empty-project-heading" aria-hidden="true"><div class="title-row"><h1>工作台</h1></div><div class="project-description"><span>尚未创建项目</span></div></div><div class="heading-actions">'+modelEntry()+'</div></header>'+
+      '<div class="project-body"><section class="canvas-panel"><header class="canvas-header"><div class="view-tabs" role="tablist" aria-label="项目视图">'+[['graph','workflow','画布'],['materials','paperclip','材料'],['result','file-check-2','结果']].map(([id,i,title]) => '<button id="view-tab-'+id+'" role="tab" aria-selected="'+(id === 'graph')+'" aria-controls="project-view" class="'+(id === 'graph' ? 'active' : '')+'" disabled>'+icon(i)+title+(id === 'materials' ? '<small>0</small>' : '')+'</button>').join('')+'</div><div class="workspace-actions"><button class="button secondary" disabled>'+icon('sliders-horizontal')+'项目管理</button><button class="button secondary" disabled>'+icon('message-square-plus')+'补充信息</button></div></header>'+
+      '<div id="project-view" class="graph-stage" role="tabpanel" aria-labelledby="view-tab-graph"><div id="graph-host" class="graph-host"></div><div class="canvas-empty-state"><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" data-create>'+icon('plus')+'新建项目</button></div><div class="canvas-bottom"><div class="zoom-controls"><button class="icon-button" aria-label="缩小画布" disabled>'+icon('minus')+'</button><span>100%</span><button class="icon-button" aria-label="放大画布" disabled>'+icon('plus')+'</button><i></i><button class="icon-button" aria-label="适应画布" disabled>'+icon('maximize')+'</button></div></div></div>'+
+      '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+[['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button disabled><i class="legend-dot '+id+'"></i>'+title+'</button>').join('')+'</div><div class="task-progress"><span>0 / 0 个任务</span><span class="progress-track"><i style="width:0%"></i></span></div></footer></section>'+
+      '<aside class="activity-pane" aria-labelledby="activity-title"><header class="activity-heading"><h2>'+icon('notebook-text')+'<span id="activity-title">黑板日志</span></h2><span id="activity-match-count">0 条记录</span></header><div id="activity-toolbar"><div class="activity-search"><label for="activity-search" class="visually-hidden">搜索黑板日志全文</label>'+icon('search')+'<input id="activity-search" type="search" placeholder="搜索日志全文" disabled></div></div><div id="activity-content" class="activity-content" role="region" aria-labelledby="activity-title" tabindex="0"></div></aside></div></section>';
+  }
   function materialsMarkup(p) {
     return '<div class="section-heading"><h2 class="section-title">项目输入</h2></div><div class="project-inputs">'+[['target','起点 / 已知信息',p.target],['goal','终点 / 项目目标',p.goal]].map(([key,label,body]) => '<section class="content-card" data-content-key="'+key+'">'+contentHeader(label,'input:'+key)+'<p id="content-'+key+'" class="content-text is-collapsed">'+esc(body)+'</p></section>').join('')+'</div><div class="section-heading"><h2 class="section-title">材料</h2>'+(selectedRun === 'current' && lifecycle.canHint(p) ? '<button class="text-button" id="add-materials">'+icon('plus')+'添加材料</button>' : '')+'</div>'+
     (p.files.map((f,index) => '<div class="material-row" role="button" tabindex="0" data-material="'+index+'" aria-label="查看材料：'+esc(f.name)+'">'+icon('file-text')+'<span><strong title="'+esc(f.name)+'">'+esc(f.name)+'</strong><small>'+fileSize(f.size)+'</small></span></div>').join('') || '<div class="empty-state">'+icon('folder-open')+'暂无材料</div>');
@@ -162,6 +169,7 @@
     return entries.length ? '<div class="log-stream">'+entries.map(entry => timelineEntry(entry,ui)).join('')+'</div>' : '';
   }
   function renderActivity() {
+    if (!viewed()) return;
     const host = $('#activity-content'); if (!host) return;
     disposeActivity?.(); disposeActivity = null;
     const p = viewed(), state = PwnDemoGraph.buildState(p);
@@ -253,8 +261,8 @@
     closeMenu(); disposeRecord?.(); disposeActivity?.(); disposeActivity = null; disposeInspector?.(); disposeInspector = null; graph?.destroy(); graph = null; disposeLLM?.(); disposeLLM = null; selectedNode = null; selectedEdge = null;
     activityOrigin = null;
     const page = route(), p = viewed();
-    $('.topbar').hidden = page === 'llm' || Boolean(p);
-    $('.topbar').innerHTML = $('.topbar').hidden ? '' : modelEntry();
+    $('.topbar').hidden = true;
+    $('.topbar').innerHTML = '';
     if (page === 'llm') {
       const origin = projects.find(project => project.id === llmReturn?.id) || projects[0];
       $('#main').innerHTML = PwnLLMDemo.render({returnLabel:origin ? '返回项目' : '返回工作台',projectName:origin?.name || ''});
@@ -264,7 +272,7 @@
         returningFromLLM = true; location.hash = 'project/'+origin.id;
       }});
     } else if (!p) {
-      $('#main').innerHTML = '<section class="workspace-empty">'+icon('folder-open')+'<h1>创建第一个项目</h1><p>选择 CTF、代码审计或渗透测试，添加已知信息与目标。</p><button class="button primary" data-create>'+icon('plus')+'新建项目</button></section>';
+      $('#main').innerHTML = emptyWorkspaceMarkup();
     } else {
       $('#main').innerHTML = projectMarkup(p); if (viewTab === 'graph') mountGraph(p); else fitContentBodies(); renderActivity();
     }
@@ -319,8 +327,8 @@
       const before = current()?.id, result = await service.refresh(id); if (!result) return;
       projects.splice(0,projects.length,...result.projects); connected = true;
       const p = current(), signature = JSON.stringify([p?.id,p?.generation,p?.state,p?.logs,p?.files,p?.history.map(h=>[h.generation,h.archivedAt])]);
-      if (route() !== 'llm' && (!p || before !== p.id || !$('.project-page'))) render();
-      else if (route() !== 'llm' && signature !== lastSnapshot) {
+      if (route() !== 'llm' && ((!p && !$('.empty-project-page')) || before !== p?.id || !$('.project-page'))) render();
+      else if (route() !== 'llm' && p && signature !== lastSnapshot) {
         if (selectedRun !== 'current' && !p.history.some(h=>String(h.generation)===selectedRun && h.state)) selectedRun = 'current';
         const shown = viewed(), holder = document.createElement('div'); holder.innerHTML = projectMarkup(shown);
         $('.project-heading')?.replaceWith(holder.querySelector('.project-heading'));
