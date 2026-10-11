@@ -5,11 +5,30 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode"
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/contract"
 )
+
+func TestBuiltInPromptTemplatesContainNoChinese(t *testing.T) {
+	entries, err := prompts.ReadDir("prompts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			body, err := prompts.ReadFile("prompts/" + entry.Name())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.ContainsFunc(string(body), func(r rune) bool { return unicode.Is(unicode.Han, r) }) {
+				t.Fatal("built-in prompt contains untranslated Chinese")
+			}
+		})
+	}
+}
 
 // Exercise the examples actually sent to the model against the same contract
 // as the Worker. Phase deltas retain this contract without copying its examples.
@@ -137,18 +156,19 @@ func TestScenarioRulesPreserveGeneralUserGoals(t *testing.T) {
 	t.Setenv("TSEC_SERVER_HOST", "")
 	t.Setenv("TSEC_AGENT_TOKEN", "")
 	const goal = "Write and return recursive sorting code with tests for empty input, duplicates and negative numbers."
+	const userInput = "Preserve this literal user input: 中文🙂"
 	for _, scenario := range []string{"ctf", "pentest", "audit"} {
 		for _, kind := range []string{"reason", "explore"} {
 			t.Run(scenario+"/"+kind, func(t *testing.T) {
 				job := Job{Kind: kind, Graph: board.Graph{
 					Project: board.Project{Scenario: scenario},
-					Facts:   []board.Fact{{ID: "origin", Description: "No existing code or uploaded files."}, {ID: "goal", Description: goal}},
+					Facts:   []board.Fact{{ID: "origin", Description: userInput}, {ID: "goal", Description: goal}},
 				}}
 				prompt, err := Prompt(job, false)
 				if err != nil {
 					t.Fatal(err)
 				}
-				for _, required := range []string{goal, "including non-security tasks", "scenario rules apply only to relevant work and add no extra deliverables"} {
+				for _, required := range []string{goal, userInput, "including non-security tasks", "scenario rules apply only to relevant work and add no extra deliverables"} {
 					if !strings.Contains(prompt, required) {
 						t.Errorf("general task lost its goal or scope boundary: %q", required)
 					}

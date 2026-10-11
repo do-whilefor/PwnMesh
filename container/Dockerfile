@@ -1,8 +1,8 @@
-# 在仓库根目录构建；先构建 pwnmesh:dev，再构建本 Worker 镜像。
+# Build from the repository root; build pwnmesh:dev before this Worker image.
 ARG PWNMESH_IMAGE=pwnmesh:dev
 FROM --platform=linux/amd64 ${PWNMESH_IMAGE} AS application
 
-# kali-linux-headless 是 APT 元包：在官方 Kali 基础镜像中安装其工具集。
+# kali-linux-headless is an APT metapackage: install its toolset in the official Kali base image.
 FROM --platform=linux/amd64 kalilinux/kali-rolling@sha256:30399bd65187e06525008dd13eecc2b3439d26a82b2c6b0ba32dee72bd843117 AS runtime
 
 ARG KALI_MIRROR=
@@ -16,12 +16,12 @@ ENV TZ=Asia/Shanghai \
     PLAYWRIGHT_MCP_SANDBOX=false \
     NO_UPDATE_NOTIFIER=1
 
-# 在第一次 APT 请求前，从已有控制镜像提供 CA，避免 HTTPS 源的冷启动依赖。
-# 随后安装 Kali 的 ca-certificates 接管证书更新；不关闭 TLS 或 APT 签名校验。
+# Supply CA certificates from the existing control image before the first APT request to bootstrap HTTPS mirrors.
+# Kali's ca-certificates then manages updates; keep TLS and APT signature verification enabled.
 COPY --from=application /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
-# 软件包安装期间不启动 Apache、SSH、数据库等服务；运行时按需手动启动。
-# 可选镜像源只替换 URI，保留套件、组件和签名校验配置。
+# Do not start Apache, SSH, databases, or other services during package installation; start them as needed at runtime.
+# An optional mirror replaces only the URI, preserving suites, components, and signature verification settings.
 RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && chmod 0755 /usr/sbin/policy-rc.d \
     && if [ -n "$KALI_MIRROR" ]; then \
@@ -50,7 +50,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# pwntools 4.15 尚未完整支持 Python 3.14；任务环境使用 3.13。
+# pwntools 4.15 does not fully support Python 3.14; use 3.13 for the task environment.
 RUN python3.13 -m venv /opt/pwnmesh-venv \
     && ln -s /usr/bin/fdfind /usr/local/bin/fd
 ENV PATH="/opt/pwnmesh-venv/bin:${PATH}"
@@ -62,7 +62,7 @@ RUN pip install --no-cache-dir \
         "pwntools==${PWNTOOLS_VERSION}" "pymongo==${PYMONGO_VERSION}" "awscli==${AWSCLI_VERSION}" \
     && pip check
 
-# 单独隔离 tccli 的 SDK 依赖，避免与任务追加的 Python 包互相影响。
+# Isolate tccli's SDK dependencies from Python packages added by tasks.
 ARG TCCLI_VERSION=3.1.173.1
 RUN /usr/bin/python3.13 -m venv /opt/tccli-venv \
     && /opt/tccli-venv/bin/pip install --no-cache-dir "tccli==${TCCLI_VERSION}" \
@@ -80,7 +80,7 @@ RUN curl --fail --show-error --location --retry 3 \
     && install -m 0755 /tmp/aliyun-install/aliyun /usr/local/bin/aliyun \
     && rm -rf /tmp/aliyun.tgz /tmp/aliyun-install
 
-# 按需解析 latest；初始化只发生在临时目录，不向项目注入配置或 skills。
+# Resolve latest as needed; initialize only in a temporary directory without injecting project configuration or skills.
 RUN npm install --global --no-audit --no-fund @playwright/cli@latest \
     && mkdir /tmp/playwright-setup \
     && cd /tmp/playwright-setup \
@@ -92,7 +92,7 @@ RUN npm install --global --no-audit --no-fund @playwright/cli@latest \
     && npm cache clean --force
 ENV PLAYWRIGHT_MCP_EXECUTABLE_PATH=/usr/local/bin/pwnmesh-chromium
 
-# 保留手动使用的 kali 用户；Dispatcher 注入的私有任务文件仍由 root 读取。
+# Keep the kali user for manual use; root still reads private task files injected by the Dispatcher.
 RUN if ! id kali >/dev/null 2>&1; then useradd -m -s /bin/bash kali; fi \
     && printf 'kali ALL=(ALL) NOPASSWD:ALL\n' > /etc/sudoers.d/kali \
     && chmod 0440 /etc/sudoers.d/kali \
@@ -103,8 +103,8 @@ RUN if ! id kali >/dev/null 2>&1; then useradd -m -s /bin/bash kali; fi \
 
 COPY container/environment.md container/check-worker.sh /usr/local/share/pwnmesh/
 COPY container/pwn-http.py /usr/local/bin/pwn-http
-# Kali 为 Nmap 设置的 CAP_NET_ADMIN 超出 Docker 默认权限，连 --version 也会无法执行。
-# 去掉文件 capabilities，让默认 root 进程沿用容器已有权限。
+# Kali's CAP_NET_ADMIN for Nmap exceeds Docker's default permissions, preventing even --version from running.
+# Remove file capabilities so the default root process uses the container's existing permissions.
 RUN chmod 0755 /usr/local/share/pwnmesh/check-worker.sh /usr/local/bin/pwn-http \
     && if [ -f /usr/lib/nmap/nmap ] && [ -n "$(getcap /usr/lib/nmap/nmap)" ]; then \
         setcap -r /usr/lib/nmap/nmap; \

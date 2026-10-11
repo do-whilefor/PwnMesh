@@ -1,9 +1,38 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
+
+func TestRepositoryDocumentationContainsNoChinese(t *testing.T) {
+	for _, file := range []string{
+		"README.md", "SECURITY.md", "LICENSE", "container/README.md", "container/environment.md",
+		"Dockerfile", "container/Dockerfile", "compose.yaml", "dispatch.example.yaml", ".env.example",
+	} {
+		t.Run(file, func(t *testing.T) {
+			body, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(file)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !utf8.Valid(body) {
+				t.Fatal("documentation must be valid UTF-8")
+			}
+			line := 1
+			for _, r := range string(body) {
+				if unicode.Is(unicode.Han, r) {
+					t.Fatalf("untranslated Chinese character %q on line %d", r, line)
+				}
+				if r == '\n' {
+					line++
+				}
+			}
+		})
+	}
+}
 
 // Exercise the shipped example through the same loader as the Dispatcher, using
 // synthetic environment values so these checks never need local credentials.

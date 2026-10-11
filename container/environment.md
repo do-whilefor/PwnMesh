@@ -1,70 +1,70 @@
-# PwnMesh Worker 环境
+# PwnMesh Worker Environment
 
-本文描述公开构建配置使用的完整 `pwnmesh-worker:dev` 环境，包含 Web、APK/JAR 分析所需工具。
-构建定义见 [Dockerfile](Dockerfile)，离线自检见 [check-worker.sh](check-worker.sh)。
+This document describes the full `pwnmesh-worker:dev` environment used by the public build configuration, including tools for Web and APK/JAR analysis.
+See [Dockerfile](Dockerfile) for the build definition and [check-worker.sh](check-worker.sh) for the offline self-check.
 
-- 基于官方 Kali rolling 镜像（`linux/amd64`），安装 `kali-linux-headless` 元包及其必需工具依赖，使用 Go `pwnmesh worker` 执行 Agent Loop。
-- `/workspace` 是同一项目共享的工作目录；`/home/kali/workspace` 指向同一目录，且已初始化为 git 仓库。
-- `/workspace/.pwnmesh/runs/<run-id>` 保存单次执行的任务、会话和工具输出。
-- 默认用户为 root，以兼容 Dispatcher 写入的私有任务文件。保留 `kali` 用户和免密码 sudo，便于手动使用。
-- 时区为 `Asia/Shanghai`，Python 输出不缓冲。
-- 首次 APT 请求前从控制镜像提供 CA 证书，支持 HTTPS 镜像源；构建完成后由 Kali 的 `ca-certificates` 管理证书。
+- Based on the official Kali rolling image (`linux/amd64`), with the `kali-linux-headless` metapackage and its required tool dependencies. The Go `pwnmesh worker` runs the agent loop.
+- `/workspace` is the shared working directory for a project. `/home/kali/workspace` points to the same directory, which is initialized as a Git repository.
+- `/workspace/.pwnmesh/runs/<run-id>` stores the task, session, and tool outputs for each run.
+- The default user is root to support private task files written by the Dispatcher. The `kali` user and passwordless sudo remain available for manual use.
+- The timezone is `Asia/Shanghai`, and Python output is unbuffered.
+- CA certificates are supplied by the control image before the first APT request to support HTTPS mirrors. Kali's `ca-certificates` manages certificates after the build.
 
-## 基础工具
+## Base Tools
 
-bash、curl、wget、ripgrep (`rg`)、fd (`fdfind`)、Python 3.13、pip、venv、jq、git、coreutils、procps (`ps`)、iproute2 (`ip`)、dnsutils (`dig`)、zip/unzip、sudo，以及 CA 证书和时区数据。另含 binutils、cpp、C/C++ 构建工具和 Python 3.13 开发依赖，支持 pwntools 的本机汇编及 Python 包源码安装。
+bash, curl, wget, ripgrep (`rg`), fd (`fdfind`), Python 3.13, pip, venv, jq, git, coreutils, procps (`ps`), iproute2 (`ip`), dnsutils (`dig`), zip/unzip, sudo, CA certificates, and timezone data. Also includes binutils, cpp, C/C++ build tools, and Python 3.13 development dependencies to support native assembly with pwntools and Python package installation from source.
 
-另外显式安装 bsdextrautils（`column`、`hexdump`）、Node.js/npm、iputils-ping（`ping`）、sshpass、ncat、rlwrap、yq、krb5-user（`kinit`、`klist`）、adb。`yq` 是 Kali 提供的 jq 风格 Python 实现，可用 `yq -r '.name' file.yaml` 读取字段。
+Also explicitly installs bsdextrautils (`column`, `hexdump`), Node.js/npm, iputils-ping (`ping`), sshpass, ncat, rlwrap, yq, krb5-user (`kinit`, `klist`), and adb. `yq` is Kali's jq-style Python implementation; use `yq -r '.name' file.yaml` to read a field.
 
-headless 工具集包含 nmap、sqlmap 等命令及其随包数据；APT 不额外安装 Recommends。软件包安装期间不会自动启动服务。容器入口仍为 PwnMesh，不运行 systemd；任务需要时可直接启动相应服务进程。
+The headless toolset includes commands such as nmap and sqlmap and their packaged data. APT does not install additional Recommends. Services are not started automatically during package installation. PwnMesh remains the container entrypoint, and systemd does not run; tasks can start the required service processes directly.
 
-Nmap 去除了 Kali 软件包附带的文件 capabilities，避免 `CAP_NET_ADMIN` 超出 Docker 默认权限导致启动失败；默认 root 进程沿用容器已有权限。
+The file capabilities shipped with Kali's Nmap package are removed to prevent startup failures caused by `CAP_NET_ADMIN` exceeding Docker's default permissions. The default root process uses the container's existing permissions.
 
-## 客户端接口与本地材料
+## Client APIs and Local Materials
 
-项目可以上传 HAR、原始 HTTP 请求、APK、源码压缩包、配置和数据库等二进制文件。上传结果中的工作区路径就是 Worker 的输入路径；上传本身不解压或执行文件。使用任务要求说明授权接口范围、分析目标和不同测试账号的身份。
+Projects accept uploads such as HAR files, raw HTTP requests, APKs, source archives, configurations, and databases, including binary files. The workspace path returned by an upload is the Worker's input path. Uploading does not extract or execute files. Use task requirements to specify the authorized API scope, analysis goals, and identities of the different test accounts.
 
-`pwn-http inspect <文件>` 离线读取 HAR 或原始 HTTP 请求，输出请求索引、方法、脱敏 URL、请求头名称和 body 大小。`pwn-http replay <文件> --index 1 --output <新目录>` 单次发送选中的完整请求并保存请求/响应证据；不会自动跟随跳转或重试。原始请求使用相对路径时需指定 `--base-url <源站>`。HTTP 错误状态同样保存为证据；缺失或无法完整还原的 body 会拒绝重放。
+`pwn-http inspect <file>` reads a HAR file or raw HTTP request offline and outputs request indices, methods, redacted URLs, header names, and body sizes. `pwn-http replay <file> --index 1 --output <new-directory>` sends the selected complete request once and saves request/response evidence; it does not automatically follow redirects or retry. Raw requests with relative paths require `--base-url <origin>`. HTTP error responses are also saved as evidence. Replay is rejected if a body is missing or cannot be fully reconstructed.
 
-用 `--headers <JSON文件>` 覆盖测试身份的认证头，JSON 值为 null 时删除对应头，也可用 `--remove-header Cookie` 去掉原会话。认证失败或响应不同只代表观察结果，需要结合账号权限、业务预期和实际影响判断。请求或响应 body 中可能含敏感数据，证据目录和原始材料应按凭据文件保护。
+Use `--headers <JSON-file>` to override authentication headers for the test identity. A JSON value of null removes the corresponding header; `--remove-header Cookie` can also remove the original session. Authentication failures or differing responses are observations that must be assessed against account permissions, expected application behavior, and actual impact. Request or response bodies may contain sensitive data; protect evidence directories and source materials as you would credential files.
 
-显式安装 Java JDK（`java`、`javac`、`jar`）、`jadx`、`apktool`、`file`、`sqlite3`，结合现有 `unzip`、`strings`、`rg`、`jq` 和 `yq` 支持：
+Java JDK (`java`, `javac`, `jar`), `jadx`, `apktool`, `file`, and `sqlite3` are explicitly installed. Together with the existing `unzip`, `strings`, `rg`, `jq`, and `yq`, they support:
 
-- `jadx -d <新目录> <APK/JAR/DEX>`：反编译代码（包含 APK 内多个 DEX），查找接口、认证实现和本地数据处理；混淆或加固包可能需要补充源码。
-- `apktool d <APK> -o <新目录>`：解码 Manifest、资源和 smali，检查权限、导出组件、深链、备份及网络配置；声明须结合代码、资源限定符和 Android 版本判断，关键词命中不是漏洞证明。SDK 版本还需查看解码目录中 `apktool.yml` 的 `sdkInfo`，`uses-sdk` 可能已从解码后的 Manifest 移到此处。
-- `file <文件>`、`unzip -l <压缩包>`：确认类型和内容，再将需要分析的源码或资源提取到独立目录；不要直接运行来历未知的安装包和构建脚本。
-- `sqlite3 -readonly <数据库>`：只读检查本地表结构与保存的数据；JSON/YAML/文本配置使用 `jq`、`yq`、`rg`。
+- `jadx -d <new-directory> <APK/JAR/DEX>`: Decompile code, including multiple DEX files within an APK, to find APIs, authentication implementations, and local data handling. Obfuscated or hardened packages may require additional source code.
+- `apktool d <APK> -o <new-directory>`: Decode the Manifest, resources, and smali to inspect permissions, exported components, deep links, backups, and network configuration. Assess declarations alongside the code, resource qualifiers, and Android version; keyword matches are not proof of a vulnerability. For SDK versions, also inspect `sdkInfo` in the decoded directory's `apktool.yml`, since `uses-sdk` may have been moved there from the decoded Manifest.
+- `file <file>`, `unzip -l <archive>`: Confirm file types and contents, then extract the source code or resources to analyze into a separate directory. Do not directly run installation packages or build scripts of unknown origin.
+- `sqlite3 -readonly <database>`: Inspect local table schemas and stored data in read-only mode. Use `jq`, `yq`, and `rg` for JSON, YAML, and text configurations.
 
-以上覆盖客户端服务端接口重放和本地静态分析，不验证 APK 签名真实性或 Android 运行时行为；拆分 APK 需要完整 split 集。抓包由已有测试设备/代理导出 HAR 或原始请求；镜像不新增设备代理、Android/iOS 原生页面操作或自动登录。设备签名、客户端证书绑定、过期令牌等仍可能使离开原设备的请求无法重放。
+These tools cover replaying client-to-server API requests and local static analysis. They do not verify APK signature authenticity or Android runtime behavior; split APKs require the complete split set. Export captured traffic as HAR files or raw requests from existing test devices or proxies. The image does not add device agents, native Android/iOS UI interaction, or automatic login. Device signatures, client certificate binding, expired tokens, and similar constraints may still prevent replaying requests outside the original device.
 
-## Python 与云 CLI
+## Python and Cloud CLIs
 
-`/opt/pwnmesh-venv/bin` 已加入 PATH，`python`/`python3` 和 `pip`/`pip3` 默认使用该虚拟环境。两个虚拟环境均使用 Python 3.13，避免 pwntools 4.15.0 对 Python 3.14 部分字节码不兼容的问题。预装：
+`/opt/pwnmesh-venv/bin` is on PATH, so `python`/`python3` and `pip`/`pip3` use this virtual environment by default. Both virtual environments use Python 3.13 to avoid pwntools 4.15.0 incompatibilities with some Python 3.14 bytecode. Preinstalled packages:
 
-| 包 | 默认版本 | 用法 |
+| Package | Default version | Usage |
 | --- | --- | --- |
-| pwntools | 4.15.0 | Python 中 `from pwn import ...`，支持 amd64 汇编 |
-| pymongo | 4.18.1 | Python 中 `import pymongo`，提供 MongoDB 客户端和 BSON 编解码 |
-| awscli | 1.46.1 | AWS CLI v1，命令 `aws`；预装 groff-base 支持离线帮助 |
+| pwntools | 4.15.0 | `from pwn import ...` in Python; supports amd64 assembly |
+| pymongo | 4.18.1 | `import pymongo` in Python; provides a MongoDB client and BSON encoding/decoding |
+| awscli | 1.46.1 | AWS CLI v1, invoked as `aws`; groff-base is preinstalled for offline help |
 
-`tccli` 3.1.173.1 使用独立的 `/opt/tccli-venv`，并通过 `/usr/local/bin/tccli` 加入 PATH，避免其 SDK 依赖与任务追加的 Python 包互相影响。`REQUESTS_CA_BUNDLE` 指向 `/etc/ssl/certs/ca-certificates.crt`，requests 使用系统 CA。
+`tccli` 3.1.173.1 uses a separate `/opt/tccli-venv` and is available on PATH through `/usr/local/bin/tccli`, isolating its SDK dependencies from Python packages added by tasks. `REQUESTS_CA_BUNDLE` points to `/etc/ssl/certs/ca-certificates.crt` so requests uses the system CA certificates.
 
-`aliyun` 3.5.1 来自官方 Linux amd64 发布包，构建时校验固定 SHA256。三个云 CLI 的版本命令均可离线执行；访问云服务时由任务提供相应凭据和网络连接。镜像不预置云凭据。
+`aliyun` 3.5.1 comes from the official Linux amd64 release archive, with a pinned SHA256 verified during the build. Version commands for all three cloud CLIs work offline. Tasks must provide the credentials and network connectivity required to access cloud services. No cloud credentials are included in the image.
 
-任务可继续用 `python -m pip install ...` 向共享虚拟环境安装依赖。
+Tasks can install additional dependencies into the shared virtual environment with `python -m pip install ...`.
 
-## 浏览器
+## Browser
 
-Node.js 和 npm 由 Kali APT 安装，提供 `node`、`npm`、`npx`；自检要求 Node.js 至少为 20。全局安装 `@playwright/cli@latest`，命令为 `playwright-cli`；构建时通过 `playwright-cli install` 下载 Chromium，并安装浏览器运行库及字体。
+Kali APT installs Node.js and npm, providing `node`, `npm`, and `npx`. The self-check requires Node.js 20 or later. `@playwright/cli@latest` is installed globally as `playwright-cli`. The build downloads Chromium through `playwright-cli install` and installs browser runtime libraries and fonts.
 
-浏览器文件位于 `/opt/ms-playwright`；`/usr/local/bin/pwnmesh-chromium` 指向该版本的 Chromium。环境变量默认选择 Chromium、无头模式和 `sandbox=false`，适配镜像默认的 root 用户。CLI 通过 `PLAYWRIGHT_MCP_EXECUTABLE_PATH` 使用固定入口，可在任意工作目录运行，无需再次安装浏览器。
+Browser files are stored in `/opt/ms-playwright`, and `/usr/local/bin/pwnmesh-chromium` points to that Chromium version. Environment variables default to Chromium, headless mode, and `sandbox=false` to accommodate the image's default root user. The CLI uses the fixed entrypoint through `PLAYWRIGHT_MCP_EXECUTABLE_PATH` and can run from any working directory without reinstalling the browser.
 
-`latest` 在安装层实际执行时解析；Docker 缓存命中时沿用已有版本。安装步骤见 [Dockerfile](Dockerfile)；需要重新解析版本时，在仓库根目录执行 `docker build --no-cache -f container/Dockerfile -t pwnmesh-worker:dev .`（先构建 `pwnmesh:dev`）。离线检查内容见 [check-worker.sh](check-worker.sh)，构建后执行 `docker run --rm --pull never --network none --init --entrypoint /usr/local/share/pwnmesh/check-worker.sh pwnmesh-worker:dev`。
+`latest` is resolved when the installation layer executes; a Docker cache hit reuses the existing version. See [Dockerfile](Dockerfile) for installation steps. To resolve the version again, run `docker build --no-cache -f container/Dockerfile -t pwnmesh-worker:dev .` from the repository root after building `pwnmesh:dev`. See [check-worker.sh](check-worker.sh) for offline checks, then run `docker run --rm --pull never --network none --init --entrypoint /usr/local/share/pwnmesh/check-worker.sh pwnmesh-worker:dev` after the build.
 
-## 安装范围
+## Installation Scope
 
-预装 Kali headless 工具集、上述补充工具及 PwnMesh 二进制；不额外复制原竞赛环境的知识库、PoC、`AGENTS.md`、`CLAUDE.md` 和技能目录。Playwright 初始化在临时目录完成，不向项目注入 skills 或配置。
+The image includes the Kali headless toolset, the additional tools listed above, and the PwnMesh binary. It does not copy the original competition environment's knowledge base, PoCs, `AGENTS.md`, `CLAUDE.md`, or skill directories. Playwright initialization runs in a temporary directory and does not inject skills or configuration into projects.
 
-镜像通过 `PWNMESH_WORKER_ENVIRONMENT=kali-headless` 标识环境。Worker 在初始任务提示词中注入简短的 Kali/headless 说明和实际工作目录；执行阶段另提示可尝试 nuclei、ffuf 等命令，并以实际输出确认可用性。未设置或不识别该标记时，不声明 Kali 或预装工具集。收尾和修复阶段沿用原始说明，不重复注入。
+The image identifies its environment with `PWNMESH_WORKER_ENVIRONMENT=kali-headless`. The Worker adds a brief Kali/headless description and the actual working directory to the initial task prompt. During execution, it also suggests trying commands such as nuclei and ffuf and checking their actual output to confirm availability. If the marker is absent or unrecognized, the prompt makes no claims about Kali or preinstalled tools. Concluding and repair phases retain the original description without injecting it again.
 
-此文档全文不自动注入模型提示词。
+The full text of this document is not automatically injected into model prompts.

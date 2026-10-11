@@ -1,59 +1,59 @@
-# PwnMesh 免责声明与使用合规须知
+# PwnMesh Disclaimer and Usage Compliance Notice
 
-本声明适用于 PwnMesh 项目的代码、工具及相关文档。请在使用前阅读本声明与 [PolyForm Noncommercial License 1.0.0](LICENSE)。软件的使用、复制、修改和分发权限以该许可证为准；本声明不替代或变更许可证，也不授予对任何第三方系统进行测试的权限。
+This notice applies to the PwnMesh project's code, tools, and related documentation. Read this notice and the [PolyForm Noncommercial License 1.0.0](LICENSE) before use. The license governs permission to use, copy, modify, and distribute the software. This notice neither replaces nor changes the license, and does not grant permission to test any third-party system.
 
-## 1 工具定位
+## 1 Intended Use
 
-PwnMesh 用于合法的技术研究、经授权的安全测试、内部风险自查及其他符合许可证的技术工作。涉及网络安全测试的功能，旨在帮助发现和验证风险、改进防御措施及开展合规的漏洞治理。
+PwnMesh is intended for lawful technical research, authorized security testing, internal risk assessments, and other technical work permitted by the license. Its security testing features are intended to help discover and validate risks, improve defenses, and support vulnerability management in compliance with applicable requirements.
 
-公开提供代码不代表允许任意商业使用，也不代表对任何目标的测试已获得授权。涉及商业目的的使用，应先核实是否属于许可证允许的范围，必要时另行取得权利人的授权。
+Public availability of the code does not permit unrestricted commercial use or authorize testing of any target. Before using it for commercial purposes, verify that the use falls within the license's scope and obtain separate authorization from the rights holder if necessary.
 
-## 2 授权使用原则
+## 2 Authorized Use
 
-使用者应当在测试前取得目标系统权利人或有权授权主体的书面授权，并明确测试对象、时间、方法、账号权限及数据处理范围。对自有系统进行测试，也应确认不会影响未经授权的第三方资源。
+Before testing, users must obtain written authorization from the target system's rights holder or another party entitled to grant it, specifying the targets, time window, methods, account permissions, and scope of data processing. When testing their own systems, users must also confirm that third-party resources outside the authorized scope will not be affected.
 
-严禁在无授权、越权或超出授权范围的情况下，实施扫描、探测、渗透、数据获取、流量分析及其他自动化测试，包括针对：
+Scanning, probing, penetration testing, data acquisition, traffic analysis, and other automated testing without authorization or beyond granted permissions or scope are strictly prohibited, including against:
 
-- 未获授权的互联网系统；
-- 金融、能源、政务、通信、交通等领域的关键信息基础设施；
-- 第三方企业、个人或公有云中的业务系统；
-- 法律法规禁止测试的信息系统。
+- Internet systems for which authorization has not been obtained;
+- Critical information infrastructure in finance, energy, government, communications, transportation, and other sectors;
+- Business systems belonging to third-party organizations or individuals, or hosted in public clouds;
+- Information systems that laws or regulations prohibit testing.
 
-授权不免除使用者遵守适用法律、监管要求及目标服务规则的义务。授权范围不清、授权被撤回或测试产生非预期影响时，应停止相关操作并确认后再继续。
+Authorization does not relieve users of their obligations under applicable laws, regulatory requirements, or the target service's rules. If the scope is unclear, authorization is withdrawn, or testing causes unexpected effects, stop the relevant operations and resolve the issue before continuing.
 
-## 3 禁止滥用
+## 3 Prohibited Misuse
 
-不得利用本项目实施以下行为：
+This project must not be used for:
 
-1. 非法入侵、非法控制、数据窃取、流量攻击或恶意利用漏洞；
-2. 黑灰产活动、违法牟利、恶意破坏、未经授权的批量扫描或网络骚扰；
-3. 为非法目的绕过安全控制、权限校验或其他保护措施；
-4. 危害网络安全、扰乱公共秩序、侵犯隐私、知识产权或其他合法权益的活动。
+1. Unlawful intrusion or control, data theft, traffic attacks, or malicious exploitation of vulnerabilities;
+2. Illicit or legally dubious commercial activities, unlawful profit, malicious destruction, unauthorized mass scanning, or online harassment;
+3. Bypassing security controls, permission checks, or other protections for unlawful purposes;
+4. Activities that endanger cybersecurity, disrupt public order, or infringe privacy, intellectual property, or other lawful rights and interests.
 
-## 4 责任边界与风险
+## 4 Liability and Risks
 
-本项目按现状提供。在适用法律允许的范围内，项目作者、维护者和贡献者不对其准确性、完整性、安全性、持续可用性或特定用途适用性作出保证；责任限制以 [LICENSE](LICENSE) 中的条款及适用法律为准。
+This project is provided as is. To the extent permitted by applicable law, its authors, maintainers, and contributors make no warranties as to its accuracy, completeness, security, continued availability, or fitness for a particular purpose. Limitations of liability are governed by the [LICENSE](LICENSE) and applicable law.
 
-自动化执行、模型输出和工具结果可能存在错误、遗漏或非预期行为，不能替代使用者的独立判断，也不构成法律意见或安全合规认证。使用者应自行评估运行权限、数据暴露、系统变更、服务中断和第三方服务费用等风险，并采取适当的隔离、备份及验证措施。
+Automated execution, model outputs, and tool results may contain errors, omissions, or unexpected behavior. They cannot replace users' independent judgment and do not constitute legal advice or certification of security compliance. Users must assess risks such as execution privileges, data exposure, system changes, service disruptions, and third-party service charges, and take appropriate isolation, backup, and verification measures.
 
-项目代码的公开提供，不构成对第三方违法使用的认可、授权或协助。各方应根据其实际行为、过错及适用法律承担相应责任；本声明不排除或限制依法不得免除的责任，也不能据此当然免除刑事、行政或民事责任。
+Making the project's code publicly available does not constitute approval, authorization, or assistance for unlawful use by third parties. Each party bears responsibility according to its actual conduct, fault, and applicable law. This notice does not exclude or limit liability that cannot lawfully be waived, nor does it automatically exempt anyone from criminal, administrative, or civil liability.
 
-## 5 使用者的合规义务
+## 5 Users' Compliance Obligations
 
-使用者应了解并遵守其所在地、目标系统所在地及相关数据处理活动适用的法律法规。在适用中国法律的场景下，应遵守《中华人民共和国网络安全法》《中华人民共和国刑法》及其他相关规定；涉及特定行业、资质、备案或审批要求的，应在开展活动前完成必要手续。
+Users must understand and comply with the laws and regulations applicable to their location, the target system's location, and the relevant data processing activities. Where Chinese law applies, users must comply with the Cybersecurity Law of the People's Republic of China, the Criminal Law of the People's Republic of China, and other relevant provisions. Any required industry-specific procedures, qualifications, filings, or approvals must be completed before undertaking the activity.
 
-使用者应妥善保护测试账号、凭据、个人信息、业务数据和测试证据，仅在获授权的范围内收集、使用、保存或披露。向模型服务或其他第三方服务发送材料前，应确认已获得必要权限并符合相关数据处理要求。
+Users must properly protect test accounts, credentials, personal information, business data, and test evidence, and collect, use, retain, or disclose them only within the authorized scope. Before sending materials to a model service or another third-party service, users must confirm that they have the necessary permissions and comply with the relevant data processing requirements.
 
-发现漏洞后，应依照授权约定及适用的漏洞披露规则报告，不得以漏洞或测试中获取的数据进行勒索、交易或其他违法活动。
+Discovered vulnerabilities must be reported in accordance with the authorization agreement and applicable vulnerability disclosure rules. Vulnerabilities or data obtained during testing must not be used for extortion, trading, or other unlawful activities.
 
-## 6 滥用处置
+## 6 Response to Misuse
 
-在适用法律及现有许可证允许的范围内，项目维护者可拒绝提供涉嫌违法用途的技术支持，停止其自行提供的后续服务或分发渠道，并依法向有关平台或主管机关报告滥用线索。
+To the extent permitted by applicable law and the existing license, project maintainers may refuse technical support for suspected unlawful uses, discontinue subsequent services or distribution channels they provide, and lawfully report indications of misuse to the relevant platforms or authorities.
 
-有关证据的收集、保存和提供应当依法进行。本声明不表示项目具有远程监控、自动举报或远程停用功能，也不当然撤销使用者已经依据许可证合法取得的权利。
+Relevant evidence must be collected, retained, and provided lawfully. This notice does not imply that the project has remote monitoring, automatic reporting, or remote deactivation features, nor does it automatically revoke rights that users have lawfully obtained under the license.
 
-## 7 最终声明
+## 7 Final Statement
 
-请仅在合法授权及许可证允许的范围内使用 PwnMesh。使用者应对自己的操作、数据处理及其后果依法负责；项目相关方的责任同样应依据实际行为和适用法律认定。
+Use PwnMesh only within lawful authorization and the scope permitted by the license. Users are legally responsible for their actions, data processing, and resulting consequences. The responsibility of parties associated with the project must likewise be determined by their actual conduct and applicable law.
 
-如本声明的任何表述与适用法律的强制性规定冲突，以强制性规定为准。对授权、许可或责任范围存在疑问时，应在使用前咨询具备相应资质的专业人士。
+If any part of this notice conflicts with mandatory provisions of applicable law, those provisions prevail. Consult an appropriately qualified professional before use if you have questions about authorization, licensing, or the scope of liability.
