@@ -103,8 +103,8 @@ func TestCommandGraphRetainsFailureDiagnosticsAndBoundsStderrPreview(t *testing.
 			}
 			node, value := commandNodeValue(t, cp, "source")
 			if test.failed {
-				// Failed callbacks retain raw files but do not publish an
-				// unverified Output as a successful dependency receipt.
+				// Failed callbacks expose bounded diagnostics, never accepted
+				// artifacts or a successful dependency receipt.
 				nodeDir := filepath.Join(dir, "graph-tools", test.name, "nodes", "source")
 				stdoutPath, stderrPath := filepath.Join(nodeDir, "stdout.log"), filepath.Join(nodeDir, "stderr.log")
 				stdout, outErr := os.ReadFile(stdoutPath)
@@ -112,8 +112,8 @@ func TestCommandGraphRetainsFailureDiagnosticsAndBoundsStderrPreview(t *testing.
 				if outErr != nil || errErr != nil || string(stdout) != "{\"partial\":true}\n" || string(stderr) != "failure reason\n" {
 					t.Fatalf("failed command lost raw streams: stdout=%q stderr=%q errors=%v/%v", stdout, stderr, outErr, errErr)
 				}
-				if node.Status != "failed" || len(node.Output.Value) != 0 || !strings.Contains(node.Error, "command exited 7") || !strings.Contains(node.Error, stdoutPath) || !strings.Contains(node.Error, stderrPath) {
-					t.Fatalf("failed command lost diagnostic paths or published unverified output: %+v", node)
+				if node.Status != "failed" || len(node.Output.Artifacts) != 0 || value.ExitCode != 7 || value.Stdout != string(stdout) || value.Stderr != string(stderr) || value.OutputPath != stdoutPath || value.StderrPath != stderrPath || !strings.Contains(node.Error, "command exited 7") {
+					t.Fatalf("failed command lost diagnostics or published unverified artifacts: %+v", node)
 				}
 				return
 			}
@@ -134,6 +134,44 @@ func TestCommandGraphRetainsFailureDiagnosticsAndBoundsStderrPreview(t *testing.
 				}
 			}
 		})
+	}
+}
+
+func TestCommandGraphFailureRouteConsumesDiagnosticsWithoutAcceptedArtifacts(t *testing.T) {
+	job, dir := graphWrapperJob(t), t.TempDir()
+	spec := commandGraphSpec{Key: "failure-route", Nodes: []commandGraphNode{
+		{ID: "probe", Command: `printf once >> "$PWNMESH_WORKSPACE/effects"; printf partial; printf 'probe unavailable' >&2; exit 7`, Resources: []string{}, Optional: true},
+		{ID: "route", Command: `python3 -c 'import json,os; deps=json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); source=deps[0]; value=source["output"]["value"]; assert source["status"]=="failed" and value["exit_code"]==7 and value["stdout"]=="partial" and value["stderr"]=="probe unavailable"; assert not source["output"].get("artifacts") and not source["output"]["files"]; print("failure inspected")'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "probe", Optional: true}}, When: &commandGraphWhen{Node: "probe", Status: "failed"}},
+	}}
+	raw, err := marshalCommandGraphCall(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		reply, err := runCommandGraph(context.Background(), job, Options{RunDir: dir}, raw)
+		var response struct {
+			Status   string                  `json:"status"`
+			Evidence []commandGraphEvidence  `json:"verified_evidence"`
+			Nodes    []workergraph.NodeState `json:"nodes"`
+		}
+		if err != nil || json.Unmarshal([]byte(reply), &response) != nil || response.Status != "succeeded" {
+			t.Fatalf("failure route could not consume diagnostics: %s %v", reply, err)
+		}
+		if len(response.Evidence) != 1 || response.Evidence[0].NodeID != "route" {
+			t.Fatalf("failed diagnostics were certified as evidence: %+v", response.Evidence)
+		}
+		_, value := commandNodeValue(t, workergraph.Checkpoint{Nodes: response.Nodes}, "route")
+		if value.Stdout != "failure inspected\n" {
+			t.Fatalf("failure route did not inspect diagnostics: %+v", value)
+		}
+	}
+	effects, err := os.ReadFile(filepath.Join(job.Workspace, "effects"))
+	if err != nil || string(effects) != "once" {
+		t.Fatalf("recovery replayed the failed command: %q %v", effects, err)
+	}
+	reuse := commandGraphSpec{Key: "reuse-failed", Nodes: []commandGraphNode{{ID: "imported", Kind: "reuse", Resources: []string{}, ReuseFrom: &commandGraphReuse{Key: spec.Key, Node: "probe"}}}}
+	if _, err := commandGraphCall(t, context.Background(), job, dir, reuse); err == nil || !strings.Contains(err.Error(), "must have succeeded") {
+		t.Fatalf("failed diagnostics became a reusable result: %v", err)
 	}
 }
 

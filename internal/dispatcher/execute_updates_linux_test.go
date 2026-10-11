@@ -119,7 +119,7 @@ func (f *updateRequestFixture) do(method, path string, input, output any, lease 
 	}
 }
 
-func (f *updateRequestFixture) prepare(kind string, from []string, description string) *task {
+func (f *updateRequestFixture) prepare(kind string, from []string, description string, dependencies ...string) *task {
 	f.t.Helper()
 	f.seq++
 	id := fmt.Sprintf("updates-%d", f.seq)
@@ -129,7 +129,7 @@ func (f *updateRequestFixture) prepare(kind string, from []string, description s
 	if kind == "reason" || kind == "curate" {
 		f.do("POST", base+"/"+kind+"/claim", map[string]string{"worker": lease.Run, "trigger": "initial"}, nil, nil)
 	} else {
-		created := authorizeFixtureSteps(f.t, f.scheduler, f.project.ID, map[string]any{"from": from, "description": description})[0]
+		created := authorizeFixtureSteps(f.t, f.scheduler, f.project.ID, map[string]any{"from": from, "description": description, "depends_on": dependencies})[0]
 		lease.Intent = created.ID
 		f.do("POST", base+"/intents/"+created.ID+"/heartbeat", map[string]string{"worker": lease.Run}, &created, nil)
 		intent = &created

@@ -202,6 +202,12 @@ func TestAgentGraphInheritsOnlyBoundParentConstraints(t *testing.T) {
 			state.Steps[0].Description = "Inspect the retained response only; acquisition has already consumed the request allowance."
 			state.Steps[0].WritePaths = []string{"/workspace/report.json"}
 			state.Steps[0].DependsOn = []string{"upstream"}
+			state.Steps[0].GoalID = "metadata"
+			state.Goals = append(state.Goals,
+				board.Goal{ID: "metadata", ParentID: "review", Condition: "Compare only response metadata; exclude body and secrets.", Status: "open"},
+				board.Goal{ID: "review", ParentID: "goal", Condition: "Use retained bytes only; do not acquire another response.", Status: "open"},
+				board.Goal{ID: "unrelated-goal", ParentID: "goal", Condition: "Unrelated goal noise", Status: "open"},
+			)
 			state.Steps = append(state.Steps, board.Step{ID: "unrelated", GoalID: "goal", Description: "Unrelated planning noise", Status: "open"})
 			state.FactRecords[0].Description = "Unrelated observation noise"
 			var err error
@@ -228,6 +234,7 @@ func TestAgentGraphInheritsOnlyBoundParentConstraints(t *testing.T) {
 						UserInputs []board.Fact `json:"user_inputs"`
 						Hints      []board.Hint `json:"hints"`
 						Step       board.Step   `json:"step"`
+						Goals      []board.Goal `json:"goals"`
 					}
 					if !ok || !closed || json.Unmarshal([]byte(body), &inherited) != nil {
 						return agent.Message{}, errors.New("child has no structured parent constraints")
@@ -235,7 +242,15 @@ func TestAgentGraphInheritsOnlyBoundParentConstraints(t *testing.T) {
 					if !reflect.DeepEqual(inherited.UserInputs, state.Graph.Facts) || !reflect.DeepEqual(inherited.Hints, state.Graph.Hints) || inherited.Step.Description != state.Steps[0].Description || !reflect.DeepEqual(inherited.Step.WritePaths, state.Steps[0].WritePaths) || !reflect.DeepEqual(inherited.Step.DependsOn, state.Steps[0].DependsOn) {
 						return agent.Message{}, fmt.Errorf("child lost original limits or Step contract: %+v", inherited)
 					}
-					for _, noise := range []string{"Unrelated planning noise", "Unrelated observation noise", "Later intent copy", `"fact_records"`, `"status"`} {
+					wantGoals := []board.Goal{
+						{ID: "metadata", ParentID: "review", Condition: state.Goals[1].Condition},
+						{ID: "review", ParentID: "goal", Condition: state.Goals[2].Condition},
+						{ID: "goal", Condition: state.Goals[0].Condition},
+					}
+					if !reflect.DeepEqual(inherited.Goals, wantGoals) {
+						return agent.Message{}, fmt.Errorf("child lost selected goal ancestry: %+v", inherited.Goals)
+					}
+					for _, noise := range []string{"Unrelated planning noise", "Unrelated observation noise", "Unrelated goal noise", "Later intent copy", `"fact_records"`, `"status"`} {
 						if strings.Contains(prompt, noise) {
 							return agent.Message{}, fmt.Errorf("child received unrelated context: %s", noise)
 						}
@@ -271,6 +286,41 @@ func TestAgentGraphRejectsMissingBoundStepBeforeModelRequest(t *testing.T) {
 	spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Inspect", Timeout: 10, Resources: []string{}}
 	if _, err := executeAgentNode(context.Background(), j, o, "missing", t.TempDir(), spec, nil); err == nil || !strings.Contains(err.Error(), "immutable input") {
 		t.Fatalf("missing bound Step silently used mutable intent text: %v", err)
+	}
+}
+
+func TestAgentGraphRejectsIncompleteGoalConstraintsBeforeModelRequest(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]json.RawMessage){
+		"missing goal": func(view map[string]json.RawMessage) {
+			view["goals"] = json.RawMessage(`[]`)
+		},
+		"missing ancestor": func(view map[string]json.RawMessage) {
+			view["goals"] = json.RawMessage(`[{"id":"goal","parent_id":"missing","condition":"Use retained bytes only"}]`)
+		},
+		"cyclic ancestry": func(view map[string]json.RawMessage) {
+			view["goals"] = json.RawMessage(`[{"id":"goal","parent_id":"goal","condition":"Use retained bytes only"}]`)
+		},
+		"missing step goal": func(view map[string]json.RawMessage) {
+			view["steps"] = json.RawMessage(`[{"id":"step_original","description":"Inspect the local fixture"}]`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			j, _ := snapshotRuntimeFixture(t, "explore")
+			var view map[string]json.RawMessage
+			if err := json.Unmarshal(j.InputView, &view); err != nil {
+				t.Fatal(err)
+			}
+			mutate(view)
+			j.InputView, _ = json.Marshal(view)
+			o := Options{RunDir: t.TempDir(), graphProvider: func(string) (agent.Provider, error) {
+				t.Fatal("incomplete goal constraints started a model request")
+				return nil, nil
+			}}
+			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Inspect", Timeout: 10, Resources: []string{}}
+			if _, err := executeAgentNode(context.Background(), j, o, "missing-goal", t.TempDir(), spec, nil); err == nil || !strings.Contains(err.Error(), "goal") {
+				t.Fatalf("invalid bound goal constraints were accepted: %v", err)
+			}
+		})
 	}
 }
 

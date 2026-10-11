@@ -226,14 +226,41 @@ func awaitDualGraphProcess(t *testing.T, f *updateRequestFixture, done <-chan up
 }
 
 func TestDualGraphAbandonCancelsActualDAGWithoutStartingDependent(t *testing.T) {
+	testDualGraphCancellation(t, false)
+}
+
+func TestDualGraphDependencyCorrectionCancelsActualDAGWithoutStartingDependent(t *testing.T) {
+	testDualGraphCancellation(t, true)
+}
+
+func testDualGraphCancellation(t *testing.T, dependency bool) {
+	t.Helper()
 	f := newUpdateRequestFixture(t)
-	run, source := f.dependentRun()
+	var run *task
+	var source string
+	if dependency {
+		producer := f.prepare("explore", []string{"origin"}, "Produce the accepted prerequisite")
+		f.start(producer)
+		source = f.publish(producer, updateOriginal)
+		final, err := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]string{"fact_id": source}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.do("POST", executionPath(producer)+"/status", map[string]any{"status": "result_pending", "result": worker.Result{Status: "success", Text: string(final)}}, nil, &producer.Lease)
+		f.do("POST", executionPath(producer)+"/apply", map[string]any{}, nil, &producer.Lease)
+		run = f.prepare("explore", []string{"origin"}, "Compute from the accepted prerequisite", producer.Job.Intent.ID)
+		if len(run.Job.DependencyResults) != 1 || run.Job.DependencyResults[0] != (board.DependencyResult{StepID: producer.Job.Intent.ID, FactID: source, RunID: producer.Job.RunID}) {
+			t.Fatalf("consumer lost its accepted prerequisite: %+v", run.Job.DependencyResults)
+		}
+	} else {
+		run, source = f.dependentRun()
+	}
 	runDir := t.TempDir()
 	requests := 0
 	f.runner.options = worker.Options{RunDir: runDir, Provider: updateProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		requests++
 		if requests != 1 {
-			return agent.Message{}, errors.New("abandoned DAG reached another model request")
+			return agent.Message{}, errors.New("cancelled DAG reached another model request")
 		}
 		return updateToolCall("real-dag", "run_graph", dualGraphSpec), nil
 	})}
@@ -243,13 +270,21 @@ func TestDualGraphAbandonCancelsActualDAGWithoutStartingDependent(t *testing.T) 
 	})
 	pid := awaitDualGraphProcess(t, f, done)
 	f.correct(source)
-	f.decide("step", map[string]string{"action": "abandon", "id": run.Job.Intent.ID, "reason": "Explicitly stop the local computation"})
+	if !dependency {
+		f.decide("step", map[string]string{"action": "abandon", "id": run.Job.Intent.ID, "reason": "Explicitly stop the local computation"})
+	}
+	// No scheduler tick or direct cancellation follows the curation write.
+	// The execution heartbeat must fence the real process on its own.
 	result := f.await(done)
-	if result.result.Status != "cancelled" || !errors.Is(result.err, context.Canceled) || requests != 1 {
-		t.Fatalf("abandon failed to cancel the real DAG: %+v %v requests=%d", result.result, result.err, requests)
+	wantCause := errors.Is(result.err, context.Canceled)
+	if dependency {
+		wantCause = dependencyInvalidated(result.err)
+	}
+	if result.result.Status != "cancelled" || !wantCause || requests != 1 {
+		t.Fatalf("invalidation failed to cancel the real DAG: %+v %v requests=%d", result.result, result.err, requests)
 	}
 	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("abandoned command process is still alive: pid=%d err=%v", pid, err)
+		t.Fatalf("cancelled command process is still alive: pid=%d err=%v", pid, err)
 	}
 	raw, err := os.ReadFile(filepath.Join(runDir, "graph-tools", "boundary", "graph.json"))
 	if err != nil {
@@ -264,10 +299,42 @@ func TestDualGraphAbandonCancelsActualDAGWithoutStartingDependent(t *testing.T) 
 	}
 	for _, node := range checkpoint.Nodes {
 		if node.ID == "join" && (node.Attempt != 0 || !node.StartedAt.IsZero()) {
-			t.Fatal("abandoned DAG launched the dependent command")
+			t.Fatal("cancelled DAG launched the dependent command")
 		}
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "graph-tools", "boundary", "nodes", "seed", "value.json")); !os.IsNotExist(err) {
 		t.Fatal("cancelled command produced a success artifact")
+	}
+	var execution board.Execution
+	f.do("GET", executionPath(run)+"?namespace="+f.scheduler.namespace(), nil, &execution, nil)
+	var failure worker.Result
+	if err := json.Unmarshal(execution.Result, &failure); err != nil {
+		t.Fatal(err)
+	}
+	wantFailure := "hard_cancelled"
+	if dependency {
+		wantFailure = "dependency_invalidated"
+	}
+	if execution.Status != "cancelled" || failure.FailureKind != wantFailure || failure.Retryable {
+		t.Fatalf("DAG cancellation lost its durable cause: %+v %+v", execution, failure)
+	}
+	var state board.State
+	f.do("GET", projectPath(f.project.ID)+"/state", nil, &state, nil)
+	for _, fact := range state.FactRecords {
+		if fact.SourceStepID == run.Job.Intent.ID {
+			t.Fatalf("cancelled DAG published an accepted observation: %+v", fact)
+		}
+	}
+	found := false
+	for _, step := range state.Steps {
+		if step.ID == run.Job.Intent.ID {
+			found = true
+			if step.Result != nil || step.Status == "completed" || dependency && !slices.Contains(step.BlockedBy, run.Job.DependencyResults[0].StepID) {
+				t.Fatalf("cancelled DAG bypassed its shared prerequisite: %+v", step)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("cancelled Step disappeared")
 	}
 }

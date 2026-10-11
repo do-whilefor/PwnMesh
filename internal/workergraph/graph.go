@@ -39,6 +39,8 @@ type Artifact struct {
 }
 
 type Output struct {
+	// Failed Run callbacks may retain Value as bounded diagnostic data. Only
+	// succeeded nodes expose accepted artifacts; diagnostics never pass Verify.
 	Value     json.RawMessage `json:"value,omitempty"`
 	Artifacts []Artifact      `json:"artifacts,omitempty"`
 }
@@ -733,6 +735,11 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				state.Status, state.Output = "succeeded", result.output
 			} else {
 				state.Status, state.Error = "failed", result.err.Error()
+				if result.runFailed && validateOutput(result.output) == nil {
+					// Keep failure context for the parent and optional failure routes,
+					// but never turn partial or unverified files into accepted output.
+					state.Output.Value = result.output.Value
+				}
 				if !result.node.Optional {
 					if !terminalFailure {
 						aborted, terminalFailure, firstError = true, true, result.err

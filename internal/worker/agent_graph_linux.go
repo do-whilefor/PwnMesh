@@ -169,10 +169,16 @@ func agentAssignmentContext(j Job) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	type goalConstraint struct {
+		ID        string `json:"id"`
+		ParentID  string `json:"parent_id,omitempty"`
+		Condition string `json:"condition"`
+	}
 	var view struct {
 		UserInputs json.RawMessage   `json:"user_inputs"`
 		Hints      json.RawMessage   `json:"hints"`
 		Steps      []json.RawMessage `json:"steps"`
+		Goals      []goalConstraint  `json:"goals"`
 	}
 	if err := json.Unmarshal(raw, &view); err != nil {
 		return "", err
@@ -211,11 +217,46 @@ func agentAssignmentContext(j Job) (string, error) {
 			}
 		}
 	}
+	var goals []goalConstraint
+	if step != nil {
+		var goalID string
+		if raw, ok := step["goal_id"]; ok {
+			if err := json.Unmarshal(raw, &goalID); err != nil {
+				return "", err
+			}
+		}
+		if goalID == "" && j.InputSnapshot != nil {
+			return "", errors.New("child assignment is missing its Step goal from the immutable input")
+		}
+		byID := make(map[string]goalConstraint, len(view.Goals))
+		for _, goal := range view.Goals {
+			byID[goal.ID] = goal
+		}
+		seen := map[string]bool{}
+		for goalID != "" {
+			if seen[goalID] {
+				return "", errors.New("child assignment has cyclic goal ancestry")
+			}
+			goal, ok := byID[goalID]
+			if !ok {
+				return "", fmt.Errorf("child assignment is missing goal %q from the bound input", goalID)
+			}
+			goals = append(goals, goal)
+			seen[goalID] = true
+			goalID = goal.ParentID
+		}
+		// ContextView also retains the root goal when the selected ancestry
+		// does not reach it; it still constrains the parent's assignment.
+		if root, ok := byID["goal"]; ok && !seen[root.ID] {
+			goals = append(goals, root)
+		}
+	}
 	encoded, err := json.Marshal(struct {
 		UserInputs json.RawMessage            `json:"user_inputs"`
 		Hints      json.RawMessage            `json:"hints"`
 		Step       map[string]json.RawMessage `json:"step,omitempty"`
-	}{view.UserInputs, view.Hints, step})
+		Goals      []goalConstraint           `json:"goals,omitempty"`
+	}{view.UserInputs, view.Hints, step, goals})
 	return string(encoded), err
 }
 

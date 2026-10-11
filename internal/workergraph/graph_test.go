@@ -160,6 +160,89 @@ func TestRequiredDependencyCannotUseSkippedNode(t *testing.T) {
 	}
 }
 
+func TestFailedDiagnosticsRemainBoundWithoutAuthorizingRequiredDependencies(t *testing.T) {
+	for _, optional := range []bool{false, true} {
+		name, wantConsumed := "required", 0
+		if optional {
+			name, wantConsumed = "optional", 1
+		}
+		t.Run(name, func(t *testing.T) {
+			options := fixtureOptions(t, 1)
+			var runs, consumed int
+			diagnostic := json.RawMessage(`{"exit_code":7,"stderr":"probe failed"}`)
+			checkInput := func(input Input) error {
+				dep := input.Dependencies[0]
+				if dep.Status != "failed" || string(dep.Output.Value) != string(diagnostic) || len(dep.Output.Artifacts) != 0 {
+					return errors.New("failure context lost or partial artifacts accepted")
+				}
+				dep.Output.Value[0] = '[' // Callback ownership must protect the checkpoint.
+				return nil
+			}
+			definition := Definition{Version: "1", Nodes: []Node{
+				{ID: "probe", Kind: "function", Optional: true, Run: func(context.Context, Input) (Output, error) {
+					runs++
+					return Output{Value: diagnostic, Artifacts: []Artifact{{Path: filepath.Join(options.Dir, "partial"), SHA256: strings.Repeat("a", 64)}}}, errors.New("probe failed")
+				}},
+				{ID: "consume", Kind: "function", DependsOn: []Dependency{{ID: "probe", Optional: optional}}, Run: func(_ context.Context, input Input) (Output, error) {
+					consumed++
+					return Output{}, checkInput(input)
+				}, Verify: func(_ context.Context, input Input, _ Output) error {
+					return checkInput(input)
+				}},
+			}}
+			for range 2 {
+				checkpoint, err := Run(context.Background(), definition, options)
+				if (err == nil) != optional || runs != 1 || consumed != wantConsumed {
+					t.Fatalf("failure diagnostics authorized execution or replay: %+v err=%v runs=%d consumed=%d", checkpoint, err, runs, consumed)
+				}
+				failed := stateByID(checkpoint, "probe")
+				if failed.Status != "failed" || string(failed.Output.Value) != string(diagnostic) || len(failed.Output.Artifacts) != 0 {
+					t.Fatalf("failure diagnostics changed: %+v", failed)
+				}
+				if err := ValidateSnapshot(definition, options, checkpoint); err != nil {
+					t.Fatalf("failure diagnostics broke input binding: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestFailedDiagnosticsRejectInvalidOutputAndVerificationFailures(t *testing.T) {
+	failure := errors.New("node failed")
+	for _, test := range []struct {
+		name   string
+		output Output
+		verify bool
+	}{
+		{"malformed", Output{Value: json.RawMessage(`{"unfinished":`)}, false},
+		{"oversized", Output{Value: json.RawMessage(`"` + strings.Repeat("x", maxValueBytes) + `"`)}, false},
+		{"invalid-artifact", Output{Value: json.RawMessage(`{"partial":true}`), Artifacts: []Artifact{{Path: "relative"}}}, false},
+		{"verification", Output{Value: json.RawMessage(`{"claimed_success":true}`)}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := fixtureOptions(t, 1)
+			node := Node{ID: "probe", Kind: "function", Run: func(context.Context, Input) (Output, error) {
+				if test.verify {
+					return test.output, nil
+				}
+				return test.output, failure
+			}}
+			if test.verify {
+				node.Verify = func(context.Context, Input, Output) error { return failure }
+			}
+			definition := Definition{Version: "1", Nodes: []Node{node}}
+			checkpoint, err := Run(context.Background(), definition, options)
+			failed := stateByID(checkpoint, "probe")
+			if !errors.Is(err, failure) || failed.Status != "failed" || len(failed.Output.Value) != 0 || len(failed.Output.Artifacts) != 0 {
+				t.Fatalf("invalid or rejected output was retained: %+v %v", failed, err)
+			}
+			if err := ValidateSnapshot(definition, options, persistedCheckpoint(t, options)); err != nil {
+				t.Fatalf("discarded output corrupted checkpoint: %v", err)
+			}
+		})
+	}
+}
+
 func TestSkipRequiresReason(t *testing.T) {
 	cp, err := Run(context.Background(), Definition{Version: "1", Nodes: []Node{{ID: "skip", Kind: "function", Run: successful, When: func(context.Context, Input) (bool, string, error) { return false, "", nil }}}}, fixtureOptions(t, 1))
 	if err == nil || cp.Status != "failed" {
