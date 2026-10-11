@@ -3,6 +3,7 @@ package board
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 const MaxExecuteUpdateBytes = 16 << 10
@@ -113,11 +114,15 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 		}
 	}
 	relevant := !out.Complete
+	curated := slices.ContainsFunc(events, func(event StateChange) bool { return event.Op == "curate" })
+	curationRelevant := curated && current.ValidateFactSources(sources, false) != nil
 	for _, event := range events {
 		// A curation batch can correct several facts atomically. Its single
-		// event ID identifies the scan, not an individual target. Rebuild the
-		// bounded dependency view rather than silently acknowledging it.
-		if selected[event.ID] || event.Op == "curate" {
+		// event ID identifies the scan, not an individual target. Corrections
+		// invalidate a source directly or through its accepted Step support.
+		// If every source remains effective, this batch changed another scope;
+		// resending unchanged evidence could needlessly exhaust the page budget.
+		if selected[event.ID] || event.Op == "curate" && curationRelevant {
 			relevant = true
 		}
 	}

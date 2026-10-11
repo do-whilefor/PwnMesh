@@ -64,6 +64,100 @@ func TestExecuteUpdatesCarryAtomicCurationCorrections(t *testing.T) {
 	}
 }
 
+func TestExecuteUpdatesIgnoreCurationWithEffectiveSources(t *testing.T) {
+	for _, excerptBytes := range []int{32, 7000} {
+		t.Run(fmt.Sprint(excerptBytes), func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			producer := f.worker("producer", "")
+			var evidence []EvidenceRef
+			for i := 0; i < 3; i++ {
+				evidence = append(evidence, EvidenceRef{RunID: producer.Lease, Path: fmt.Sprintf("/workspace/evidence-%d.txt", i), Excerpt: strings.Repeat("x", excerptBytes)})
+			}
+			source := f.action(producer.Fence(), "fact", "large-source", map[string]any{
+				"description": "Independent source observation", "scope": "controlled fixture", "observed_at": f.store.Now().Format("2006-01-02T15:04:05Z07:00"), "evidence": evidence,
+			}, "").ID
+			consumer := f.action(f.planner, "step", "consumer", map[string]any{"action": "add", "from": []string{source}, "description": "Use the independent source"}, "").ID
+			other := f.worker("other", "")
+			candidate := f.candidate(other, f.fact(other, "unrelated"), "verified")
+			target, correction := f.fact(other, "unrelated-target"), f.fact(other, "unrelated-correction")
+			curator, before := f.curator("unrelated-curation")
+			if _, err := ContextView(before, consumer, DefaultContextViewBytes); err != nil {
+				t.Fatalf("fixture is not a valid execution input: %v", err)
+			}
+			f.action(curator.Fence(), "curate", "unrelated-curation", CuratePayload{ThroughRevision: before.Revision,
+				Groups:    []CurateGroup{{CandidateIDs: []string{candidate}, Status: "verified", Reason: "Independent finding"}},
+				Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: target, Reason: "Independent correction"}},
+			}, DecisionStateVersion(before))
+			current := f.state()
+			cursor := ExecuteUpdateCursor{ProjectID: "p", Generation: current.Graph.Project.Generation, StepID: consumer, RunID: "consumer", Revision: before.Revision}
+			var changes []StateChange
+			f.do(func(tx *Tx) error {
+				var err error
+				changes, err = tx.StateChanges("p", cursor.Revision, current.Revision)
+				return err
+			})
+			update, err := BuildExecuteUpdates(current, cursor, []string{source}, changes, true, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !update.Complete || update.PendingReason != "" || update.ToRevision != current.Revision || len(update.Facts)+len(update.Relations)+len(update.InvalidSources) != 0 || update.ReadMore != "" {
+				t.Fatalf("unrelated curation injected source evidence or stalled the cursor: complete=%v pending=%q facts=%d", update.Complete, update.PendingReason, len(update.Facts))
+			}
+		})
+	}
+}
+
+func TestExecuteUpdatesKeepCurationInvalidationAcrossStepSupport(t *testing.T) {
+	for _, kind := range []string{"refutes", "narrows", "supersedes"} {
+		for _, edge := range []string{"direct", "from", "depends_on"} {
+			t.Run(kind+"/"+edge, func(t *testing.T) {
+				f := newOrchestrationFixture(t)
+				producer := f.worker("producer", "")
+				original := f.fact(producer, "original")
+				f.finish(producer, original)
+				source := original
+				if edge != "direct" {
+					var run Execution
+					if edge == "from" {
+						step := f.action(f.planner, "step", "derived", map[string]any{"action": "add", "from": []string{original}, "description": "Derived observation"}, "").ID
+						run = f.worker("derived", step)
+					} else {
+						run = dependencyRun(f, "derived", dependentStep(f, "derived", producer.Intent))
+						f.do(func(tx *Tx) error { return tx.RegisterExecution(run) })
+					}
+					source = f.fact(run, "derived-result")
+					f.finish(run, source)
+				}
+				corrector := f.worker("corrector", "")
+				correction := f.fact(corrector, "correction")
+				curator, before := f.curator("correction")
+				if err := before.ValidateFactSources([]string{source}, true); err != nil {
+					t.Fatalf("source was already invalid before correction: %v", err)
+				}
+				f.action(curator.Fence(), "curate", "correct-source", CuratePayload{ThroughRevision: before.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: kind, Source: correction, Target: original, Reason: "Correct the upstream observation"}}}, DecisionStateVersion(before))
+				current := f.state()
+				if err := current.ValidateFactSources([]string{source}, true); err == nil {
+					t.Fatal("correction did not invalidate source support")
+				}
+				cursor := ExecuteUpdateCursor{ProjectID: "p", Generation: current.Graph.Project.Generation, StepID: "consumer", RunID: "consumer", Revision: before.Revision}
+				var changes []StateChange
+				f.do(func(tx *Tx) error {
+					var err error
+					changes, err = tx.StateChanges("p", cursor.Revision, current.Revision)
+					return err
+				})
+				update, err := BuildExecuteUpdates(current, cursor, []string{source}, changes, true, 0)
+				if err != nil || !update.Complete || !reflect.DeepEqual(update.InvalidSources, []string{source}) || len(update.Facts) == 0 {
+					t.Fatalf("curation lost the invalidated source: %+v, %v", update, err)
+				}
+				if edge != "direct" && !update.Facts[0].SupportInvalid {
+					t.Fatal("indirect correction lost the derived support status")
+				}
+			})
+		}
+	}
+}
+
 func TestExecuteUpdatesBoundSilentAcknowledgementEnvelope(t *testing.T) {
 	state, cursor, _ := executeUpdateFixture()
 	events := []StateChange{{Revision: 2, Op: "fact", ID: "unrelated"}}
