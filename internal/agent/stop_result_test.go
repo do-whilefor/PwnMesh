@@ -120,8 +120,6 @@ func TestStopResultSettlesToolGroupWithoutMoreSideEffectsOrModelCalls(t *testing
 					return name + " finished", nil
 				}}
 			}
-			followUp := make(chan string, 1)
-			followUp <- "Continue with more work"
 			var saved []Message
 			var events []Event
 			loop := &Loop{
@@ -132,7 +130,6 @@ func TestStopResultSettlesToolGroupWithoutMoreSideEffectsOrModelCalls(t *testing
 						cancel()
 					}
 				}), makeTool("write", nil)},
-				FollowUp:   followUp,
 				StopResult: func() (string, bool) { return authoritative, committed },
 				SaveState: func(history []Message, _ *ContextCheckpoint) error {
 					saved = append([]Message{}, history...)
@@ -146,9 +143,6 @@ func TestStopResultSettlesToolGroupWithoutMoreSideEffectsOrModelCalls(t *testing
 			result, err := loop.Run(ctx, "Create and commit one bounded plan")
 			if err != nil || result != authoritative || provider.calls != 1 || strings.Join(executed, ",") != "read,commit" {
 				t.Fatalf("runtime failed to stop at commit: result=%q err=%v calls=%d effects=%v", result, err, provider.calls, executed)
-			}
-			if len(followUp) != 1 {
-				t.Fatal("commit consumed queued follow-up work")
 			}
 			if len(saved) == 0 || saved[len(saved)-1].Role != "user" {
 				t.Fatal("tool results were not durably settled before returning")

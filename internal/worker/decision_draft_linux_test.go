@@ -65,7 +65,6 @@ func TestDecisionDraftRejectsMissingFieldsWithoutReservingKey(t *testing.T) {
 		{"step", `{"action":"priority","id":"i001","reason":"First","priority":"high"}`},
 		{"step", `{"action":"priority","id":"i001","reason":"First","priority":-1}`},
 		{"step", `{"action":"priority","id":"i001","reason":"First","priority":1000001}`},
-		{"fact_relation", `{"kind":"supersedes","source":"f001","target":"f002"}`},
 	} {
 		t.Run(tc.op+tc.payload, func(t *testing.T) {
 			d := &decisionDraft{}
@@ -85,6 +84,20 @@ func TestDecisionDraftRejectsMissingFieldsWithoutReservingKey(t *testing.T) {
 		if _, err := d.action(context.Background(), draftTestAction("step", "valid", `{"action":"add","from":["origin"],"description":"Inspect","priority":`+priority+`}`), "good"); err != nil {
 			t.Fatalf("valid priority %s rejected: %v", priority, err)
 		}
+	}
+}
+
+func TestDecisionDraftRejectsRetiredRelationOperation(t *testing.T) {
+	draft := &decisionDraft{request: func(context.Context, GraphRequest) (string, error) {
+		t.Fatal("retired relation operation reached the graph bridge")
+		return "", nil
+	}}
+	action := draftTestAction("fact_relation", "relation", `{"kind":"supersedes","source":"f001","target":"f002","reason":"New observation"}`)
+	if _, err := draft.action(context.Background(), action, "original"); err == nil || !strings.Contains(err.Error(), "unknown draft operation") {
+		t.Fatalf("retired relation was staged: %v", err)
+	}
+	if len(draft.actions) != 0 || len(draft.keys) != 0 || draft.version != "" {
+		t.Fatal("retired relation reserved a draft key or version")
 	}
 }
 

@@ -123,15 +123,13 @@ func runWorkerAcceptance(ctx context.Context, j Job, o Options, sessionRun func(
 		if r.Status != "success" {
 			return nil
 		}
-		if j.ResultContractVersion >= 2 {
-			parsed, err := parseOutput(j, r.Conclude, r.Text)
-			if err != nil {
+		parsed, err := parseOutput(j, r.Conclude, r.Text)
+		if err != nil {
+			return err
+		}
+		if len(parsed.FactPayload) > 0 {
+			if _, err := graphInlineFactEvidence(ctx, j, o.RunDir, parsed.FactPayload); err != nil {
 				return err
-			}
-			if len(parsed.FactPayload) > 0 {
-				if _, err := graphInlineFactEvidence(ctx, j, o.RunDir, parsed.FactPayload); err != nil {
-					return err
-				}
 			}
 		}
 		if j.Repair != nil {

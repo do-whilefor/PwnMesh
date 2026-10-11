@@ -44,8 +44,11 @@ func retainedReadFixture(t *testing.T, workspace, run, original string) board.Ev
 
 func retainedReadTool(t *testing.T, workspace string, state *board.State) agent.Tool {
 	t.Helper()
-	job := Job{Kind: "reason", RunID: "reader", Workspace: workspace, Graph: state.Graph, State: state}
-	options := Options{}
+	job := Job{Kind: "reason", RunID: "reader", Workspace: workspace, Graph: state.Graph, State: state, GraphRPC: true}
+	runDir := t.TempDir()
+	options := Options{RunDir: runDir, Output: &draftTestBridge{dir: runDir, handle: func(request GraphRequest) (any, error) {
+		return GraphPage(*state, request)
+	}}}
 	if err := ConfigureRuntimeTools(job, &options); err != nil {
 		t.Fatal(err)
 	}

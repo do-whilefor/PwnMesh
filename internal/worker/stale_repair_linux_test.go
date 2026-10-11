@@ -171,14 +171,14 @@ func TestRepairRecoveryPreservesAnExecutedAttempt(t *testing.T) {
 
 func TestRepairDraftPreservesExactNumericPredicate(t *testing.T) {
 	payload := `{"action":"add","from":["origin"],"description":"repair","repair":{"path":"/workspace/a.json","sha256":"` + strings.Repeat("a", 64) + `","rules":[{"kind":"json_equals","pointer":"/n","value":9007199254740993}]}}`
-	d := &decisionDraft{orchestration: true}
+	d := &decisionDraft{}
 	if _, err := d.action(context.Background(), draftTestAction("step", "repair", payload), "version"); err != nil {
 		t.Fatal(err)
 	}
 	if len(d.actions) != 1 || !strings.Contains(string(d.actions[0].Payload), "9007199254740993") {
 		t.Fatalf("predicate lost precision: %+v", d.actions)
 	}
-	large := &decisionDraft{orchestration: true}
+	large := &decisionDraft{}
 	if _, err := large.action(context.Background(), draftTestAction("step", "large", strings.Replace(payload, "9007199254740993", "1e309", 1)), "version"); err != nil {
 		t.Fatal(err)
 	}
@@ -186,7 +186,7 @@ func TestRepairDraftPreservesExactNumericPredicate(t *testing.T) {
 		t.Fatal("large exponent lost in draft")
 	}
 	for _, bad := range []string{strings.Replace(payload, "json_equals", "arbitrary_script", 1), strings.Replace(payload, `"action":"add"`, `"action":"priority"`, 1)} {
-		invalid := &decisionDraft{orchestration: true}
+		invalid := &decisionDraft{}
 		if _, err := invalid.action(context.Background(), draftTestAction("step", "repair", bad), "version"); err == nil || len(invalid.actions) > 0 {
 			t.Fatal("invalid repair staged")
 		}

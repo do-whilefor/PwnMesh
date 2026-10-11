@@ -19,7 +19,6 @@ const committedDecisionText = `{"accepted":true,"data":{"decided":true}}`
 // The draft is intentionally process-local. Its only durable authority is the
 // server receipt; transcripts do not re-authorize a lost or stale draft.
 type decisionDraft struct {
-	orchestration      bool
 	version            string
 	keys               []string
 	actions            []board.DecisionAction
@@ -224,7 +223,7 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 			d.committed, d.uncertain = true, false
 		}
 		return raw, nil
-	case "goal", "step", "fact_relation", "curation_request", "complete":
+	case "goal", "step", "curation_request", "complete":
 	default:
 		return "", errors.New("unknown draft operation")
 	}
@@ -238,7 +237,7 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 		return "", errors.New("draft payload must be an object")
 	}
 	if _, exists := payload["repair"]; exists {
-		if !d.orchestration || a.Op != "step" || payload["action"] != "add" {
+		if a.Op != "step" || payload["action"] != "add" {
 			return "", errors.New("repair is only available for orchestration step add; draft unchanged")
 		}
 		// Preserve exact JSON numbers in the predicate through draft canonicalization.
@@ -256,13 +255,7 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 	if a.Op == "goal" && payload["id"] == "goal" {
 		return "", errors.New("root goal cannot be changed by goal actions; use complete with supporting facts and proof; draft unchanged")
 	}
-	if a.Op == "curation_request" && !d.orchestration {
-		return "", errors.New("curation_request requires orchestration version 1; draft unchanged")
-	}
 	if a.Op == "step" && payload["action"] == "retry" {
-		if !d.orchestration {
-			return "", errors.New("step retry requires orchestration version 1; draft unchanged")
-		}
 		for field := range payload {
 			if field != "action" && field != "id" && field != "latest_run_id" && field != "reason" {
 				return "", errors.New("step retry requires only action, id, latest_run_id and reason; existing task inputs remain immutable; draft unchanged")
@@ -293,10 +286,7 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 				return "", errors.New("step from cannot include root goal; use goal_id to bind the target; from accepts evidence (origin is allowed); draft unchanged")
 			}
 			if id, ok := source.(string); ok && strings.HasPrefix(id, "$") {
-				if d.orchestration {
-					return "", errors.New("step from requires published fact IDs or origin; put prerequisite Step IDs or earlier Step $aliases in depends_on; draft unchanged")
-				}
-				return "", errors.New("step from requires published fact IDs or origin, not draft goal/step aliases; wait for a Step to publish evidence before planning work that depends on it; draft unchanged")
+				return "", errors.New("step from requires published fact IDs or origin; put prerequisite Step IDs or earlier Step $aliases in depends_on; draft unchanged")
 			}
 		}
 	}
@@ -340,7 +330,7 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 
 func (d *decisionDraft) canAssessCompletion() bool {
 	a := d.assessment
-	if !d.orchestration || !d.assessmentReady || d.assessmentDisabled || a == nil || a.Acceptance != "not_checked" || a.StateVersion != d.version || !completionReviewProvided(a) || len(d.actions) != 1 || !d.completes() {
+	if !d.assessmentReady || d.assessmentDisabled || a == nil || a.Acceptance != "not_checked" || a.StateVersion != d.version || !completionReviewProvided(a) || len(d.actions) != 1 || !d.completes() {
 		return false
 	}
 	origin, goal := false, false
@@ -425,7 +415,7 @@ func (d *decisionDraft) validateDependencies(op string, payload map[string]any) 
 	if !exists {
 		return nil
 	}
-	if !d.orchestration || op != "step" || payload["action"] != "add" {
+	if op != "step" || payload["action"] != "add" {
 		return errors.New("depends_on is only available for orchestration step add; draft unchanged")
 	}
 	values, ok := value.([]any)
@@ -510,9 +500,6 @@ func validateDraftFields(op string, payload map[string]any) error {
 		default:
 			valid = false
 		}
-	case "fact_relation":
-		kind, _ := payload["kind"].(string)
-		valid = (kind == "supersedes" || kind == "refutes" || kind == "narrows") && text("source") && text("target") && text("reason")
 	case "curation_request":
 		for field := range payload {
 			if field != "sources" && field != "reason" {

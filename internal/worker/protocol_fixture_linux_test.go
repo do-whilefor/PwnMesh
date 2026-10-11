@@ -5,6 +5,7 @@ package worker
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"strings"
@@ -80,5 +81,24 @@ func TestWorkerRejectsRetiredProtocolsBeforeCallingProvider(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestRuntimeGraphReadRequiresDispatcherBridge(t *testing.T) {
+	for _, kind := range []string{"reason", "explore"} {
+		t.Run(kind, func(t *testing.T) {
+			job := outcomeJob(t, kind)
+			job.GraphRPC = false
+			var output bytes.Buffer
+			options := Options{RunDir: t.TempDir(), Output: &output}
+			if err := ConfigureRuntimeTools(job, &options); err != nil {
+				t.Fatal(err)
+			}
+			read := snapshotRuntimeTool(t, options, "read_graph")
+			raw, err := read.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["origin"]}`))
+			if err == nil || !strings.Contains(err.Error(), "requires the dispatcher graph bridge") || raw != "" || output.Len() != 0 {
+				t.Fatalf("offline graph read bypassed the bridge: raw=%q err=%v output=%q", raw, err, output.String())
+			}
+		})
 	}
 }

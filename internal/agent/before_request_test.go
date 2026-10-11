@@ -23,6 +23,54 @@ func (p beforeRequestProvider) GenerateSummary(_ context.Context, messages []Mes
 	return p.summarize(messages)
 }
 
+func TestRuntimeContinuationRefreshesThenReturnsSettledResult(t *testing.T) {
+	requests, boundaries, turns, starts, ends := 0, 0, 0, 0, 0
+	loop := &Loop{
+		Provider: beforeRequestProvider{generate: func(_ context.Context, messages []Message) (Message, error) {
+			requests++
+			if boundaries != requests {
+				t.Fatalf("request %d skipped its runtime boundary: %d", requests, boundaries)
+			}
+			if requests == 1 {
+				return Text("assistant", "partial result"), nil
+			}
+			if requests != 2 || messages[len(messages)-1].Text() != "finish the remaining check" {
+				t.Fatalf("unexpected continuation request: %+v", messages)
+			}
+			return Text("assistant", "completed result"), nil
+		}},
+		BeforeRequest: func(ctx context.Context, _ *Loop) (context.Context, error) {
+			boundaries++
+			return ctx, nil
+		},
+		OnTurnEnd: func(ctx context.Context, loop *Loop, message Message) (context.Context, string, error) {
+			turns++
+			if loop.History[len(loop.History)-1].Text() != message.Text() {
+				t.Fatal("continuation was requested before the model response was settled")
+			}
+			if turns == 1 {
+				return ctx, "finish the remaining check", nil
+			}
+			return ctx, "", nil
+		},
+		Emit: func(event Event) {
+			switch event.Type {
+			case "agent_start":
+				starts++
+			case "agent_end":
+				ends++
+			}
+		},
+	}
+	result, err := loop.Run(context.Background(), "bounded task")
+	if err != nil || result != "completed result" || requests != 2 || boundaries != 2 || turns != 2 || starts != 1 || ends != 1 {
+		t.Fatalf("result=%q err=%v requests=%d boundaries=%d turns=%d starts=%d ends=%d", result, err, requests, boundaries, turns, starts, ends)
+	}
+	if len(loop.History) != 4 || loop.Checkpoint.LastSequence != 4 {
+		t.Fatalf("continuation history did not settle exactly once: %+v", loop.History)
+	}
+}
+
 func TestBeforeRequestSeesPromptAndSettledToolResults(t *testing.T) {
 	hooks, requests, executions := 0, 0, 0
 	loop := &Loop{

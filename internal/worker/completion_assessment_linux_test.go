@@ -60,7 +60,7 @@ func assessmentProviderLoop(d *decisionDraft, loop *agent.Loop, p agent.Provider
 func TestCompletionAssessmentMissingFromProviderCannotAuthorizeCommit(t *testing.T) {
 	for _, promptOnly := range []bool{false, true} {
 		t.Run(map[bool]string{false: "missing_packet", true: "task_without_history"}[promptOnly], func(t *testing.T) {
-			d := &decisionDraft{orchestration: true, assessment: assessmentFixture("v1"), request: func(context.Context, GraphRequest) (string, error) {
+			d := &decisionDraft{assessment: assessmentFixture("v1"), request: func(context.Context, GraphRequest) (string, error) {
 				t.Fatal("unobserved assessment reached preview or commit")
 				return "", nil
 			}}
@@ -102,7 +102,7 @@ func TestCompletionAssessmentHiddenMismatchRequiresExplicitPreviewAndLaterReques
 	a := assessmentFixture("v1")
 	calls, previews, commits := 0, 0, 0
 	const changed = "The authoritative preview includes a changed requirement"
-	d := &decisionDraft{orchestration: true, assessment: a, request: func(_ context.Context, request GraphRequest) (string, error) {
+	d := &decisionDraft{assessment: a, request: func(_ context.Context, request GraphRequest) (string, error) {
 		if request.Op == "decision_commit" {
 			commits++
 			if calls != 3 || previews != 2 {
@@ -234,11 +234,11 @@ func TestCompletionAssessmentReachesFirstModelAndStillPreviewsBeforeOneTurnCommi
 }
 
 func TestCompletionAssessmentNeverAuthorizesUnseenChangedOrIncompleteEvidence(t *testing.T) {
-	for _, scenario := range []string{"unseen", "legacy", "assessment_omitted", "version", "reset", "planning", "requirements", "feedback_missing", "feedback_changed", "hints", "evidence", "preview_omitted", "missing_fact", "conflict", "preview_failure"} {
+	for _, scenario := range []string{"unseen", "absent", "assessment_omitted", "version", "reset", "planning", "requirements", "feedback_missing", "feedback_changed", "hints", "evidence", "preview_omitted", "missing_fact", "conflict", "preview_failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			a := assessmentFixture("v1")
 			commits, previews := 0, 0
-			d := &decisionDraft{orchestration: true, assessment: a}
+			d := &decisionDraft{assessment: a}
 			d.request = func(_ context.Context, request GraphRequest) (string, error) {
 				if request.Op == "decision_commit" {
 					commits++
@@ -281,8 +281,8 @@ func TestCompletionAssessmentNeverAuthorizesUnseenChangedOrIncompleteEvidence(t 
 				}
 			}
 			switch scenario {
-			case "legacy":
-				d.orchestration = false
+			case "absent":
+				d.assessment = nil
 			case "assessment_omitted":
 				a.OmittedFactIDs = []string{"other-observation"}
 			case "version":
@@ -322,7 +322,7 @@ func TestCompletionAssessmentNeverAuthorizesUnseenChangedOrIncompleteEvidence(t 
 }
 
 func TestCompletionAssessmentRecoveryDiscardsFastAuthority(t *testing.T) {
-	d := &decisionDraft{orchestration: true, assessment: assessmentFixture("v1")}
+	d := &decisionDraft{assessment: assessmentFixture("v1")}
 	loop := assessmentObservedLoop(d.assessment)
 	d.beforeRequest(loop)
 	if !d.assessmentReady {
@@ -367,7 +367,7 @@ func TestCompletionAssessmentReuseRequiresAllUncertaintyToBeObservedAndUnchanged
 				a.CurationRequest.Sources = []string{"unseen"}
 			}
 			previews, commits := 0, 0
-			d := &decisionDraft{orchestration: true, assessment: a}
+			d := &decisionDraft{assessment: a}
 			d.request = func(_ context.Context, request GraphRequest) (string, error) {
 				if request.Op == "decision_commit" {
 					commits++

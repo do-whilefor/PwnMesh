@@ -93,7 +93,7 @@ func TestDecisionDependencyDraftRejectsInvalidReferencesWithoutReservingKey(t *t
 		"alias evidence": `{"action":"add","from":["$first"],"description":"Review","depends_on":["$first"]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			d := &decisionDraft{orchestration: true}
+			d := &decisionDraft{}
 			for _, seed := range []board.StateAction{
 				draftTestAction("goal", "target", `{"action":"add","condition":"Inspect"}`),
 				draftTestAction("step", "first", `{"action":"add","from":["origin"],"description":"Inspect"}`),
@@ -114,10 +114,6 @@ func TestDecisionDependencyDraftRejectsInvalidReferencesWithoutReservingKey(t *t
 				t.Fatal(err)
 			}
 		})
-	}
-	legacy := &decisionDraft{}
-	if _, err := legacy.action(context.Background(), draftTestAction("step", "first", `{"action":"add","from":["origin"],"description":"Inspect","depends_on":["existing"]}`), "original"); err == nil {
-		t.Fatal("legacy draft accepted execution dependencies")
 	}
 }
 

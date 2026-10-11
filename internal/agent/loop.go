@@ -19,8 +19,6 @@ type Loop struct {
 	// Original messages remain in message_end events.
 	SaveState  func([]Message, *ContextCheckpoint) error
 	Checkpoint *ContextCheckpoint
-	Steering   <-chan string
-	FollowUp   <-chan string
 	Concluding bool
 	Repairing  bool
 	// Task and conclusion instructions remain verbatim across every compaction.
@@ -112,17 +110,6 @@ func (l *Loop) saveState() error {
 // AppendInstruction adds a runtime instruction at a settled turn boundary.
 // The caller must first settle any interrupted tool group with RepairHistory.
 func (l *Loop) AppendInstruction(prompt string) error { return l.append(Text("user", prompt)) }
-func queued(ch <-chan string) (string, bool) {
-	if ch == nil {
-		return "", false
-	}
-	select {
-	case s, ok := <-ch:
-		return s, ok
-	default:
-		return "", false
-	}
-}
 func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 	if l.Provider == nil {
 		return "", errors.New("missing model provider")
@@ -155,152 +142,132 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 	l.emit(Event{Type: "agent_start"})
 	defer l.emit(Event{Type: "agent_end"})
 	last := ""
-	for { // Outer loop: queued follow-up after an otherwise settled run.
-		for { // Inner loop: model, tools and steering at turn boundaries.
-			if err := ctx.Err(); err != nil {
-				return last, err
-			}
-			if s, ok := queued(l.Steering); ok {
-				if err := l.append(Text("user", s)); err != nil {
-					return last, err
-				}
-			}
-			if l.BeforeRequest != nil {
-				next, err := l.BeforeRequest(ctx, l)
-				if err != nil {
-					return last, err
-				}
-				if next != nil {
-					ctx = next
-				}
-			}
-			inputBytes, err := l.compactRequest(ctx, false)
-			if err != nil {
-				return last, err
-			}
-			defs := l.definitions()
-			l.emit(Event{Type: "turn_start"})
-			m, err := l.generateMeasured(ctx, l.History, defs, 0, inputBytes)
-			if err != nil {
-				var modelErr *ModelError
-				if errors.As(err, &modelErr) && modelErr.Kind == ErrorContextOverflow && l.Checkpoint.OverflowRetries < 1 {
-					// Persist the allowance before the recovery attempt. Restarting
-					// this run must not grant another attempt or replay any tool.
-					l.Checkpoint.OverflowRetries++
-					if saveErr := l.saveState(); saveErr != nil {
-						return last, saveErr
-					}
-					inputBytes, compactErr := l.compactRequest(ctx, true)
-					if compactErr != nil {
-						return last, compactErr
-					}
-					m, err = l.generateMeasured(ctx, l.History, defs, 0, inputBytes)
-				}
-			}
-			if err != nil {
-				var modelErr *ModelError
-				if errors.As(err, &modelErr) && modelErr.Kind == ErrorToolArguments && l.Checkpoint.ToolArgumentRetries == 0 && ctx.Err() == nil {
-					// The provider rejected the whole response before any calls ran.
-					// Persist one allowance until a tool succeeds, including across restarts.
-					l.Checkpoint.ToolArgumentRetries++
-					if saveErr := l.append(Text("user", "The previous response had invalid JSON tool arguments; none of its calls ran. Return valid JSON tool arguments.")); saveErr != nil {
-						return last, saveErr
-					}
-					l.emit(Event{Type: "tool_argument_retry", Error: err.Error()})
-					l.emit(Event{Type: "turn_end"})
-					// Refresh runtime inputs and cancellation at the normal boundary.
-					continue
-				}
-				return last, err
-			}
-			if m.Role != "assistant" {
-				return last, errors.New("provider returned a non-assistant message")
-			}
-			if err := validateCalls(m); err != nil {
-				return last, err
-			}
-			// A truncated argument fragment cannot be marshaled into a valid
-			// session. Preserve the call identity but never execute any of its calls.
-			if m.StopReason == "max_tokens" || m.StopReason == "length" {
-				for n := range m.Content {
-					if m.Content[n].Type == "tool_use" && !json.Valid(m.Content[n].Input) {
-						m.Content[n].Input = json.RawMessage(`{}`)
-					}
-				}
-			}
-			if err = l.append(m); err != nil {
-				return last, err
-			}
-			last = m.Text()
-			calls := []Block{}
-			for _, b := range m.Content {
-				if b.Type == "tool_use" {
-					calls = append(calls, b)
-				}
-			}
-			if len(calls) > 0 {
-				results := l.execute(ctx, calls, m.StopReason == "max_tokens" || m.StopReason == "length")
-				argumentRetries := l.Checkpoint.ToolArgumentRetries
-				// A later, independent argument error must not discard useful work.
-				// Replenish only with a successful tool receipt, saved atomically
-				// below; text or error receipts cannot replenish the allowance.
-				for _, result := range results {
-					if !result.IsError {
-						l.Checkpoint.ToolArgumentRetries = 0
-						break
-					}
-				}
-				// Always settle every emitted tool id, including after cancellation.
-				if err = l.append(Message{Role: "user", Content: results}); err != nil {
-					l.Checkpoint.ToolArgumentRetries = argumentRetries
-					return last, err
-				}
-			}
-			l.emit(Event{Type: "turn_end"})
-			if l.StopResult != nil {
-				if result, done := l.StopResult(); done {
-					l.emit(Event{Type: "runtime_result", Text: result})
-					return result, nil
-				}
-			}
-			if err = ctx.Err(); err != nil {
-				return last, err
-			}
-			if l.OnTurnEnd != nil {
-				next, instruction, hookErr := l.OnTurnEnd(ctx, l, m)
-				if hookErr != nil {
-					return last, hookErr
-				}
-				if next != nil {
-					ctx = next
-				}
-				if instruction != "" {
-					if l.Repairing {
-						l.RepairPrompt = instruction
-					} else if l.Concluding {
-						l.ConclusionPrompt = instruction
-					}
-					if err = l.append(Text("user", instruction)); err != nil {
-						return last, err
-					}
-					continue
-				}
-			}
-			if len(calls) > 0 {
-				continue
-			}
-			if s, ok := queued(l.Steering); ok {
-				if err = l.append(Text("user", s)); err != nil {
-					return last, err
-				}
-				continue
-			}
-			break
+	for { // Model and tools advance through settled runtime boundaries.
+		if err := ctx.Err(); err != nil {
+			return last, err
 		}
-		if s, ok := queued(l.FollowUp); ok {
-			if err := l.append(Text("user", s)); err != nil {
+		if l.BeforeRequest != nil {
+			next, err := l.BeforeRequest(ctx, l)
+			if err != nil {
 				return last, err
 			}
+			if next != nil {
+				ctx = next
+			}
+		}
+		inputBytes, err := l.compactRequest(ctx, false)
+		if err != nil {
+			return last, err
+		}
+		defs := l.definitions()
+		l.emit(Event{Type: "turn_start"})
+		m, err := l.generateMeasured(ctx, l.History, defs, 0, inputBytes)
+		if err != nil {
+			var modelErr *ModelError
+			if errors.As(err, &modelErr) && modelErr.Kind == ErrorContextOverflow && l.Checkpoint.OverflowRetries < 1 {
+				// Persist the allowance before the recovery attempt. Restarting
+				// this run must not grant another attempt or replay any tool.
+				l.Checkpoint.OverflowRetries++
+				if saveErr := l.saveState(); saveErr != nil {
+					return last, saveErr
+				}
+				inputBytes, compactErr := l.compactRequest(ctx, true)
+				if compactErr != nil {
+					return last, compactErr
+				}
+				m, err = l.generateMeasured(ctx, l.History, defs, 0, inputBytes)
+			}
+		}
+		if err != nil {
+			var modelErr *ModelError
+			if errors.As(err, &modelErr) && modelErr.Kind == ErrorToolArguments && l.Checkpoint.ToolArgumentRetries == 0 && ctx.Err() == nil {
+				// The provider rejected the whole response before any calls ran.
+				// Persist one allowance until a tool succeeds, including across restarts.
+				l.Checkpoint.ToolArgumentRetries++
+				if saveErr := l.append(Text("user", "The previous response had invalid JSON tool arguments; none of its calls ran. Return valid JSON tool arguments.")); saveErr != nil {
+					return last, saveErr
+				}
+				l.emit(Event{Type: "tool_argument_retry", Error: err.Error()})
+				l.emit(Event{Type: "turn_end"})
+				// Refresh runtime inputs and cancellation at the normal boundary.
+				continue
+			}
+			return last, err
+		}
+		if m.Role != "assistant" {
+			return last, errors.New("provider returned a non-assistant message")
+		}
+		if err := validateCalls(m); err != nil {
+			return last, err
+		}
+		// A truncated argument fragment cannot be marshaled into a valid
+		// session. Preserve the call identity but never execute any of its calls.
+		if m.StopReason == "max_tokens" || m.StopReason == "length" {
+			for n := range m.Content {
+				if m.Content[n].Type == "tool_use" && !json.Valid(m.Content[n].Input) {
+					m.Content[n].Input = json.RawMessage(`{}`)
+				}
+			}
+		}
+		if err = l.append(m); err != nil {
+			return last, err
+		}
+		last = m.Text()
+		calls := []Block{}
+		for _, b := range m.Content {
+			if b.Type == "tool_use" {
+				calls = append(calls, b)
+			}
+		}
+		if len(calls) > 0 {
+			results := l.execute(ctx, calls, m.StopReason == "max_tokens" || m.StopReason == "length")
+			argumentRetries := l.Checkpoint.ToolArgumentRetries
+			// A later, independent argument error must not discard useful work.
+			// Replenish only with a successful tool receipt, saved atomically
+			// below; text or error receipts cannot replenish the allowance.
+			for _, result := range results {
+				if !result.IsError {
+					l.Checkpoint.ToolArgumentRetries = 0
+					break
+				}
+			}
+			// Always settle every emitted tool id, including after cancellation.
+			if err = l.append(Message{Role: "user", Content: results}); err != nil {
+				l.Checkpoint.ToolArgumentRetries = argumentRetries
+				return last, err
+			}
+		}
+		l.emit(Event{Type: "turn_end"})
+		if l.StopResult != nil {
+			if result, done := l.StopResult(); done {
+				l.emit(Event{Type: "runtime_result", Text: result})
+				return result, nil
+			}
+		}
+		if err = ctx.Err(); err != nil {
+			return last, err
+		}
+		if l.OnTurnEnd != nil {
+			next, instruction, hookErr := l.OnTurnEnd(ctx, l, m)
+			if hookErr != nil {
+				return last, hookErr
+			}
+			if next != nil {
+				ctx = next
+			}
+			if instruction != "" {
+				if l.Repairing {
+					l.RepairPrompt = instruction
+				} else if l.Concluding {
+					l.ConclusionPrompt = instruction
+				}
+				if err = l.append(Text("user", instruction)); err != nil {
+					return last, err
+				}
+				continue
+			}
+		}
+		if len(calls) > 0 {
 			continue
 		}
 		return last, nil

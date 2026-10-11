@@ -72,7 +72,7 @@ func TestCurationRequestRejectsMalformedDraftWithoutReservingKey(t *testing.T) {
 		`{"sources":[7],"reason":"Merge"}`, `{"sources":["f"],"reason":"Merge","action":"add"}`,
 		`{"sources":["f"],"reason":"Merge","relations":[]}`, string(tooMany),
 	} {
-		draft := &decisionDraft{orchestration: true, request: func(context.Context, GraphRequest) (string, error) {
+		draft := &decisionDraft{request: func(context.Context, GraphRequest) (string, error) {
 			t.Fatal("malformed draft reached server")
 			return "", nil
 		}}
@@ -82,9 +82,5 @@ func TestCurationRequestRejectsMalformedDraftWithoutReservingKey(t *testing.T) {
 		if _, err := draft.action(context.Background(), draftTestAction("curation_request", "review", `{"sources":["f"],"reason":"Resolve concrete contradiction"}`), "version"); err != nil || len(draft.actions) != 1 {
 			t.Fatalf("corrected request could not reuse its key: %v", err)
 		}
-	}
-	legacy := &decisionDraft{}
-	if _, err := legacy.action(context.Background(), draftTestAction("curation_request", "review", `{"sources":["f"],"reason":"Resolve contradiction"}`), "version"); err == nil {
-		t.Fatal("legacy draft enabled orchestration-only curation")
 	}
 }

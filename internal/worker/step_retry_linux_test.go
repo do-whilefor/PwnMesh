@@ -33,7 +33,7 @@ func TestStepRetryToolsAndPromptDescribeAuthorization(t *testing.T) {
 
 func TestStepRetryDraftStagesOnceAndUsesNormalBatchReceipt(t *testing.T) {
 	requests := 0
-	d := &decisionDraft{orchestration: true, request: func(_ context.Context, request GraphRequest) (string, error) {
+	d := &decisionDraft{request: func(_ context.Context, request GraphRequest) (string, error) {
 		requests++
 		if request.Batch == nil || request.Batch.ExpectedVersion != "original" || len(request.Batch.Actions) != 1 || request.Batch.Actions[0].Ref != "" {
 			t.Fatalf("retry changed identity or invented a new Step: %+v", request)
@@ -84,7 +84,7 @@ func TestStepRetryDraftRejectsMissingFieldsAndInputChanges(t *testing.T) {
 		`{"action":"retry","id":"failed-step","latest_run_id":"failed-run","reason":"Try again","run_id":"model-chosen"}`,
 	} {
 		t.Run(payload, func(t *testing.T) {
-			d := &decisionDraft{orchestration: true}
+			d := &decisionDraft{}
 			if _, err := d.action(context.Background(), draftTestAction("step", "correctable", payload), "bad"); err == nil || !strings.Contains(err.Error(), "draft unchanged") {
 				t.Fatalf("invalid retry was accepted: %v", err)
 			}
@@ -95,9 +95,5 @@ func TestStepRetryDraftRejectsMissingFieldsAndInputChanges(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
-	}
-	legacy := &decisionDraft{}
-	if _, err := legacy.action(context.Background(), draftTestAction("step", "retry", `{"action":"retry","id":"failed-step","latest_run_id":"failed-run","reason":"Try again"}`), "original"); err == nil {
-		t.Fatal("legacy draft accepted main-agent retry authorization")
 	}
 }

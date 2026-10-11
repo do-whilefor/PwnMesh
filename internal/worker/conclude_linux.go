@@ -49,11 +49,7 @@ func conclusionInputWithEvidence(ctx context.Context, j Job, runDir string, coll
 	}
 	if !collectArtifacts {
 		prompt += "\nThis session did not save a bounded output snapshot at its original conclusion boundary. No files have been read on recovery. Use only the original task input and existing session evidence.\n"
-		if j.ResultContractVersion >= 2 {
-			prompt += "No frozen fragments are available for a new final fact. Completed must use a previously published evidence-backed fact_id from this Step; otherwise report incomplete.\n"
-		} else {
-			prompt += "Report incomplete if the existing evidence does not establish a confirmed result.\n"
-		}
+		prompt += "No frozen fragments are available for a new final fact. Completed must use a previously published evidence-backed fact_id from this Step; otherwise report incomplete.\n"
 		return prompt, nil, ctx.Err()
 	}
 	snapshot, err := snapshotArtifacts(ctx, runDir)
@@ -61,23 +57,21 @@ func conclusionInputWithEvidence(ctx context.Context, j Job, runDir string, coll
 		return "", nil, err
 	}
 	var refs []board.EvidenceRef
-	if j.ResultContractVersion >= 2 {
-		for n := range snapshot.Files {
-			entry := &snapshot.Files[n]
-			// Invalid UTF-8 may be displayed as untrusted diagnostic text, but
-			// replacement characters must never be certified as original bytes.
-			if !utf8.Valid(entry.original) || strings.TrimSpace(string(entry.original)) == "" {
-				continue
-			}
-			ref, err := freezeEvidenceBytes(ctx, j.RunID, runDir, entry.original)
-			if err != nil {
-				return "", nil, err
-			}
-			entry.Evidence = &ref
-			refs = append(refs, ref)
+	for n := range snapshot.Files {
+		entry := &snapshot.Files[n]
+		// Invalid UTF-8 may be displayed as untrusted diagnostic text, but
+		// replacement characters must never be certified as original bytes.
+		if !utf8.Valid(entry.original) || strings.TrimSpace(string(entry.original)) == "" {
+			continue
 		}
-		prompt += "\nFor a new final fact, select only evidence.path values below: frozen byte-exact output fragments, never mutable workspace paths. A previously published fact_id from this Step can also anchor completion.\n"
+		ref, err := freezeEvidenceBytes(ctx, j.RunID, runDir, entry.original)
+		if err != nil {
+			return "", nil, err
+		}
+		entry.Evidence = &ref
+		refs = append(refs, ref)
 	}
+	prompt += "\nFor a new final fact, select only evidence.path values below: frozen byte-exact output fragments, never mutable workspace paths. A previously published fact_id from this Step can also anchor completion.\n"
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		return "", nil, err

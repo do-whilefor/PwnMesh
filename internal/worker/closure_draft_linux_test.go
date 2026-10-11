@@ -51,7 +51,7 @@ func TestRootAssessmentPromptRequiresEvaluationBeforeCompletionReuse(t *testing.
 }
 
 func TestRootAssessmentSeparatesEvaluationFromPlanningAndBindsNewWork(t *testing.T) {
-	d := &decisionDraft{orchestration: true, closureProtocol: true}
+	d := &decisionDraft{closureProtocol: true}
 	ctx := context.Background()
 	step := draftTestAction("step", "verify", `{"action":"add","from":["f001"],"description":"Obtain verifier acceptance"}`)
 	if _, err := d.action(ctx, step, "v1", "acceptance"); err == nil {
@@ -90,7 +90,7 @@ func TestRootAssessmentSeparatesEvaluationFromPlanningAndBindsNewWork(t *testing
 func TestSatisfiedRootCannotGrowPlansOrReuseAfterResetAndConflict(t *testing.T) {
 	for _, invalidate := range []bool{false, true} {
 		t.Run(map[bool]string{false: "reset", true: "state_changed"}[invalidate], func(t *testing.T) {
-			d := &decisionDraft{orchestration: true, closureProtocol: true}
+			d := &decisionDraft{closureProtocol: true}
 			ctx := context.Background()
 			if _, err := d.assessRoot(json.RawMessage(satisfiedRoot), "v1"); err != nil {
 				t.Fatal(err)

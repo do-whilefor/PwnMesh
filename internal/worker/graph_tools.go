@@ -107,34 +107,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 			return track(string(raw), err)
 		}
 		if !j.GraphRPC {
-			if (r.Op != "read_graph" && !frozen) || j.InputSnapshot != nil {
-				return "", errors.New("live graph submission requires the dispatcher graph bridge")
-			}
-			state := board.State{Graph: j.Graph}
-			if j.State != nil {
-				state = *j.State
-			}
-			for _, f := range j.Graph.Facts {
-				if j.State != nil {
-					break
-				}
-				state.FactRecords = append(state.FactRecords, board.FactRecord{ID: f.ID, Description: f.Description, Status: "legacy", Legacy: true})
-			}
-			for _, s := range j.Graph.Intents {
-				if j.State != nil {
-					break
-				}
-				state.Steps = append(state.Steps, board.Step{ID: s.ID, From: s.From, GoalID: "goal", Description: s.Description, Status: "open"})
-			}
-			page, err := GraphPage(state, r)
-			if err != nil {
-				return "", err
-			}
-			raw, err := json.Marshal(page)
-			if frozen {
-				return string(raw), err
-			}
-			return track(string(raw), err)
+			return "", errors.New("live graph submission requires the dispatcher graph bridge")
 		}
 		if r.Op == "graph_action" {
 			var err error
@@ -197,7 +170,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	}
 	o.graphRequest = request
 	if batchDecision(j) {
-		o.decision = &decisionDraft{orchestration: orchestrationJob(j), closureProtocol: j.Decision.ClosureProtocol == 1, request: request}
+		o.decision = &decisionDraft{closureProtocol: j.Decision.ClosureProtocol == 1, request: request}
 	}
 	if j.Kind == "curate" {
 		o.curation = &curationCommit{job: j, request: request}
