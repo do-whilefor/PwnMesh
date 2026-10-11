@@ -66,7 +66,6 @@
     }
     isHintRetry(id,values){const pending=this.pendingHints.get(id);return !!pending&&pending.text===values.text&&pending.files.length===values.files.length&&pending.files.every((file,index)=>file===values.files[index]);}
     async hint(id,values){
-      if(!values.files.length){this.pendingHints.delete(id);return this.api.request(pathFor(id)+'/hints',{method:'POST',body:{content:values.text,creator:'user'}});}
       let pending=this.pendingHints.get(id);
       if(!this.isHintRetry(id,values)){
         const key=crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');

@@ -44,10 +44,10 @@ test('refresh filters executions from old rounds and bounds event projection to 
 test('project creation retries only unfinished uploads on the same paused project',async()=>{const calls=[],files=[new File(['a'],'a.txt'),new File(['b'],'b.txt')];let fail=true;const service=new Service({async request(url,options){calls.push({url,options});return {project:{id:'created'}};},async uploadInput(base,file){calls.push({upload:file.name});if(file.name==='b.txt'&&fail){fail=false;throw new APIError('upload interrupted',503);}}});const values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files};await assert.rejects(service.create(values),error=>error.pendingCreate);assert.equal(calls[0].options.body.start_paused,true);assert.equal(await service.create(values),'created');assert.equal(calls.filter(c=>c.url==='/projects').length,1);assert.deepEqual(calls.filter(c=>c.upload).map(c=>c.upload),['a.txt','b.txt','b.txt']);assert.deepEqual(calls.at(-1).options.body,{status:'active'});});
 test('ambiguous creation is never blindly retried',async()=>{let creates=0;const service=new Service({async request(){creates++;throw new APIError('lost connection',0);}}),values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files:[]};await assert.rejects(service.create(values),error=>error.uncertainCreate);await assert.rejects(service.create(values),/尚未确认/);assert.equal(creates,1);});
 test('lifecycle operations use real endpoints and generation fencing',async()=>{const calls=[],service=new Service({async request(url,options){calls.push({url,options});}});for(const action of ['pause','resume','restart','terminate','delete'])await service.change('a/b',action,7);assert.equal(calls[0].url,'/projects/a%2Fb/status');assert.deepEqual(calls[0].options.body,{status:'stopped'});assert.deepEqual(calls[2].options.body,{expected_generation:7});assert.equal(calls.at(-1).options.method,'DELETE');});
-test('supplement files and text use one atomic batch request',async()=>{const calls=[],file=new File(['bytes'],'request.http'),service=new Service({async uploadInputs(...args){calls.push(args);},async request(...args){calls.push(args);}});await service.hint('a',{text:'scope',files:[file]});assert.equal(calls.length,1);assert.equal(calls[0][1][0],file);assert.equal(calls[0][2],'scope');await service.hint('a',{text:'more scope',files:[]});assert.equal(calls[1][0],'/projects/a/hints');});
+test('supplement files and text use one atomic batch request',async()=>{const calls=[],file=new File(['bytes'],'request.http'),service=new Service({async uploadInputs(...args){calls.push(args);}});await service.hint('a',{text:'scope',files:[file]});assert.equal(calls.length,1);assert.equal(calls[0][1][0],file);assert.equal(calls[0][2],'scope');await service.hint('a',{text:'more scope',files:[]});assert.equal(calls[1][0],'/projects/a');assert.deepEqual(calls[1][1],[]);assert.equal(calls[1][2],'more scope');assert.ok(calls[1][3]);});
 test('supplement retries reuse their key until the submitted project, text or file references change',async()=>{
  const calls=[],files=[new File(['apk'],'client.apk'),new File(['http'],'capture.http')];let fail=true;
- const service=new Service({async uploadInputs(...args){calls.push(args);if(fail)throw new APIError('response lost',0);return ['saved'];},async request(){return 'text saved';}});
+ const service=new Service({async uploadInputs(...args){calls.push(args);if(fail)throw new APIError('response lost',0);return ['saved'];}});
  const submit=async(id,text,items)=>assert.rejects(service.hint(id,{text,files:items}),/response lost/);
  await submit('a','scope',files);await submit('a','scope',files.slice());
  assert.match(calls[0][3],/^[a-f0-9-]{32,36}$/);assert.equal(calls[1][3],calls[0][3]);
@@ -60,7 +60,7 @@ test('supplement retries reuse their key until the submitted project, text or fi
  fail=false;assert.deepEqual(await service.hint('b',{text:'changed scope',files:replacement}),['saved']);assert.equal(calls[6][3],calls[5][3]);
  assert.equal(service.isHintRetry('b',{text:'changed scope',files:replacement}),false);
  await service.hint('b',{text:'changed scope',files:replacement});assert.notEqual(calls[7][3],calls[6][3]);
- fail=true;await submit('a','scope',files);await service.hint('a',{text:'text only',files:[]});await submit('a','scope',files);assert.notEqual(calls[9][3],calls[8][3]);
+ fail=true;await submit('a','scope',files);await submit('a','text only',[]);await submit('a','text only',[]);assert.equal(calls[10][3],calls[9][3]);assert.equal(service.isHintRetry('a',{text:'text only',files:[]}),true);await submit('a','scope',files);assert.notEqual(calls[11][3],calls[8][3]);
 });
 test('pending supplement retries survive writes to another project and clear only their own project',async()=>{
  const calls=[],values={text:'scope',files:[new File(['apk'],'client.apk')]},lost=new Set(['/projects/a','/projects/b']);
@@ -68,10 +68,10 @@ test('pending supplement retries survive writes to another project and clear onl
  await assert.rejects(service.hint('a',values),/response lost/);await assert.rejects(service.hint('b',values),/response lost/);
  assert.equal(service.isHintRetry('a',values),true);assert.equal(service.isHintRetry('b',values),true);
  await service.hint('b',{text:'text only',files:[]});assert.equal(service.isHintRetry('a',values),true);assert.equal(service.isHintRetry('b',values),false);
- await service.hint('b',values);assert.notEqual(calls[2][3],calls[1][3]);assert.equal(service.isHintRetry('a',values),true);
+ await service.hint('b',values);assert.notEqual(calls[3][3],calls[1][3]);assert.equal(service.isHintRetry('a',values),true);
  await service.change('b','delete');assert.equal(service.isHintRetry('a',values),true);
- await service.hint('a',values);assert.equal(calls[3][3],calls[0][3]);assert.equal(service.isHintRetry('a',values),false);
- lost.add('/projects/a');await assert.rejects(service.hint('a',values),/response lost/);assert.notEqual(calls[4][3],calls[3][3]);
+ await service.hint('a',values);assert.equal(calls[4][3],calls[0][3]);assert.equal(service.isHintRetry('a',values),false);
+ lost.add('/projects/a');await assert.rejects(service.hint('a',values),/response lost/);assert.notEqual(calls[5][3],calls[4][3]);
  await service.change('a','delete');assert.equal(service.isHintRetry('a',values),false);
 });
 test('form drafts retain actual File objects, isolate file arrays and validate total uploaded bytes',()=>{

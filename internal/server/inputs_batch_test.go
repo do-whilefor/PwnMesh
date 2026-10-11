@@ -168,14 +168,14 @@ func TestInputBatchWaitsForAllFilesAndFreezesAccompanyingContent(t *testing.T) {
 }
 
 func TestInputBatchInvalidRequestsLeaveNoFilesHintsOrTemporaryFiles(t *testing.T) {
-	for _, mode := range []string{"invalid second filename", "truncated", "unknown field", "duplicate content", "long content", "invalid UTF-8", "no files", "too many files", "cross origin", "worker"} {
+	for _, mode := range []string{"invalid second filename", "truncated", "unknown field", "duplicate content", "long content", "invalid UTF-8", "empty input", "blank content", "too many files", "cross origin", "worker"} {
 		t.Run(mode, func(t *testing.T) {
 			f, _ := newSnapshotHTTPFixture(t)
 			dir := isolatedInputBatchTemp(t)
 			before, beforeEvents := f.state(), storedEvents(f)
 			var body bytes.Buffer
 			mw := multipart.NewWriter(&body)
-			if mode != "no files" {
+			if mode != "empty input" && mode != "blank content" {
 				part, _ := mw.CreateFormFile("file", "first.apk")
 				_, _ = part.Write([]byte("first"))
 			}
@@ -195,8 +195,8 @@ func TestInputBatchInvalidRequestsLeaveNoFilesHintsOrTemporaryFiles(t *testing.T
 				for n := 0; n < board.MaxProjectInputs; n++ {
 					_, _ = mw.CreateFormFile("file", fmt.Sprintf("file-%d.apk", n))
 				}
-			case "no files":
-				_ = mw.WriteField("content", "instruction")
+			case "blank content":
+				_ = mw.WriteField("content", " \n\t")
 			}
 			if mode != "truncated" {
 				_ = mw.Close()
@@ -344,6 +344,28 @@ func TestInputBatchKeyReplaysDurableReceiptWithoutDuplicatingInstructions(t *tes
 		t.Fatal(err)
 	}
 	assertInputBatchTempEmpty(t, dir)
+}
+
+func TestInputBatchTextOnlyRetryDoesNotDuplicateInstructions(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	const content = "Only inspect the authorized client."
+	body, contentType := inputBatchBody(t, nil, content, "text-only-1")
+	if inputs := inputBatchRequest(t, f, body, contentType, http.StatusCreated); inputs == nil || len(inputs) != 0 {
+		t.Fatalf("text-only supplement returned file metadata: %+v", inputs)
+	}
+	before, events := f.state(), storedEvents(f)
+	if len(before.Graph.Hints) != 1 || before.Graph.Hints[0].Content != content {
+		t.Fatal("text-only supplement did not preserve its instruction")
+	}
+	inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	if !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
+		t.Fatal("retry duplicated text-only instructions or events")
+	}
+	body, contentType = inputBatchBody(t, nil, content, "text-only-2")
+	inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	if len(f.state().Graph.Hints) != len(before.Graph.Hints)+1 {
+		t.Fatal("a deliberate new submission was deduplicated")
+	}
 }
 
 func TestInputBatchKeyBindsFilesOrderNamesBytesAndContent(t *testing.T) {

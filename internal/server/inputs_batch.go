@@ -137,8 +137,8 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(files) == 0 {
-		writeError(w, r, b.Err(422, "Expected at least one input file"))
+	if len(files) == 0 && content == "" {
+		writeError(w, r, b.Err(422, "Expected input files or non-empty content"))
 		return
 	}
 	// Bind semantic input, excluding temporary paths and multipart boundaries.

@@ -94,6 +94,12 @@ test('demo upload form preserves bytes and retries a lost supplement response th
   const saved=await(await request(projectPath(id)+'/inputs')).json();assert.equal(saved.length,2);const apk=saved.find(file=>file.name==='client.apk');assert.deepEqual(Buffer.from(await(await request(projectPath(id)+'/inputs/'+apk.id)).arrayBuffer()),bytes);
   await page.locator('#add-hint').click();await page.locator('#hint-text').fill('失去响应后仍只补充一次');await page.locator('#hint-files').setInputFiles({name:'client.apk',mimeType:'application/octet-stream',buffer:bytes});await page.locator('#hint-form [type="submit"]').click();await page.locator('#hint-dialog').waitFor({state:'hidden'});
   const repeated=await(await request(projectPath(id)+'/state')).json();assert.equal(keys.length,3);assert.notEqual(keys[2],keys[0]);assert.equal(repeated.graph.hints.length,after.graph.hints.length+1);assert.equal(repeated.graph.hints.filter(hint=>hint.content==='失去响应后仍只补充一次').length,2);assert.ok(repeated.revision>after.revision);assert.equal((await(await request(projectPath(id)+'/inputs')).json()).length,2);
+  await page.unroute('**/inputs/batch');let textRequests=0;
+  await page.route(/\/(?:hints|inputs\/batch)$/,async route=>{const response=await route.fetch();assert.equal(response.status(),201);if(++textRequests===1)return route.abort('failed');return route.fulfill({response});});
+  await page.locator('#add-hint').click();await page.locator('#hint-text').fill('纯文本补充丢失响应后也只提交一次');await page.locator('#hint-form [type="submit"]').click();
+  await page.waitForFunction(()=>document.getElementById('hint-error').textContent.includes('无法连接'));const textBefore=await(await request(projectPath(id)+'/state')).json();assert.equal(textBefore.graph.hints.filter(hint=>hint.content==='纯文本补充丢失响应后也只提交一次').length,1);
+  await page.locator('#hint-form [type="submit"]').click();await page.locator('#hint-dialog').waitFor({state:'hidden'});const textAfter=await(await request(projectPath(id)+'/state')).json();
+  assert.equal(textRequests,2);assert.equal(textAfter.revision,textBefore.revision);assert.equal(textAfter.graph.hints.length,textBefore.graph.hints.length);
  }finally{await browser.close();if(id)await request(projectPath(id),{method:'DELETE'});}
 });
 
