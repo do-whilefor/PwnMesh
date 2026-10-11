@@ -162,6 +162,8 @@ subprocess.run(["apktool", "d", str(apk_file), "-p", str(apk_framework), "-o", s
 android = "{http://schemas.android.com/apk/res/android}"
 manifest = ET.parse(apk_decoded / "AndroidManifest.xml").getroot()
 assert manifest.attrib["package"] == "example.clientprobe"
+sdk = json.loads(subprocess.check_output(["yq", ".sdkInfo", str(apk_decoded / "apktool.yml")], text=True, timeout=10))
+assert (str(sdk.get("minSdkVersion")), str(sdk.get("targetSdkVersion"))) == ("21", "28"), sdk
 assert manifest.find("uses-permission").attrib[android + "name"] == "android.permission.INTERNET"
 application = manifest.find("application")
 assert application.attrib[android + "allowBackup"] == "false"

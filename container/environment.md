@@ -31,7 +31,7 @@ Nmap 去除了 Kali 软件包附带的文件 capabilities，避免 `CAP_NET_ADMI
 显式安装 Java JDK（`java`、`javac`、`jar`）、`jadx`、`apktool`、`file`、`sqlite3`，结合现有 `unzip`、`strings`、`rg`、`jq` 和 `yq` 支持：
 
 - `jadx -d <新目录> <APK/JAR/DEX>`：反编译代码（包含 APK 内多个 DEX），查找接口、认证实现和本地数据处理；混淆或加固包可能需要补充源码。
-- `apktool d <APK> -o <新目录>`：解码 Manifest、资源和 smali，检查权限、导出组件、深链、备份及网络配置；声明须结合代码、资源限定符和 Android 版本判断，关键词命中不是漏洞证明。
+- `apktool d <APK> -o <新目录>`：解码 Manifest、资源和 smali，检查权限、导出组件、深链、备份及网络配置；声明须结合代码、资源限定符和 Android 版本判断，关键词命中不是漏洞证明。SDK 版本还需查看解码目录中 `apktool.yml` 的 `sdkInfo`，`uses-sdk` 可能已从解码后的 Manifest 移到此处。
 - `file <文件>`、`unzip -l <压缩包>`：确认类型和内容，再将需要分析的源码或资源提取到独立目录；不要直接运行来历未知的安装包和构建脚本。
 - `sqlite3 -readonly <数据库>`：只读检查本地表结构与保存的数据；JSON/YAML/文本配置使用 `jq`、`yq`、`rg`。
 
