@@ -32,14 +32,30 @@ PwnMesh 是基于 Go 的多 Agent 任务执行系统，面向 CTF、授权渗透
 ## 运行结构
 
 ```mermaid
-flowchart LR
-    U["浏览器 / Web 工作台"] <-->|HTTP API| S["Server<br/>共享黑板 · SQLite"]
-    S <-->|调度状态与结果| D["Dispatcher<br/>任务调度 · 容器管理"]
-    D <-->|模型请求| M["模型 API"]
-    D <-->|启动进程与消息桥接| W
-    subgraph P["项目容器 / 共享工作目录"]
-        W["Worker<br/>reason · explore · curate"]
+flowchart TB
+    U["用户 / Web 工作台"] <-->|"HTTP API · 项目与状态"| S["Server<br/>共享黑板 · SQLite"]
+    S <-->|"调度、租约与提交"| D["Dispatcher<br/>任务调度 · 容器管理<br/>模型与状态桥接"]
+    D <-->|"模型请求与响应"| M["模型 API"]
+    subgraph P["项目级 Kali 容器 · 共享 /workspace"]
+        R["reason / Decide<br/>规划与完成检查"]
+        E["explore / Execute<br/>多个 Worker 并行执行"]
+        C["curate / Curate<br/>结论与争议整理"]
     end
+    D <-->|"规划任务"| R
+    D <-->|"执行任务"| E
+    D <-->|"整理任务"| C
+
+    classDef entry fill:#f1f5f9,stroke:#64748b,color:#0f172a
+    classDef service fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
+    classDef dispatcher fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    classDef execute fill:#dcfce7,stroke:#16a34a,color:#14532d
+    classDef curate fill:#f3e8ff,stroke:#9333ea,color:#581c87
+    class U,M entry
+    class S,R service
+    class D dispatcher
+    class E execute
+    class C curate
+    style P fill:#f8fafc,stroke:#94a3b8,color:#334155
 ```
 
 | 角色 | 职责 |
