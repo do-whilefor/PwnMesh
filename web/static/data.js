@@ -119,7 +119,10 @@
     // State computes support_valid; event results are stored before that computation.
     if (typeof record.support_valid === 'boolean') return record.support_valid;
     const sources = refs(record.sources);
-    return sources.length > 0 && sources.every(source => facts.get(source.id)?.status === 'valid');
+    return sources.length > 0 && sources.every(source => {
+      const fact = facts.get(source.id);
+      return fact?.status === 'valid' && fact.support_invalid !== true;
+    });
   }
 
   function findingLabel(finding, supportValid) {

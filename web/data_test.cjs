@@ -82,3 +82,25 @@ test('activity logs identify real execution phases without inferring an upstream
   assert.match(error.body,/HTTP 503: execution failed/);
   assert.equal(logs.some(log => log.phase === 'LLM'),false);
 });
+
+test('historical finding and goal events retain invalidated transitive evidence', () => {
+  const state = fixture();
+  state.fact_records[0].support_invalid = true;
+  state.findings[0].support_valid = false;
+  state.goals[0].support_valid = false;
+  const events = ['finding','goal'].flatMap((op,index) => {
+    const record = op === 'finding' ? state.findings[0] : state.goals[0];
+    // Persisted Goal/Finding events explicitly contain support_valid. The log
+    // adapter refreshes old events against the current evidence snapshot.
+    return [1,2].map(version => ({revision:index * 2 + version,op,id:record.id,
+      result:{...record,support_valid:false}}));
+  });
+  const logs = data.buildLogs(state,events).filter(log => log.source === 'event');
+  assert.equal(logs.length,4);
+  for (const log of logs) {
+    assert.equal(log.supportValid,false,log.id);
+    assert.equal(log.level,'warning',log.id);
+    assert.match(log.title,/证据失效/);
+  }
+  assert.equal(state.fact_records[0].status,'valid','support invalidation preserves the recorded fact status');
+});
