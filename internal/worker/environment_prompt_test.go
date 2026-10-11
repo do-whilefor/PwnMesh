@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"pwnmesh/internal/board"
 )
 
@@ -83,7 +85,47 @@ func TestPhaseInstructionsDoNotRepeatEnvironment(t *testing.T) {
 }
 
 func TestKaliWorkerImageDeclaresInstalledEnvironment(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", "container", "Dockerfile"))
+	root := filepath.Join("..", "..")
+	readYAML := func(name string, value any) {
+		t.Helper()
+		raw, err := os.ReadFile(filepath.Join(root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := yaml.Unmarshal(raw, value); err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+	}
+	var compose struct {
+		Services struct {
+			WorkerImage struct {
+				Image string `yaml:"image"`
+				Build struct {
+					Context    string `yaml:"context"`
+					Dockerfile string `yaml:"dockerfile"`
+				} `yaml:"build"`
+			} `yaml:"worker-image"`
+		} `yaml:"services"`
+	}
+	readYAML("compose.yaml", &compose)
+	workerImage := compose.Services.WorkerImage
+	if workerImage.Image == "" || workerImage.Build.Context == "" {
+		t.Fatal("Compose must define a worker image and its build context")
+	}
+	var dispatch struct {
+		Container struct {
+			Image string `yaml:"image"`
+		} `yaml:"container"`
+	}
+	readYAML("dispatch.example.yaml", &dispatch)
+	if dispatch.Container.Image != workerImage.Image {
+		t.Fatalf("dispatcher requests %q, but Compose builds %q", dispatch.Container.Image, workerImage.Image)
+	}
+	dockerfile := workerImage.Build.Dockerfile
+	if dockerfile == "" {
+		dockerfile = "Dockerfile"
+	}
+	raw, err := os.ReadFile(filepath.Join(root, workerImage.Build.Context, dockerfile))
 	if err != nil {
 		t.Fatal(err)
 	}

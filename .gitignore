@@ -14,6 +14,19 @@
 /VALIDATION*.md
 /internal/dispatcher/testdata/fgs-live-20260923.md
 
+# ---- 本地开发镜像与验收工具 ----
+/container/Dockerfile.dev
+/container/check-worker-dev.sh
+/tests/integration/analyze_efficiency.py
+/tests/integration/analyze_live_contention.py
+/tests/integration/analyze_tail_latency.py
+/tests/integration/efficiency_fixture.py
+/tests/integration/test_analyze_efficiency.py
+/tests/integration/test_analyze_live_contention.py
+/tests/integration/test_analyze_orchestration.py
+/tests/integration/test_analyze_tail_latency.py
+/tests/integration/test_efficiency_fixture.py
+
 # ---- 本地 AI 协作说明（不纳入版本控制）----
 /AGENTS.md
 
