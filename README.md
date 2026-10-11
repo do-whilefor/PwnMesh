@@ -1,6 +1,9 @@
 <div align="center">
 
-<img src="./web/static/brand.png" alt="PwnMesh" width="640">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="./web/static/brand-dark.png">
+  <img src="./web/static/brand.png" alt="PwnMesh" width="640">
+</picture>
 
 
 **面向 CTF、授权渗透测试与代码审计的多 Worker AI 协作探索系统**
