@@ -218,12 +218,7 @@ func buildCompletionReview(state State, version string, payload json.RawMessage,
 			review.FactRecords = review.FactRecords[:len(review.FactRecords)-1]
 			continue
 		}
-		for n, omitted := range review.OmittedFactIDs {
-			if omitted == id {
-				review.OmittedFactIDs = append(review.OmittedFactIDs[:n], review.OmittedFactIDs[n+1:]...)
-				break
-			}
-		}
+		review.OmittedFactIDs = removeReviewID(review.OmittedFactIDs, id)
 	}
 	if len(review.OmittedFactIDs)+len(candidates)+len(review.Disputes)+len(review.OmittedDisputeIDs) == 0 && review.CurationRequest == nil {
 		review.ReadMore = ""

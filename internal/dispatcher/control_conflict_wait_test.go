@@ -24,7 +24,6 @@ func TestControlConflictWaitDoesNotExtendOnObservationsOrPolling(t *testing.T) {
 				input.Revision++
 				input.DecisionRevision++
 				s.schedules[g.Project.ID] = input
-				s.stateRevisions[g.Project.ID] = input.DecisionRevision
 				s.nextWake = time.Time{}
 				at := now.Add(time.Duration(second) * time.Second)
 				waiting := false

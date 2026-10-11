@@ -8,6 +8,18 @@ import (
 	"testing"
 )
 
+func TestDecisionRetryKeyPreservesLegacyBytes(t *testing.T) {
+	g := Graph{Project: Project{ID: "fixture"}}
+	if got := DecisionRetryKey(g, 0); got != "reason:6131a7e2e21f30d058650b89faec6a12380760e4c8ef0d39b481400bb08c2ac0" {
+		t.Fatalf("nil collection identity changed: %s", got)
+	}
+	g.Facts, g.Hints = []Fact{}, []Hint{}
+	g.Intents = []Intent{{ID: "open"}, {ID: "done", To: Ptr("fact")}, {ID: "abandoned", ConcludedAt: Ptr("now")}}
+	if got := DecisionRetryKey(g, 7); got != "reason:a86d0bc22e11e5da882fdc78a134a95cafd08467213a711605afcc547492a35d" {
+		t.Fatalf("ordered completion identity changed: %s", got)
+	}
+}
+
 func TestCompactStepMetadataLifecycleAndRollbackRead(t *testing.T) {
 	f := newPlanFixture(t)
 	id := f.action("step", "add", stepInput("Current task", []string{"f002", "f001"}, "goal", 7)).ID

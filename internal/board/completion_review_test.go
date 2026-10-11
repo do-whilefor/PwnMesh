@@ -55,6 +55,15 @@ func TestCompletionReviewKeepsWholeFactsAndBudgetedOmissionIDs(t *testing.T) {
 	if len(raw) > MaxCompletionReviewBytes {
 		t.Fatalf("encoded review exceeded its budget: %d", len(raw))
 	}
+	// Every included occurrence removes only its own reserved omission; a
+	// skipped large fact between repeated citations must remain discoverable.
+	repeated, err := buildCompletionReview(state, "v", json.RawMessage(`{"from":["f001","large","f001"],"description":"repeated citation"}`), MaxCompletionReviewBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(repeated.OmittedFactIDs, []string{"large"}) || !reflect.DeepEqual(repeated.FactRecords, []FactRecord{state.FactRecords[1], state.FactRecords[1]}) {
+		t.Fatalf("included repeated citations changed the remaining omissions: %+v", repeated)
+	}
 }
 
 func TestCompletionReviewRejectsOversizedRequirementsAndProposal(t *testing.T) {

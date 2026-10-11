@@ -68,47 +68,27 @@ func (s *Scheduler) releaseIdleAdmissions() {
 		}
 	}
 }
-func (s *Scheduler) retryKey(g board.Graph, kind string, intent *board.Intent) string {
-	if kind == "curate" {
-		return s.schedules[g.Project.ID].CurationRetryKey
-	}
-	if kind != "reason" {
-		if intent == nil {
-			return kind
-		}
-		return kind + ":" + intent.ID
-	}
-	if input, ok := s.schedules[g.Project.ID]; ok {
-		return input.RetryKey
-	}
-	return board.DecisionRetryKey(g, s.stateRevisions[g.Project.ID])
-}
 
 // Scheduling asks the registry only about this input. Historical Jobs and
 // Results remain on the Server and never accumulate in a dispatcher snapshot.
-func (s *Scheduler) executionCheck(ctx context.Context, g board.Graph, kind string, intent *board.Intent, stateVersion string) (board.ExecutionCheck, error) {
-	query := url.Values{"namespace": {s.namespace()}, "generation": {strconv.FormatInt(g.Project.Generation, 10)}, "kind": {kind}, "retry_key": {s.retryKey(g, kind, intent)}}
-	if intent != nil {
-		query.Set("intent", intent.ID)
-	}
-	if stateVersion != "" {
-		query.Set("state_version", stateVersion)
-	}
-	var check board.ExecutionCheck
-	err := s.Client.Do(ctx, "GET", projectPath(g.Project.ID)+"/executions/check?"+query.Encode(), nil, &check, nil)
-	return check, err
-}
-
-func (s *Scheduler) candidateCheck(ctx context.Context, input board.SchedulePage, g board.Graph, kind string, intent *board.Intent) (board.ExecutionCheck, error) {
-	intentID := ""
-	if intent != nil {
-		intentID = intent.ID
-	}
-	if check, ok := input.ExecutionChecks[kind+":"+intentID]; ok {
+func (s *Scheduler) candidateCheck(ctx context.Context, input board.SchedulePage, kind, intent string) (board.ExecutionCheck, error) {
+	key := kind + ":" + intent
+	if check, ok := input.ExecutionChecks[key]; ok {
 		return check, nil
 	}
 	// Targeted callers may not carry the precomputed scheduling checks.
-	return s.executionCheck(ctx, g, kind, intent, "")
+	if kind == "reason" {
+		key = input.RetryKey
+	} else if kind == "curate" {
+		key = input.CurationRetryKey
+	}
+	query := url.Values{"namespace": {s.namespace()}, "generation": {strconv.FormatInt(input.Project.Generation, 10)}, "kind": {kind}, "retry_key": {key}}
+	if intent != "" {
+		query.Set("intent", intent)
+	}
+	var check board.ExecutionCheck
+	err := s.Client.Do(ctx, "GET", projectPath(input.Project.ID)+"/executions/check?"+query.Encode(), nil, &check, nil)
+	return check, err
 }
 
 func (s *Scheduler) restoreDecisionBoundary(project string, latest *board.ExecutionSummary) {
@@ -148,7 +128,7 @@ func (s *Scheduler) register(ctx context.Context, t *task) error {
 	if err != nil {
 		return err
 	}
-	e := board.Execution{ProjectID: t.Job.Graph.Project.ID, ID: t.Job.RunID, Namespace: s.namespace(), Backend: t.Worker.Name, Kind: t.Job.Kind, Intent: t.Lease.Intent, Lease: t.Lease.Run, Job: raw, RetryKey: s.retryKey(t.Job.Graph, t.Job.Kind, t.Job.Intent)}
+	e := board.Execution{ProjectID: t.Job.Graph.Project.ID, ID: t.Job.RunID, Namespace: s.namespace(), Backend: t.Worker.Name, Kind: t.Job.Kind, Intent: t.Lease.Intent, Lease: t.Lease.Run, Job: raw}
 	if err = s.Client.Do(ctx, "POST", projectPath(e.ProjectID)+"/executions/prepare", e, &t.Execution, &t.Lease); err != nil {
 		return err
 	}

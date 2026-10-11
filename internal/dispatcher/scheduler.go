@@ -84,7 +84,6 @@ type Scheduler struct {
 	cursor            int
 	pendingExecutions []board.ExecutionSummary
 	decisionRevisions map[string]int64
-	stateRevisions    map[string]int64
 	schedules         map[string]board.SchedulePage
 	generations       map[string]int64
 	restartCleaned    map[string]int64
@@ -94,7 +93,7 @@ type Scheduler struct {
 }
 
 func New(c config.Config, r Runner) *Scheduler {
-	s := &Scheduler{Config: c, Runner: r, Client: &Client{Base: c.Server}, running: map[string]*task{}, admitted: map[string]bool{}, checkpoints: map[string]checkpoint{}, unhealthy: map[string]time.Time{}, rejected: map[string]time.Time{}, cleanup: map[string]string{}, cleaned: map[string]string{}, done: make(chan finished, c.Runtime.MaxWorkers), cleanupDone: make(chan cleaned, c.Runtime.MaxProjects+8), decisionRevisions: map[string]int64{}, stateRevisions: map[string]int64{}}
+	s := &Scheduler{Config: c, Runner: r, Client: &Client{Base: c.Server}, running: map[string]*task{}, admitted: map[string]bool{}, checkpoints: map[string]checkpoint{}, unhealthy: map[string]time.Time{}, rejected: map[string]time.Time{}, cleanup: map[string]string{}, cleaned: map[string]string{}, done: make(chan finished, c.Runtime.MaxWorkers), cleanupDone: make(chan cleaned, c.Runtime.MaxProjects+8), decisionRevisions: map[string]int64{}}
 	s.configureGraphHandler()
 	s.configureInputReader()
 	s.schedules = map[string]board.SchedulePage{}
@@ -416,17 +415,12 @@ func (s *Scheduler) trigger(g board.Graph, check board.ExecutionCheck, previous 
 	if !ok {
 		return "initial"
 	}
-	// Legacy To-based draining excludes the planner's own abandonment (To=nil).
-	// Actual scheduling uses the Server's normalized Ready flag.
-	facts, hints, open := len(g.Facts), len(g.Hints), g.OpenCount()
-	if input, ok := s.schedules[g.Project.ID]; ok {
-		facts, hints, open = input.FactCount, input.HintCount, input.OpenCount
-	}
-	if facts > p.Facts || hints > p.Hints || (p.Open > 0 && open == 0) || s.stateRevisions[g.Project.ID] > s.decisionRevisions[g.Project.ID] {
+	input := s.schedules[g.Project.ID]
+	if input.FactCount > p.Facts || input.HintCount > p.Hints || (p.Open > 0 && input.OpenCount == 0) || input.DecisionRevision > s.decisionRevisions[g.Project.ID] {
 		// User input and a drained execution phase need an immediate decision.
 		// Ordinary Execute updates often arrive in bursts; deciding between
 		// them starts model requests that the next heartbeat must cancel.
-		if hints <= p.Hints && open > 0 && s.waitForReason(g, previous, now) {
+		if input.HintCount <= p.Hints && input.OpenCount > 0 && s.waitForReason(g, previous, now) {
 			return ""
 		}
 		return "new_facts_or_hints_or_finished_intents"
@@ -528,7 +522,6 @@ func (s *Scheduler) observeGeneration(project board.Project) {
 	if s.generations[project.ID] != project.Generation {
 		delete(s.checkpoints, project.ID)
 		delete(s.decisionRevisions, project.ID)
-		delete(s.stateRevisions, project.ID)
 		delete(s.schedules, project.ID)
 		delete(s.reasonWaits, project.ID)
 		delete(s.curationWaits, project.ID)
@@ -616,7 +609,6 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	if !s.restartReady(ctx, g.Project) {
 		return false, nil
 	}
-	s.stateRevisions[id] = input.DecisionRevision
 	if g.Project.Status != "active" {
 		return false, nil
 	}
@@ -637,7 +629,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	var curationCheck board.ExecutionCheck
 	curationReady := false
 	if input.CurationNeeded && !localCurator {
-		check, err := s.candidateCheck(ctx, input, g, "curate", nil)
+		check, err := s.candidateCheck(ctx, input, "curate", "")
 		if err != nil {
 			return false, err
 		}
@@ -651,7 +643,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		curationCheck = check
 		curationReady = g.Project.Curator == nil && curating && (input.CurationRequested || check.PreviousRunID != "" || !s.waitForCuration(g, input.Revision, time.Now()))
 	}
-	reasonCheck, err := s.candidateCheck(ctx, input, g, "reason", nil)
+	reasonCheck, err := s.candidateCheck(ctx, input, "reason", "")
 	if err != nil {
 		return false, err
 	}
@@ -709,7 +701,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		if !step.Ready {
 			continue
 		}
-		check, err := s.candidateCheck(ctx, input, g, "explore", &board.Intent{ID: step.ID})
+		check, err := s.candidateCheck(ctx, input, "explore", step.ID)
 		if err != nil {
 			return false, err
 		}
@@ -834,7 +826,7 @@ func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, inte
 	// Worker owns its execution budget and the separate conclusion deadline.
 	// A dispatcher deadline measured from container startup could abort before
 	// a long current turn reaches the boundary where soft conclusion begins.
-	t := &task{Job: worker.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, DecisionRevision: s.stateRevisions[g.Project.ID], EnvironmentID: s.environmentID(*w)}, Worker: *w, Lease: lease}
+	t := &task{Job: worker.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, EnvironmentID: s.environmentID(*w)}, Worker: *w, Lease: lease}
 	if kind == "reason" {
 		t.Job.DecisionTrigger = trigger
 		t.urgentInput = s.reasonWaits[g.Project.ID].Urgent

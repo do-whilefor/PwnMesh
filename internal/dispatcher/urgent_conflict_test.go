@@ -26,7 +26,7 @@ func TestUrgentReasonConflictRestoresUnconsumedDependencyCorrection(t *testing.T
 		{ID: "working", Running: true}, {ID: "queued", InvalidSources: []string{"refuted"}},
 	}}
 	s.checkpoints[id] = checkpoint{Facts: 2, Open: 1}
-	s.decisionRevisions[id], s.stateRevisions[id] = 1, 2
+	s.decisionRevisions[id] = 1
 	s.schedules[id] = input
 	trigger := s.trigger(g, board.ExecutionCheck{}, previous, time.Now())
 	if trigger == "" || !s.reasonWaits[id].Urgent {
@@ -64,7 +64,7 @@ func TestUrgentReasonConflictRestoresUnconsumedDependencyCorrection(t *testing.T
 	previous = input
 	input.FactCount++
 	input.DecisionRevision++
-	s.schedules[id], s.stateRevisions[id] = input, input.DecisionRevision
+	s.schedules[id] = input
 	if got := s.trigger(g, board.ExecutionCheck{}, previous, time.Now()); got != "" {
 		t.Fatalf("consumed dependency correction disabled ordinary coalescing: %q", got)
 	}

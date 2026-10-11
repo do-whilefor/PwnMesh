@@ -40,6 +40,14 @@ func TestNewJobsRegisterTheCurrentResultProtocol(t *testing.T) {
 			}
 			runner := &protocolRunner{jobs: make(chan worker.Job, 1)}
 			scheduler.Runner = runner
+			var current board.State
+			if err := scheduler.Client.Do(ctx, "GET", projectPath(graph.Project.ID)+"/state", nil, &current, nil); err != nil {
+				t.Fatal(err)
+			}
+			// The last polled scheduling page may already be stale at claim time.
+			// Preparation must supply the actual revision and retry boundary
+			// before the Runner receives its immutable assignment.
+			scheduler.schedules[graph.Project.ID] = board.SchedulePage{DecisionRevision: current.DecisionRevision + 100, RetryKey: "reason:stale"}
 			started, err := scheduler.launch(ctx, graph, kind, intent, "initial", board.ExecutionCheck{})
 			if err != nil || !started {
 				t.Fatalf("launch: started=%v, err=%v", started, err)
@@ -53,7 +61,17 @@ func TestNewJobsRegisterTheCurrentResultProtocol(t *testing.T) {
 			if job.ResultContractVersion != 2 || !job.GraphRPC || job.Graph.Project.OrchestrationVersion != 1 || job.WorkerType != "go" {
 				t.Fatalf("wrong protocol: kind=%s version=%d graph_rpc=%v orchestration=%d backend=%s", kind, job.ResultContractVersion, job.GraphRPC, job.Graph.Project.OrchestrationVersion, job.WorkerType)
 			}
+			if job.InputSnapshot == nil || job.DecisionRevision != current.DecisionRevision || job.InputSnapshot.DecisionRevision != current.DecisionRevision {
+				t.Fatalf("Runner did not receive the server's current revision: %+v", job.InputSnapshot)
+			}
 			executions := testExecutions(t, store)
+			expectedRetry := board.DecisionRetryKey(current.Graph, current.DecisionRevision)
+			if kind == "explore" {
+				expectedRetry = "explore:" + intent.ID
+			}
+			if got := executions[len(executions)-1].RetryKey; got != expectedRetry {
+				t.Fatalf("registration lost its server-owned retry boundary: %s", got)
+			}
 			var persisted worker.Job
 			if err = json.Unmarshal(executions[len(executions)-1].Job, &persisted); err != nil {
 				t.Fatal(err)

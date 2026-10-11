@@ -16,7 +16,6 @@ func coalescingFixture() (*Scheduler, board.Graph, board.SchedulePage, time.Time
 	g := board.Graph{Project: board.Project{ID: "coalesce"}}
 	s.checkpoints[g.Project.ID] = checkpoint{Facts: 2, Open: 2}
 	s.decisionRevisions[g.Project.ID] = 1
-	s.stateRevisions[g.Project.ID] = 2
 	previous := board.SchedulePage{FactCount: 2, OpenCount: 2, DecisionRevision: 1}
 	s.schedules[g.Project.ID] = board.SchedulePage{FactCount: 3, OpenCount: 2, DecisionRevision: 2,
 		Steps: []board.ScheduleStep{{ID: "working", Status: "running", Running: true}, {ID: "queued", Status: "open", Ready: true}}}
@@ -34,7 +33,6 @@ func TestReasonCoalescesFactsAndPartialCompletionsUntilQuiet(t *testing.T) {
 	// extends the quiet window even when it did not add another fact.
 	input.OpenCount, input.DecisionRevision = 1, 3
 	s.schedules[g.Project.ID] = input
-	s.stateRevisions[g.Project.ID] = input.DecisionRevision
 	if got := s.trigger(g, board.ExecutionCheck{}, previous, start.Add(10*time.Second)); got != "" {
 		t.Fatalf("partial completion escaped coalescing: %q", got)
 	}
@@ -57,7 +55,6 @@ func TestReasonContinuousUpdatesHaveBoundedWait(t *testing.T) {
 		input.FactCount++
 		input.DecisionRevision++
 		s.schedules[g.Project.ID] = input
-		s.stateRevisions[g.Project.ID] = input.DecisionRevision
 		got := s.trigger(g, board.ExecutionCheck{}, previous, start.Add(time.Duration(second)*time.Second))
 		if (got != "") != (second == 60) {
 			t.Fatalf("continuous updates at second %d: trigger=%q; expected only at the maximum wait", second, got)
@@ -142,7 +139,6 @@ func TestReasonInvalidationObservedDuringPlannerCancellationStaysUrgent(t *testi
 	previous = input
 	input.FactCount++
 	input.DecisionRevision++
-	s.stateRevisions[g.Project.ID] = input.DecisionRevision
 	s.schedules[g.Project.ID] = input
 	if got := s.trigger(g, board.ExecutionCheck{}, previous, now.Add(time.Second)); got != "" {
 		t.Fatalf("consumed invalidation disabled later coalescing: %q", got)
@@ -154,11 +150,28 @@ func TestReasonWaitDoesNotCrossProjectGeneration(t *testing.T) {
 	s.trigger(g, board.ExecutionCheck{}, previous, now)
 	g.Project.Generation++
 	s.observeGeneration(g.Project)
-	if len(s.reasonWaits) != 0 {
-		t.Fatal("project restart retained the old input's scheduling deadline")
+	if len(s.reasonWaits) != 0 || len(s.schedules) != 0 {
+		t.Fatal("project restart retained the old input's scheduling deadline or revision")
 	}
 	if got := s.trigger(g, board.ExecutionCheck{}, board.SchedulePage{}, now); got != "initial" {
 		t.Fatalf("new project generation did not get an immediate initial decision: %q", got)
+	}
+}
+
+func TestReasonUsesSchedulingRevisionWithoutCountChanges(t *testing.T) {
+	s, g, previous, now := coalescingFixture()
+	input := s.schedules[g.Project.ID]
+	input.FactCount = previous.FactCount
+	s.schedules[g.Project.ID] = input
+	if got := s.trigger(g, board.ExecutionCheck{}, previous, now); got != "" {
+		t.Fatalf("new revision did not coalesce with the running producer: %q", got)
+	}
+	if got := s.trigger(g, board.ExecutionCheck{}, input, now.Add(reasonQuietPeriod)); got != "new_facts_or_hints_or_finished_intents" {
+		t.Fatalf("business revision without a count change was lost: %q", got)
+	}
+	s.decisionRevisions[g.Project.ID] = input.DecisionRevision
+	if got := s.trigger(g, board.ExecutionCheck{}, input, now.Add(reasonMaxWait)); got != "" {
+		t.Fatalf("consumed scheduling revision started another decision: %q", got)
 	}
 }
 
