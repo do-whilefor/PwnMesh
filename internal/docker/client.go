@@ -187,8 +187,14 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 	if !missing && info.Image != desired.ID {
 		return "", fmt.Errorf("project %s container uses image %q but configured worker image %q resolves to %q; preserve and migrate its workspace before recreating the container", id, info.Image, c.Config.Image, desired.ID)
 	}
-	if !missing && (networkMode(info.HostConfig.NetworkMode) != networkMode(c.Config.Network) || !slices.Equal(capabilities(info.HostConfig.CapAdd), capabilities(c.Config.CapAdd))) {
-		return "", fmt.Errorf("project %s container uses network %q and added capabilities %v but configured network is %q and added capabilities are %v; preserve and migrate its workspace before recreating the container", id, info.HostConfig.NetworkMode, info.HostConfig.CapAdd, c.Config.Network, c.Config.CapAdd)
+	if !missing {
+		sameNetwork, err := c.sameNetwork(ctx, info.HostConfig.NetworkMode, c.Config.Network)
+		if err != nil {
+			return "", err
+		}
+		if !sameNetwork || !slices.Equal(capabilities(info.HostConfig.CapAdd), capabilities(c.Config.CapAdd)) {
+			return "", fmt.Errorf("project %s container uses network %q and added capabilities %v but configured network is %q and added capabilities are %v; preserve and migrate its workspace before recreating the container", id, info.HostConfig.NetworkMode, info.HostConfig.CapAdd, c.Config.Network, c.Config.CapAdd)
+		}
 	}
 	if !info.State.Running {
 		err = c.json(ctx, "POST", "/containers/"+url.PathEscape(name)+"/start", nil, nil)
@@ -206,6 +212,40 @@ func networkMode(value string) string {
 		return "bridge"
 	}
 	return value
+}
+
+func (c *Client) sameNetwork(ctx context.Context, actual, configured string) (bool, error) {
+	actual, configured = networkMode(actual), networkMode(configured)
+	if actual == configured {
+		return true, nil
+	}
+	if !strings.HasPrefix(actual, "container:") || !strings.HasPrefix(configured, "container:") {
+		return false, nil
+	}
+	// Engine records a running worker's owner as a full ID. Resolve aliases
+	// afresh so renaming/replacing an owner cannot silently change its network.
+	resolve := func(mode string) (string, error) {
+		target := strings.TrimPrefix(mode, "container:")
+		if decoded, err := hex.DecodeString(target); err == nil && len(decoded) == 32 {
+			return target, nil
+		}
+		var owner struct {
+			ID string `json:"Id"`
+		}
+		if err := c.json(ctx, "GET", "/containers/"+url.PathEscape(target)+"/json", nil, &owner); err != nil {
+			return "", fmt.Errorf("resolve shared network target %q: %w", target, err)
+		}
+		if decoded, err := hex.DecodeString(owner.ID); err != nil || len(decoded) != 32 {
+			return "", errors.New("Docker returned an invalid ID for a shared network target")
+		}
+		return owner.ID, nil
+	}
+	actualID, err := resolve(actual)
+	if err != nil {
+		return false, err
+	}
+	configuredID, err := resolve(configured)
+	return actualID == configuredID, err
 }
 
 func capabilities(values []string) []string {

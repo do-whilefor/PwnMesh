@@ -149,3 +149,65 @@ func TestEnsureHostGatewayRespectsSharedContainerNetworking(t *testing.T) {
 		})
 	}
 }
+
+func TestEnsureMatchesSharedNetworkTargetIdentity(t *testing.T) {
+	ownerID, otherID := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	for _, tc := range []struct {
+		name, actual, configured string
+		targets                  map[string]string
+		allowed                  bool
+		lookups                  int
+	}{
+		{name: "name normalized to ID", actual: ownerID, configured: "network-owner", targets: map[string]string{"network-owner": ownerID}, allowed: true, lookups: 1},
+		{name: "short ID normalized", actual: ownerID, configured: ownerID[:12], targets: map[string]string{ownerID[:12]: ownerID}, allowed: true, lookups: 1},
+		{name: "full ID unchanged", actual: ownerID, configured: ownerID, allowed: true},
+		{name: "different owner", actual: ownerID, configured: otherID},
+		{name: "name rebound to another owner", actual: ownerID, configured: "network-owner", targets: map[string]string{"network-owner": otherID}, lookups: 1},
+		{name: "missing owner", actual: ownerID, configured: "missing", lookups: 1},
+		{name: "empty resolved ID", actual: ownerID, configured: "network-owner", targets: map[string]string{"network-owner": ""}, lookups: 1},
+		{name: "invalid resolved ID", actual: ownerID, configured: "network-owner", targets: map[string]string{"network-owner": "invalid"}, lookups: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			starts, lookups := 0, 0
+			engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/containers/test-dispatch-p/json":
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"Image":      "sha256:same",
+						"Config":     map[string]any{"Labels": map[string]string{"pwnmesh.namespace": "test", "pwnmesh.project": "p", "pwnmesh.model-boundary": "dispatcher-v1"}},
+						"State":      map[string]bool{"Running": false},
+						"HostConfig": map[string]any{"NetworkMode": "container:" + tc.actual},
+					})
+				case r.Method == http.MethodGet && r.URL.Path == "/images/worker:current/json":
+					_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256:same"})
+				case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/containers/") && strings.HasSuffix(r.URL.Path, "/json"):
+					lookups++
+					target := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/containers/"), "/json")
+					if id, ok := tc.targets[target]; ok {
+						_ = json.NewEncoder(w).Encode(map[string]string{"Id": id})
+					} else {
+						w.WriteHeader(http.StatusNotFound)
+					}
+				case r.Method == http.MethodPost && r.URL.Path == "/containers/test-dispatch-p/start":
+					starts++
+				default:
+					t.Errorf("unexpected engine mutation/request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}))
+			defer engine.Close()
+			client := &Client{Config: config.Container{Namespace: "test", Image: "worker:current", Network: "container:" + tc.configured}, http: &http.Client{Transport: graphBridgeTestTransport{base: http.DefaultTransport, endpoint: engine.URL}}}
+			name, err := client.ensure(context.Background(), "p")
+			if tc.allowed {
+				if err != nil || name != "test-dispatch-p" || starts != 1 {
+					t.Fatalf("equivalent shared network rejected: name=%q err=%v starts=%d", name, err, starts)
+				}
+			} else if err == nil || name != "" || starts != 0 {
+				t.Fatalf("unresolved or changed shared network accepted: name=%q err=%v starts=%d", name, err, starts)
+			}
+			if lookups != tc.lookups {
+				t.Fatalf("network target lookup count=%d, want %d", lookups, tc.lookups)
+			}
+		})
+	}
+}
