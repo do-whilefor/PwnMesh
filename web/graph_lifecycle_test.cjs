@@ -62,6 +62,23 @@ test('switching projects restores exact camera and positions; new generation inv
   assert.ok(!graph.projectLayouts.has(JSON.stringify(['A', 1]))); graph.forgetProject('B'); assert.ok(!graph.projectLayouts.has(JSON.stringify(['B', 1])));
   graph.destroy();
 });
+
+test('application-owned layouts survive graph remounts and remain scoped to the project generation', () => {
+  const projectLayouts = new Map(), first = harness({projectLayouts});
+  first.graph.setState(state('A')); first.flush();
+  first.graph.positions.set('step:work', {x: 144, y: 288});
+  first.graph.scale = .42; first.graph.tx = 72; first.graph.ty = -48;
+  first.graph.destroy();
+  const other = harness({projectLayouts}); other.graph.setState(state('B')); other.flush(); other.graph.destroy();
+  const restored = harness({projectLayouts}); restored.graph.setState(state('A')); restored.flush();
+  assert.deepEqual(restored.graph.positions.get('step:work'), {x: 144, y: 288});
+  assert.deepEqual([restored.graph.scale,restored.graph.tx,restored.graph.ty], [.42,72,-48]);
+  restored.graph.setState(state('A', 2)); restored.flush();
+  assert.notDeepEqual(restored.graph.positions.get('step:work'), {x: 144, y: 288});
+  assert.equal(projectLayouts.has(JSON.stringify(['A', 1])),false);
+  restored.graph.forgetProject('B'); assert.equal(projectLayouts.has(JSON.stringify(['B', 1])),false);
+  restored.graph.destroy();
+});
 test('updated text invalidates no geometry but refreshes cached-edge labels, details and selection callbacks', () => {
   const selected = [], h = harness({onSelect: node => selected.push(node)}), graph = h.graph, value = state(); graph.setState(value); h.flush();
   const edge = graph.edges.find(item => item.kind === 'refutes'), hit = graph.edgeElements.get(edge.id).hit, cache = graph.edgeRouteCache;

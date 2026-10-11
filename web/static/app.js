@@ -18,7 +18,7 @@
   let selectedRun = 'current', menuProject = null, menuTrigger = null, command = null, mutating = false;
   let disposeActivity, disposeRecord, activityRecords = new Map(), activityOrigin = null;
   let llmReturn = null, returningFromLLM = false;
-  const activityStates = new Map();
+  const activityStates = new Map(), graphLayouts = new Map();
   function activityState() {
     const p = viewed(), key = p.id+':'+(p.generation || 0);
     if (!activityStates.has(key)) activityStates.set(key,{query:'',expanded:new Set(),scrollTop:0,revision:null});
@@ -267,6 +267,7 @@
   function mountGraph(p) {
     const host = $('#graph-host');
     graph = new PwnMeshGraph(host,{
+      projectLayouts: graphLayouts,
       onSelect: node => { selectedNode = node; selectedEdge = null; renderActivity(); },
       onSelectEdge: edge => { selectedEdge = edge && graph?.getEdgeDetails(edge.id); selectedNode = null; renderActivity(); }
     });
@@ -342,6 +343,7 @@
     try {
       const before = current()?.id, result = await service.refresh(id); if (!result) return;
       projects.splice(0,projects.length,...result.projects); connected = true;
+      for (const [key,layout] of graphLayouts) if (!projects.some(project=>project.id===layout.projectId)) graphLayouts.delete(key);
       const p = current(), signature = JSON.stringify([p?.id,p?.generation,p?.state,p?.logs,p?.files,p?.history.map(h=>[h.generation,h.archivedAt])]);
       if (route() !== 'llm' && ((!p && !$('.empty-project-page')) || before !== p?.id || !$('.project-page'))) render();
       else if (route() !== 'llm' && p && signature !== lastSnapshot) {

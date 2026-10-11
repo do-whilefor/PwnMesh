@@ -70,6 +70,14 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       }
     });
 
+    await t.test('returning from materials restores the manually arranged canvas and camera',async()=>{
+      const node=page.locator('[data-node-key="step:running"]');
+      await node.focus();await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowDown');
+      await page.locator('#zoom-in').click();await paint(page);const arranged=await view();
+      await page.locator('#view-tab-materials').click();await page.locator('#view-tab-graph').click();await paint(page);
+      assert.deepEqual(await view(),arranged);
+    });
+
     await t.test('long blackboard and execution logs fold, survive polling and expose safe full-text readers',async()=>{
       for(const [article,head,tail] of [[board(),boardHead,boardTail],[system(),systemHead,systemTail]]){
         assert.equal(await article.locator('details').getAttribute('open'),null);assert.match(await article.innerText(),new RegExp(head));assert.ok(!(await article.innerText()).includes(tail));

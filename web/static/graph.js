@@ -21,7 +21,7 @@
       this.host = host; this.document = host.ownerDocument; this.window = this.document.defaultView || root;
       this.onSelect = options.onSelect || (() => {}); this.onSelectEdge = options.onSelectEdge || (() => {});
       this.instanceId = 'pwnmesh-graph-' + (++nextInstance);
-      this.positions = new Map(); this.nodeGeometry = new Map(); this.projectLayouts = new Map();
+      this.positions = new Map(); this.nodeGeometry = new Map(); this.projectLayouts = options.projectLayouts || new Map();
       this.cards = new Map(); this.edgeElements = new Map(); this.listeners = [];
       this.selected = null; this.selectedEdge = null; this.scale = 1; this.tx = 0; this.ty = 0;
       this.project = null; this.projectId = null; this.nodes = []; this.edges = []; this.diagnostics = [];
@@ -338,7 +338,7 @@
       this.cancelDrag(); this.cancelPendingFit(); this.cancelFrame(this.drawFrame); this.drawFrame = null;
       if (this.clickTimer !== null) this.window.clearTimeout(this.clickTimer); this.clickTimer = null;
       this.destroyed = true; this.resizeObserver?.disconnect(); for (const remove of this.listeners) remove(); this.listeners = [];
-      this.viewport.remove(); this.empty.remove(); this.warning.remove(); this.live.remove(); this.cards.clear(); this.edgeElements.clear(); this.projectLayouts.clear();
+      this.viewport.remove(); this.empty.remove(); this.warning.remove(); this.live.remove(); this.cards.clear(); this.edgeElements.clear(); this.projectLayouts = new Map();
     }
   }
   return {PwnMeshGraph};
