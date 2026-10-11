@@ -22,6 +22,34 @@ class CaptureError(ValueError):
     pass
 
 
+class CaptureResponse(http.client.HTTPResponse):
+    """Keep stdlib streaming, but require complete chunk framing for evidence."""
+
+    def _chunk_line(self):
+        line = self.fp.readline(65537)
+        if len(line) > 65536 or not line.endswith(b"\r\n"):
+            raise CaptureError("incomplete or invalid chunked response framing")
+        return line[:-2]
+
+    def _get_chunk_left(self):
+        if self.chunk_left:
+            return self.chunk_left
+        # http.client discards these bytes without checking their value and
+        # accepts EOF in trailers. Neither is complete HTTP response evidence.
+        if self.chunk_left == 0 and self._safe_read(2) != b"\r\n":
+            raise CaptureError("invalid chunked response separator")
+        size = self._chunk_line().split(b";", 1)[0]
+        if not re.fullmatch(b"[0-9A-Fa-f]+", size):
+            raise CaptureError("invalid chunked response size")
+        self.chunk_left = int(size, 16)
+        if self.chunk_left == 0:
+            while self._chunk_line():
+                pass
+            self._close_conn()
+            self.chunk_left = None
+        return self.chunk_left
+
+
 def read_json(path):
     try:
         return json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -260,6 +288,7 @@ def replay(request, output, timeout):
     save_private(directory, "request.body", request["body"])
     connection_type = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
     connection = connection_type(parsed.hostname, parsed.port, timeout=timeout)
+    connection.response_class = CaptureResponse
     try:
         target = parsed.path or "/"
         if parsed.query or "?" in request["url"]:

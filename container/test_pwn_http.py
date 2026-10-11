@@ -39,6 +39,18 @@ class CaptureTests(unittest.TestCase):
                         payload = b"4\r\ndone\r\n4\r\nab"
                     elif self.path == "/chunked-unterminated":
                         payload = b"4\r\ndone\r\n"
+                    elif self.path == "/chunked-missing-trailer-end":
+                        payload = b"4\r\ndone\r\n0\r\n"
+                    elif self.path == "/chunked-incomplete-trailer":
+                        payload = b"4\r\ndone\r\n0\r\nX-Probe: yes\r\n"
+                    elif self.path == "/chunked-invalid-separator":
+                        payload = b"4\r\ndoneXX0\r\n\r\n"
+                    elif self.path == "/chunked-invalid-size":
+                        payload = b"4\r\ndone\r\n+0\r\n\r\n"
+                    elif self.path == "/chunked-trailer":
+                        payload = b'4;probe="yes"\r\ndone\r\n0\r\nX-Probe: yes\r\n\r\n'
+                    elif self.path == "/chunked-empty":
+                        payload = b"0\r\n\r\n"
                     self.wfile.write(payload)
                     self.close_connection = True
                     return
@@ -247,7 +259,13 @@ class CaptureTests(unittest.TestCase):
     def test_chunked_response_keeps_all_received_bytes_on_failure(self):
         for route, body, complete in (("/chunked", b"doneab", True),
                                       ("/chunked-short", b"doneab", False),
-                                      ("/chunked-unterminated", b"done", False)):
+                                      ("/chunked-unterminated", b"done", False),
+                                      ("/chunked-missing-trailer-end", b"done", False),
+                                      ("/chunked-incomplete-trailer", b"done", False),
+                                      ("/chunked-invalid-separator", b"done", False),
+                                      ("/chunked-invalid-size", b"done", False),
+                                      ("/chunked-trailer", b"done", True),
+                                      ("/chunked-empty", b"", True)):
             with self.subTest(route=route):
                 output = self.root / route[1:]
                 path = self.capture(self.entry(url=self.origin + route))
