@@ -258,7 +258,7 @@ test('status filtering hides cards and disconnected edges without changing graph
   graph.setStatusFilter('running'); h.flush(); assert.deepEqual(visibleKeys(), ['step:work']);
   graph.selectNode('step:work'); h.flush(); assert.deepEqual(visibleKeys(), ['step:work']);
   assert.equal(graph.cards.get('step:work').classList.contains('dim'), false);
-  assert.equal(graph.cards.get('fact:origin').classList.contains('lineage'), true);
+  assert.equal(graph.cards.get('fact:origin').classList.contains('lineage'), false);
   assert.equal(graph.cards.get('fact:old').classList.contains('dim'), true);
   graph.setStatusFilter('pending'); h.flush(); assert.deepEqual(visibleKeys(), ['step:queued']);
   graph.setStatusFilter('all'); h.flush(); assert.equal(graph.getVisibleNodeCount(), 8);
@@ -298,4 +298,111 @@ test('filtered fit uses visible nodes and empty filters preserve the camera; pro
   graph.setState(state('A', 2)); h.flush(); assert.equal(graph.getStatusFilter(), 'all');
   graph.setStatusFilter('done'); graph.setState(state('B')); h.flush(); assert.equal(graph.getStatusFilter(), 'all');
   graph.setStatusFilter('running'); graph.setState(null); h.flush(); assert.equal(graph.getStatusFilter(), 'all'); graph.destroy();
+});
+
+test('connection details expose real neighbors and selected edge endpoints with fresh statuses', () => {
+  const h = harness(), graph = h.graph, value = state();
+  value.fact_relations = [];
+  value.fact_records.push({id:'observation',description:'Early evidence',status:'valid',source_step_id:'work'});
+  value.steps.push({id:'next',description:'Consumer',status:'blocked',depends_on:['work'],blocked_by:['work']});
+  assert.deepEqual(graph.getConnections('step:work'), []);
+  graph.setState(value); h.flush();
+  const connections = graph.getConnections('step:work');
+  assert.deepEqual(new Set(connections.map(item => item.key)), new Set(['fact:origin','fact:old','fact:observation','step:next']));
+  assert.equal(connections.find(item => item.key === 'fact:observation').title, 'Early evidence');
+  const dependency = graph.edges.find(edge => edge.kind === 'step_dependency');
+  assert.deepEqual(graph.getConnections(null, dependency.id).map(({key,title}) => ({key,title})), [
+    {key:'step:work',title:value.steps[0].description}, {key:'step:next',title:'Consumer'}
+  ]);
+  const priorStatus = graph.getConnections(null, dependency)[0].statusLabel;
+  value.steps[0].description = 'Updated producer'; value.steps[0].status = 'completed'; value.steps[0].support_valid = true;
+  value.steps[1].blocked_by = []; value.steps[1].status = 'open';
+  value.fact_records[2].description = 'Updated evidence';
+  graph.setState(value); h.flush();
+  const refreshed = graph.getConnections(null, dependency.id);
+  assert.equal(refreshed[0].title, 'Updated producer'); assert.notEqual(refreshed[0].statusLabel, priorStatus);
+  assert.equal(graph.getConnections('step:work').find(item => item.key === 'fact:observation').title, 'Updated evidence');
+  assert.deepEqual(graph.getConnections('step:missing'), []); assert.deepEqual(graph.getConnections(null, 'missing-edge'), []);
+  value.steps.pop(); graph.setState(value); h.flush();
+  assert.deepEqual(graph.getConnections(null, dependency.id), []);
+  assert.equal(graph.getConnections('step:work').some(item => item.key === 'step:next'), false);
+  graph.destroy();
+});
+
+test('trace direction updates lineage without moving the camera or crossing hidden nodes', () => {
+  const h = harness(), graph = h.graph, value = state();
+  value.fact_records = []; value.fact_relations = [];
+  value.steps = [
+    {id:'first',status:'completed',support_valid:true},
+    {id:'middle',status:'running',depends_on:['first']},
+    {id:'last',status:'completed',support_valid:true,depends_on:['middle']}
+  ];
+  graph.setState(value); h.flush(); graph.selectNode('step:middle'); h.flush();
+  const lineage = () => [...graph.cards].filter(([,card]) => card.classList.contains('lineage')).map(([key]) => key).sort();
+  const positions = [...graph.positions], camera = [graph.scale,graph.tx,graph.ty];
+  assert.equal(graph.getTraceDirection(), 'upstream'); assert.deepEqual(lineage(), ['step:first','step:middle']);
+  graph.setTraceDirection('downstream'); h.flush();
+  assert.equal(graph.getTraceDirection(), 'downstream'); assert.deepEqual(lineage(), ['step:last','step:middle']);
+  assert.equal(graph.selected, 'step:middle'); assert.deepEqual([...graph.positions], positions); assert.deepEqual([graph.scale,graph.tx,graph.ty], camera);
+  graph.selectNode('step:first'); graph.setStatusFilter('done'); h.flush();
+  assert.deepEqual(lineage(), ['step:first']);
+  assert.equal(graph.cards.get('step:last').classList.contains('dim'), true);
+  assert.ok([...graph.edgeElements.values()].every(entry => !entry.path.classList.contains('lineage')));
+  graph.selectNode('step:last'); graph.setTraceDirection('upstream'); h.flush(); assert.deepEqual(lineage(), ['step:last']);
+  graph.setStatusFilter('all'); h.flush(); assert.deepEqual(lineage(), ['step:first','step:last','step:middle']);
+  graph.setTraceDirection('downstream'); graph.setState(value); h.flush(); assert.equal(graph.getTraceDirection(), 'downstream');
+  graph.setState({...value,graph:{project:{id:'A',generation:2}}}); h.flush(); assert.equal(graph.getTraceDirection(), 'upstream');
+  graph.setTraceDirection('unsupported'); h.flush(); assert.equal(graph.getTraceDirection(), 'upstream');
+  graph.destroy();
+});
+
+test('blocked invalid and paused filters expose matching nodes and readable empty states', () => {
+  const h = harness(), graph = h.graph, value = state();
+  value.steps.push(
+    {id:'blocked',status:'blocked',depends_on:['work'],blocked_by:['work']},
+    {id:'failed',status:'failed'}, {id:'paused',status:'paused'},
+    {id:'unsupported',status:'completed',support_valid:false}
+  );
+  graph.setState(value); h.flush();
+  const visibleKeys = () => [...graph.cards].filter(([,card]) => !card.hidden).map(([key]) => key).sort();
+  for (const [filter, expected] of [
+    ['blocked',['step:blocked']], ['invalid',['step:failed','step:unsupported']], ['paused',['step:paused']]
+  ]) {
+    graph.setStatusFilter(filter); h.flush();
+    assert.equal(graph.getStatusFilter(), filter); assert.deepEqual(visibleKeys(), expected); assert.equal(graph.empty.hidden, true);
+  }
+  value.steps.splice(1); graph.setState(value); h.flush();
+  const camera = [graph.scale,graph.tx,graph.ty];
+  for (const filter of ['blocked','invalid','paused']) {
+    graph.setStatusFilter(filter); h.flush(); graph.fit();
+    assert.equal(graph.getStatusFilter(), filter); assert.equal(graph.getVisibleNodeCount(), 0); assert.equal(graph.empty.hidden, false);
+    assert.match(graph.empty.textContent, /^暂无.+节点$/); assert.doesNotMatch(graph.empty.textContent, /undefined|null/);
+    assert.deepEqual([graph.scale,graph.tx,graph.ty], camera);
+  }
+  graph.destroy();
+});
+
+test('explicit flow arrangement retains selection and survives polling and layout cache restoration', () => {
+  const projectLayouts = new Map(), h = harness({projectLayouts}), graph = h.graph, value = state();
+  value.fact_relations = [];
+  graph.setState(value); h.flush();
+  const initial = new Map([...graph.positions].map(([key,point]) => [key,{...point}]));
+  graph.positions.set('step:work', {x:42000,y:-34000}); graph.zoomBy(.4); graph.selectNode('step:work'); h.flush();
+  const card = graph.cards.get('step:work');
+  graph.arrange(); h.flush();
+  assert.deepEqual(graph.positions, initial); assert.equal(graph.selected, 'step:work');
+  assert.equal(graph.cards.get('step:work'), card); assert.equal(card.getAttribute('aria-pressed'), 'true');
+  const positions = new Map([...graph.positions].map(([key,point]) => [key,{...point}]));
+  const camera = [graph.scale,graph.tx,graph.ty];
+  value.steps[0].description = 'Updated task'; value.fact_records.push({id:'additional',status:'valid',source_step_id:'work'});
+  graph.setState(value); h.flush();
+  for (const [key,point] of positions) assert.deepEqual(graph.positions.get(key), point);
+  assert.equal(graph.selected, 'step:work'); assert.equal(graph.cards.get('step:work'), card); assert.deepEqual([graph.scale,graph.tx,graph.ty], camera);
+  const accepted = new Map([...graph.positions].map(([key,point]) => [key,{...point}]));
+  graph.setState(state('B')); h.flush(); graph.setState(value); h.flush();
+  assert.deepEqual(graph.positions, accepted); assert.deepEqual([graph.scale,graph.tx,graph.ty], camera);
+  graph.destroy();
+  const restored = harness({projectLayouts}); restored.graph.setState(value); restored.flush();
+  assert.deepEqual(restored.graph.positions, accepted); assert.deepEqual([restored.graph.scale,restored.graph.tx,restored.graph.ty], camera);
+  restored.graph.destroy();
 });

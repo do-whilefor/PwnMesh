@@ -32,8 +32,13 @@ test('production forms render accessible dialogs, retry uploads, and atomically 
   });
   await page.goto(server.url,{waitUntil:'networkidle'});
   assert.deepEqual(await page.locator('.view-tabs [role="tab"]').evaluateAll(tabs=>tabs.map(tab=>({disabled:tab.disabled,selected:tab.getAttribute('aria-selected')}))),[{disabled:true,selected:'true'},{disabled:true,selected:'false'},{disabled:true,selected:'false'}]);
-  assert.equal(await page.locator('.zoom-controls button:disabled').count(),3);
-  assert.equal(await page.locator('.legend button:disabled').count(),3);
+  assert.deepEqual(await page.locator('.zoom-controls button').evaluateAll(buttons=>buttons.map(button=>({label:button.getAttribute('aria-label'),disabled:button.disabled}))),[
+   {label:'缩小画布',disabled:true},{label:'放大画布',disabled:true},{label:'适应画布',disabled:true},{label:'按流程整理',disabled:true}
+  ]);
+  assert.equal(await page.locator('.legend button:disabled').count(),6);
+  assert.deepEqual(await page.locator('.graph-trace-controls button').evaluateAll(buttons=>buttons.map(button=>({direction:button.dataset.trace,disabled:button.disabled,pressed:button.getAttribute('aria-pressed')}))),[
+   {direction:'upstream',disabled:true,pressed:'true'},{direction:'downstream',disabled:true,pressed:'false'}
+  ]);
   assert.match(await page.locator('.task-progress').textContent(),/0 \/ 0 个任务/);
   await fillCreate(page,'真实材料上传');
   assert.ok(await page.getByRole('dialog',{name:'新建项目',exact:true}).isVisible());

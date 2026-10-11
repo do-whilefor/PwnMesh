@@ -59,6 +59,11 @@
       else if (sourceNode.status === 'completed') statusLabel = '等待有效完成结果';
       return {...record, sourceNode, targetNode, status, statusLabel, description: `${targetNode.label || targetNode.id} 依赖 ${sourceNode.label || sourceNode.id} 的有效完成结果。${statusLabel}。`};
     }
+    if (record.kind === 'step_observation') {
+      const invalid = visualStatus(targetNode) === 'invalid';
+      const status = invalid ? 'invalid' : 'recorded', statusLabel = invalid ? '观测支持已失效' : '已发布观测';
+      return {...record, sourceNode, targetNode, status, statusLabel, description: `${sourceNode.label || sourceNode.id} 发布观测：${targetNode.label || targetNode.id}。${statusLabel}。`};
+    }
     const correction = ['refutes', 'supersedes', 'narrows'].includes(record.kind);
     const invalid = record.supportValid === false || (['goal_support', 'finding_support', 'step_input'].includes(record.kind) && (sourceNode.raw?.support_invalid === true || ['refuted', 'superseded', 'narrowed'].includes(sourceNode.status))) || (record.kind === 'step_result' && visualStatus(targetNode) === 'invalid');
     const step = record.kind === 'step_input' ? targetNode : record.kind === 'step_result' ? sourceNode : null;
@@ -67,20 +72,25 @@
     const statusLabel = invalid ? '支持已失效' : correction ? record.label : step ? nodePresentation(step, null).statusLabel : supported ? nodePresentation(supported, null).statusLabel : '已记录关系';
     return {...record, sourceNode, targetNode, status, statusLabel, description: record.raw?.description || record.raw?.reason || `${record.label}：${sourceNode.label} → ${targetNode.label}`};
   }
-  function collectSelection(project, nodeId, selectedEdge, direction = 'upstream') {
+  function collectSelection(project, nodeId, selectedEdge, direction = 'upstream', visibleNode = () => true) {
     const nodeIds = new Set(), edgeKeys = new Set();
     if (!project) return {active: false, nodeIds, edgeKeys};
+    const visible = id => project.nodeIndex.has(id) && visibleNode(project.nodeIndex.get(id));
     if (selectedEdge) {
       const edge = project.edgeIndex.get(edgeKey(selectedEdge));
-      if (edge) { nodeIds.add(edge.source); nodeIds.add(edge.target); edgeKeys.add(edgeKey(edge)); }
-    } else if (project.nodeIndex.has(nodeId)) {
+      if (edge && visible(edge.source) && visible(edge.target)) { nodeIds.add(edge.source); nodeIds.add(edge.target); edgeKeys.add(edgeKey(edge)); }
+    } else if (visible(nodeId)) {
       const adjacency = direction === 'downstream' ? project.outgoing : project.incoming;
       const pending = [nodeId];
       while (pending.length) {
         const id = pending.pop();
         if (nodeIds.has(id)) continue;
         nodeIds.add(id);
-        for (const edge of adjacency.get(id)) { edgeKeys.add(edgeKey(edge)); pending.push(direction === 'downstream' ? edge.target : edge.source); }
+        for (const edge of adjacency.get(id)) {
+          const next = direction === 'downstream' ? edge.target : edge.source;
+          if (!visible(next)) continue;
+          edgeKeys.add(edgeKey(edge)); pending.push(next);
+        }
       }
     }
     return {active: nodeIds.size > 0, nodeIds, edgeKeys};

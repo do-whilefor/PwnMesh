@@ -8,10 +8,10 @@
   'use strict';
   const {mapState, resolveNodeKey} = data;
   const {worldBounds, fitTransform, edgePanVelocity} = canvas;
-  const {mergePositions, NODE_WIDTH, NODE_HEIGHT} = layout;
+  const {mergePositions, flowLayout, NODE_WIDTH, NODE_HEIGHT} = layout;
   const {projectGeometry, describeEdge, collectSelection, placeEdgeLabel, nodePresentation, edgeKey} = view;
   const NS = 'http://www.w3.org/2000/svg';
-  const COLORS = Object.freeze({neutral: '#7b8b9e', step_input: '#6b89b2', step_result: '#4a938a', step_dependency: '#8a71aa', goal_step: '#9983b3', parent: '#62977d', goal_support: '#3f8b70', finding_support: '#b18a42', refutes: '#b66b73', supersedes: '#9275a8', narrows: '#8c854d'});
+  const COLORS = Object.freeze({neutral: '#7b8b9e', step_input: '#6b89b2', step_result: '#4a938a', step_observation: '#557e91', step_dependency: '#8a71aa', goal_step: '#9983b3', parent: '#62977d', goal_support: '#3f8b70', finding_support: '#b18a42', refutes: '#b66b73', supersedes: '#9275a8', narrows: '#8c854d'});
   let nextInstance = 0;
   const clone = value => value == null ? null : JSON.parse(JSON.stringify(value));
 
@@ -25,10 +25,10 @@
       this.cards = new Map(); this.edgeElements = new Map(); this.listeners = [];
       this.selected = null; this.selectedEdge = null; this.scale = 1; this.tx = 0; this.ty = 0;
       this.project = null; this.projectId = null; this.nodes = []; this.edges = []; this.diagnostics = [];
-      this.drag = null; this.statusFilter = 'all'; this.destroyed = false;
+      this.drag = null; this.statusFilter = 'all'; this.traceDirection = 'upstream'; this.destroyed = false;
       this.panFrame = null; this.panTime = null; this.fitFrame = null; this.drawFrame = null; this.clickTimer = null;
       this.viewport = this.el('div', 'graph-viewport'); this.viewport.tabIndex = 0;
-      this.viewport.setAttribute('role', 'group'); this.viewport.setAttribute('aria-label', '项目业务与步骤依赖图。点击节点追踪上游，方向键移动节点，加减号缩放，0 适应画布，Escape 清除选择。');
+      this.viewport.setAttribute('role', 'group'); this.viewport.setAttribute('aria-label', '项目业务与步骤依赖图。点击节点追踪关系，方向键移动节点，加减号缩放，0 适应画布，Escape 清除选择。');
       this.world = this.el('div', 'graph-world'); this.nodeHost = this.el('div', 'graph-nodes'); this.svg = this.svgEl('svg', {class: 'graph-edges', tabindex: -1});
       this.defs = this.svgEl('defs');
       for (const [name, color] of Object.entries(COLORS)) {
@@ -82,14 +82,14 @@
       const mapped = mapState(state), key = this.cacheKey(mapped), changed = key !== this.cacheKey();
       const previousNode = this.project?.nodeIndex.get(this.selected), previousEdge = describeEdge(this.project, this.selectedEdge);
       this.saveView();
-      if (changed) { this.cancelDrag(); this.cancelPendingFit(); this.statusFilter = 'all'; }
+      if (changed) { this.cancelDrag(); this.cancelPendingFit(); this.statusFilter = 'all'; this.traceDirection = 'upstream'; }
       // The generation-scoped key gives new rounds a fresh layout while
       // preserving each viewed round when navigating through history.
       let saved = this.projectLayouts.get(key);
       const fresh = !saved;
       if (!saved) saved = {projectId: mapped.projectId, generation: mapped.generation, positions: new Map()};
       const firstNodes = !saved.positions.size && mapped.nodes.length > 0;
-      Object.assign(saved, mergePositions(mapped.nodes, saved.positions, {seed: key + ':0'}));
+      Object.assign(saved, firstNodes ? flowLayout(mapped.nodes, mapped.edges) : mergePositions(mapped.nodes, saved.positions, {seed: key + ':0'}));
       this.projectLayouts.set(key, saved); this.positions = saved.positions;
       this.project = mapped; this.projectId = mapped.projectId;
       this.nodes = mapped.nodes; this.edges = mapped.edges; this.diagnostics = mapped.diagnostics;
@@ -159,8 +159,8 @@
       if (this.destroyed || !this.project) return;
       this.syncGeometry(); this.updateBounds();
       this.empty.hidden = this.getVisibleNodeCount() > 0;
-      this.empty.textContent = this.statusFilter === 'all' ? '暂无图节点' : '暂无' + ({done: '已完成', running: '运行中', pending: '待执行'})[this.statusFilter] + '节点';
-      const selection = collectSelection(this.project, this.selected, this.selectedEdge);
+      this.empty.textContent = this.statusFilter === 'all' ? '暂无图节点' : '暂无' + ({done: '已完成', running: '运行中', pending: '待执行', blocked: '等待依赖', invalid: '需处理', paused: '已暂停'})[this.statusFilter] + '节点';
+      const selection = collectSelection(this.project, this.selected, this.selectedEdge, this.traceDirection, node => this.isNodeVisible(node));
       for (const [key, card] of this.cards) {
         const node = this.project.nodeIndex.get(key), related = selection.nodeIds.has(key);
         card.hidden = !this.isNodeVisible(node);
@@ -203,6 +203,34 @@
     }
     updateEdgeLabelVisibility() { for (const [key, entry] of this.edgeElements) entry.label.classList.toggle('is-revealed', key === this.hoveredEdgeKey || key === this.focusedEdgeKey); }
     getEdgeDetails(edge) { return clone(describeEdge(this.project, edge)); }
+    getConnections(nodeKey, selectedEdge) {
+      if (!this.project) return [];
+      if (selectedEdge) {
+        const detail = describeEdge(this.project, selectedEdge);
+        return detail ? [
+          {key: detail.source, label: '来源', title: detail.sourceNode.label, statusLabel: nodePresentation(detail.sourceNode, null).statusLabel},
+          {key: detail.target, label: '去向', title: detail.targetNode.label, statusLabel: nodePresentation(detail.targetNode, null).statusLabel}
+        ] : [];
+      }
+      return [...(this.project.incoming.get(nodeKey) || []), ...(this.project.outgoing.get(nodeKey) || [])].map(edge => {
+        const incoming = edge.target === nodeKey, detail = describeEdge(this.project, edge);
+        return {key: incoming ? edge.source : edge.target, label: (incoming ? '上游 · ' : '下游 · ') + edge.label,
+          title: (incoming ? detail.sourceNode : detail.targetNode).label, statusLabel: detail.statusLabel};
+      });
+    }
+    setTraceDirection(direction) {
+      if (this.destroyed) return;
+      this.traceDirection = direction === 'downstream' ? direction : 'upstream'; this.scheduleDraw();
+    }
+    getTraceDirection() { return this.traceDirection; }
+    arrange() {
+      if (this.destroyed || !this.project) return;
+      this.cancelDrag(); this.cancelPendingFit();
+      const arranged = flowLayout(this.nodes, this.edges);
+      this.positions = arranged.positions;
+      Object.assign(this.projectLayouts.get(this.cacheKey()), arranged);
+      this.scheduleDraw(); this.fit();
+    }
     selectNode(selection) {
       if (this.destroyed) return;
       const key = resolveNodeKey(this.nodes, selection);
@@ -220,7 +248,7 @@
       if (hadNode) this.onSelect(null); this.onSelectEdge(clone(this.project?.edgeIndex.get(key)));
     }
     clearSelection() { this.selected = null; this.selectedEdge = null; this.scheduleDraw(); this.onSelect(null); this.onSelectEdge(null); }
-    isNodeVisible(node) { return !!node && (this.statusFilter === 'all' || nodePresentation(node, null).status === this.statusFilter); }
+    isNodeVisible(node) { return !!node && (this.statusFilter === 'all' || (this.statusFilter === 'blocked' ? node.type === 'step' && node.status === 'blocked' : nodePresentation(node, null).status === this.statusFilter)); }
     isEdgeVisible(edge) { return !!edge && this.isNodeVisible(this.project?.nodeIndex.get(edge.source)) && this.isNodeVisible(this.project?.nodeIndex.get(edge.target)); }
     clearHiddenSelection(notify = true) {
       if (this.drag?.id && !this.isNodeVisible(this.project?.nodeIndex.get(this.drag.id))) this.cancelDrag();
@@ -231,7 +259,7 @@
     }
     setStatusFilter(status) {
       if (this.destroyed) return;
-      const next = ['done', 'running', 'pending'].includes(status) ? status : 'all';
+      const next = ['done', 'running', 'pending', 'blocked', 'invalid', 'paused'].includes(status) ? status : 'all';
       if (next === this.statusFilter) return;
       this.statusFilter = next; this.cancelPendingFit(); this.clearHiddenSelection(); this.scheduleDraw();
     }

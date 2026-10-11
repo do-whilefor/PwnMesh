@@ -76,6 +76,11 @@
         strings(raw.depends_on).forEach(id => addEdge('step_dependency', keyOf('step', id), node.key, '执行依赖', null));
         strings(raw.from).forEach(id => addEdge('step_input', keyOf('fact', id), node.key, '依据', null, strings(raw.invalid_sources).includes(id) ? false : null));
         if (text(raw.result)) addEdge('step_result', node.key, keyOf('fact', raw.result), '产生', null);
+      } else if (node.type === 'fact' && text(raw.source_step_id)) {
+        const producerKey = keyOf('step', raw.source_step_id);
+        // Observations can be published before completion; only the retained
+        // Step result represents its final result edge.
+        if (nodeIndex.get(producerKey)?.raw.result !== node.id) addEdge('step_observation', producerKey, node.key, '发布观测', null);
       } else if (node.type === 'finding') {
         node.sources.forEach(id => addEdge('finding_support', keyOf('fact', id), node.key, '支持发现', null, node.supportValid));
       }

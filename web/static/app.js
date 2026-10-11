@@ -75,10 +75,10 @@
     return '<div class="view-tabs" role="tablist" aria-label="项目视图">'+[['graph','workflow','画布'],['materials','paperclip','材料'],['result','file-check-2','结果']].map(([id,i,title]) => '<button id="view-tab-'+id+'" '+(p ? 'data-view="'+id+'" ' : '')+'role="tab" aria-selected="'+(active === id)+'" aria-controls="project-view" '+(p ? 'tabindex="'+(active === id ? '0' : '-1')+'" ' : '')+'class="'+(active === id ? 'active' : '')+'"'+(p ? '' : ' disabled')+'>'+icon(i)+title+(id === 'materials' ? '<small>'+(p ? p.files.length : 0)+'</small>' : '')+'</button>').join('')+'</div>';
   }
   function zoomControls(disabled = false) {
-    return '<div class="canvas-bottom"><div class="zoom-controls">'+[['zoom-out','minus','缩小画布'],['zoom-in','plus','放大画布'],['fit-graph','maximize','适应画布']].map(([id,name,label],index) => (index === 1 ? '<span'+(disabled ? '' : ' id="zoom-label"')+'>100%</span>' : index === 2 ? '<i></i>' : '')+'<button class="icon-button" '+(disabled ? '' : 'id="'+id+'" ')+'aria-label="'+label+'" '+(disabled ? 'disabled' : 'title="'+label+(id === 'fit-graph' ? ' · 0' : '')+'"')+'>'+icon(name)+'</button>').join('')+'</div></div>';
+    return '<div class="canvas-bottom"><div class="zoom-controls">'+[['zoom-out','minus','缩小画布'],['zoom-in','plus','放大画布'],['fit-graph','maximize','适应画布'],['arrange-graph','workflow','按流程整理']].map(([id,name,label],index) => (index === 1 ? '<span'+(disabled ? '' : ' id="zoom-label"')+'>100%</span>' : index === 2 ? '<i></i>' : '')+'<button class="icon-button" '+(disabled ? '' : 'id="'+id+'" ')+'aria-label="'+label+'" '+(disabled ? 'disabled' : 'title="'+label+(id === 'fit-graph' ? ' · 0' : '')+'"')+'>'+icon(name)+'</button>').join('')+'</div><div class="graph-trace-controls" role="group" aria-label="关系追踪方向">'+[['upstream','arrow-left','上游'],['downstream','arrow-left','下游']].map(([direction,name,label]) => '<button type="button" data-trace="'+direction+'" aria-pressed="'+(direction === 'upstream')+'" title="'+(direction === 'upstream' ? '追踪来源' : '追踪影响')+'"'+(disabled ? ' disabled' : '')+'>'+icon(name)+label+'</button>').join('')+'</div></div>';
   }
   function projectFooter(total,completed,disabled = false) {
-    return '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+(disabled || viewTab === 'graph' ? [['done','已完成'],['running','运行中'],['pending','待执行']].map(([id,title]) => '<button '+(disabled ? 'disabled' : 'data-filter="'+id+'" aria-pressed="false"')+'><i class="legend-dot '+id+'"></i>'+title+'</button>').join('') : '')+'</div><div class="task-progress"><span>'+completed+' / '+total+' 个任务</span><span class="progress-track"><i style="width:'+(total ? completed/total*100 : 0)+'%"></i></span></div></footer>';
+    return '<footer class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选">'+(disabled || viewTab === 'graph' ? [['done','已完成'],['running','运行中'],['pending','待执行'],['blocked','等待依赖'],['invalid','需处理'],['paused','已暂停']].map(([id,title]) => '<button '+(disabled ? 'disabled' : 'data-filter="'+id+'" aria-pressed="false"')+'><i class="legend-dot '+id+'"></i>'+title+'</button>').join('') : '')+'</div><div class="task-progress"><span>'+completed+' / '+total+' 个任务</span><span class="progress-track"><i style="width:'+(total ? completed/total*100 : 0)+'%"></i></span></div></footer>';
   }
   function projectMarkup(p) {
     const state = projectState(p), completed = state.steps.filter(s => s.status === 'completed').length;
@@ -193,7 +193,12 @@
     $('#activity-collapse-all').hidden = true;
     if (selectedNode || selectedEdge) {
       const nodeKey = selectedNode?.key;
-      host.innerHTML = PwnDemoInspector.render({node:selectedNode,edge:selectedEdge,canLocate:Boolean(nodeKey)});
+      const connections = graph?.getConnections(nodeKey, selectedEdge?.id) || [];
+      const executions = PwnMeshData.relatedExecutions(projectState(p), p.runs, selectedNode).map(run => {
+        const log = p.logs.find(item => item.id === 'execution:' + run.id);
+        return {id: run.id, title: log?.title || run.status, time: dateTime(run.updated_at || run.created_at)};
+      });
+      host.innerHTML = PwnDemoInspector.render({node:selectedNode,edge:selectedEdge,connections,executions,canLocate:Boolean(nodeKey)});
       paintIcons(); disposeInspector = PwnDemoInspector.bind(host,{toast,onLocate:nodeKey ? () => focusGraph(nodeKey) : undefined}); return;
     }
     const entries = PwnDemoActivity.buildEntries(p);
@@ -244,6 +249,7 @@
   function syncStatusFilter() {
     const filter = graph?.getStatusFilter();
     $$('[data-filter]').forEach(button => { const active = button.dataset.filter === filter; button.classList.toggle('active',active); button.setAttribute('aria-pressed',String(active)); });
+    $$('[data-trace]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.trace === graph?.getTraceDirection())));
   }
   function openRecord(record,options = {}) {
     materialReadVersion++;
@@ -273,6 +279,7 @@
     });
     graph.listen(host,'graphzoom',event => { if ($('#zoom-label')) $('#zoom-label').textContent = Math.round(event.detail.zoom*100)+'%'; });
     graph.setState(projectState(p));
+    syncStatusFilter();
     $('#zoom-label').textContent = Math.round(graph.scale*100)+'%';
   }
   function render() {
@@ -427,11 +434,19 @@
     if (d.close === 'project-dialog') { if (!mutating) $('#project-dialog').close(); return; }
     if (d.view) { viewTab = d.view; render(); $('#view-tab-'+viewTab).focus(); return; }
     if (d.focus) return focusGraph(d.focus);
+    if (d.execution) {
+      const p = viewed(), log = p?.logs.find(item => item.id === 'execution:' + d.execution);
+      const conclusions = log ? p.logs.filter(item => item.id.startsWith(log.id + ':conclusion:')).map(item => item.body) : [];
+      if (log) return openRecord({title:log.title,kind:'执行记录',body:[...conclusions,log.body].filter(Boolean).join('\n\n'),meta:[{label:'Run',value:log.runId},{label:'时间',value:dateTime(log.time)}]}, {onLocate:log.node ? () => focusGraph(log.node.type + ':' + log.node.id) : undefined});
+      return;
+    }
+    if (d.trace && graph) { graph.setTraceDirection(d.trace); syncStatusFilter(); return; }
     if (d.filter && graph) { graph.setStatusFilter(graph.getStatusFilter() === d.filter ? 'all' : d.filter); syncStatusFilter(); return; }
     if (b.id === 'clear-search') { $('#project-search').value = ''; renderSidebar(); $('#project-search').focus(); }
     if (b.id === 'zoom-in') graph?.zoom(1.18);
     if (b.id === 'zoom-out') graph?.zoom(1/1.18);
     if (b.id === 'fit-graph') graph?.fit();
+    if (b.id === 'arrange-graph') graph?.arrange();
     if (b.id === 'clear-selection') return returnToActivity();
     if (b.id === 'add-hint' || b.id === 'add-materials') forms.openHint(current().id);
     if (b.id === 'return-current') { roundReadVersion++; selectedRun = 'current'; render(); }

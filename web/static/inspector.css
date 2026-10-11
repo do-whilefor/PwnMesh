@@ -96,3 +96,14 @@ dialog.inspector-reader.is-closing::backdrop{animation:inspector-backdrop-out 14
 @media(prefers-reduced-motion:reduce){dialog.inspector-reader[open]::backdrop,dialog.inspector-reader.is-closing::backdrop{animation:none}}
 .inspector-record-mount{position:fixed;inset:0 auto auto 0;width:0;height:0;z-index:0}
 .inspector-copy-buffer{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
+.inspector-links{border-top:1px solid #e5ebee;margin-top:18px;padding-top:12px;min-width:0}
+.inspector-links h4{display:flex;justify-content:space-between;font-size:11px;color:#3e5361;margin:0 0 6px}
+.inspector-links h4 small{color:#657987;font-weight:400}
+.inspector-connection{display:flex;align-items:center;gap:10px;width:100%;min-width:0;text-align:left;padding:10px 0;border-bottom:1px solid #eef2f4;color:#3e5361}
+.inspector-connection>span{display:grid;gap:3px;min-width:0;flex:1}
+.inspector-connection strong,.inspector-connection small,.inspector-connection code{overflow-wrap:anywhere;white-space:normal;line-height:1.6}
+.inspector-connection strong{font-size:11px;font-weight:500}
+.inspector-connection small,.inspector-connection code{font-size:10px;color:#657987}
+.inspector-connection>.inspector-icon{width:13px;height:13px;flex:none;color:#4a8071}
+.inspector-connection:hover{background:#f3f8f6}
+.inspector-connection:focus-visible{outline:2px solid #5b927f;outline-offset:2px}

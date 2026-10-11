@@ -113,6 +113,57 @@ test('dependency details use upstream readiness, including blocked and unsupport
   assert.equal(visualStatus(node), 'pending');
   assert.equal(nodePresentation(node, null).statusLabel, '等待依赖');
 });
+
+test('published observations retain their producer without duplicating final result edges', () => {
+  const state = {steps:[
+    {id:'producer',description:'Collect observations',status:'running',from:['origin'],result:'final'},
+    {id:'consumer',description:'Use the observation',status:'pending',from:['early']}
+  ],fact_records:[
+    {id:'origin',status:'input'},
+    {id:'early',description:'An intermediate observation',status:'valid',source_step_id:'producer',run_id:'run-1'},
+    {id:'final',description:'The retained result',status:'valid',source_step_id:'producer',run_id:'run-1'}
+  ]};
+  const mapped = mapState(state);
+  const observation = mapped.edges.find(edge => edge.kind === 'step_observation');
+  assert.equal(observation.source, 'step:producer'); assert.equal(observation.target, 'fact:early');
+  assert.equal(mapped.edges.filter(edge => edge.target === 'fact:final').length, 1);
+  assert.equal(mapped.edges.find(edge => edge.target === 'fact:final').kind, 'step_result');
+  assert.equal(mapped.nodeIndex.get('fact:early').raw.run_id, 'run-1');
+  assert.equal(mapped.nodeIndex.get('step:producer').status, 'running');
+  assert.deepEqual(collectSelection(mapped, 'step:consumer', null).nodeIds, new Set(['step:consumer','fact:early','step:producer','fact:origin']));
+  const reordered = mapState({...state,steps:[...state.steps].reverse(),fact_records:[...state.fact_records].reverse()});
+  assert.deepEqual(reordered.edges, mapped.edges);
+  assert.deepEqual(reordered.nodes, mapped.nodes);
+  assert.equal(state.steps[0].status, 'running');
+});
+
+test('missing observation producers are diagnosed without fabricated steps or inferred producers', () => {
+  const mapped = mapState({steps:[{id:'other',status:'running'}],fact_records:[
+    {id:'orphan',status:'valid',source_step_id:'missing'},
+    {id:'legacy',status:'valid',run_id:'other'},
+    {id:'origin',status:'input'}
+  ]});
+  assert.deepEqual(mapped.diagnostics, [{kind:'missing_reference',relation:'step_observation',source:'step:missing',target:'fact:orphan',missing:['step:missing']}]);
+  assert.equal(mapped.nodeIndex.has('step:missing'), false);
+  assert.equal(mapped.edges.length, 0);
+});
+
+test('observation relationships reflect current fact support independently of producer completion', () => {
+  for (const status of ['running','failed','completed']) {
+    const mapped = mapState({graph:{project:{orchestration_version:1}},steps:[{id:'producer',description:'Producer',status}],fact_records:[
+      {id:'observation',description:'Retained observation',status:'valid',source_step_id:'producer'}
+    ]});
+    const edge = mapped.edges[0], detail = describeEdge(mapped, edge);
+    assert.equal(detail.kind, 'step_observation'); assert.equal(detail.status, 'recorded');
+    assert.doesNotMatch(detail.statusLabel, /完成|满足/);
+    assert.equal(detail.sourceNode.status, status);
+    for (const changed of [{status:'refuted'},{status:'superseded'},{status:'narrowed'},{status:'valid',support_invalid:true}]) {
+      const updated = mapState({steps:[{id:'producer',status}],fact_records:[{id:'observation',source_step_id:'producer',...changed}]});
+      const invalid = describeEdge(updated, edge.id);
+      assert.equal(invalid.status, 'invalid'); assert.match(invalid.statusLabel, /失效/);
+    }
+  }
+});
 test('root goal is terminal anchor; goal input never becomes an inferred answer', () => {
   const mapped = mapState(fixture()); assert.equal(anchors(mapped.nodes).endKey, 'goal:goal');
   assert.equal(anchors(mapped.nodes.filter(node => node.type !== 'goal')).endKey, null);
@@ -230,4 +281,27 @@ test('edge details use exact relationship, source record and latest text, not a 
   mapped.nodes.find(node => node.key === edge.source).label = '<script>new title</script>';
   assert.equal(describeEdge(mapped, edge.id).sourceNode.label, '<script>new title</script>');
   assert.equal(describeEdge(mapped, mapped.edges.find(item => item.kind === 'finding_support')).status, 'invalid');
+});
+
+test('filtered lineage stops at hidden nodes in either direction and preserves visible branches', () => {
+  const project = mapState({steps:[
+    {id:'first',status:'completed'},
+    {id:'hidden',status:'running',depends_on:['first']},
+    {id:'last',status:'completed',depends_on:['hidden','visible']},
+    {id:'visible',status:'completed'}
+  ]});
+  const visible = node => node.status === 'completed';
+  const upstream = collectSelection(project, 'step:last', null, 'upstream', visible);
+  assert.deepEqual(upstream.nodeIds, new Set(['step:last','step:visible']));
+  assert.deepEqual(upstream.edgeKeys, new Set(project.edges.filter(edge => edge.source === 'step:visible').map(edge => edge.id)));
+  const downstream = collectSelection(project, 'step:first', null, 'downstream', visible);
+  assert.deepEqual(downstream.nodeIds, new Set(['step:first'])); assert.equal(downstream.edgeKeys.size, 0);
+  assert.equal(collectSelection(project, 'step:hidden', null, 'upstream', visible).active, false);
+  assert.deepEqual(collectSelection(project, 'step:first', null, 'downstream').nodeIds, new Set(['step:first','step:hidden','step:last']));
+  for (const edge of project.edges) {
+    const selection = collectSelection(project, null, edge.id, 'upstream', visible);
+    const expected = visible(project.nodeIndex.get(edge.source)) && visible(project.nodeIndex.get(edge.target));
+    assert.equal(selection.active, expected);
+    assert.equal(selection.nodeIds.size, expected ? 2 : 0); assert.equal(selection.edgeKeys.size, expected ? 1 : 0);
+  }
 });

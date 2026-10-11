@@ -47,18 +47,36 @@
   }
 
   function belongsToCurrentRound(execution, project) {
-    if (project.id && execution.project_id && execution.project_id !== project.id) return false;
+    if (project.id && [execution.project_id, execution.job?.graph?.project?.id].some(id => id && id !== project.id)) return false;
     const generation = Number.isInteger(project.generation) ? project.generation : 0;
-    if (Number.isInteger(execution.generation) && execution.generation !== generation) return false;
+    const runGeneration = execution.generation ?? execution.job?.graph?.project?.generation;
+    if (Number.isInteger(runGeneration) && runGeneration !== generation) return false;
     const restarted = timestamp(project.restarted_at);
     if (restarted !== null) {
       const created = timestamp(execution.created_at);
       if (created !== null && created < restarted) return false;
       // Legacy execution summaries have no generation. After a restart they
       // need a current-round timestamp before their conclusions can be shown.
-      if (!Number.isInteger(execution.generation) && created === null) return false;
+      if (!Number.isInteger(runGeneration) && created === null) return false;
     }
     return true;
+  }
+
+  function relatedExecutions(state, executions, node) {
+    if (!node) return [];
+    const project = object(state?.graph?.project), record = object(node.raw), selected = new Map();
+    const evidenceRuns = new Set(array(record.evidence).map(item => item?.run_id).filter(Boolean));
+    for (const run of array(executions)) {
+      if (!run || !string(run.id) || run.kind !== 'explore' || !belongsToCurrentRound(run, project)) continue;
+      const identities = [run.id, ...(string(run.backend) ? [run.backend + '@' + run.id] : [])];
+      const producer = record.run_id && identities.includes(record.run_id);
+      const related = node.type === 'step' ? run.intent === node.id :
+        node.type === 'fact' || node.type === 'finding' ? producer || identities.some(id => evidenceRuns.has(id)) : false;
+      if (!related) continue;
+      const previous = selected.get(run.id);
+      if (!previous || string(run.updated_at) >= string(previous.updated_at)) selected.set(run.id, run);
+    }
+    return [...selected.values()].sort((a, b) => string(b.created_at).localeCompare(string(a.created_at)) || a.id.localeCompare(b.id));
   }
 
   function terminationTime(project) {
@@ -408,5 +426,5 @@
     return {status,summary,notice,findings,conclusions,truncated};
   }
 
-  return {validateProject,projectTiming,buildLogs,buildResult};
+  return {validateProject,projectTiming,buildLogs,buildResult,relatedExecutions};
 }));
