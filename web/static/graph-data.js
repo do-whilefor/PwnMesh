@@ -12,6 +12,13 @@
   const clone = value => value === undefined ? undefined : JSON.parse(JSON.stringify(value));
   const text = value => typeof value === 'string' ? value : '';
   const keyOf = (type, id) => type + ':' + id;
+  function stepSupportValid(step, result, version) {
+    const feedback = step.description === 'external_feedback' && result?.legacy === true && !result.source_step_id;
+    // Protocol 1 omits false Step support. Legacy projects do not compute
+    // this field; synthetic human feedback is an input, not Worker success.
+    if (version === 1 && !feedback) return step.support_valid === true;
+    return typeof step.support_valid === 'boolean' ? step.support_valid : null;
+  }
   // State is the server's complete /projects/{id}/state response. No inferred facts
   // or evidence are added here: a missing endpoint is reported and its edge omitted.
   function mapState(input) {
@@ -64,10 +71,7 @@
         if (node.status === 'achieved') node.sources.forEach(id => addEdge('goal_support', keyOf('fact', id), node.key, '支持目标', null, node.supportValid));
       } else if (node.type === 'step') {
         const result = nodeIndex.get(keyOf('fact', raw.result));
-        const feedback = raw.description === 'external_feedback' && result?.raw.legacy === true && !result.raw.source_step_id;
-        // Protocol 1 omits false Step support. Legacy projects do not compute
-        // this field; synthetic human feedback is an input, not Worker success.
-        if (state.graph?.project?.orchestration_version === 1 && !feedback) node.supportValid = raw.support_valid === true;
+        node.supportValid = stepSupportValid(raw, result?.raw, state.graph?.project?.orchestration_version);
         if (text(raw.goal_id)) addEdge('goal_step', keyOf('goal', raw.goal_id), node.key, '任务归属', null);
         strings(raw.depends_on).forEach(id => addEdge('step_dependency', keyOf('step', id), node.key, '执行依赖', null));
         strings(raw.from).forEach(id => addEdge('step_input', keyOf('fact', id), node.key, '依据', null, strings(raw.invalid_sources).includes(id) ? false : null));
@@ -105,5 +109,5 @@
     return matches.length === 1 ? matches[0].key : null;
   }
 
-  return {mapState, resolveNodeKey};
+  return {mapState, resolveNodeKey, stepSupportValid};
 });

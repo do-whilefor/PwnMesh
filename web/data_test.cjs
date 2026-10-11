@@ -104,3 +104,50 @@ test('historical finding and goal events retain invalidated transitive evidence'
   }
   assert.equal(state.fact_records[0].status,'valid','support invalidation preserves the recorded fact status');
 });
+
+test('Step and Fact logs preserve recorded success while exposing current support invalidation', () => {
+  const state = fixture();
+  state.graph.project.orchestration_version = 1;
+  state.steps = [{id:'work',description:'Inspect endpoint',status:'completed',result:'f',from:['origin']}];
+  state.fact_records[0].support_invalid = true;
+  const events = [
+    {revision:1,op:'step',id:'work',result:{...state.steps[0],support_valid:true}},
+    {revision:2,op:'fact',id:'f',result:{...state.fact_records[0],support_invalid:false}}
+  ];
+  for (const inputEvents of [[],events]) {
+    const logs = data.buildLogs(state,inputEvents);
+    for (const [type,id,status] of [['step','work','completed'],['fact','f','valid']]) {
+      const records = logs.filter(log => log.node?.type === type && log.node.id === id);
+      assert.equal(records.length,1,'current projected support must not duplicate the latest event');
+      assert.equal(records[0].status,status);
+      assert.equal(records[0].supportValid,false);
+      assert.equal(records[0].level,'warning');
+      assert.match(records[0].title,/支持失效/);
+    }
+  }
+  assert.equal(state.steps[0].support_valid,undefined,'projection does not mutate state');
+  assert.equal(events[0].result.support_valid,true,'projection does not rewrite stored events');
+});
+
+test('Step log support follows live graph protocol and exempts legacy human feedback', () => {
+  const state = fixture();
+  state.steps = [{id:'work',description:'Inspect',status:'completed',result:'f'}];
+  const stepLog = () => data.buildLogs(state).find(log => log.node?.type === 'step');
+  assert.doesNotMatch(stepLog().title,/支持失效/,'legacy snapshots do not compute Step support');
+  state.graph.project.orchestration_version = 1;
+  assert.match(stepLog().title,/支持失效/);
+  state.steps[0].support_valid = true;
+  assert.doesNotMatch(stepLog().title,/支持失效/);
+  delete state.steps[0].support_valid;
+  state.steps[0].description = 'external_feedback';
+  state.fact_records[0].legacy = true;
+  assert.doesNotMatch(stepLog().title,/支持失效/,'human input does not claim Worker success');
+});
+
+test('Fact logs retain default statuses for snapshots that omit the status field', () => {
+  const state = fixture();
+  state.fact_records = [{id:'origin'}, {id:'goal'}, {id:'observation'}];
+  const facts = data.buildLogs(state).filter(log => log.node?.type === 'fact');
+  assert.deepEqual(Object.fromEntries(facts.map(log => [log.node.id,log.status])),
+    {origin:'input',goal:'input',observation:'valid'});
+});

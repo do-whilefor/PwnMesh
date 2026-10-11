@@ -1,8 +1,9 @@
 (function (root, factory) {
-  const api = factory();
-  if (typeof module === 'object' && module.exports) module.exports = api;
+  const common = typeof module === 'object' && module.exports;
+  const api = factory(common ? require('./graph-data.js') : root.PwnMeshGraphData);
+  if (common) module.exports = api;
   else root.PwnMeshData = api;
-}(typeof window === 'object' ? window : globalThis, function () {
+}(typeof window === 'object' ? window : globalThis, function (graphData) {
   'use strict';
 
   const SCENARIOS = Object.freeze(['ctf','pentest','audit']);
@@ -138,6 +139,13 @@
       title:({goal:'目标',step:'步骤',fact:'事实',finding:'关键结论'}[type] || type) + ' · ' + statusName(status),
       level:['failed','refuted','superseded','abandoned','withdrawn'].includes(status) ? 'warning' : 'info',
       evidence:refs(type === 'step' ? record.from : record.sources)};
+    if (type === 'step') log.supportValid = record.support_valid;
+    if (type === 'fact' && record.support_invalid === true) log.supportValid = false;
+    if ((type === 'step' && (array(record.invalid_sources).length || status === 'completed' && log.supportValid === false)) ||
+        (type === 'fact' && log.supportValid === false)) {
+      log.title += ' · 支持失效';
+      log.level = 'warning';
+    }
     if (type === 'fact' || type === 'finding') {
       log.scope = string(record.scope);
       log.artifacts = array(record.evidence).map(evidence => ({
@@ -218,7 +226,10 @@
     const facts = new Map(array(state.fact_records).map(fact => [fact.id,fact]));
     const currentSupportRecords = {
       finding:new Map(array(state.findings).map(finding => [finding.id,finding])),
-      goal:new Map(array(state.goals).map(goal => [goal.id,goal]))
+      goal:new Map(array(state.goals).map(goal => [goal.id,goal])),
+      fact:facts,
+      step:new Map(array(state.steps).map(step => [step.id,{...step,
+        support_valid:graphData.stepSupportValid(step,facts.get(step.result),project.orchestration_version)}]))
     };
     const intents = new Map(array(graph.intents).map(intent => [intent.id,intent]));
     const uniqueEvents = new Map();
@@ -254,14 +265,20 @@
       const common = {...base('event:' + key,event.created_at,'event',event.run_id),revision:event.revision};
       if (['goal','step','fact','finding'].includes(event.op)) {
         let record = {...payload,...result,id:string(event.id) || string(result.id)};
+        const current = currentSupportRecords[event.op].get(record.id);
+        const snapshotCoversEvent = Number.isSafeInteger(state.revision) && Number.isSafeInteger(event.revision)
+          && state.revision >= event.revision;
         if (event.op === 'finding' || event.op === 'goal') {
           // Stored event support_valid defaults false. Use current authoritative state
           // for the latest event, and current source effectiveness for older evidence.
           delete record.support_valid;
-          const current = currentSupportRecords[event.op].get(record.id);
-          const snapshotCoversEvent = Number.isSafeInteger(state.revision) && Number.isSafeInteger(event.revision)
-            && state.revision >= event.revision;
           if (current && snapshotCoversEvent && lastEvent.get(event.op + ':' + record.id) === key) record = {...record,...current};
+        } else if (current && snapshotCoversEvent) {
+          // Keep the recorded lifecycle transition, but expose whether its
+          // evidence still supports it, just as the live graph does.
+          record.support_valid = current.support_valid;
+          record.support_invalid = current.support_invalid;
+          record.invalid_sources = current.invalid_sources;
         }
         const log = recordLog(record,event.op,{...common,phase:['goal','step'].includes(event.op) ? 'Decide' : 'Execute'},facts);
         add(log);
@@ -280,6 +297,7 @@
     }
 
     function supplement(record,type,time,worker = '') {
+      if (type === 'step') record = currentSupportRecords.step.get(record.id) || record;
       const log = recordLog(record,type,{...base('state:' + type + ':' + record.id,time,'state',worker),
         phase:type === 'step' || type === 'goal' ? 'Decide' : type === 'fact' ? 'Execute' : 'Model'},facts);
       if (!represented.has(fingerprint(log))) add(log);
