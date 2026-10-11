@@ -256,7 +256,7 @@ func graphPublishedFactEvidence(ctx context.Context, j Job, runDir string, ident
 	if saved.Result == nil || saved.Result.Status != "success" || saved.Result.Text != result.Text || j.Intent == nil {
 		return nil, errors.New("published fact is not bound to the saved successful result")
 	}
-	pending := map[string]bool{}
+	pending := map[string]board.StateAction{}
 	var selected []board.EvidenceRef
 	var selectedRecord []byte
 	consume := func(message agent.Message) error {
@@ -267,14 +267,14 @@ func graphPublishedFactEvidence(ctx context.Context, j Job, runDir string, ident
 				delete(pending, block.ID)
 				var action board.StateAction
 				if block.ID != "" && block.Name == "graph_action" && json.Unmarshal(block.Input, &action) == nil && action.Op == "fact" {
-					pending[block.ID] = true
+					pending[block.ID] = action
 				}
 				continue
 			}
 			if message.Role != "user" || block.Type != "tool_result" {
 				continue
 			}
-			published := pending[block.ToolUseID]
+			action, published := pending[block.ToolUseID]
 			delete(pending, block.ToolUseID)
 			if !published || block.IsError {
 				continue
@@ -284,9 +284,33 @@ func graphPublishedFactEvidence(ctx context.Context, j Job, runDir string, ident
 			if json.Unmarshal(block.Content, &text) != nil || json.Unmarshal([]byte(text), &receipt) != nil || receipt.Op != "fact" || receipt.ID != factID {
 				continue
 			}
-			var fact board.FactRecord
-			if json.Unmarshal(receipt.Result, &fact) != nil || fact.ID != factID || fact.Legacy || fact.Status != "valid" || fact.SourceStepID != j.Intent.ID || fact.RunID == "" || !currentEvidence(fact.RunID, j.RunID) || len(fact.Evidence) == 0 {
+			var publication compactFactPublication
+			if json.Unmarshal(receipt.Result, &publication) != nil || publication.ID != factID || publication.Legacy || publication.Status != "valid" || publication.SourceStepID != j.Intent.ID || publication.RunID == "" || !currentEvidence(publication.RunID, j.RunID) || len(publication.Evidence) == 0 {
 				return errors.New("published fact receipt lacks complete evidence from this Step and run")
+			}
+			fact := publication.FactRecord
+			if publication.EvidenceExcerptsOmitted || publication.EvidenceExcerptSHA256 != nil {
+				var input struct {
+					Evidence []board.EvidenceRef `json:"evidence"`
+				}
+				if !publication.EvidenceExcerptsOmitted || json.Unmarshal(action.Payload, &input) != nil || len(input.Evidence) != len(fact.Evidence) || len(publication.EvidenceExcerptSHA256) != len(fact.Evidence) {
+					return errors.New("compact publication does not match its original evidence selections")
+				}
+				for i := range fact.Evidence {
+					ref := &fact.Evidence[i]
+					if filepath.Dir(ref.Path) != filepath.Join(runDir, "evidence") || ref.RunID != j.RunID || ref.StartLine != input.Evidence[i].StartLine || ref.EndLine != input.Evidence[i].EndLine || ref.Excerpt != "" {
+						return errors.New("compact publication has invalid evidence identity")
+					}
+					original, err := readEvidenceFile(ctx, ref.Path, maxEvidenceFileBytes)
+					if err != nil {
+						return err
+					}
+					excerpt, err := selectedEvidence(original, input.Evidence[i])
+					if err != nil || graphRecordVersion([]byte(excerpt)) != publication.EvidenceExcerptSHA256[i] {
+						return errors.New("compact publication evidence excerpt SHA-256 mismatch")
+					}
+					ref.Excerpt = excerpt
+				}
 			}
 			record, err := json.Marshal(fact)
 			if err != nil {
@@ -310,7 +334,7 @@ func graphPublishedFactEvidence(ctx context.Context, j Job, runDir string, ident
 		}
 	}
 	if len(selected) == 0 {
-		pending = map[string]bool{}
+		pending = map[string]board.StateAction{}
 		if err := graphJournalMessages(ctx, filepath.Join(runDir, "events.jsonl"), saved.Log, consume); err != nil {
 			return nil, err
 		}

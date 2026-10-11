@@ -36,6 +36,7 @@ type graphAgentSession struct {
 }
 
 func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, spec commandGraphNode, dependencies []workergraph.NodeState) (workergraph.Output, error) {
+	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(spec.Timeout)*time.Second)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -142,12 +143,21 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	}
 	// stdout.log is the node's final local account, not its event stream and
 	// never a top-level Worker result. Reuse verifies these exact bytes.
+	var out workergraph.Output
 	if err := commandNewFile(filepath.Join(dir, "stdout.log"), []byte(text)); err != nil {
 		runErr = errors.Join(runErr, err)
-	}
-	var out workergraph.Output
-	if runErr == nil {
-		out, runErr = commandNodeOutput(ctx, dir, spec.Artifacts)
+	} else {
+		paths := spec.Artifacts
+		outputContext := ctx
+		if runErr != nil {
+			paths = nil
+			// A node timeout ends its work, but the active parent can still
+			// receive bounded diagnostics. Parent cancellation stops this read.
+			outputContext = parent
+		}
+		var outputErr error
+		out, outputErr = commandNodeOutput(outputContext, dir, paths)
+		runErr = errors.Join(runErr, outputErr)
 	}
 	state.Result = text
 	if runErr != nil {
@@ -157,7 +167,10 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 		return workergraph.Output{}, errors.Join(runErr, err)
 	}
 	if runErr != nil {
-		return workergraph.Output{}, fmt.Errorf("agent node failed; inspect %s: %w", filepath.Join(dir, "events.jsonl"), runErr)
+		// Like a failed command, keep the bounded account for the parent and
+		// failure routes, without certifying files from an unsuccessful Agent.
+		out.Artifacts = nil
+		return out, fmt.Errorf("agent node failed; inspect %s: %w", filepath.Join(dir, "events.jsonl"), runErr)
 	}
 	return out, nil
 }

@@ -5,7 +5,6 @@ package worker
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -212,10 +211,6 @@ func prepareCommandReuses(ctx context.Context, j Job, o Options, spec commandGra
 	}
 	slices.Sort(keys)
 	keys = slices.Compact(keys)
-	identity, err := identityFor(j, o.RunDir)
-	if err != nil {
-		return fail(err)
-	}
 	type sourceGraph struct {
 		dir   string
 		nodes map[string]workergraph.NodeState
@@ -236,59 +231,22 @@ func prepareCommandReuses(ctx context.Context, j Job, o Options, spec commandGra
 			return fail(err)
 		}
 		unlocks = append(unlocks, unlock)
-		raw, err := readCommandGraphFile(ctx, filepath.Join(dir, "graph.json"), 8<<20)
+		checkpoint, specs, err := readCommandSnapshot(ctx, j, o.RunDir, key, dir)
 		if err != nil {
-			return fail(err)
-		}
-		var checkpoint workergraph.Checkpoint
-		if err := json.Unmarshal(raw, &checkpoint); err != nil {
 			return fail(err)
 		}
 		if !slices.Contains([]string{"failed", "succeeded"}, checkpoint.Status) || len(checkpoint.Nodes) == 0 || len(checkpoint.Nodes) > 64 {
 			return fail(errors.New("reuse source graph must be terminal"))
 		}
-		sourceSpec := commandGraphSpec{Key: key}
+		source := sourceGraph{dir: dir, nodes: map[string]workergraph.NodeState{}, specs: specs}
 		for _, node := range checkpoint.Nodes {
 			if node.Status == "running" || node.Status == "pending" {
 				return fail(errors.New("reuse source has unresolved operations"))
 			}
-			digest, err := hex.DecodeString(node.DefinitionSHA256)
-			if err != nil || len(digest) != 32 {
-				return fail(errors.New("reuse source has no bound node definition"))
-			}
-			raw, err := readCommandGraphFile(ctx, filepath.Join(dir, "definitions", node.DefinitionSHA256+".json"), 1<<20)
-			if err != nil {
-				return fail(fmt.Errorf("reuse requires retained source definitions: %w", err))
-			}
-			var nodeSpec commandGraphNode
-			decoder := json.NewDecoder(bytes.NewReader(raw))
-			decoder.DisallowUnknownFields()
-			if err := decoder.Decode(&nodeSpec); err != nil {
-				return fail(err)
-			}
-			canonical, _ := json.Marshal(nodeSpec)
-			if !bytes.Equal(canonical, raw) || nodeSpec.ID != node.ID || nodeSpec.Kind == "reuse" || nodeSpec.ReuseFrom != nil {
+			nodeSpec := specs[node.ID]
+			if nodeSpec.Kind == "reuse" || nodeSpec.ReuseFrom != nil {
 				return fail(errors.New("reuse source definition is invalid or recursive"))
 			}
-			sourceSpec.Nodes = append(sourceSpec.Nodes, nodeSpec)
-		}
-		if err := validateCommandGraph(&sourceSpec); err != nil {
-			return fail(err)
-		}
-		definition := workergraph.Definition{Version: commandGraphVersion}
-		source := sourceGraph{dir: dir, nodes: map[string]workergraph.NodeState{}, specs: map[string]commandGraphNode{}}
-		for _, nodeSpec := range sourceSpec.Nodes {
-			definition.Nodes = append(definition.Nodes, commandNodeDefinition(nodeSpec))
-			source.specs[nodeSpec.ID] = nodeSpec
-		}
-		input, err := commandGraphInitialInput(identity, key)
-		if err != nil {
-			return fail(err)
-		}
-		if err := workergraph.ValidateSnapshot(definition, workergraph.Options{RunID: j.RunID, Input: input, Dir: dir, Parallelism: 1}, checkpoint); err != nil {
-			return fail(err)
-		}
-		for _, node := range checkpoint.Nodes {
 			source.nodes[node.ID] = node
 			if node.Status == "succeeded" {
 				if err := verifyCommandNodeOutput(ctx, filepath.Join(dir, "nodes", node.ID), source.specs[node.ID], node.Output); err != nil {

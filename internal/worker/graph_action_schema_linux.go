@@ -38,9 +38,9 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 	text := map[string]any{"type": "string"}
 	if kind == "reason" {
 		properties := map[string]any{"description": text}
-		for _, name := range []string{"id", "condition", "parent_id"} {
-			properties[name] = text
-		}
+		properties["id"] = map[string]any{"type": "string", "description": "Existing record to change. Omit on goal/step add; the server assigns IDs. Use the draft key for $aliases."}
+		properties["parent_id"] = text
+		properties["condition"] = map[string]any{"type": "string", "description": "Goal add only. Put Step requirements and acceptance checks in description."}
 		properties["from"] = map[string]any{"type": "array", "items": text, "description": "Step inputs: published, effective Fact IDs or origin. Complete: published, effective Fact IDs only, never origin. goal is a user constraint, never a source; assign a Goal with goal_id instead."}
 		properties["goal_id"] = map[string]any{"type": "string", "description": "The Goal this Step advances; use goal for the root requirement. Never put this ID in from."}
 		properties["priority"] = map[string]any{"type": "integer", "minimum": 0, "maximum": 1000000}

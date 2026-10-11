@@ -54,6 +54,7 @@ func TestDecisionDraftRejectsMissingFieldsWithoutReservingKey(t *testing.T) {
 	for _, tc := range []struct{ op, payload string }{
 		{"goal", `{}`},
 		{"goal", `{"action":"add","condition":" "}`},
+		{"goal", `{"action":"add","condition":"Check results","id":"chosen-goal"}`},
 		{"goal", `{"action":"achieve","id":"g001","reason":"Done"}`},
 		{"goal", `{"action":"withdraw","reason":"No longer needed"}`},
 		{"step", `{}`},
@@ -61,6 +62,8 @@ func TestDecisionDraftRejectsMissingFieldsWithoutReservingKey(t *testing.T) {
 		{"step", `{"action":"add","description":"Inspect","from":[]}`},
 		{"step", `{"action":"add","description":"Inspect","from":[""]}`},
 		{"step", `{"action":"add","from":["origin"]}`},
+		{"step", `{"action":"add","from":["origin"],"description":"Run the local DAG","condition":"DAG outputs are verified"}`},
+		{"step", `{"action":"add","from":["origin"],"description":"Run the local DAG","id":"chosen-step"}`},
 		{"step", `{"action":"abandon","id":"i001"}`},
 		{"step", `{"action":"priority","id":"i001","reason":"First","priority":"high"}`},
 		{"step", `{"action":"priority","id":"i001","reason":"First","priority":-1}`},

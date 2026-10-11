@@ -485,6 +485,12 @@ func compactGraphRecord(section string, raw json.RawMessage) (json.RawMessage, e
 
 // CompactGraphActionResult keeps the successful write acknowledgement within
 // the bridge frame. The saved entity remains available through graph pages.
+type compactFactPublication struct {
+	board.FactRecord
+	EvidenceExcerptsOmitted bool     `json:"evidence_excerpts_omitted,omitempty"`
+	EvidenceExcerptSHA256   []string `json:"evidence_excerpt_sha256,omitempty"`
+}
+
 func CompactGraphActionResult(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) <= maxGraphPageBytes {
 		return raw, nil
@@ -492,6 +498,32 @@ func CompactGraphActionResult(raw json.RawMessage) (json.RawMessage, error) {
 	var result board.StateActionResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
+	}
+	if result.Op == "fact" {
+		// Keep the publication's identity and exact evidence selection usable by
+		// finish_step. Excerpts already exist in retained files and the original
+		// tool call; their hashes bind reconstruction without another graph read.
+		var fact board.FactRecord
+		if err := json.Unmarshal(result.Result, &fact); err != nil {
+			return nil, err
+		}
+		publication := compactFactPublication{FactRecord: fact, EvidenceExcerptsOmitted: true}
+		for i := range publication.Evidence {
+			publication.EvidenceExcerptSHA256 = append(publication.EvidenceExcerptSHA256, graphRecordVersion([]byte(publication.Evidence[i].Excerpt)))
+			publication.Evidence[i].Excerpt = ""
+		}
+		projected, err := json.Marshal(publication)
+		if err != nil {
+			return nil, err
+		}
+		result.Result = projected
+		compact, err := json.Marshal(result)
+		if err != nil {
+			return nil, err
+		}
+		if len(compact) <= maxGraphPageBytes {
+			return compact, nil
+		}
 	}
 	return json.Marshal(struct {
 		Op            string   `json:"op"`

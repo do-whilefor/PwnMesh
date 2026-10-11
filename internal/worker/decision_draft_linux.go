@@ -448,6 +448,14 @@ func (d *decisionDraft) validateDependencies(op string, payload map[string]any) 
 // Reject missing action fields before a bad draft reserves its key. The board
 // remains authoritative for references, state transitions and evidence.
 func validateDraftFields(op string, payload map[string]any) error {
+	if _, exists := payload["condition"]; exists && op != "goal" {
+		return errors.New("condition belongs to goal actions; put Step requirements in description; draft unchanged")
+	}
+	if (op == "goal" || op == "step") && payload["action"] == "add" {
+		if id, exists := payload["id"]; exists && id != "" {
+			return errors.New("new goals and Steps receive server-assigned IDs; omit id and use the draft key for aliases; draft unchanged")
+		}
+	}
 	text := func(key string) bool {
 		value, ok := payload[key].(string)
 		return ok && strings.TrimSpace(value) != ""

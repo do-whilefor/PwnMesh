@@ -62,6 +62,12 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 				t.Fatalf("mode fields = %v, want %s", fields, tc.fields)
 			}
 			if tc.kind == "reason" {
+				if !strings.Contains(props["id"].Description, "Omit on goal/step add") {
+					t.Fatalf("new records appear to accept client-assigned IDs: %+v", props["id"])
+				}
+				if !strings.Contains(props["condition"].Description, "Goal add only") || !strings.Contains(props["condition"].Description, "in description") {
+					t.Fatalf("goal condition is ambiguous for Step creation: %+v", props["condition"])
+				}
 				if !reflect.DeepEqual(props["action"].Enum, []string{"add", "achieve", "withdraw", "abandon", "priority", "retry"}) {
 					t.Fatalf("missing transition discriminator guidance: %+v", props["action"])
 				}

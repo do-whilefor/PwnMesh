@@ -162,6 +162,65 @@ func TestAgentGraphRespectsParentDeadlineAndFailureRoute(t *testing.T) {
 	}
 }
 
+func TestAgentGraphFailureRetainsAccountWithoutAcceptedArtifacts(t *testing.T) {
+	for _, failure := range []string{"missing-artifact", "truncated", "provider", "timeout"} {
+		t.Run(failure, func(t *testing.T) {
+			j, dir := graphWrapperJob(t), t.TempDir()
+			account := "Observed partial work; the required report is unavailable."
+			calls := 0
+			o := Options{RunDir: dir, graphProvider: func(string) (agent.Provider, error) {
+				return scenarioProvider(func(ctx context.Context, _ []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
+					calls++
+					if calls > 1 {
+						if failure == "timeout" {
+							<-ctx.Done()
+							return agent.Message{}, ctx.Err()
+						}
+						return agent.Message{}, errors.New("provider disconnected")
+					}
+					message := agent.Text("assistant", account)
+					if failure == "truncated" {
+						message.StopReason = "max_tokens"
+					}
+					if failure == "provider" || failure == "timeout" {
+						message.StopReason = "tool_use"
+						message.Content = append(message.Content, agent.Block{Type: "tool_use", ID: "inspect", Name: "bash", Input: json.RawMessage(`{"command":"printf inspected"}`)})
+					}
+					return message, nil
+				}), nil
+			}}
+			spec := commandGraphSpec{Key: "agent-failure", Nodes: []commandGraphNode{
+				{ID: "source", Kind: "agent", Task: "Inspect and write report.txt", Resources: []string{}, Artifacts: []string{"report.txt"}, Optional: true},
+				{ID: "route", Command: `python3 -c 'import json,os; source=json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))[0]; assert source["status"]=="failed"; output=source["output"]; assert not output.get("artifacts") and not output["files"]; print(output["value"]["stdout"])'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source", Optional: true}}, When: &commandGraphWhen{Node: "source", Status: "failed"}},
+			}}
+			if failure == "timeout" {
+				spec.Nodes[0].Timeout = 1
+			}
+			for range 2 {
+				checkpoint, err := mixedGraphCall(t, context.Background(), j, o, spec)
+				if err != nil || checkpoint.Status != "succeeded" {
+					t.Fatalf("failure route lost the child account: %+v %v", checkpoint, err)
+				}
+				node, value := commandNodeValue(t, checkpoint, "source")
+				if node.Status != "failed" || value.Stdout != account || len(node.Output.Artifacts) != 0 {
+					t.Fatalf("failed Agent lost diagnostics or published artifacts: %+v", node)
+				}
+				_, route := commandNodeValue(t, checkpoint, "route")
+				if route.Stdout != account+"\n" {
+					t.Fatalf("failure route received the wrong account: %+v", route)
+				}
+			}
+			wantCalls := 1
+			if failure == "provider" || failure == "timeout" {
+				wantCalls = 2
+			}
+			if calls != wantCalls {
+				t.Fatalf("failed child was replayed: calls=%d want=%d", calls, wantCalls)
+			}
+		})
+	}
+}
+
 func TestMixedGraphRejectsAmbiguousCapabilitiesBeforeExecution(t *testing.T) {
 	for _, node := range []commandGraphNode{
 		{ID: "bad", Kind: "agent", Task: "task", Command: "touch outside", Resources: []string{}},

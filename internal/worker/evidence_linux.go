@@ -251,6 +251,9 @@ func prepareEvidence(ctx context.Context, j Job, runDir string, action board.Sta
 		if err != nil {
 			return action, fmt.Errorf("read selected evidence: %w", err)
 		}
+		if err := verifyCommandEvidence(ctx, j, runDir, source, raw); err != nil {
+			return action, fmt.Errorf("verify selected DAG evidence: %w", err)
+		}
 		if !utf8.Valid(raw) {
 			return action, errors.New("evidence original must be UTF-8 text")
 		}
