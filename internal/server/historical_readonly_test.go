@@ -79,6 +79,21 @@ func TestRetiredExecutionCannotResumeApplyOrRetryInCurrentProject(t *testing.T) 
 	for _, op := range []string{"resume", "status", "apply", "retry"} {
 		f.request("POST", f.base()+"/executions/"+f.run+"/"+op, map[string]any{"status": "running"}, op != "retry", http.StatusConflict, nil)
 	}
+	// Even the idempotent apply path must reject a retired protocol before
+	// returning an already-settled status.
+	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+		_, err := tx.Exec("UPDATE xloom_executions SET status='succeeded' WHERE project_id=? AND id=?", f.project, f.run)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.request("POST", f.base()+"/executions/"+f.run+"/apply", map[string]any{}, true, http.StatusConflict, nil)
+	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+		_, err := tx.Exec("UPDATE xloom_executions SET status=? WHERE project_id=? AND id=?", original.Status, f.project, f.run)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	f.request("POST", f.base()+"/executions/"+f.run+"/retry", map[string]any{"automatic": true}, false, http.StatusConflict, nil)
 	var retained board.Execution
 	f.request("GET", f.base()+"/executions/"+f.run+"?namespace=protocol-test", nil, false, http.StatusOK, &retained)

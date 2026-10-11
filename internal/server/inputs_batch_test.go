@@ -104,7 +104,7 @@ func TestInputBatchWaitsForAllFilesAndFreezesAccompanyingContent(t *testing.T) {
 	dir := isolatedInputBatchTemp(t)
 	content := "Only inspect the authorized test account; preserve both client builds."
 	files := []batchFixtureFile{{"first.apk", []byte("FIRST_APK")}, {"second.apk", []byte("SECOND_APK")}}
-	body, contentType := inputBatchBody(t, files, content)
+	body, contentType := inputBatchBody(t, files, " \n"+content+" \t")
 	split := bytes.Index(body, files[1].data)
 	reader := &gatedBatchReader{prefix: bytes.NewReader(body[:split]), suffix: bytes.NewReader(body[split:]), waiting: make(chan struct{}), resume: make(chan struct{})}
 	var resume sync.Once

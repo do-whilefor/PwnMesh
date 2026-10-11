@@ -306,9 +306,6 @@ func (c *Client) modelDelivery(name, runDir string) func(context.Context, modelr
 			return err
 		}
 		target := path.Join(runDir, "model-response-"+response.RequestID+".json")
-		if err = c.archive(ctx, name, target+".tmp", raw); err != nil {
-			return err
-		}
-		return c.exec(ctx, name, []string{"/bin/mv", "-T", "--", target + ".tmp", target}, nil, io.Discard)
+		return c.publish(ctx, name, target, raw)
 	}
 }

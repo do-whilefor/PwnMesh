@@ -286,3 +286,27 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 	}
 	return 200, page, nil
 }
+
+// Bind live execution reads to the registered input and current project round
+// before either endpoint selects updates or retained process traces.
+func executionReadState(t *b.Tx, e b.Execution, r *http.Request, read worker.GraphRequest, roundError string) (worker.Job, b.State, error) {
+	var job worker.Job
+	var current b.State
+	if err := json.Unmarshal(e.Job, &job); err != nil {
+		return job, current, err
+	}
+	if err := worker.ValidateGraphRequest(job, read); err != nil {
+		return job, current, b.Err(422, err.Error())
+	}
+	current, err := t.State(e.ProjectID)
+	if err != nil {
+		return job, current, err
+	}
+	if err = guard(t, current.Graph, r); err != nil {
+		return job, current, err
+	}
+	if job.Graph.Project.ID != e.ProjectID || job.Graph.Project.Generation != current.Graph.Project.Generation || job.RunID != e.ID || job.Kind != e.Kind {
+		return job, current, b.Err(409, roundError)
+	}
+	return job, current, nil
+}

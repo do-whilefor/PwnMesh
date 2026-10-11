@@ -117,15 +117,6 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, b.Err(422, "Expected at least one input file"))
 		return
 	}
-	q := &request{fields: map[string]any{"content": content, "creator": "user"}}
-	if content != "" {
-		q.text("content")
-		q.text("creator")
-		if q.err != nil {
-			writeError(w, r, q.err)
-			return
-		}
-	}
 	inputs := make([]b.InputFile, 0, len(files))
 	err = s.Store.Do(r.Context(), func(t *b.Tx) error {
 		for _, file := range files {
@@ -140,10 +131,7 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 			inputs = append(inputs, input)
 		}
 		if content != "" {
-			_, _, err := s.hint(t, q, r)
-			if q.err != nil {
-				return q.err
-			}
+			_, _, err := s.hint(t, &request{fields: map[string]any{"content": content, "creator": "user"}}, r)
 			return err
 		}
 		return nil

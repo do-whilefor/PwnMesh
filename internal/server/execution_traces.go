@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 
 	b "pwnmesh/internal/board"
@@ -25,22 +24,9 @@ func (s *Server) executionTraces(t *b.Tx, q *request, r *http.Request) (int, any
 	if e.Kind != "explore" || e.Intent == "" || !e.Pending() || e.Status == "result_pending" {
 		return 0, nil, b.Err(409, "Trace read requires an active Execute run")
 	}
-	var job worker.Job
-	if err = json.Unmarshal(e.Job, &job); err != nil {
-		return 0, nil, err
-	}
-	if err = worker.ValidateGraphRequest(job, read); err != nil {
-		return 0, nil, b.Err(422, err.Error())
-	}
-	current, err := t.State(e.ProjectID)
+	job, _, err := executionReadState(t, e, r, read, "Trace read belongs to another execution or project round")
 	if err != nil {
 		return 0, nil, err
-	}
-	if err = guard(t, current.Graph, r); err != nil {
-		return 0, nil, err
-	}
-	if job.Graph.Project.ID != e.ProjectID || job.Graph.Project.Generation != current.Graph.Project.Generation || job.RunID != e.ID || job.Kind != e.Kind {
-		return 0, nil, b.Err(409, "Trace read belongs to another execution or project round")
 	}
 	limit := read.Limit
 	if limit == 0 {

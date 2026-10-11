@@ -258,6 +258,14 @@ func (c *Client) archive(ctx context.Context, name, target string, data []byte) 
 	return nil
 }
 
+// Publish only after the complete temporary file has reached the container.
+func (c *Client) publish(ctx context.Context, name, target string, data []byte) error {
+	if err := c.archive(ctx, name, target+".tmp", data); err != nil {
+		return err
+	}
+	return c.exec(ctx, name, []string{"/bin/mv", "-T", "--", target + ".tmp", target}, nil, io.Discard)
+}
+
 // exec starts without TTY; Docker frames stdout/stderr with an 8-byte header.
 func (c *Client) exec(ctx context.Context, name string, argv, env []string, out io.Writer) error {
 	var created struct {

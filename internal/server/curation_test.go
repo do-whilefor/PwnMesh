@@ -141,9 +141,30 @@ func TestCuratorCannotForgeSuccessfulResultWithoutReceipt(t *testing.T) {
 	}
 	f.request("POST", f.base()+"/intents", map[string]any{"from": []string{"origin"}, "description": "Unauthorized plan", "creator": f.lease}, true, http.StatusForbidden, nil)
 	f.pending(`{"accepted":true,"data":{"curated":true}}`)
-	f.apply(http.StatusConflict)
+	before := f.state()
+	for range 2 {
+		body := f.apply(http.StatusConflict)
+		if !strings.Contains(body, "Curator has no committed curation receipt") || !reflect.DeepEqual(before, f.state()) {
+			t.Fatal("receipt-free curation changed its rejection or business state")
+		}
+	}
 	if executions := f.executionRecords(); len(executions) != 1 || executions[0].Status != "result_pending" {
 		t.Fatal("forged final text became a successful curation")
+	}
+}
+
+func TestCuratorCanRejectWithoutPublishingReceipt(t *testing.T) {
+	f := newCurationHTTPFixture(t)
+	prepareCurator(f)
+	f.pending(`{"accepted":false,"reason":"Insufficient evidence to curate"}`)
+	for range 2 {
+		f.apply(http.StatusOK)
+	}
+	if executions := f.executionRecords(); len(executions) != 1 || executions[0].Status != "rejected" {
+		t.Fatal("curator rejection was not retained")
+	}
+	if f.state().Graph.Project.Curator != nil {
+		t.Fatal("curator rejection retained its lease")
 	}
 }
 

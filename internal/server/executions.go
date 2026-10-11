@@ -231,9 +231,6 @@ func (s *Server) executionAction(t *b.Tx, q *request, r *http.Request) (int, any
 // Final business mutations and their receipt commit in the same SQLite
 // transaction. Retrying after a lost HTTP response cannot append duplicates.
 func applyExecution(t *b.Tx, e b.Execution) (int, any, error) {
-	if err := requireCurrentExecution(e); err != nil {
-		return 0, nil, err
-	}
 	if e.Status == "succeeded" || e.Status == "rejected" {
 		return 200, map[string]string{"status": e.Status}, nil
 	}
@@ -308,21 +305,8 @@ func applyExecution(t *b.Tx, e b.Execution) (int, any, error) {
 	if parsed.Kind == "rejected" {
 		status = "rejected"
 	} else if e.Kind == "curate" {
-		if parsed.Kind != "curated" {
-			return 0, nil, b.Err(422, "Invalid curation result")
-		}
-		receipt, receiptErr := t.CurationReceipt(e.ProjectID, e.Lease)
-		if receiptErr != nil {
-			var apiError *b.APIError
-			if errors.As(receiptErr, &apiError) && apiError.Status == http.StatusNotFound {
-				return 0, nil, b.Err(409, "Curator has no committed curation receipt")
-			}
-			return 0, nil, receiptErr
-		}
-		if !receipt.Committed || receipt.Op != "curate" {
-			return 0, nil, b.Err(409, "Curator has no committed curation receipt")
-		}
-
+		// Committed receipts were settled above in this same transaction.
+		return 0, nil, b.Err(409, "Curator has no committed curation receipt")
 	} else {
 		if _, err = t.ConcludeEvidenceStep(e.ProjectID, e.Fence(), parsed.FactID, parsed.FactPayload); err != nil {
 			return 0, nil, err

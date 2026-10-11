@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"io"
 	"path"
 	"time"
 
@@ -78,10 +77,6 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j work
 		// A complete temporary file is uploaded before publishing the response.
 		// Every path component comes from the verified run or a 32-hex request ID.
 		target := path.Join(runDir, "graph-response-"+request.RequestID+".json")
-		tmp := target + ".tmp"
-		if err = c.archive(ctx, name, tmp, raw); err != nil {
-			return err
-		}
-		return c.exec(ctx, name, []string{"/bin/mv", "-T", "--", tmp, target}, nil, io.Discard)
+		return c.publish(ctx, name, target, raw)
 	}
 }

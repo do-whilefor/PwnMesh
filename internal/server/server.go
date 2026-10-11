@@ -302,10 +302,7 @@ func (r *request) orchestrationVersion() int {
 
 // Headers opt a dispatcher request into the board's transactional lease fence.
 func guard(t *b.Tx, g b.Graph, r *http.Request) error {
-	return t.CheckExecution(g, b.ExecutionFence{
-		Run: r.Header.Get("X-PwnMesh-Run"), Lease: r.Header.Get("X-PwnMesh-Lease"),
-		Intent: r.Header.Get("X-PwnMesh-Intent"),
-	})
+	return t.CheckExecution(g, decisionFence(r))
 }
 
 // Unregistered clients without execution headers retain Cairn's ability to
