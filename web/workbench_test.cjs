@@ -117,3 +117,26 @@ test('archived UTF-8 state chunks join without corrupting a split multibyte char
  const summary={id:'a',generation:0,archivedAt:stamp,files:[]},project={id:'a',history:[summary]};
  const service=new Service({async request(url){if(url.endsWith('/entries?limit=100&cursor=0'))return {items:[{cursor:1,kind:'state',bytes:bytes.length}]};const offset=Number(new URL(url,'http://local').searchParams.get('offset'));return {encoding:'base64',offset,total_bytes:bytes.length,data:bytes.subarray(offset,offset?bytes.length:split).toString('base64'),...(offset?{}:{next_offset:split})};}});service.projects=[project];const archived=await service.archive(project,0);assert.equal(archived.name,'中文项目');
 });
+
+test('archived rounds retain their real completion or termination time across live refreshes',async()=>{
+ const ended='2026-10-10T02:30:00Z',archivedAt='2026-10-11T03:00:00Z';
+ for(const status of ['completed','terminated','active']){
+  const oldState=snapshot('a',0),liveState=snapshot('a',1);oldState.graph.project.status=status;
+  if(status==='terminated')oldState.graph.project.terminated_at=ended;
+  if(status==='completed'){
+   oldState.goals=[{id:'goal',status:'achieved'}];
+   oldState.graph.intents=[{id:'finish',to:'goal',concluded_at:ended}];
+  }
+  const bytes=Buffer.from(JSON.stringify(oldState)),api=fixture({a:liveState}),original=api.request.bind(api);
+  api.request=(url,options)=>{
+   if(url==='/projects/a/rounds?limit=100&cursor=-1')return {items:[{generation:0,archived_at:archivedAt}]};
+   if(url==='/projects/a/rounds/0/entries?limit=100&cursor=0')return {items:[{cursor:1,kind:'state',bytes:bytes.length}]};
+   if(url.startsWith('/projects/a/rounds/0/entries/1?'))return {encoding:'base64',offset:0,total_bytes:bytes.length,data:bytes.toString('base64')};
+   return original(url,options);
+  };
+  const service=new Service(api);await service.refresh('a');const round=await service.archive(service.projects[0],0);
+  const expected=status==='active'?archivedAt:new Date(ended).toISOString();
+  assert.equal(round.endedAt,expected,status+' hydration');assert.equal(round.archivedAt,archivedAt);
+  await service.refresh('a');assert.equal(service.projects[0].history[0].endedAt,expected,status+' refresh');
+ }
+});

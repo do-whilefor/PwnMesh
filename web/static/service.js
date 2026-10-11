@@ -38,7 +38,7 @@
         if(selected.generation!==generation||(identity.generation||0)!==generation){this.events.delete(selected.id);throw new API.APIError('项目已进入新轮次，正在重新同步。',409);}
         cache={generation,revision:state.revision,after,items:cache.items.concat(batch)};this.events.set(selected.id,cache);
         Object.assign(selected,snapshotView(state,cache.items.filter(e=>e.revision<=state.revision),runs.filter(r=>(r.generation||0)===generation),files,selected));
-        selected.history=rounds.map(round=>{const previous=selected.history.find(p=>p.generation===round.generation);return Object.assign(previous||{status:'paused'},{id:selected.id,name:selected.name,type:selected.type,generation:round.generation,archived:true,archivedAt:round.archived_at,endedAt:round.archived_at,files:files.filter(f=>f.created_at<=round.archived_at),history:[]});});
+        selected.history=rounds.map(round=>{const previous=selected.history.find(p=>p.generation===round.generation);return Object.assign(previous||{status:'paused'},{id:selected.id,name:selected.name,type:selected.type,generation:round.generation,archived:true,archivedAt:round.archived_at,endedAt:previous?.endedAt || round.archived_at,files:files.filter(f=>f.created_at<=round.archived_at),history:[]});});
       }
       if(!this.scope.current(request.version))return null;this.projects=projects;return {projects,selected};
     }
@@ -86,7 +86,8 @@
         records[entry.kind].push(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
       }
       if(!records.state.length)throw new Error('历史轮次缺少状态快照。');
-      const value={...snapshotView(records.state[0],records.event,records.execution,summary.files,summary),archived:true,endedAt:summary.archivedAt,history:[]};Object.assign(summary,value);const latest=this.projects.find(p=>p.id===project.id)?.history.find(p=>p.generation===generation);if(latest&&latest!==summary)Object.assign(latest,value);return latest||summary;
+      const snapshot=snapshotView(records.state[0],records.event,records.execution,summary.files,summary);
+      const value={...snapshot,archived:true,endedAt:snapshot.endedAt || summary.archivedAt,history:[]};Object.assign(summary,value);const latest=this.projects.find(p=>p.id===project.id)?.history.find(p=>p.generation===generation);if(latest&&latest!==summary)Object.assign(latest,value);return latest||summary;
     }
   }
   return {Service,projectView,snapshotView};
