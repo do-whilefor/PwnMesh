@@ -33,18 +33,3 @@
 .graph-edge-label.invalid{fill:#7d5b29}
 .graph-edge.invalid.selected{stroke:#bc6043}
 .graph-node.invalid.selected{border-color:#bc6043}
-
-.graph-trace-controls{display:flex;align-items:center;pointer-events:auto;background:#fff;border:1px solid #d9e1e6;border-radius:6px;padding:2px;flex:none}
-.graph-trace-controls button{display:flex;align-items:center;justify-content:center;gap:4px;min-width:55px;height:27px;padding:0 6px;font-size:11px;color:#5c6f7c;border-radius:4px}
-.graph-trace-controls button[aria-pressed="true"]{background:#eaf3f0;color:#286c58}
-.graph-trace-controls button:focus-visible{outline:2px solid #5b927f;outline-offset:1px}
-.graph-trace-controls button:disabled{opacity:.45}
-.graph-trace-controls [data-trace="downstream"] .lucide{transform:rotate(180deg)}
-.canvas-panel .canvas-bottom{gap:8px;flex-wrap:wrap}
-.canvas-panel .canvas-footer{height:auto;min-height:36px;gap:8px;padding-top:4px;padding-bottom:4px;flex-wrap:wrap}
-.canvas-panel .legend{flex-wrap:wrap;gap:2px 6px}
-.canvas-panel .legend-dot.invalid{background:#ad5665}
-.canvas-panel .legend-dot.paused{background:#aa7e42}
-.canvas-panel .legend-dot.blocked{background:#858290}
-.canvas-panel .task-progress{white-space:nowrap;margin-left:auto}
-.graph-edge[data-edge-kind="step_observation"]{stroke-dasharray:3 4}

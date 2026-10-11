@@ -349,25 +349,3 @@ dialog{padding:25px;border-color:#e2e9ed;border-radius:14px;box-shadow:0 20px 65
 .log-long-content[open] .log-expand{color:#a37258}
 
 .log-title:hover,.log-title:focus-visible{background:#f7f9fa}
-
-@media(max-width:1179px){
-  body{min-width:0}
-  .sidebar{position:relative;inset:auto;width:auto;margin:8px;padding:10px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;border-radius:8px}
-  .sidebar .brand{padding:0;margin:0}.sidebar .brand-art{width:145px;height:38px}.sidebar .create-button{align-self:center}
-  .sidebar .brand-art img{width:221px;left:-39px;top:-38px}
-  .sidebar .project-search{grid-column:1/-1;margin:0}.sidebar .nav-caption{display:none}
-  .sidebar #project-list{grid-column:1/-1;display:flex;gap:6px;max-height:100px;overflow:auto}
-  .sidebar .project-row{flex:0 0 210px;min-width:0}
-  .workbench{margin-left:0;height:auto;min-width:0}
-  #main{overflow:visible;min-width:0}
-  .project-page{height:auto;min-height:0;padding:0 8px 8px}
-  .project-heading{grid-template-columns:minmax(0,1fr);gap:8px;padding:12px}
-  .project-heading .title-row{flex-wrap:wrap}.project-heading .title-row h1{overflow-wrap:anywhere;letter-spacing:0}
-  .project-heading .project-description{flex-wrap:wrap;white-space:normal;gap:5px}
-  .project-heading .project-times{flex-wrap:wrap}.heading-actions{justify-content:flex-end}
-  .project-body{grid-template-columns:minmax(0,1fr)}
-  .canvas-panel{min-height:540px}.graph-stage{min-height:400px}
-  .canvas-header{height:auto;min-height:42px;flex-wrap:wrap;gap:8px;padding:8px 12px}
-  .canvas-header .view-tabs{height:32px}.workspace-actions{flex-wrap:wrap;justify-content:flex-start}
-  .activity-pane{height:440px}
-}

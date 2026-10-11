@@ -93,8 +93,8 @@ test('literal and dynamic application icon choices are included in the subset', 
   const tabs = [...app.matchAll(/\['(?:graph|materials|result)','([^']+)'/g)];
   assert.ok(tabs.length >= 3, 'inspect dynamic tab icons when their mapping changes');
   tabs.forEach(match => required.add(match[1]));
-  const zoom = [...app.matchAll(/\['(?:zoom-out|zoom-in|fit-graph|arrange-graph|upstream|downstream)','([^']+)'/g)];
-  assert.equal(zoom.length, 6, 'inspect dynamic graph control icons when their mapping changes');
+  const zoom = [...app.matchAll(/\['(?:zoom-out|zoom-in|fit-graph)','([^']+)'/g)];
+  assert.equal(zoom.length, 3, 'inspect dynamic zoom icons when their mapping changes');
   zoom.forEach(match => required.add(match[1]));
   for (const name of required) assert.ok(ICONS.includes(name), `Missing application icon: ${name}`);
 });
