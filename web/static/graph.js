@@ -83,8 +83,8 @@
       const previousNode = this.project?.nodeIndex.get(this.selected), previousEdge = describeEdge(this.project, this.selectedEdge);
       this.saveView();
       if (changed) { this.cancelDrag(); this.cancelPendingFit(); this.statusFilter = 'all'; }
-      // New generations invalidate previous-round coordinates and camera.
-      for (const [savedKey, saved] of this.projectLayouts) if (saved.projectId === mapped.projectId && saved.generation !== mapped.generation) this.projectLayouts.delete(savedKey);
+      // The generation-scoped key gives new rounds a fresh layout while
+      // preserving each viewed round when navigating through history.
       let saved = this.projectLayouts.get(key);
       const fresh = !saved;
       if (!saved) saved = {projectId: mapped.projectId, generation: mapped.generation, positions: new Map()};

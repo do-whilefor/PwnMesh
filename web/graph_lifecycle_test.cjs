@@ -52,14 +52,14 @@ test('repeated updates preserve DOM identity and manual positions, and merge one
   assert.deepEqual([graph.scale, graph.tx, graph.ty], camera); assert.ok(graph.positions.has('fact:new'));
   graph.destroy();
 });
-test('switching projects restores exact camera and positions; new generation invalidates the old round', () => {
+test('switching projects restores exact camera and positions; new generations receive their own layout', () => {
   const h = harness(), graph = h.graph; graph.setState(state('A')); h.flush();
   graph.positions.set('fact:origin', {x: -444, y: 777}); graph.scale = .36; graph.tx = -555; graph.ty = 888; graph.transform();
   graph.setState(null); h.flush(); graph.setState(state('B')); h.flush(); graph.zoomBy(1.4);
   graph.setState(state('A')); h.flush();
   assert.deepEqual(graph.positions.get('fact:origin'), {x: -444, y: 777}); assert.deepEqual([graph.scale, graph.tx, graph.ty], [.36, -555, 888]);
   graph.setState(state('A', 2)); h.flush(); assert.notDeepEqual(graph.positions.get('fact:origin'), {x: -444, y: 777});
-  assert.ok(!graph.projectLayouts.has(JSON.stringify(['A', 1]))); graph.forgetProject('B'); assert.ok(!graph.projectLayouts.has(JSON.stringify(['B', 1])));
+  assert.ok(graph.projectLayouts.has(JSON.stringify(['A', 1]))); graph.forgetProject('B'); assert.ok(!graph.projectLayouts.has(JSON.stringify(['B', 1])));
   graph.destroy();
 });
 
@@ -75,8 +75,25 @@ test('application-owned layouts survive graph remounts and remain scoped to the 
   assert.deepEqual([restored.graph.scale,restored.graph.tx,restored.graph.ty], [.42,72,-48]);
   restored.graph.setState(state('A', 2)); restored.flush();
   assert.notDeepEqual(restored.graph.positions.get('step:work'), {x: 144, y: 288});
-  assert.equal(projectLayouts.has(JSON.stringify(['A', 1])),false);
+  assert.equal(projectLayouts.has(JSON.stringify(['A', 1])),true);
   restored.graph.forgetProject('B'); assert.equal(projectLayouts.has(JSON.stringify(['B', 1])),false);
+  restored.graph.destroy();
+});
+
+test('viewing an archived round preserves the current round layout and camera across remounts', () => {
+  const projectLayouts = new Map(), current = harness({projectLayouts});
+  current.graph.setState(state('A', 2)); current.flush();
+  current.graph.positions.set('step:work', {x: -620, y: 480});
+  current.graph.scale = .55; current.graph.tx = 130; current.graph.ty = -260;
+  current.graph.destroy();
+  const archived = harness({projectLayouts}); archived.graph.setState(state('A', 1)); archived.flush();
+  assert.notDeepEqual(archived.graph.positions.get('step:work'), {x: -620, y: 480});
+  archived.graph.destroy();
+  const restored = harness({projectLayouts}); restored.graph.setState(state('A', 2)); restored.flush();
+  assert.deepEqual(restored.graph.positions.get('step:work'), {x: -620, y: 480});
+  assert.deepEqual([restored.graph.scale, restored.graph.tx, restored.graph.ty], [.55, 130, -260]);
+  restored.graph.forgetProject('A');
+  assert.ok([...projectLayouts.values()].every(layout => layout.projectId !== 'A'));
   restored.graph.destroy();
 });
 test('updated text invalidates no geometry but refreshes cached-edge labels, details and selection callbacks', () => {

@@ -164,6 +164,21 @@ test('embedded canvas handles live graph changes and unrestricted pointer moveme
   assert.equal(await page.locator('#canvas-probe [data-node-key="fact:f0"]').count(),0);
   await page.evaluate(()=>{probeState.graph.project.generation=1; probe.setState(probeState);});
   assert.notDeepEqual(await page.evaluate(()=>[probe.scale,probe.tx,probe.ty]),saved.camera);
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  const currentRound = await page.evaluate(()=>{
+    probe.positions.set('step:s0',{x:-620,y:480});probe.zoomBy(.8);
+    return {positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty]};
+  });
+  await page.evaluate(async()=>{
+    const archived=structuredClone(probeState);archived.graph.project.generation=0;
+    probe.setState(archived);
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    probe.setState(probeState);
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  });
+  const restoredRound = await page.evaluate(()=>({positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty]}));
+  assert.deepEqual(new Map(restoredRound.positions),new Map(currentRound.positions),'viewing an archived round preserves the current round arrangement');
+  assert.deepEqual(restoredRound.camera,currentRound.camera);
   await page.evaluate(()=>{probe.destroy(); document.getElementById('canvas-probe').remove();});
   assert.deepEqual(errors,[]);
   t.diagnostic(`122 nodes / 183 edges; initial synchronous update ${initial.duration.toFixed(1)} ms`);
