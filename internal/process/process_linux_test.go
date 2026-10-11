@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -124,7 +125,8 @@ func TestRunStreamsCancellationCleansUpChildren(t *testing.T) {
 	deadline = time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", childPID))
-		if os.IsNotExist(err) {
+		// Reaping between open and read returns ESRCH instead of ENOENT.
+		if os.IsNotExist(err) || errors.Is(err, syscall.ESRCH) {
 			return
 		}
 		if err != nil {
