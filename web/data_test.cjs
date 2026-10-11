@@ -42,6 +42,42 @@ test('only persisted completion with valid root support becomes a project result
   assert.equal(data.buildResult(state).status,'unverified');
 });
 
+test('ordinary code goals and their complete delivered code survive all three scenarios', () => {
+  const code = 'def recursive_sort(values):\n    if len(values) < 2:\n        return values[:]\n    pivot = values[0]\n    return (recursive_sort([x for x in values[1:] if x < pivot])\n            + [pivot]\n            + recursive_sort([x for x in values[1:] if x >= pivot]))';
+  const delivery = '递归排序代码：\n\n```python\n' + code + '\n```\n\n示例：recursive_sort([3, -1, 3]) == [-1, 3, 3]。';
+  for (const scenario of ['ctf','pentest','audit']) {
+    const payload = data.validateProject({title:'递归排序',origin:'Python 标准库；没有 APK、客户端或安全测试目标。',goal:'编写递归排序代码并输出完整函数与运行示例。',scenario});
+    assert.equal(payload.scenario,scenario);
+    const state = fixture();
+    state.graph.project.status = 'completed';
+    state.graph.project.scenario = scenario;
+    state.graph.intents[0].description = delivery;
+    state.findings = [];
+    const result = data.buildResult(state);
+    assert.equal(result.status,'completed');
+    assert.equal(result.summary,delivery);
+    assert.deepEqual(result.findings,[]);
+    state.goals[0].support_valid = false;
+    assert.equal(data.buildResult(state).summary,'');
+  }
+});
+
+test('persisted deliverables preserve literal reasoning tags inside code and text', () => {
+  const state = fixture();
+  state.graph.project.status = 'completed';
+  for (const code of ['const xml = "<analysis>sort results</analysis>";',
+    'print("<think>literal</think>", "<thinking>literal</thinking>")',
+    'const openingTag = "<analysis>";']) {
+    const delivery = '```\n' + code + '\n```';
+    state.graph.intents[0].description = delivery;
+    state.findings[0].claim = code;
+    const result = data.buildResult(state);
+    assert.equal(result.status,'completed');
+    assert.equal(result.summary,delivery);
+    assert.equal(result.findings[0].claim,code);
+  }
+});
+
 test('candidate findings, invalid support, rejected and truncated output never become successful conclusions', () => {
   const state = fixture();
   state.findings = [{id:'a',claim:'候选',status:'candidate',sources:[]},

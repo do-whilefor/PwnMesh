@@ -292,14 +292,14 @@ func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
 				return scenarioProvider(func(_ context.Context, history []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
 					requests++
 					prompt := history[0].Text()
-					ctf := tc.scenario == "ctf" && tc.submission
+					ctf := tc.scenario == "ctf"
 					if strings.Contains(prompt, pentestPolicy) != (tc.scenario == "pentest") || strings.Contains(prompt, ctfPolicy) != ctf || strings.Count(prompt, executionDiscipline) != 1 {
 						return agent.Message{}, errors.New("child scenario policy or execution limits were lost or duplicated")
 					}
 					tools := map[string]bool{}
 					for _, def := range defs {
 						tools[def.Name] = true
-						if strings.Contains(def.Description, ctfExecution) != (ctf && def.Name == "bash") {
+						if strings.Contains(def.Description, ctfExecution) != (ctf && tc.submission && def.Name == "bash") {
 							return agent.Message{}, errors.New("CTF submission instructions escaped their configured bash capability")
 						}
 					}

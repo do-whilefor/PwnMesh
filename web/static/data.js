@@ -376,7 +376,7 @@
     const facts = new Map(array(state.fact_records).map(fact => [fact.id,fact]));
     const findings = array(state.findings).map(finding => {
       const supportValid = sourceSupport(finding, facts);
-      return {id:string(finding.id),claim:visibleFinalText(finding.claim),status:string(finding.status),
+      return {id:string(finding.id),claim:string(finding.claim),status:string(finding.status),
         statusLabel:findingLabel(finding,supportValid),supportValid,sources:refs(finding.sources)};
     });
     const executionLogs = logs.filter(log => log.source === 'execution');
@@ -397,7 +397,8 @@
       // final response, or fact:goal (the input) cannot substitute for it.
       const valid = rootGoal?.status === 'achieved' && sourceSupport(rootGoal,facts) && completion;
       if (valid) {
-        status = 'completed'; summary = visibleFinalText(completion.description);
+        // Persisted public content can contain literal tags in delivered code.
+        status = 'completed'; summary = string(completion.description);
         notice = '项目已完成，根目标具有有效证据。';
       } else {
         status = 'unverified'; notice = '项目记录为已完成，但完成说明或根目标有效证据不完整，请核对黑板记录。';

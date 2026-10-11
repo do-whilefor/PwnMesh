@@ -40,8 +40,8 @@ func TestCTFSubmissionCapabilityRequiresConfiguredChannel(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if strings.Contains(prompt, ctfPolicy) != tc.available {
-					t.Fatalf("%s prompt disagrees with the configured submission capability", kind)
+				if !strings.Contains(prompt, ctfPolicy) {
+					t.Fatalf("%s prompt lost the general submission evidence policy", kind)
 				}
 				options := Options{RunDir: t.TempDir()}
 				if err := ConfigureRuntimeTools(job, &options); err != nil {
@@ -67,7 +67,7 @@ func TestCTFSubmissionCapabilityRequiresConfiguredChannel(t *testing.T) {
 	}
 }
 
-func TestUnconfiguredCTFKeepsUserInstructionsWithoutSubmissionPolicy(t *testing.T) {
+func TestUnconfiguredCTFKeepsUserInstructionsAndSubmissionEvidencePolicy(t *testing.T) {
 	t.Setenv("TSEC_SERVER_HOST", "")
 	t.Setenv("TSEC_AGENT_TOKEN", "")
 	for _, kind := range []string{"reason", "explore"} {
@@ -89,7 +89,15 @@ func TestUnconfiguredCTFKeepsUserInstructionsWithoutSubmissionPolicy(t *testing.
 				if !strings.Contains(input, custom) {
 					t.Fatal("scenario capability filtering removed user task instructions")
 				}
-				for _, unexpected := range []string{"CTF submission evidence:", "TSEC_", "Submission requires an Execute action"} {
+				if !strings.Contains(input, ctfPolicy) {
+					t.Fatal("model lost submission evidence rules for a user-specified service")
+				}
+				for _, rule := range []string{"only when the user's task requires flag submission", "choosing CTF alone does not add", "API response explicitly confirms acceptance"} {
+					if !strings.Contains(input, rule) {
+						t.Fatalf("model lost scoped CTF submission rule %q", rule)
+					}
+				}
+				for _, unexpected := range []string{"TSEC_", ctfExecution} {
 					if strings.Contains(input, unexpected) {
 						t.Fatalf("model received an unconfigured submission policy: %q", unexpected)
 					}

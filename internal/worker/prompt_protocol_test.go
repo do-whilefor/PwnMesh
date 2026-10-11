@@ -123,10 +123,40 @@ func TestPlannerKeepsSingleWriterAndEvidenceReview(t *testing.T) {
 		"unless the user requests it earlier", "Preserve the user's root conditions and required coverage",
 		"Combine independent evidence review, report generation and artifact validation when they fit one Step",
 		"Reuse existing reports with targeted corrections",
+		"Include requested answers or code snippets directly in the completion description (limit: 16384 bytes)",
+		"for larger deliverables, identify the artifact and its supporting evidence",
 		"Add a separate report review only if the user requests it or a specific concern about content, evidence support or required coverage remains unresolved",
 		"wait for its producing Step's completion"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("rpc=%t lost deliverable ordering or verification: %q", rpc, required)
+		}
+	}
+}
+
+func TestScenarioRulesPreserveGeneralUserGoals(t *testing.T) {
+	t.Setenv("TSEC_SERVER_HOST", "")
+	t.Setenv("TSEC_AGENT_TOKEN", "")
+	const goal = "Write and return recursive sorting code with tests for empty input, duplicates and negative numbers."
+	for _, scenario := range []string{"ctf", "pentest", "audit"} {
+		for _, kind := range []string{"reason", "explore"} {
+			t.Run(scenario+"/"+kind, func(t *testing.T) {
+				job := Job{Kind: kind, Graph: board.Graph{
+					Project: board.Project{Scenario: scenario},
+					Facts:   []board.Fact{{ID: "origin", Description: "No existing code or uploaded files."}, {ID: "goal", Description: goal}},
+				}}
+				prompt, err := Prompt(job, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, required := range []string{goal, "including non-security tasks", "scenario rules apply only to relevant work and add no extra deliverables"} {
+					if !strings.Contains(prompt, required) {
+						t.Errorf("general task lost its goal or scope boundary: %q", required)
+					}
+				}
+				if scenario == "pentest" && !strings.Contains(prompt, "Apply these rules only to vulnerability assessment and reporting within the user's goal") {
+					t.Error("pentest policy can turn a code task into an unsolicited vulnerability assessment")
+				}
+			})
 		}
 	}
 }

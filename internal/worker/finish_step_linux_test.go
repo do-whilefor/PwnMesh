@@ -25,6 +25,140 @@ func finishStepInput(t *testing.T, path string) json.RawMessage {
 	return result["data"]
 }
 
+// The model replies are scripted; writing, executing, freezing and replaying
+// the delivered code use the real Worker tools and durable result protocol.
+func TestFinishStepDeliversRecursiveSortAcrossScenarios(t *testing.T) {
+	const source = `def merge_sort(values):
+    if len(values) < 2:
+        return list(values)
+    middle = len(values) // 2
+    left = merge_sort(values[:middle])
+    right = merge_sort(values[middle:])
+    result = []
+    i = j = 0
+    while i < len(left) and j < len(right):
+        if left[i] <= right[j]:
+            result.append(left[i])
+            i += 1
+        else:
+            result.append(right[j])
+            j += 1
+    return result + left[i:] + right[j:]
+
+if __name__ == "__main__":
+    import json
+    cases = [[], [9], [3, 1, 3, -2, 0], [1, 2, 3], [3, 2, 1], [4, 4, 4]]
+    receipts = []
+    for values in cases:
+        before = values[:]
+        actual = merge_sort(values)
+        assert actual == sorted(before), (before, actual)
+        assert values == before, "input was modified"
+        receipts.append({"input": before, "output": actual})
+    print(json.dumps({"passed": len(receipts), "cases": receipts}))
+`
+	for _, scenario := range []string{"ctf", "pentest", "audit"} {
+		t.Run(scenario, func(t *testing.T) {
+			j := scenarioJob(t, scenario, "explore")
+			j.Graph.Facts[0].Description = "Use Python standard library only; there is no application or security target."
+			j.Graph.Facts[1].Description = "Write and deliver recursive sorting code, with an example and verified edge cases."
+			j.Intent.Description = j.Graph.Facts[1].Description
+			j.Graph.Intents[0] = *j.Intent
+			j.Budget.Timeout = 30
+			dir := t.TempDir()
+			codePath := filepath.Join(j.Workspace, "recursive_sort.py")
+			proofPath := filepath.Join(j.Workspace, "verification.json")
+			delivery := "Recursive merge sort; all six edge cases passed.\n\n```python\n" + source + "```"
+			turn := 0
+			provider := scenarioProvider(func(_ context.Context, history []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+				turn++
+				if turn > 3 {
+					t.Fatal("the completed code task requested an extra model turn")
+				}
+				if turn > 1 {
+					found := false
+					for _, message := range history {
+						for _, block := range message.Content {
+							if block.Type == "tool_result" && block.ToolUseID == []string{"", "write-code", "run-tests"}[turn-1] {
+								found = true
+								if block.IsError {
+									t.Fatalf("real tool failed: %s", block.Content)
+								}
+							}
+						}
+					}
+					if !found {
+						t.Fatal("tool result did not reach the next model turn")
+					}
+				}
+				name, id := "write", "write-code"
+				input := map[string]any{"path": codePath, "content": source}
+				if turn == 2 {
+					name, id = "bash", "run-tests"
+					input = map[string]any{"command": "python3 recursive_sort.py > verification.json", "timeout": 10}
+				} else if turn == 3 {
+					proof, err := os.ReadFile(proofPath)
+					if err != nil {
+						t.Fatal(err)
+					}
+					var receipt struct {
+						Passed int `json:"passed"`
+						Cases  []struct {
+							Input  []int `json:"input"`
+							Output []int `json:"output"`
+						} `json:"cases"`
+					}
+					if json.Unmarshal(proof, &receipt) != nil || receipt.Passed != 6 || len(receipt.Cases) != 6 || len(receipt.Cases[0].Output) != 0 {
+						t.Fatalf("missing actual edge-case verification: %s", proof)
+					}
+					name, id = "finish_step", "deliver-code"
+					input = map[string]any{"fact": map[string]any{"description": delivery, "scope": "local recursive sorting code", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []map[string]string{{"path": codePath}, {"path": proofPath}}}}
+				}
+				available := false
+				for _, def := range defs {
+					available = available || def.Name == name
+				}
+				if !available {
+					t.Fatalf("scenario %s removed the %s capability", scenario, name)
+				}
+				raw, _ := json.Marshal(input)
+				return agent.Message{Role: "assistant", StopReason: "tool_use", Content: []agent.Block{{Type: "tool_use", ID: id, Name: name, Input: raw}}}, nil
+			})
+			result, err := runTestWorker(context.Background(), j, Options{RunDir: dir, Provider: provider})
+			if err != nil || result.Status != "success" || turn != 3 {
+				t.Fatalf("ordinary code delivery failed: result=%+v turns=%d err=%v", result, turn, err)
+			}
+			parsed, err := parseOutput(j, result.Conclude, result.Text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fact board.FactRecord
+			if json.Unmarshal(parsed.FactPayload, &fact) != nil || fact.Description != delivery || len(fact.Evidence) != 2 {
+				t.Fatalf("full code or verification references were lost: %s", parsed.FactPayload)
+			}
+			proof, err := os.ReadFile(proofPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for n, want := range []string{source, string(proof)} {
+				ref := fact.Evidence[n]
+				retained, err := os.ReadFile(ref.Path)
+				if err != nil || string(retained) != want || ref.Excerpt != want || ref.RunID != j.RunID {
+					t.Fatalf("delivered code or execution receipt not frozen: %+v %v", ref, err)
+				}
+			}
+			saved := outcomeSession(t, dir)
+			if saved.Result == nil || saved.Result.Text != result.Text {
+				t.Fatal("the completed code result was not durably saved")
+			}
+			again, err := runTestWorker(context.Background(), j, Options{RunDir: dir, Provider: provider})
+			if err != nil || again.Text != result.Text || turn != 3 {
+				t.Fatalf("replay changed the delivered code or reran the model: %+v %v", again, err)
+			}
+		})
+	}
+}
+
 func TestFinishStepStopsWithoutConfirmationAndFreezesOriginal(t *testing.T) {
 	j := graphWrapperJob(t)
 	j.ResultContractVersion = 2
