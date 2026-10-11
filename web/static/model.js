@@ -14,7 +14,7 @@
     if(all.some(file=>!file||!Number.isSafeInteger(file.size)||file.size<0))return '文件大小必须是有效的非负整数。';
     if(all.some(file=>file.size>256*MiB))return '单个文件不能超过 256 MiB。';
     if(all.reduce((total,file)=>total+file.size,0)>512*MiB)return '文件总大小不能超过 512 MiB（含已导入材料）。';
-    if(all.some(file=>typeof file.name!=='string'||!file.name.trim()||/[\\/\u0000-\u001f\u007f]/.test(file.name)||new TextEncoder().encode(file.name).length>200))return '文件名须为不含路径或控制字符的普通名称，长度不超过 200 字节。';
+    if(all.some(file=>typeof file.name!=='string'||!file.name.trim()||file.name==='.'||file.name==='..'||/[\\/\u0000-\u001f\u007f-\u009f]/.test(file.name)||new TextEncoder().encode(file.name).length>200))return '文件名须为不含路径或控制字符的普通名称，长度不超过 200 字节。';
     return '';
   }
   function validateProject(data={}){

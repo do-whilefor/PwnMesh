@@ -15,7 +15,7 @@
     return {...project,state,logs:Data.buildLogs(state,events,runs),runs,events,files,target:facts.find(f=>f.id==='origin')?.description || '',goal:facts.find(f=>f.id==='goal')?.description || state.goals?.find(g=>g.id==='goal')?.condition || '',startedAt:timing.startedAt,endedAt:timing.endedAt || null};
   }
   class Service {
-    constructor(api=new API.Client()){this.api=api;this.scope=new API.RequestScope();this.projects=[];this.events=new Map();this.pendingCreate=null;this.uncertainCreate=false;}
+    constructor(api=new API.Client()){this.api=api;this.scope=new API.RequestScope();this.projects=[];this.events=new Map();this.pendingCreate=null;this.uncertainCreate=false;this.pendingHints=new Map();}
     cancel(){this.scope.cancel();}
     async pages(path,options={},cursor=-1){const items=[];for(;;){const page=await this.api.request(path+'?limit=100&cursor='+cursor,options);if(!Array.isArray(page.items))throw new Error('历史记录分页格式无效');items.push(...page.items);if(page.next_cursor==null)return items;if(!Number.isSafeInteger(page.next_cursor)||page.next_cursor<=cursor)throw new Error('历史记录分页边界无效');cursor=page.next_cursor;}}
     async refresh(preferred='') {
@@ -42,7 +42,7 @@
     }
     async change(id,action,generation){
       const base=pathFor(id);this.cancel();
-      if(action==='delete'){await this.api.request(base,{method:'DELETE'});this.events.delete(id);if(this.pendingCreate?.created.project.id===id)this.pendingCreate=null;return;}
+      if(action==='delete'){await this.api.request(base,{method:'DELETE'});this.events.delete(id);this.pendingHints.delete(id);if(this.pendingCreate?.created.project.id===id)this.pendingCreate=null;return;}
       if(action==='pause'||action==='resume')return this.api.request(base+'/status',{method:'PUT',body:{status:action==='pause'?'stopped':'active'}});
       if(!['restart','terminate'].includes(action))throw new Error('不支持的项目操作。');
       const result=await this.api.request(base+'/'+action,{method:'POST',body:{expected_generation:generation}});this.events.delete(id);return result;
@@ -62,7 +62,18 @@
         this.pendingCreate=null;return id;
       }catch(error){error.pendingCreate=true;error.message+='；项目已保存，已导入材料保留。重试将继续上传并启动同一项目。';throw error;}
     }
-    async hint(id,values){if(values.files.length)return this.api.uploadInputs(pathFor(id),values.files,values.text);return this.api.request(pathFor(id)+'/hints',{method:'POST',body:{content:values.text,creator:'user'}});}
+    isHintRetry(id,values){const pending=this.pendingHints.get(id);return !!pending&&pending.text===values.text&&pending.files.length===values.files.length&&pending.files.every((file,index)=>file===values.files[index]);}
+    async hint(id,values){
+      if(!values.files.length){this.pendingHints.delete(id);return this.api.request(pathFor(id)+'/hints',{method:'POST',body:{content:values.text,creator:'user'}});}
+      let pending=this.pendingHints.get(id);
+      if(!this.isHintRetry(id,values)){
+        const key=crypto.randomUUID?.()||Array.from(crypto.getRandomValues(new Uint8Array(16)),byte=>byte.toString(16).padStart(2,'0')).join('');
+        pending={text:values.text,files:values.files.slice(),key};this.pendingHints.set(id,pending);
+      }
+      const result=await this.api.uploadInputs(pathFor(id),values.files,values.text,pending.key);
+      if(this.pendingHints.get(id)===pending)this.pendingHints.delete(id);
+      return result;
+    }
     async archive(project,generation){
       const base=pathFor(project.id)+'/rounds/'+generation, summary=project.history.find(p=>p.generation===generation);
       if(!summary)throw new Error('此历史轮次不存在。');if(summary.state)return summary;

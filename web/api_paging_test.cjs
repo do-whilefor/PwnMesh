@@ -137,8 +137,9 @@ test('supplement sends binary files and their instructions in one multipart requ
     assert.deepEqual(options.body.getAll('file').map(file => file.name), files.map(file => file.name));
     assert.deepEqual(new Uint8Array(await options.body.getAll('file')[0].arrayBuffer()), bytes);
     assert.equal(options.body.get('content'), '仅静态分析，不重放请求');
+    assert.equal(options.body.get('idempotency_key'), 'retry-1');
     return {status:201, ok:true, text:async () => '[{"id":"apk"},{"id":"http"}]'};
   });
-  assert.deepEqual(await client.uploadInputs('/projects/p', files, '仅静态分析，不重放请求'), [{id:'apk'},{id:'http'}]);
+  assert.deepEqual(await client.uploadInputs('/projects/p', files, '仅静态分析，不重放请求', 'retry-1'), [{id:'apk'},{id:'http'}]);
   assert.equal(calls, 1);
 });

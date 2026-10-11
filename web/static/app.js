@@ -375,6 +375,7 @@
   window.addEventListener('pageshow',event=>{if(event.persisted){render();refreshWorkspace(true);}});
   const forms = PwnDemoForms.bind({
     getProject:id => projects.find(p => p.id === id), toast,
+    isHintRetry:(id,values) => service.isHintRetry(id,values),
     onCreate:values => mutation(async () => {
       const id = await service.create(values); $('#project-search').value = ''; selectedRun = 'current'; viewTab = 'graph';
       location.hash = 'project/'+id; await refreshWorkspace(true,id); $('#project-list').scrollTop = 0; toast('项目已创建并开始');

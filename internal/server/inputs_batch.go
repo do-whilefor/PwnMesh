@@ -1,6 +1,8 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -38,11 +40,16 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.RemoveAll(dir)
-	type stagedFile struct{ name, path string }
+	type stagedFile struct {
+		Name   string `json:"name"`
+		Size   int64  `json:"size"`
+		SHA256 string `json:"sha256"`
+		path   string
+	}
 	files := []stagedFile{}
 	var total int64
-	var content string
-	contentSeen := false
+	var content, key string
+	contentSeen, keySeen := false, false
 	for {
 		// NextPart decodes quoted-printable data; evidence must retain its bytes.
 		part, partErr := mr.NextRawPart()
@@ -55,7 +62,7 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		disposition, params, parseErr := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
 		if parseErr != nil || disposition != "form-data" {
-			writeError(w, r, b.Err(422, "Expected file or content form fields"))
+			writeError(w, r, b.Err(422, "Expected file, content or idempotency_key form fields"))
 			return
 		}
 		switch params["name"] {
@@ -76,7 +83,8 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			limit := min(int64(b.MaxInputBytes), int64(b.MaxProjectInputBytes)-total)
-			size, copyErr := io.Copy(file, io.LimitReader(part, limit+1))
+			hash := sha256.New()
+			size, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(part, limit+1))
 			closeErr := file.Close()
 			if size > limit {
 				writeError(w, r, b.Err(413, "Input limit is 256 MiB per file and 512 MiB per project"))
@@ -91,7 +99,7 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			total += size
-			files = append(files, stagedFile{name, file.Name()})
+			files = append(files, stagedFile{Name: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), path: file.Name()})
 		case "content":
 			if _, hasFilename := params["filename"]; contentSeen || hasFilename {
 				writeError(w, r, b.Err(422, "Expected at most one text content field"))
@@ -108,8 +116,24 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			content = strings.TrimSpace(string(raw))
+		case "idempotency_key":
+			if _, hasFilename := params["filename"]; keySeen || hasFilename {
+				writeError(w, r, b.Err(422, "Expected at most one text idempotency_key field"))
+				return
+			}
+			keySeen = true
+			raw, err := io.ReadAll(io.LimitReader(part, 129))
+			if err != nil {
+				writeError(w, r, inputBatchReadError(err))
+				return
+			}
+			key = string(raw)
+			if !validInputBatchKey(key) {
+				writeError(w, r, b.Err(422, "Idempotency key must contain 1 to 128 ASCII letters, digits, underscores or hyphens"))
+				return
+			}
 		default:
-			writeError(w, r, b.Err(422, "Expected file or content form fields"))
+			writeError(w, r, b.Err(422, "Expected file, content or idempotency_key form fields"))
 			return
 		}
 	}
@@ -117,24 +141,38 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, b.Err(422, "Expected at least one input file"))
 		return
 	}
+	// Bind semantic input, excluding temporary paths and multipart boundaries.
+	// File order is preserved because it also determines the receipt's order.
+	canonical, _ := json.Marshal(struct {
+		Files   []stagedFile `json:"files"`
+		Content string       `json:"content"`
+	}{files, content})
+	digest := sha256.Sum256(canonical)
+	requestSHA256 := hex.EncodeToString(digest[:])
 	inputs := make([]b.InputFile, 0, len(files))
 	err = s.Store.Do(r.Context(), func(t *b.Tx) error {
+		project := r.PathValue("pid")
+		if saved, found, err := t.InputBatchReceipt(project, key, requestSHA256); found || err != nil {
+			inputs = saved
+			return err
+		}
 		for _, file := range files {
 			data, err := os.ReadFile(file.path)
 			if err != nil {
 				return err
 			}
-			input, err := t.AddInput(r.PathValue("pid"), file.name, data)
+			input, err := t.AddInput(project, file.Name, data)
 			if err != nil {
 				return err
 			}
 			inputs = append(inputs, input)
 		}
 		if content != "" {
-			_, _, err := s.hint(t, &request{fields: map[string]any{"content": content, "creator": "user"}}, r)
-			return err
+			if _, _, err := s.hint(t, &request{fields: map[string]any{"content": content, "creator": "user"}}, r); err != nil {
+				return err
+			}
 		}
-		return nil
+		return t.SaveInputBatchReceipt(project, key, requestSHA256, inputs)
 	})
 	if err != nil {
 		writeError(w, r, err)
@@ -144,6 +182,18 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(inputs)
+}
+
+func validInputBatchKey(key string) bool {
+	if len(key) == 0 || len(key) > 128 {
+		return false
+	}
+	for _, ch := range key {
+		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func inputBatchReadError(err error) error {

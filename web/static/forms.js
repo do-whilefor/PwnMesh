@@ -9,7 +9,7 @@
   };
   let activeBinding;
 
-  function bind({ getProject, onCreate, onHint, toast = () => {} }) {
+  function bind({ getProject, onCreate, onHint, isHintRetry = () => false, toast = () => {} }) {
     if (![getProject, onCreate, onHint].every(callback => typeof callback === 'function')) throw new TypeError('Project form callbacks are required.');
     activeBinding?.destroy();
     const { validateProject, validateHint, validateFiles, isProjectClosed, createFormDrafts, PROJECT_TYPES, fileSize } = window.PwnDemoModel;
@@ -207,7 +207,8 @@
       if (hintBusy || hintProjectId === null) return;
       captureHint();
       const id = hintProjectId, draft = drafts.getHint(id), values = { text: draft.text.trim(), files: draft.files };
-      const project = getProject(id), error = hintUnavailable(project) || validateHint(values, project); report('hint', error);
+      const project = getProject(id), validationProject = project && isHintRetry(id, values) ? { ...project, files: [] } : project;
+      const error = hintUnavailable(project) || validateHint(values, validationProject); report('hint', error);
       hintStatus(project);
       if (error) { if (!values.text && !values.files.length) { $('#hint-text').setAttribute('aria-invalid', 'true'); $('#hint-text').focus(); } return; }
       hintBusy = true; pending('hint', true);

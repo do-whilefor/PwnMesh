@@ -32,10 +32,11 @@
       const body = new FormData(); body.append('file', file, file.name);
       return this.request(projectPath + '/inputs', {method:'POST', body, timeout:300000});
     }
-    async uploadInputs(projectPath, files, content = '') {
+    async uploadInputs(projectPath, files, content = '', idempotencyKey = '') {
       const body = new FormData();
       for (const file of files) body.append('file', file, file.name);
       if (content) body.append('content', content);
+      if (idempotencyKey) body.append('idempotency_key', idempotencyKey);
       return this.request(projectPath + '/inputs/batch', {method:'POST', body, timeout:300000});
     }
     async request(path, {method = 'GET', body, signal, timeout = this.timeout} = {}) {

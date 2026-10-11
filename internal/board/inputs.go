@@ -21,7 +21,11 @@ CREATE TABLE IF NOT EXISTS xloom_input_files(
  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  id TEXT NOT NULL,name TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,
  created_at TEXT NOT NULL,data BLOB NOT NULL,
- PRIMARY KEY(project_id,id),UNIQUE(project_id,name,sha256));`
+ PRIMARY KEY(project_id,id),UNIQUE(project_id,name,sha256));
+CREATE TABLE IF NOT EXISTS xloom_input_batches(
+ project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ idempotency_key TEXT NOT NULL,request_sha256 TEXT NOT NULL,response TEXT NOT NULL,
+ PRIMARY KEY(project_id,idempotency_key));`
 
 // InputFile is metadata only. Captured credentials and binary contents never
 // enter the graph, execution JSON or model prompt as part of file transfer.
@@ -32,6 +36,40 @@ type InputFile struct {
 	SHA256    string `json:"sha256"`
 	Path      string `json:"path"`
 	CreatedAt string `json:"created_at"`
+}
+
+// Upload acknowledgements survive project restarts just like the original
+// user inputs. Replaying one must not append a second instruction or event.
+func (t *Tx) InputBatchReceipt(project, key, requestSHA256 string) ([]InputFile, bool, error) {
+	if key == "" {
+		return nil, false, nil
+	}
+	var digest, response string
+	err := t.QueryRow("SELECT request_sha256,response FROM xloom_input_batches WHERE project_id=? AND idempotency_key=?", project, key).Scan(&digest, &response)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if digest != requestSHA256 {
+		return nil, false, Err(409, "Idempotency key was used for a different input batch")
+	}
+	var inputs []InputFile
+	err = json.Unmarshal([]byte(response), &inputs)
+	return inputs, true, err
+}
+
+func (t *Tx) SaveInputBatchReceipt(project, key, requestSHA256 string, inputs []InputFile) error {
+	if key == "" {
+		return nil
+	}
+	response, err := json.Marshal(inputs)
+	if err != nil {
+		return err
+	}
+	_, err = t.Exec("INSERT INTO xloom_input_batches(project_id,idempotency_key,request_sha256,response) VALUES(?,?,?,?)", project, key, requestSHA256, string(response))
+	return err
 }
 
 func ValidInputName(name string) bool {

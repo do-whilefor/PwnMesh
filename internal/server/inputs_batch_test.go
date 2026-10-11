@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/textproto"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -25,7 +26,7 @@ type batchFixtureFile struct {
 	data []byte
 }
 
-func inputBatchBody(t *testing.T, files []batchFixtureFile, content string) ([]byte, string) {
+func inputBatchBody(t *testing.T, files []batchFixtureFile, content string, keys ...string) ([]byte, string) {
 	t.Helper()
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -40,6 +41,11 @@ func inputBatchBody(t *testing.T, files []batchFixtureFile, content string) ([]b
 	}
 	if content != "" {
 		if err := mw.WriteField("content", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range keys {
+		if err := mw.WriteField("idempotency_key", key); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -282,6 +288,128 @@ func TestInputBatchPreservesEncodedBytesAndFileRetryDeduplication(t *testing.T) 
 	f.handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, f.base()+"/inputs/"+inputs[0].ID, nil))
 	if w.Code != http.StatusOK || !bytes.Equal(w.Body.Bytes(), data) {
 		t.Fatal("batch upload changed original evidence bytes")
+	}
+	assertInputBatchTempEmpty(t, dir)
+}
+
+func TestInputBatchKeyReplaysDurableReceiptWithoutDuplicatingInstructions(t *testing.T) {
+	database := filepath.Join(t.TempDir(), "batch.db")
+	f, _ := newSnapshotHTTPFixture(t, database)
+	dir := isolatedInputBatchTemp(t)
+	files := []batchFixtureFile{{"client.apk", []byte("APK bytes")}, {"capture.har", []byte("HAR bytes")}}
+	const content = "Inspect the authorized test account only."
+	body, contentType := inputBatchBody(t, files, content, "supplement-1")
+	first := inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	before, events := f.state(), storedEvents(f)
+
+	// A lost acknowledgement can be retried after a server restart. Multipart
+	// boundaries and insignificant content whitespace must not alter identity.
+	reopened, err := board.Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close() })
+	f.store, f.handler = reopened, New(reopened)
+	body, contentType = inputBatchBody(t, files, " \n"+content+"\t", "supplement-1")
+	again := inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	if !reflect.DeepEqual(first, again) || !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
+		t.Fatal("same-key retry changed the original receipt, hints or revisions")
+	}
+
+	// A fresh submission may deliberately repeat instructions for existing files.
+	body, contentType = inputBatchBody(t, files, content, "supplement-2")
+	inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	if len(f.state().Graph.Hints) != len(before.Graph.Hints)+1 {
+		t.Fatal("a new submission was incorrectly deduplicated by its content")
+	}
+	f.request("POST", f.base()+"/restart", map[string]int{"expected_generation": 0}, false, http.StatusOK, nil)
+	f.request("POST", f.base()+"/terminate", map[string]int{"expected_generation": 1}, false, http.StatusOK, nil)
+	before, events = f.state(), storedEvents(f)
+	body, contentType = inputBatchBody(t, files, content, "supplement-1")
+	again = inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	if !reflect.DeepEqual(first, again) || !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
+		t.Fatal("project lifecycle changes lost the original upload acknowledgement")
+	}
+	f.request("DELETE", f.base(), nil, false, http.StatusNoContent, nil)
+	if err := reopened.Do(context.Background(), func(tx *board.Tx) error {
+		var count int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM xloom_input_batches").Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Fatal("project deletion retained upload receipts")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertInputBatchTempEmpty(t, dir)
+}
+
+func TestInputBatchKeyBindsFilesOrderNamesBytesAndContent(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	dir := isolatedInputBatchTemp(t)
+	files := []batchFixtureFile{{"first.apk", []byte("first")}, {"second.apk", []byte("second")}}
+	body, contentType := inputBatchBody(t, files, "Original instruction", "bound-request")
+	inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	before, events := f.state(), storedEvents(f)
+	for _, mode := range []string{"bytes", "name", "order", "content"} {
+		t.Run(mode, func(t *testing.T) {
+			changed := append([]batchFixtureFile(nil), files...)
+			content := "Original instruction"
+			switch mode {
+			case "bytes":
+				changed[0].data = []byte("FIRST")
+			case "name":
+				changed[0].name = "renamed.apk"
+			case "order":
+				changed[0], changed[1] = changed[1], changed[0]
+			case "content":
+				content = "Different instruction"
+			}
+			body, contentType := inputBatchBody(t, changed, content, "bound-request")
+			inputBatchRequest(t, f, body, contentType, http.StatusConflict)
+			if !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
+				t.Fatal("conflicting key changed project state")
+			}
+		})
+	}
+	assertInputBatchTempEmpty(t, dir)
+}
+
+func TestInputBatchRejectsMalformedOrDuplicateKeys(t *testing.T) {
+	for _, keys := range [][]string{{""}, {"contains space"}, {"非ASCII"}, {strings.Repeat("k", 129)}, {"same", "same"}} {
+		t.Run(fmt.Sprint(keys), func(t *testing.T) {
+			f, _ := newSnapshotHTTPFixture(t)
+			dir := isolatedInputBatchTemp(t)
+			before, events := f.state(), storedEvents(f)
+			body, contentType := inputBatchBody(t, []batchFixtureFile{{"fixture.apk", []byte("bytes")}}, "", keys...)
+			inputBatchRequest(t, f, body, contentType, http.StatusUnprocessableEntity)
+			if !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
+				t.Fatal("invalid key changed project state")
+			}
+			assertInputBatchTempEmpty(t, dir)
+		})
+	}
+}
+
+func TestInputBatchFailedKeyCanBeRetried(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	dir := isolatedInputBatchTemp(t)
+	for n := 0; n < 3; n++ {
+		f.request("POST", f.base()+"/hints", map[string]string{"content": strings.Repeat("x", 8192), "creator": "user"}, false, http.StatusCreated, nil)
+	}
+	before, events := f.state(), storedEvents(f)
+	files := []batchFixtureFile{{"fixture.apk", []byte("bytes")}}
+	body, contentType := inputBatchBody(t, files, strings.Repeat("y", 8192), "retry-failed")
+	inputBatchRequest(t, f, body, contentType, http.StatusUnprocessableEntity)
+	if !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
+		t.Fatal("failed batch retained partial state")
+	}
+	body, contentType = inputBatchBody(t, files, "Short instruction", "retry-failed")
+	inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	if len(f.state().Graph.Hints) != len(before.Graph.Hints)+2 {
+		t.Fatal("failed batch reserved its key or left a partial file")
 	}
 	assertInputBatchTempEmpty(t, dir)
 }
