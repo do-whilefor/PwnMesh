@@ -4,9 +4,16 @@
 
 # PwnMesh
 
-**规划、执行、复核，让多 Agent 围绕事实与证据协作。**
+**面向 CTF、授权渗透测试与代码审计的多 Worker AI 协作探索系统**
 
-[项目简介](#项目简介) · [核心能力](#核心能力) · [运行结构](#运行结构) · [安装教程](#安装教程) · [使用限制](#使用限制) · [授权说明](#授权说明)
+*Plan centrally. Explore in parallel. Keep the evidence.*
+
+[![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Docker](https://img.shields.io/badge/Docker-Kali_Workspace-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
+[![Platform](https://img.shields.io/badge/Platform-Linux-555?logo=linux&logoColor=white)](#环境要求)
+[![License](https://img.shields.io/badge/License-PolyForm_Noncommercial_1.0.0-orange)](./LICENSE)
+
+[项目简介](#项目简介) · [核心能力](#核心能力) · [快速开始](#快速开始) · [使用限制](#使用限制与安全提示) · [授权说明](#授权说明)
 
 </div>
 
@@ -43,6 +50,9 @@ flowchart LR
 
 Compose 启动 Server 和 Dispatcher；Dispatcher 在同一调度命名空间内按项目创建并复用容器。多个 Worker 以独立进程运行，共享 `/workspace`，模型调用和共享状态读写经 Dispatcher 桥接。Server 数据存入 Docker 命名卷，执行记录保存在项目容器的 `/workspace/.pwnmesh/runs/`。
 
+<a id="快速开始"></a>
+<a id="环境要求"></a>
+
 ## 安装教程
 
 需要 Linux x86_64、Docker Engine、Docker Compose 插件，以及兼容 Anthropic Messages 流式响应和工具调用的模型服务。完整 Worker 使用 Kali 环境，首次构建需下载工具及浏览器依赖。
@@ -64,14 +74,26 @@ docker compose up -d --no-build
 
 打开 [http://127.0.0.1:8000](http://127.0.0.1:8000)，创建项目、填写目标和操作范围，并上传所需材料。模型设置也可在工作台中管理。配置示例见 [dispatch.example.yaml](./dispatch.example.yaml)，工具环境见 [container/environment.md](./container/environment.md)。
 
-## 使用限制
+## 使用限制与安全提示
 
 使用前请阅读 [免责声明与使用合规须知](./DISCLAIMER.md)。
 
-- 仅在合法授权及许可证允许的范围内使用；APK/JAR 能力以静态分析为主，不等同于真实设备上的运行验证。
-- 模型输出、工具命中和完成结论需要结合原始证据人工复核；上传材料应符合保密要求及模型服务的数据处理约定。
-- 在可信环境部署：Dispatcher 挂载 Docker Socket，Worker 默认以 root 运行；同一项目共享工作目录，容器不应被视为绝对安全边界。
+- **合法授权：** 仅用于自有系统、明确授权的目标和允许测试的 CTF / 靶场，遵守资产、时间和操作范围；禁止用于未经授权的入侵、数据窃取或破坏。
+- **人工复核：** 模型判断、工具命中与项目完成状态需结合原始证据、实际影响和覆盖范围核验。
+- **可信部署：** Dispatcher 挂载 Docker Socket，Worker 默认以 root 运行；项目内共享容器与文件，需协调共享文件的写入。
+- **信息保护：** 源码、日志、凭证及其他输入应符合保密要求和模型服务的数据处理约定。
+- **资源控制：** 根据主机和目标环境设置并发、执行期限及模型预算，保留必要的任务数据与证据。
+
+使用者须对测试授权、具体操作及产生的后果负责。
 
 ## 授权说明
 
 PwnMesh 采用 [PolyForm Noncommercial License 1.0.0](./LICENSE)。可在许可证规定的范围内进行非商业使用、研究、修改和分发；超出许可范围的商业用途需另行取得权利人授权。完整条款以许可证为准。
+
+<div align="center">
+
+**PwnMesh · For authorized security research only.**
+
+> 重构前版本SHA：a6fde4dd2c4061f997966c1e08436d2cc583f9b0
+
+</div>
