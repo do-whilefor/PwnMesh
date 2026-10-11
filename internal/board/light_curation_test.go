@@ -18,6 +18,104 @@ func assertCurationNeeded(t *testing.T, f *orchestrationFixture, want bool) {
 	})
 }
 
+func TestCurationRelationBatchWakesUnsupportedFindingOnce(t *testing.T) {
+	for _, kind := range []string{"refutes", "supersedes", "narrows"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			producer := f.worker("producer", "")
+			original := f.fact(producer, "original")
+			candidate := f.candidate(producer, original, "verified")
+			f.finish(producer, original)
+			curator, input := f.curator("initial")
+			f.curate(curator, input, CurateGroup{CandidateIDs: []string{candidate}, Status: "verified", Reason: "Initial supported observation"})
+			assertCurationNeeded(t, f, false)
+
+			corrector := f.worker("corrector", "")
+			correction := f.fact(corrector, "correction")
+			f.finish(corrector, correction)
+			curator, input = f.curator("correction")
+			f.action(curator.Fence(), "curate", "correct-evidence", CuratePayload{
+				ThroughRevision: input.Revision, Groups: []CurateGroup{},
+				Relations: []CurateRelation{{Kind: kind, Source: correction, Target: original, Reason: "Correct the retained premise"}},
+			}, DecisionStateVersion(input))
+			if finding := f.state().Findings[0]; finding.Status != "verified" || finding.SupportValid {
+				t.Fatalf("fixture did not invalidate the retained judgment: %+v", finding)
+			}
+			assertCurationNeeded(t, f, true)
+			raw, err := CurationContextView(f.state(), DefaultContextViewBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var view struct {
+				Candidates []CandidateView       `json:"candidates"`
+				Coverage   curationInputCoverage `json:"curation_input"`
+			}
+			if err := json.Unmarshal(raw, &view); err != nil {
+				t.Fatal(err)
+			}
+			if len(view.Candidates) != 1 || view.Candidates[0].ID != candidate || view.Candidates[0].SupportValid == nil || *view.Candidates[0].SupportValid || view.Coverage.RelevantCandidates != 1 || view.Coverage.OmittedCandidates != 0 {
+				t.Fatalf("reconciliation lost the invalidated finding's producer judgment: %+v", view)
+			}
+
+			// Acknowledging this correction must not make the curator's own
+			// event another correction and cause an unbounded idle loop.
+			curator, input = f.curator("acknowledge-correction")
+			f.curate(curator, input)
+			assertCurationNeeded(t, f, false)
+
+			curator, input = f.curator("duplicate-correction")
+			f.action(curator.Fence(), "curate", "repeat-correction", CuratePayload{
+				ThroughRevision: input.Revision, Groups: []CurateGroup{},
+				Relations: []CurateRelation{{Kind: kind, Source: correction, Target: original, Reason: "Reword the already acknowledged correction"}},
+			}, DecisionStateVersion(input))
+			assertCurationNeeded(t, f, false)
+
+			other := f.worker("unrelated", "")
+			unrelatedOld, unrelatedNew := f.fact(other, "unrelated-old"), f.fact(other, "unrelated-new")
+			f.finish(other, unrelatedNew)
+			curator, input = f.curator("unrelated-correction")
+			f.action(curator.Fence(), "curate", "correct-unrelated-evidence", CuratePayload{
+				ThroughRevision: input.Revision, Groups: []CurateGroup{},
+				Relations: []CurateRelation{{Kind: kind, Source: unrelatedNew, Target: unrelatedOld, Reason: "Correct an unrelated observation"}},
+			}, DecisionStateVersion(input))
+			assertCurationNeeded(t, f, false)
+		})
+	}
+}
+
+func TestCurationRelationBatchWakesTransitivelyUnsupportedFinding(t *testing.T) {
+	for _, edge := range []string{"from", "depends_on"} {
+		t.Run(edge, func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			upstream := f.worker("upstream", "")
+			original := f.fact(upstream, "original")
+			f.finish(upstream, original)
+			payload := map[string]any{"action": "add", "description": "Use the upstream result", "from": []string{original}}
+			if edge == "depends_on" {
+				payload["from"], payload["depends_on"] = []string{"origin"}, []string{upstream.Intent}
+			}
+			step := f.action(f.planner, "step", "consumer-step", payload, "").ID
+			consumer := dependencyRun(f, "consumer", step)
+			f.do(func(tx *Tx) error { return tx.RegisterExecution(consumer) })
+			result := f.fact(consumer, "accepted-result")
+			candidate := f.candidate(consumer, result, "verified")
+			f.finish(consumer, result)
+			curator, input := f.curator("initial")
+			f.curate(curator, input, CurateGroup{CandidateIDs: []string{candidate}, Status: "verified", Reason: "Supported downstream result"})
+			assertCurationNeeded(t, f, false)
+			corrector := f.worker("corrector", "")
+			correction := f.fact(corrector, "correction")
+			f.finish(corrector, correction)
+			curator, input = f.curator("correct-upstream")
+			f.action(curator.Fence(), "curate", "correct-upstream", CuratePayload{
+				ThroughRevision: input.Revision, Groups: []CurateGroup{},
+				Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: original, Reason: "Invalidate the accepted result's prerequisite"}},
+			}, DecisionStateVersion(input))
+			assertCurationNeeded(t, f, true)
+		})
+	}
+}
+
 func TestOrdinaryExplorationKeepsNotesWithoutMandatoryCuration(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	producer := f.worker("producer", "")

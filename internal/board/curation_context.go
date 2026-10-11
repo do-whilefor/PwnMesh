@@ -29,11 +29,17 @@ func (s State) CandidateView(candidate Candidate) CandidateView {
 	return CandidateView{Candidate: candidate, GroupKey: findingIdentity(candidate.Claim, candidate.Scope), SupportValid: &support}
 }
 
-// Keep the active identity groups needing reconciliation and unresolved disputes.
+// Keep active groups needing reconciliation, including unsupported shared
+// conclusions and unresolved disputes.
 // Older unrelated candidates stay discoverable in ContextView's shared index;
 // omission never deletes evidence or changes the immutable curation boundary.
 func curationContextCandidates(state State) map[string]bool {
 	selected, groups := state.PendingCurationCandidateIDs(), map[string]bool{}
+	for _, finding := range state.Findings {
+		if finding.Status != "candidate" && !finding.SupportValid {
+			groups[findingIdentity(finding.Claim, finding.Scope)] = true
+		}
+	}
 	for _, dispute := range state.Disputes {
 		if dispute.Status != "resolved" {
 			for _, id := range dispute.CandidateIDs {

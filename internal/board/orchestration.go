@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"slices"
 )
 
 const orchestrationSchema = `CREATE TABLE IF NOT EXISTS xloom_project_orchestration(
@@ -170,38 +171,58 @@ func (t *Tx) curationNeeded(s State) (bool, error) {
 	// Ordinary tasks may never move the curation cursor. Do not rescan their
 	// complete event history unless there is a review or conclusion to revisit.
 	reviews := []Dispute{}
-	unsupported := false
+	unsupported := []string{}
 	for _, dispute := range s.Disputes {
 		if dispute.Status == "resolved" {
-			unsupported = unsupported || s.ValidateFactSources(dispute.ReviewFactIDs, true) != nil
+			if s.ValidateFactSources(dispute.ReviewFactIDs, true) != nil {
+				unsupported = append(unsupported, dispute.ReviewFactIDs...)
+			}
 		} else if len(dispute.ReviewStepIDs) > 0 {
 			reviews = append(reviews, dispute)
 		}
 	}
 	for _, finding := range s.Findings {
-		unsupported = unsupported || finding.Status != "candidate" && !finding.SupportValid
+		if finding.Status != "candidate" && !finding.SupportValid {
+			unsupported = append(unsupported, finding.Sources...)
+		}
 	}
-	if len(reviews) == 0 && !unsupported {
+	if len(reviews) == 0 && len(unsupported) == 0 {
 		return false, nil
 	}
 	// A review fact is usable only after its independent execution succeeds.
 	// Completion remains durable even if an earlier optional scan saw the fact
 	// while that execution was running. Normal producer completion is irrelevant.
-	rows, err := t.Query(`SELECT json_extract(event,'$.op'),json_extract(event,'$.id') FROM xloom_state_events WHERE project_id=? AND revision>? AND json_extract(event,'$.op') IN ('step_completed','fact_relation')`, s.Graph.Project.ID, s.Curation.ThroughRevision)
+	// Version 1 records corrective relations inside the atomic curation event.
+	// A scan without relations only acknowledges its input and must not wake
+	// another scan solely because an unsupported conclusion remains retained.
+	rows, err := t.Query(`SELECT json_extract(event,'$.op'),json_extract(event,'$.id'),json_extract(event,'$.run_id'),
+		CASE WHEN json_extract(event,'$.op')='fact_relation' THEN json_extract(event,'$.result') ELSE '{}' END
+		FROM xloom_state_events WHERE project_id=? AND revision>? AND (
+		json_extract(event,'$.op') IN ('step_completed','fact_relation') OR
+		(json_extract(event,'$.op')='curate' AND json_array_length(event,'$.payload.relations')>0))`, s.Graph.Project.ID, s.Curation.ThroughRevision)
 	if err != nil {
 		return false, err
 	}
-	completed, invalidated := map[string]bool{}, false
+	completed, curators := map[string]bool{}, map[string]bool{}
+	relations := map[FactRelation]bool{}
 	for rows.Next() {
-		var op, id string
-		if err := rows.Scan(&op, &id); err != nil {
+		var op, id, run, result string
+		if err := rows.Scan(&op, &id, &run, &result); err != nil {
 			rows.Close()
 			return false, err
 		}
-		if op == "step_completed" {
+		switch op {
+		case "step_completed":
 			completed[id] = true
-		} else {
-			invalidated = true
+		case "curate":
+			curators[run] = true
+		case "fact_relation":
+			var relation FactRelation
+			if err := json.Unmarshal([]byte(result), &relation); err != nil {
+				rows.Close()
+				return false, err
+			}
+			relations[relation] = true
 		}
 	}
 	err = rows.Err()
@@ -209,8 +230,28 @@ func (t *Tx) curationNeeded(s State) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if invalidated && unsupported {
-		return true, nil
+	newRelation := func(relation FactRelation) bool {
+		return curators[relation.RunID] || relations[relation]
+	}
+	if len(unsupported) > 0 && slices.ContainsFunc(s.FactRelations, newRelation) {
+		// Canonical edges retain their original author, so a duplicate proposal
+		// cannot count as a new correction. Reuse the support projection without
+		// those new edges to test their actual impact, including Step dependencies
+		// while preserving independent observations from the same producer.
+		d, revision, decision, err := t.stateData(s.Graph.Project.ID)
+		if err != nil {
+			return false, err
+		}
+		d.FactRelations = slices.DeleteFunc(d.FactRelations, newRelation)
+		before, err := t.projectState(s.Graph, d, revision, decision)
+		if err != nil {
+			return false, err
+		}
+		for _, source := range unsupported {
+			if s.ValidateFactSources([]string{source}, true) != nil && before.ValidateFactSources([]string{source}, true) == nil {
+				return true, nil
+			}
+		}
 	}
 	for _, dispute := range reviews {
 		for _, fact := range s.FactRecords {
