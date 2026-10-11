@@ -13,7 +13,8 @@ RUN apt-get -o APT::Update::Error-Mode=any -o Acquire::Retries=2 update \
     && python3 -m venv /opt/pwnmesh-venv
 
 COPY container/check-worker-dev.sh /usr/local/share/pwnmesh/check-worker-dev.sh
-RUN chmod 0755 /usr/local/share/pwnmesh/check-worker-dev.sh
+COPY container/pwn-http.py /usr/local/bin/pwn-http
+RUN chmod 0755 /usr/local/share/pwnmesh/check-worker-dev.sh /usr/local/bin/pwn-http
 WORKDIR /workspace
 RUN --network=none /usr/local/share/pwnmesh/check-worker-dev.sh
 

@@ -2,7 +2,7 @@
 set -eu
 
 test "$PWNMESH_WORKER_ENVIRONMENT" = debian-dev
-for tool in bash curl rg git python python3 pip pwnmesh; do
+for tool in bash curl rg git python python3 pip pwnmesh pwn-http; do
     command -v "$tool" >/dev/null
 done
 pwnmesh worker --help >/dev/null 2>&1
@@ -49,6 +49,15 @@ with tempfile.TemporaryDirectory(prefix="pwnmesh-dev-check-", dir="/tmp") as dir
             self.end_headers()
             self.wfile.write(body)
 
+        def do_POST(self):
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            assert self.path == "/replay?part=1&part=2", self.path
+            assert self.headers.get("Authorization") == "Bearer local-probe"
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
         def log_message(self, *args):
             pass
 
@@ -58,10 +67,28 @@ with tempfile.TemporaryDirectory(prefix="pwnmesh-dev-check-", dir="/tmp") as dir
     try:
         response = subprocess.check_output(["curl", "--noproxy", "*", "--fail", "--silent", "--show-error", "--max-time", "5", f"http://127.0.0.1:{server.server_port}/proof"])
         assert json.loads(response)["marker"] == "PWNMESH_DEV_WORKER_OK"
+        capture = root / "client.har"
+        capture.write_text(json.dumps({"log": {"entries": [{"request": {
+            "method": "POST", "url": f"http://127.0.0.1:{server.server_port}/replay?part=1&part=2",
+            "headers": [{"name": "Authorization", "value": "Bearer local-probe"}],
+            "postData": {"mimeType": "application/octet-stream", "text": "AP8=", "encoding": "base64"},
+            "bodySize": 2,
+        }}]}}), encoding="utf-8")
+        inspected = subprocess.check_output(["pwn-http", "inspect", str(capture)], text=True, timeout=10)
+        assert json.loads(inspected)[0]["replayable"], inspected
+        assert "local-probe" not in inspected, inspected
+        evidence = root / "http-evidence"
+        replayed = json.loads(subprocess.check_output([
+            "pwn-http", "replay", str(capture), "--index", "1", "--output", str(evidence),
+        ], text=True, timeout=10))
+        assert replayed["status"] == 200, replayed
+        assert (evidence / "request.body").read_bytes() == b"\x00\xff"
+        assert (evidence / "response.body").read_bytes() == b"\x00\xff"
+        assert json.loads((evidence / "response.json").read_text())["complete"]
     finally:
         server.shutdown()
         server.server_close()
         thread.join()
 
-print("PwnMesh development worker: Python, TLS, Git, shell, search, SQLite and local HTTP verified")
+print("PwnMesh development worker: Python, TLS, Git, shell, search, SQLite and HTTP capture/replay verified")
 PY
