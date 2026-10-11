@@ -21,6 +21,24 @@ test('historical projects are read-only when the server omits or explicitly send
 test('refresh fetches real materials, round summaries and generation-fenced state',async()=>{const api=fixture(),service=new Service(api);const value=await service.refresh('a');assert.equal(value.selected.id,'a');assert.ok(api.calls.some(c=>c.url==='/projects/a/inputs'));assert.ok(api.calls.some(c=>c.url.startsWith('/projects/a/rounds?')));assert.ok(api.calls.some(c=>c.url==='/projects/a/identity'));});
 test('late project responses cannot replace the latest selection even if transport ignores abort',async()=>{const api=fixture({a:snapshot(),b:snapshot('b')}),old=api.request.bind(api),gate=deferred();api.request=(url,opts)=>url==='/projects/a/state'?gate.promise:old(url,opts);const service=new Service(api),first=service.refresh('a');await new Promise(r=>setImmediate(r));await service.refresh('b');gate.resolve(snapshot());assert.equal(await first,null);assert.equal(service.projects.find(p=>p.id==='b').state.graph.project.id,'b');});
 test('generation conflict refuses mixed current and previous round data',async()=>{const api=fixture(),old=api.request.bind(api);api.request=(url,opts)=>url.endsWith('/identity')?{id:'a',generation:1}:old(url,opts);const service=new Service(api);await assert.rejects(service.refresh('a'),error=>error.status===409);assert.deepEqual(service.projects,[]);});
+test('refresh rejects restarts on either side of the parallel state read without replacing the last snapshot',async()=>{
+ for(const stateGeneration of [0,1]){
+  const api=fixture(),service=new Service(api);await service.refresh('a');const before=service.projects,original=api.request.bind(api);
+  // The list and round summaries were read before restart; the state request
+  // may finish on either side, and the final identity sees the new round.
+  api.request=(url,options)=>url==='/projects/a/state'?snapshot('a',stateGeneration):url==='/projects/a/identity'?{id:'a',generation:1}:original(url,options);
+  api.projectExecutions=async()=>[{id:'previous-round',generation:0}];
+  await assert.rejects(service.refresh('a'),error=>error.status===409,'state generation '+stateGeneration);
+  assert.equal(service.projects,before);assert.equal(service.projects[0].generation,0);assert.equal(service.events.has('a'),false);
+ }
+});
+test('refresh accepts one stable round and treats missing legacy generations as round zero',async()=>{
+ for(const generation of [undefined,0,4]){
+  const state=snapshot('a',generation);if(generation===undefined)delete state.graph.project.generation;
+  const api=fixture({a:state});api.projectExecutions=async()=>[{id:'current',generation:generation||0}];
+  const result=await new Service(api).refresh('a');assert.equal(result.selected.generation,generation||0);assert.deepEqual(result.selected.runs.map(run=>run.id),['current']);
+ }
+});
 test('failed refresh preserves the last accepted project state',async()=>{const api=fixture(),service=new Service(api);await service.refresh('a');const before=service.projects;api.request=()=>{throw new APIError('offline');};await assert.rejects(service.refresh('a'),/offline/);assert.equal(service.projects,before);});
 test('refresh filters executions from old rounds and bounds event projection to state revision',async()=>{const state=snapshot('a',2,2),api=fixture({a:state}),old=api.request.bind(api);api.projectExecutions=async()=>[{id:'old',generation:1},{id:'current',generation:2}];api.request=(url,opts)=>url.includes('/state/events?')?[{revision:2,op:'event'},{revision:3,op:'event'}]:old(url,opts);const service=new Service(api),result=await service.refresh('a');assert.deepEqual(result.selected.runs.map(r=>r.id),['current']);assert.equal(result.selected.events.length,1);assert.equal(service.events.get('a').after,3);});
 test('project creation retries only unfinished uploads on the same paused project',async()=>{const calls=[],files=[new File(['a'],'a.txt'),new File(['b'],'b.txt')];let fail=true;const service=new Service({async request(url,options){calls.push({url,options});return {project:{id:'created'}};},async uploadInput(base,file){calls.push({upload:file.name});if(file.name==='b.txt'&&fail){fail=false;throw new APIError('upload interrupted',503);}}});const values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files};await assert.rejects(service.create(values),error=>error.pendingCreate);assert.equal(calls[0].options.body.start_paused,true);assert.equal(await service.create(values),'created');assert.equal(calls.filter(c=>c.url==='/projects').length,1);assert.deepEqual(calls.filter(c=>c.upload).map(c=>c.upload),['a.txt','b.txt','b.txt']);assert.deepEqual(calls.at(-1).options.body,{status:'active'});});

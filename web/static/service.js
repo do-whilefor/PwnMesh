@@ -33,7 +33,9 @@
         let after=cache.after;const batch=[];
         for(let page=0;page<5;page++){const items=await this.api.request(base+'/state/events?after='+after,options);if(!items.length)break;const next=Math.max(...items.map(e=>e.revision));if(next<=after)break;batch.push(...items);after=next;if(items.length<1000)break;}
         const identity=await this.api.request(base+'/identity',options);if(!this.scope.current(request.version))return null;
-        if((identity.generation||0)!==generation){this.events.delete(selected.id);throw new API.APIError('项目已进入新轮次，正在重新同步。',409);}
+        // Fence both sides of the parallel reads: state can already be from a
+        // new round while execution and archive pages still describe the old one.
+        if(selected.generation!==generation||(identity.generation||0)!==generation){this.events.delete(selected.id);throw new API.APIError('项目已进入新轮次，正在重新同步。',409);}
         cache={generation,revision:state.revision,after,items:cache.items.concat(batch)};this.events.set(selected.id,cache);
         Object.assign(selected,snapshotView(state,cache.items.filter(e=>e.revision<=state.revision),runs.filter(r=>(r.generation||0)===generation),files,selected));
         selected.history=rounds.map(round=>{const previous=selected.history.find(p=>p.generation===round.generation);return Object.assign(previous||{status:'paused'},{id:selected.id,name:selected.name,type:selected.type,generation:round.generation,archived:true,archivedAt:round.archived_at,endedAt:round.archived_at,files:files.filter(f=>f.created_at<=round.archived_at),history:[]});});
