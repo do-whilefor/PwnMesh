@@ -2,7 +2,6 @@
 
 <img src="./web/static/brand.png" alt="PwnMesh" width="640">
 
-# PwnMesh
 
 **面向 CTF、授权渗透测试与代码审计的多 Worker AI 协作探索系统**
 
