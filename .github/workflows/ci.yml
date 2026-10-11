@@ -23,8 +23,44 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Test, vet and compile
-        run: docker build --target build --progress=plain .
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+
+      - name: Set up Python for Go fixtures and HTTP replay tests
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install test tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+
+      - name: Verify Go dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      # Docker and live-model acceptance tests remain opt-in.
+      - name: Test Go packages with race detection
+        run: go test -mod=readonly -race -count=1 ./...
+
+      - name: Vet Go packages
+        run: go vet -mod=readonly ./...
+
+      - name: Compile Linux executable
+        env:
+          CGO_ENABLED: '0'
+        run: go build -mod=readonly -trimpath -ldflags="-s -w" -o "$RUNNER_TEMP/pwnmesh" ./cmd/pwnmesh
+
+      - name: Smoke test compiled commands
+        run: |
+          "$RUNNER_TEMP/pwnmesh" --help
+          for command in serve dispatch worker; do
+            "$RUNNER_TEMP/pwnmesh" "$command" --help
+          done
 
       - name: Set up Node for workbench tests
         uses: actions/setup-node@v4
