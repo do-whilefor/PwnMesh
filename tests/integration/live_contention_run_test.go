@@ -502,6 +502,29 @@ func collectLiveWorkspace(ctx context.Context, container, output string) (map[st
 	return retainLiveWorkspace(response.Body, output)
 }
 
+func readRetainedLiveEvidence(t *testing.T, directory string) (board.State, map[string][]byte, string, string) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(directory, "state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state board.State
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.Open(filepath.Join(directory, "workspace.tar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	digest := sha256.New()
+	files, err := retainLiveWorkspace(io.TeeReader(archive, digest), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return state, files, fmt.Sprintf("%x", sha256.Sum256(raw)), fmt.Sprintf("%x", digest.Sum(nil))
+}
+
 // The original archive is authoritative when the output filesystem cannot
 // represent every Linux filename (for example, names differing only in case).
 func retainLiveWorkspace(source io.Reader, output string) (files map[string][]byte, err error) {

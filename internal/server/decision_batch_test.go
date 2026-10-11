@@ -13,8 +13,7 @@ import (
 
 func newDecisionBatchFixture(t *testing.T) *executionProtocolFixture {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.registerWithFields("reason", &live, 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
 	return f
 }
 func batchAction(op, ref, payload string) board.DecisionAction {
@@ -122,8 +121,7 @@ func TestDecisionBatchRequiresRegisteredVersionAndFencesDirectWrites(t *testing.
 	f.request("POST", f.base()+"/state/actions", map[string]any{"op": "step", "idempotency_key": "bypass", "payload": map[string]any{"action": "add", "from": []string{"origin"}, "description": "bypass"}, "expected_version": board.DecisionStateVersion(f.state())}, true, http.StatusForbidden, nil)
 	for _, version := range []int{0, 1} {
 		legacy := newExecutionProtocolFixture(t)
-		live := true
-		legacy.registerWithFields("reason", &live, version, nil, http.StatusUnprocessableEntity)
+		legacy.registerWithFields("reason", version, nil, http.StatusUnprocessableEntity)
 		if len(legacy.executionRecords()) != 0 {
 			t.Fatal("retired protocol was registered")
 		}
@@ -184,8 +182,7 @@ func TestDecisionCanWithdrawAuxiliaryPlanAndCompleteAtomically(t *testing.T) {
 	f.run = "completion-planner"
 	f.request("POST", f.base()+"/intents/"+step.ID+"/heartbeat", map[string]string{"worker": "existing-executor"}, false, http.StatusOK, nil)
 	f.lease = "planner@" + f.run
-	live := true
-	f.registerWithFields("reason", &live, 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
 	marshal := func(value any) string {
 		raw, err := json.Marshal(value)
 		if err != nil {
@@ -238,8 +235,7 @@ func TestDecisionCannotWithdrawRootOrCompleteWithoutObservedSupport(t *testing.T
 func TestDecisionBatchNoopEndsExecutionWithoutChangingSharedState(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	f.newIntent()
-	live := true
-	f.registerWithFields("reason", &live, 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
 	before := f.state()
 	receipt := f.decision("commit", f.batch([]board.DecisionAction{}...), http.StatusOK)
 	after := f.state()

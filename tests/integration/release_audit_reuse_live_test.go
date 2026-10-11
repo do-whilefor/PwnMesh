@@ -57,23 +57,7 @@ func TestRetainedReleaseAuditReuseProject(t *testing.T) {
 	if dir == "" {
 		t.Skip("opt in with retained state.json, workspace.tar and release-http-requests.json")
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state board.State
-	if err = json.Unmarshal(raw, &state); err != nil {
-		t.Fatal(err)
-	}
-	archive, err := os.Open(filepath.Join(dir, "workspace.tar"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer archive.Close()
-	files, err := retainLiveWorkspace(archive, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	state, files, _, _ := readRetainedLiveEvidence(t, dir)
 	requestRaw, err := os.ReadFile(filepath.Join(dir, "release-http-requests.json"))
 	if err != nil {
 		t.Fatal(err)

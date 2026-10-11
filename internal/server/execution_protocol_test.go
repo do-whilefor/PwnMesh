@@ -263,13 +263,12 @@ func (f *executionProtocolFixture) planAction(op, key string, payload any) board
 	return result.Results[0]
 }
 
-// nil preserves the old job format that omitted graph_rpc entirely.
-func (f *executionProtocolFixture) register(kind string, graphRPC *bool, version int) {
+func (f *executionProtocolFixture) register(kind string) {
 	f.t.Helper()
-	f.registerWithFields(kind, graphRPC, version, nil, http.StatusCreated)
+	f.registerWithFields(kind, 2, nil, http.StatusCreated)
 }
 
-func (f *executionProtocolFixture) registerWithFields(kind string, graphRPC *bool, version int, fields map[string]any, want int) {
+func (f *executionProtocolFixture) registerWithFields(kind string, version int, fields map[string]any, want int) {
 	f.t.Helper()
 	f.kind = kind
 	var intent *board.Intent
@@ -285,10 +284,8 @@ func (f *executionProtocolFixture) registerWithFields(kind string, graphRPC *boo
 	job := map[string]any{
 		"run_id": f.run, "kind": kind, "workspace": "/workspace",
 		"graph": state.Graph, "state": state, "intent": intent,
-		"budget": map[string]int{"max_intents": 3, "conclude_timeout": 60},
-	}
-	if graphRPC != nil {
-		job["graph_rpc"] = *graphRPC
+		"graph_rpc": true,
+		"budget":    map[string]int{"max_intents": 3, "conclude_timeout": 60},
 	}
 	if version != 0 {
 		job["result_contract_version"] = version
@@ -334,20 +331,17 @@ func (f *executionProtocolFixture) apply(want int) string {
 }
 
 func TestNonCompletedWorkerOutcomeCannotBeAppliedAsSuccess(t *testing.T) {
-	for _, kind := range []string{"explore"} {
-		for _, outcome := range []string{"continue", "incomplete"} {
-			t.Run(kind+"/"+outcome, func(t *testing.T) {
-				f := newExecutionProtocolFixture(t)
-				live := true
-				f.register(kind, &live, 2)
-				f.pending(`{"accepted":true,"outcome":"` + outcome + `","reason":"Required fixture reads remain"}`)
-				f.apply(http.StatusUnprocessableEntity)
-				state := f.state()
-				if len(state.Graph.Facts) != 2 || len(state.Steps) != 1 || state.Steps[0].Result != nil || state.Steps[0].Status != "running" || state.Graph.Project.Status != "active" {
-					t.Fatal("non-completed outcome produced a fact or completed the task")
-				}
-			})
-		}
+	for _, outcome := range []string{"continue", "incomplete"} {
+		t.Run(outcome, func(t *testing.T) {
+			f := newExecutionProtocolFixture(t)
+			f.register("explore")
+			f.pending(`{"accepted":true,"outcome":"` + outcome + `","reason":"Required fixture reads remain"}`)
+			f.apply(http.StatusUnprocessableEntity)
+			state := f.state()
+			if len(state.Graph.Facts) != 2 || len(state.Steps) != 1 || state.Steps[0].Result != nil || state.Steps[0].Status != "running" || state.Graph.Project.Status != "active" {
+				t.Fatal("non-completed outcome produced a fact or completed the task")
+			}
+		})
 	}
 }
 
@@ -359,8 +353,7 @@ func TestIncompleteExecutionFailureNeverCreatesFact(t *testing.T) {
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
-			live := true
-			f.register("explore", &live, 2)
+			f.register("explore")
 			output := `{"accepted":true,"outcome":"incomplete","reason":"Required fixture reads remain"}`
 			if pending {
 				f.pending(output)
@@ -402,11 +395,8 @@ func TestExecutionRegistrationRejectsInvalidProtocolFields(t *testing.T) {
 	for _, tt := range invalidExecutionProtocols {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
-			live := true
-			f.registerWithFields("reason", &live, 2, map[string]any{tt.field: tt.value}, http.StatusUnprocessableEntity)
-			var executions []board.Execution
-			executions = f.executionRecords()
-			if len(executions) != 0 {
+			f.registerWithFields("reason", 2, map[string]any{tt.field: tt.value}, http.StatusUnprocessableEntity)
+			if len(f.executionRecords()) != 0 {
 				t.Fatal("invalid protocol was saved as a resumable execution")
 			}
 		})
@@ -414,29 +404,15 @@ func TestExecutionRegistrationRejectsInvalidProtocolFields(t *testing.T) {
 }
 
 func TestRegisteredExecutionContractCannotBeDowngraded(t *testing.T) {
-	for _, kind := range []string{"explore"} {
-		for _, live := range []bool{true} {
-			name := kind + "/compatibility_graph"
-			if live {
-				name = kind + "/live_graph"
-			}
-			t.Run(name, func(t *testing.T) {
-				f := newExecutionProtocolFixture(t)
-				f.register(kind, &live, 2)
-				output := `{"accepted":true,"data":{"description":"19 of 30 chunks checked"}}`
-				if kind == "bootstrap" {
-					output = `{"accepted":true,"data":{"fact":{"description":"19 of 30 chunks checked"},"complete":{"description":"Worker exited"}}}`
-				}
-				before := f.state()
-				f.pending(output)
-				// apply() deliberately asks to use the old result protocol. Only
-				// the registered job is authoritative, regardless of graph mode.
-				f.apply(http.StatusUnprocessableEntity)
-				after := f.state()
-				if after.Revision != before.Revision || len(after.Graph.Facts) != len(before.Graph.Facts) || after.Steps[0].Status != "running" || after.Graph.Project.Status != "active" {
-					t.Fatal("unversioned partial output was applied as completion")
-				}
-			})
-		}
+	f := newExecutionProtocolFixture(t)
+	f.register("explore")
+	before := f.state()
+	f.pending(`{"accepted":true,"data":{"description":"19 of 30 chunks checked"}}`)
+	// apply() deliberately asks to use the old result protocol. Only the
+	// registered job is authoritative.
+	f.apply(http.StatusUnprocessableEntity)
+	after := f.state()
+	if after.Revision != before.Revision || len(after.Graph.Facts) != len(before.Graph.Facts) || after.Steps[0].Status != "running" || after.Graph.Project.Status != "active" {
+		t.Fatal("unversioned partial output was applied as completion")
 	}
 }

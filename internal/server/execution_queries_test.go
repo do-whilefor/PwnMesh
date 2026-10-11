@@ -60,8 +60,7 @@ func TestAutomaticRetryRouteDoesNotRestoreHistoricalJob(t *testing.T) {
 	var graph board.Graph
 	f.request("POST", "/projects", map[string]any{"title": "Retry metadata", "origin": "Synthetic fixture", "goal": "Check grant", "bootstrap_enabled": false}, false, http.StatusCreated, &graph)
 	f.project = graph.Project.ID
-	live := true
-	f.register("reason", &live, 2)
+	f.register("reason")
 	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]any{"status": "failed", "result": map[string]string{"status": "failed", "failure_kind": "transport"}}, true, http.StatusOK, nil)
 	if err := store.Do(context.Background(), func(tx *board.Tx) error {
 		_, err := tx.Exec("UPDATE xloom_executions SET job='unavailable' WHERE project_id=? AND id=?", f.project, f.run)

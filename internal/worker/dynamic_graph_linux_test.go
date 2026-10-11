@@ -172,7 +172,7 @@ func TestDynamicGraphParentLoopDelegatesFromObservedResults(t *testing.T) {
 					// Retry the full cumulative definition: no child may restart.
 				case 5:
 					finalCheckpoint = checkpoint
-					return agent.Text("assistant", completedOutput("explore")), nil
+					return agent.Text("assistant", completedOutput), nil
 				default:
 					return agent.Message{}, fmt.Errorf("parent unexpectedly needed turn %d", turns)
 				}

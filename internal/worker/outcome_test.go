@@ -19,9 +19,7 @@ import (
 const continueOutput = `{"accepted":true,"outcome":"continue","reason":"More work remains"}`
 const incompleteOutput = `{"accepted":true,"outcome":"incomplete","reason":"Only 19 of 30 chunks have been verified"}`
 
-func completedOutput(kind string) string {
-	return `{"accepted":true,"outcome":"completed","data":{"fact":{"description":"All 30 chunks verified","scope":"local fixture","observed_at":"2026-09-30T08:00:00Z","evidence":[{"path":"output-proof.txt"}]}}}`
-}
+const completedOutput = `{"accepted":true,"outcome":"completed","data":{"fact":{"description":"All 30 chunks verified","scope":"local fixture","observed_at":"2026-09-30T08:00:00Z","evidence":[{"path":"output-proof.txt"}]}}}`
 
 func outcomeJob(t *testing.T, kind string) Job {
 	j := scenarioJob(t, "", kind)
@@ -57,57 +55,51 @@ func progressCall(id int) agent.Message {
 }
 
 func TestExecutionContinuesInSameRunUntilExplicitCompletion(t *testing.T) {
-	for _, kind := range []string{"explore"} {
-		t.Run(kind, func(t *testing.T) {
-			j, runDir := outcomeJob(t, kind), t.TempDir()
-			j.Budget.Timeout = 60
-			start := time.Now()
-			turns, toolCalls := 0, 0
-			provider := scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
-				turns++
-				if len(defs) == 0 {
-					t.Fatal("continuation disabled execution tools")
-				}
-				switch turns {
-				case 1:
-					return agent.Text("assistant", continueOutput), nil
-				case 2:
-					return progressCall(1), nil
-				case 3:
-					return agent.Text("assistant", completedOutput(kind)), nil
-				default:
-					t.Fatal("unexpected extra model turn")
-					return agent.Message{}, nil
-				}
-			})
-			r, err := runTestWorker(context.Background(), j, Options{Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}, RunDir: runDir, Now: func() time.Time { return start }})
-			if err != nil || r.Status != "success" || r.Conclude || turns != 3 || toolCalls != 1 {
-				t.Fatalf("result=%+v err=%v turns=%d tool calls=%d", r, err, turns, toolCalls)
-			}
-			s := outcomeSession(t, runDir)
-			if s.RunID != j.RunID || !s.ExecutionDeadline.Equal(start.Add(time.Minute)) || s.ContinuationCount != 0 || s.Concluding {
-				t.Fatalf("continuation changed identity, deadline, or progress: %+v", s)
-			}
-		})
+	j, runDir := outcomeJob(t, "explore"), t.TempDir()
+	j.Budget.Timeout = 60
+	start := time.Now()
+	turns, toolCalls := 0, 0
+	provider := scenarioProvider(func(_ context.Context, _ []agent.Message, defs []agent.Definition, _ agent.Emit) (agent.Message, error) {
+		turns++
+		if len(defs) == 0 {
+			t.Fatal("continuation disabled execution tools")
+		}
+		switch turns {
+		case 1:
+			return agent.Text("assistant", continueOutput), nil
+		case 2:
+			return progressCall(1), nil
+		case 3:
+			return agent.Text("assistant", completedOutput), nil
+		default:
+			t.Fatal("unexpected extra model turn")
+			return agent.Message{}, nil
+		}
+	})
+	r, err := runTestWorker(context.Background(), j, Options{Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}, RunDir: runDir, Now: func() time.Time { return start }})
+	if err != nil || r.Status != "success" || r.Conclude || turns != 3 || toolCalls != 1 {
+		t.Fatalf("result=%+v err=%v turns=%d tool calls=%d", r, err, turns, toolCalls)
+	}
+	s := outcomeSession(t, runDir)
+	if s.RunID != j.RunID || !s.ExecutionDeadline.Equal(start.Add(time.Minute)) || s.ContinuationCount != 0 || s.Concluding {
+		t.Fatalf("continuation changed identity, deadline, or progress: %+v", s)
 	}
 }
 
 func TestIncompleteNeverBecomesWorkerSuccess(t *testing.T) {
-	for _, kind := range []string{"explore"} {
-		for _, conclude := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/conclude=%t", kind, conclude), func(t *testing.T) {
-				stop := make(chan struct{})
-				if conclude {
-					close(stop)
-				}
-				r, err := runTestWorker(context.Background(), outcomeJob(t, kind), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
-					return agent.Text("assistant", incompleteOutput), nil
-				})})
-				if err != nil || r.Status != "failed" || r.FailureKind != "incomplete" || r.Retryable || r.Text != incompleteOutput || r.Conclude != conclude || !strings.Contains(r.Error, "19 of 30") {
-					t.Fatalf("incomplete result=%+v err=%v", r, err)
-				}
-			})
-		}
+	for _, conclude := range []bool{false, true} {
+		t.Run(fmt.Sprintf("conclude=%t", conclude), func(t *testing.T) {
+			stop := make(chan struct{})
+			if conclude {
+				close(stop)
+			}
+			r, err := runTestWorker(context.Background(), outcomeJob(t, "explore"), Options{RunDir: t.TempDir(), SoftStop: stop, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+				return agent.Text("assistant", incompleteOutput), nil
+			})})
+			if err != nil || r.Status != "failed" || r.FailureKind != "incomplete" || r.Retryable || r.Text != incompleteOutput || r.Conclude != conclude || !strings.Contains(r.Error, "19 of 30") {
+				t.Fatalf("incomplete result=%+v err=%v", r, err)
+			}
+		})
 	}
 }
 
@@ -132,7 +124,7 @@ func TestFormatRepairCanReturnToExecutionWithoutRefreshingBudget(t *testing.T) {
 			}
 			return progressCall(1), nil
 		case 4:
-			return agent.Text("assistant", completedOutput("explore")), nil
+			return agent.Text("assistant", completedOutput), nil
 		default:
 			t.Fatal("unexpected model call")
 			return agent.Message{}, nil
@@ -162,7 +154,7 @@ func TestContinuationLimitRequiresSuccessfulToolProgress(t *testing.T) {
 				}
 				controls++
 				if controls == 5 {
-					return agent.Text("assistant", completedOutput("explore")), nil
+					return agent.Text("assistant", completedOutput), nil
 				}
 				return agent.Text("assistant", continueOutput), nil
 			})
@@ -226,7 +218,7 @@ func TestResumeRevalidatesControlAndIncompleteResults(t *testing.T) {
 						if len(defs) == 0 || turns > 1 {
 							t.Fatal("resumed continuation did not enter execution exactly once")
 						}
-						return agent.Text("assistant", completedOutput("explore")), nil
+						return agent.Text("assistant", completedOutput), nil
 					})})
 					if err != nil {
 						t.Fatal(err)
@@ -320,7 +312,7 @@ func TestRepairToolCallsStayDisabledUntilContinue(t *testing.T) {
 		case 4:
 			return progressCall(2), nil
 		case 5:
-			return agent.Text("assistant", completedOutput("explore")), nil
+			return agent.Text("assistant", completedOutput), nil
 		default:
 			t.Fatal("unexpected model request")
 			return agent.Message{}, nil

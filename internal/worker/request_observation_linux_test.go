@@ -18,7 +18,7 @@ func TestExecutePersistsRequestObservationsWithoutDoubleCountingUsage(t *testing
 	turns, toolCalls := 0, 0
 	provider := scenarioProvider(func(_ context.Context, _ []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
 		turns++
-		m := agent.Text("assistant", completedOutput("explore"))
+		m := agent.Text("assistant", completedOutput)
 		if turns == 1 {
 			m = progressCall(1)
 		}

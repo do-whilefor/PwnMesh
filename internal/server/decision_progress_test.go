@@ -12,8 +12,7 @@ func TestDecisionBatchMakesProgressAfterFiniteConcurrentObservations(t *testing.
 	f := newDecisionBatchFixture(t)
 	execute := *f
 	execute.run, execute.lease = "observer-run", "planner@observer-run"
-	live := true
-	execute.register("explore", &live, 2)
+	execute.register("explore")
 	var latest string
 	conflicts := 0
 	for n := 0; n < 3; n++ {

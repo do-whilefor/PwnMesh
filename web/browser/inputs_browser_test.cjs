@@ -1,10 +1,10 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {assetServer,launch,fillCreate,stateFor,projectPath}=require('./demo_harness.cjs');
+const {staticServer,launch,fillCreate,stateFor,projectPath,interceptProject}=require('./visual_fixture.cjs');
 test('production forms render accessible dialogs, retry uploads, and atomically supplement materials',{
  timeout:60000,skip:process.env.PLAYWRIGHT_MODULE?false:'Set PLAYWRIGHT_MODULE for isolated upload regression',
 },async()=>{
- const server=await assetServer(),browser=await launch();
+ const server=await staticServer(),browser=await launch();
  try{
   const page=await browser.newPage({viewport:{width:1440,height:960}});page.setDefaultTimeout(12000);const errors=[],uploaded=[],inputs=[],writes=[];let project=null,creates=0,fail=true;
   page.on('pageerror',error=>errors.push(error.message));
@@ -48,16 +48,17 @@ test('demo upload form preserves bytes through the real HTTP service',{
 test('material readers ignore older responses and navigation to the model page',{
  timeout:45000,skip:process.env.PLAYWRIGHT_MODULE?false:'Set PLAYWRIGHT_MODULE for material reader race regression',
 },async()=>{
- const server=await assetServer(),browser=await launch();
+ const server=await staticServer(),browser=await launch();
  try{
   const page=await browser.newPage({viewport:{width:1440,height:960}}),project={id:'reader',title:'材料读取隔离',scenario:'pentest',status:'active',orchestration_version:1,generation:0,created_at:'2026-10-10T02:00:00Z'};let slowRoute;
   const files=['slow','fast'].map(id=>({id,name:id+'.txt',size:12,path:'/inputs/'+id+'.txt',created_at:project.created_at,sha256:'a'.repeat(64)}));
-  await page.route('**/model-settings',route=>route.fulfill({contentType:'application/json',body:JSON.stringify({base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',has_token:false,connection_mode:'direct',reasoning_effort:'high'})}));
-  await page.route('**/projects**',route=>{const pathname=new URL(route.request().url()).pathname,reply=body=>route.fulfill({contentType:'application/json',body:JSON.stringify(body)});if(pathname==='/projects')return reply([project]);if(pathname.endsWith('/inputs/slow')){slowRoute=route;return;}if(pathname.endsWith('/inputs/fast'))return route.fulfill({body:'fast actual',contentType:'application/octet-stream'});if(pathname.endsWith('/inputs'))return reply(files);if(pathname.endsWith('/state/events'))return reply([]);if(pathname.endsWith('/state'))return reply(stateFor(project));if(pathname.endsWith('/identity'))return reply({id:project.id,generation:0});if(pathname.endsWith('/executions'))return reply({items:[],through:0});if(pathname.endsWith('/rounds'))return reply({items:[]});return reply({});});
+  const requests=await interceptProject(page,{state:stateFor(project),inputs:files,contents:{fast:'fast actual'}});
+  await page.route('**/inputs/slow',route=>{slowRoute=route;});
   await page.goto(server.url,{waitUntil:'networkidle'});await page.locator('[data-view="materials"]').click();
   const first=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await first;await page.locator('[data-material="1"]').click();await page.waitForFunction(()=>document.querySelector('.inspector-reader[open]')?.textContent.includes('fast actual'));
   const firstResponse=page.waitForResponse(res=>res.url().endsWith('/inputs/slow'));await slowRoute.fulfill({body:'slow actual',contentType:'application/octet-stream'});await firstResponse;await page.evaluate(()=>new Promise(requestAnimationFrame));assert.match(await page.locator('.inspector-reader[open]').textContent(),/fast actual/);
   await page.locator('.inspector-reader[open] [data-inspector-action="close"]').click();await page.locator('.inspector-reader[open]').waitFor({state:'hidden'});
   const second=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await second;await page.locator('#model-entry').click();await page.locator('.llm-page').waitFor();const secondResponse=page.waitForResponse(res=>res.url().endsWith('/inputs/slow'));await slowRoute.fulfill({body:'stale after navigation',contentType:'application/octet-stream'});await secondResponse;await page.evaluate(()=>new Promise(requestAnimationFrame));assert.equal(await page.locator('.inspector-reader[open]').count(),0);
+  assert.deepEqual(requests.writes,[]);assert.deepEqual(requests.unexpected,[]);
  }finally{await browser.close();await server.close();}
 });

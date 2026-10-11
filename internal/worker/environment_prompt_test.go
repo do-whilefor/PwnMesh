@@ -59,30 +59,26 @@ func TestInitialPromptDescribesActualWorkspaceAndDeclaredEnvironment(t *testing.
 
 func TestPhaseInstructionsDoNotRepeatEnvironment(t *testing.T) {
 	t.Setenv("PWNMESH_WORKER_ENVIRONMENT", "kali-headless")
-	for _, kind := range []string{"explore"} {
-		t.Run(kind, func(t *testing.T) {
-			job := Job{Kind: kind, Workspace: "/workspace/shared", ResultContractVersion: 2}
-			initial, err := Prompt(job, false)
-			if err != nil {
-				t.Fatal(err)
+	job := Job{Kind: "explore", Workspace: "/workspace/shared", ResultContractVersion: 2}
+	initial, err := Prompt(job, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conclusion, err := Prompt(job, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, concluding := range []bool{false, true} {
+		repair, err := repairInstruction(job, concluding, 1, &outputFailure{Reason: "invalid_contract", Detail: "fixture"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		combined := initial + conclusion + repair
+		for _, shared := range []string{"Environment:", "Kali Linux container", strconv.Quote(job.Workspace), executionDiscipline} {
+			if strings.Count(combined, shared) != 1 {
+				t.Errorf("concluding=%t lost or repeated initial environment field %q", concluding, shared)
 			}
-			conclusion, err := Prompt(job, true)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, concluding := range []bool{false, true} {
-				repair, err := repairInstruction(job, concluding, 1, &outputFailure{Reason: "invalid_contract", Detail: "fixture"})
-				if err != nil {
-					t.Fatal(err)
-				}
-				combined := initial + conclusion + repair
-				for _, shared := range []string{"Environment:", "Kali Linux container", strconv.Quote(job.Workspace), executionDiscipline} {
-					if strings.Count(combined, shared) != 1 {
-						t.Errorf("concluding=%t lost or repeated initial environment field %q", concluding, shared)
-					}
-				}
-			}
-		})
+		}
 	}
 }
 

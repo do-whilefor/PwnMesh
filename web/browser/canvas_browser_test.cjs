@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {staticServer} = require('./visual_fixture.cjs');
+const {staticServer,launch} = require('./visual_fixture.cjs');
 
 // Run against the embedded assets in a disposable Linux pwnmesh serve instance.
 // PWNMESH_WEB_URL=http://127.0.0.1:18767 node --test web/browser/canvas_browser_test.cjs
@@ -8,8 +8,7 @@ const {staticServer} = require('./visual_fixture.cjs');
 test('embedded canvas handles live graph changes and unrestricted pointer movement', {
   skip: process.env.PWNMESH_WEB_URL || process.env.PLAYWRIGHT_MODULE ? false : 'Set PWNMESH_WEB_URL or PLAYWRIGHT_MODULE to load the canvas assets', timeout:90000
 }, async t => {
-  const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-  const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE});
+  const browser = await launch();
   t.after(() => browser.close());
   const server = process.env.PWNMESH_WEB_URL ? null : await staticServer();
   if (server) t.after(() => server.close());
@@ -54,7 +53,6 @@ test('embedded canvas handles live graph changes and unrestricted pointer moveme
   for (const kind of ['start','fact','task','goal']) {
     assert.equal(presentation[kind].width,148); assert.equal(presentation[kind].height,78);
   }
-  assert.equal(new Set(['start','fact','task','goal'].map(kind=>presentation[kind].background)).size,4,'entity types retain distinct V5 card colors');
   assert.equal(presentation.start.background,'rgb(52, 73, 96)');
   assert.equal(presentation.fact.background,'rgb(243, 248, 255)');
   assert.equal(presentation.task.background,'rgb(247, 244, 255)');

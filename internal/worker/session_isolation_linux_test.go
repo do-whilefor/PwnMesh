@@ -87,7 +87,7 @@ func TestConcurrentWorkersKeepPromptsToolsAndRecoveryIdentitySeparate(t *testing
 				if turns != 2 || !strings.Contains(string(history[len(history)-1].Content[0].Content), marker) {
 					return agent.Message{}, errors.New("runtime tool read another Worker's input")
 				}
-				return agent.Text("assistant", completedOutput("explore")), nil
+				return agent.Text("assistant", completedOutput), nil
 			})
 			result, err := runTestWorker(ctx, jobs[i], Options{RunDir: dirs[i], Tools: base, Provider: provider})
 			if err != nil || result.Status != "success" || turns != 2 {

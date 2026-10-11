@@ -8,9 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -50,25 +48,8 @@ func TestRetainedAssetGraphProject(t *testing.T) {
 	if dir == "" {
 		t.Skip("opt in with the directory containing retained state.json and workspace.tar")
 	}
-	rawState, err := os.ReadFile(filepath.Join(dir, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state board.State
-	if err = json.Unmarshal(rawState, &state); err != nil {
-		t.Fatal(err)
-	}
-	archive, err := os.Open(filepath.Join(dir, "workspace.tar"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer archive.Close()
-	digest := sha256.New()
-	files, err := retainLiveWorkspace(io.TeeReader(archive, digest), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("validation_scope=asset_graph_worker_trace_and_frozen_input workspace_sha256=%x state_sha256=%x", digest.Sum(nil), sha256.Sum256(rawState))
+	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
+	t.Logf("validation_scope=asset_graph_worker_trace_and_frozen_input workspace_sha256=%s state_sha256=%s", workspaceSHA256, stateSHA256)
 	if failures := validateAssetGraphDelivery(state, files); len(failures) != 0 {
 		t.Fatal(failures)
 	}

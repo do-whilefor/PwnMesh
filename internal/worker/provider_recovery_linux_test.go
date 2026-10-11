@@ -52,7 +52,7 @@ func TestProviderTransientFailureResumesSameRunWithoutRepeatingTools(t *testing.
 				}
 				message := progressCall(1)
 				if recovering {
-					message = agent.Text("assistant", completedOutput("explore"))
+					message = agent.Text("assistant", completedOutput)
 					message.StopReason = "end_turn"
 					payload, err := io.ReadAll(req.Body)
 					if err != nil || !strings.Contains(string(payload), "Chunk verified") {
@@ -135,7 +135,7 @@ func TestMalformedToolResponseRecoversInsideOriginalWorkerRun(t *testing.T) {
 				t.Fatalf("lost prior tool receipt: %v", err)
 			}
 			if requests == 5 {
-				message = agent.Text("assistant", completedOutput("explore"))
+				message = agent.Text("assistant", completedOutput)
 				message.StopReason = "end_turn"
 			}
 		}

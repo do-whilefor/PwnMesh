@@ -15,8 +15,7 @@ import (
 
 func TestRoundHistoryHTTPPreservesEvidenceAndFencesOldWorker(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("explore", &live, 2)
+	f.register("explore")
 	evidence := make([]board.EvidenceRef, 8)
 	for n := range evidence {
 		evidence[n] = board.EvidenceRef{RunID: f.run, Path: fmt.Sprintf("/workspace/evidence-%d.txt", n), Excerpt: strings.Repeat("证据🙂", 600)}

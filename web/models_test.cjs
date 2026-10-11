@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {validate,parseProxy,providerFor,canReuseToken,proxyProtocols} = require('./static/models.js');
+const {launch} = require('./browser/visual_fixture.cjs');
 const defaults = {base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',token:'test-only-key',connection_mode:'direct',reasoning_effort:''};
 test('model setup uses Anthropic and retains a server-side token only when one exists', () => {
   const result = validate(defaults,false); assert.equal(result.protocol,'anthropic'); assert.equal(result.proxy_url,'');
@@ -47,8 +48,7 @@ test('saved credentials can only be reused for the same HTTP origin', () => {
 test('model browser blocks cross-origin saved credentials and clears provider drafts', {
   timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE to check model credential binding in a browser',
 }, async () => {
-  const {chromium} = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
+  const browser = await launch();
   try {
     const page = await browser.newPage({viewport:{width:1440,height:1000}});
     await page.setContent('<main id="main"></main>');
@@ -88,8 +88,7 @@ test('model browser blocks cross-origin saved credentials and clears provider dr
 test('model form only saves after a successful probe and discards unsaved drafts on return', {
   timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE for model form integration',
 }, async () => {
-  const {chromium} = require(process.env.PLAYWRIGHT_MODULE);
-  const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
+  const browser = await launch();
   try {
     const page = await browser.newPage();await page.setContent('<main id="main"></main>');
     const errors = [];page.on('pageerror',error => errors.push(error.message));

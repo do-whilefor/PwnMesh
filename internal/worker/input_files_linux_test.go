@@ -63,7 +63,7 @@ func TestCachedWorkerGraphStillVerifiesUploadedInputs(t *testing.T) {
 	calls := 0
 	opts := Options{RunDir: dir, Output: &output, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		calls++
-		return agent.Text("assistant", completedOutput("explore")), nil
+		return agent.Text("assistant", completedOutput), nil
 	})}
 	for n := 0; n < 2; n++ {
 		r, err := runTestWorker(context.Background(), j, opts)

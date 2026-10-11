@@ -2,8 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const data = require('./static/data.js');
 
-function fixture(status = 'active') {
-  return {revision:4,graph:{project:{id:'p',status,generation:1,restarted_at:'2026-09-24T00:00:00Z'},
+function fixture() {
+  return {revision:4,graph:{project:{id:'p',status:'active',generation:1,restarted_at:'2026-09-24T00:00:00Z'},
     intents:[{id:'done',to:'goal',from:['f'],description:'已核验目标',concluded_at:'2026-09-24T00:05:00Z'}]},
     goals:[{id:'goal',status:'achieved',sources:['f'],support_valid:true}],
     fact_records:[{id:'f',status:'valid'}],steps:[],

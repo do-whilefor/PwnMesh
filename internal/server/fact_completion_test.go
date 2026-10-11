@@ -16,8 +16,7 @@ func TestEvidenceCompletionReusesPublishedFactAndBindsSources(t *testing.T) {
 	for _, published := range []bool{false, true} {
 		t.Run(map[bool]string{false: "final observation", true: "published observation"}[published], func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
-			live := true
-			f.register("explore", &live, 2)
+			f.register("explore")
 			data := map[string]any{"fact": evidenceFixtureFact(f.run)}
 			var publishedID string
 			if published {
@@ -67,8 +66,7 @@ func TestEvidenceCompletionCannotDowngradeOrForgeProvenance(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
-			live := true
-			f.register("explore", &live, 2)
+			f.register("explore")
 			before := f.state()
 			raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": tc.data(f)})
 			f.pending(string(raw))
@@ -84,8 +82,7 @@ func TestEvidenceCompletionCannotDowngradeOrForgeProvenance(t *testing.T) {
 func TestVersionTwoCannotUseBareCompatibilityConclusion(t *testing.T) {
 	for _, fenced := range []bool{false, true} {
 		f := newExecutionProtocolFixture(t)
-		live := true
-		f.register("explore", &live, 2)
+		f.register("explore")
 		f.request("POST", f.base()+"/intents/"+f.intent+"/conclude", map[string]string{"worker": f.lease, "description": "bare conclusion"}, fenced, http.StatusConflict, nil)
 		if len(f.state().Graph.Facts) != 2 {
 			t.Fatal("compatibility endpoint bypassed the registered evidence contract")
@@ -101,12 +98,11 @@ func TestEvidenceCompletionCannotReuseOtherStepOrCorrectedObservation(t *testing
 		}
 		t.Run(name, func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
-			live := true
-			f.register("explore", &live, 2)
+			f.register("explore")
 			original := f.action("fact", "first-observation", evidenceFixtureFact(f.run))
 			if otherStep {
 				f.run, f.lease = "second-run", "planner@second-run"
-				f.register("explore", &live, 2)
+				f.register("explore")
 			} else {
 				corrective := evidenceFixtureFact(f.run)
 				corrective["description"] = "The observed response came from a stale fixture"

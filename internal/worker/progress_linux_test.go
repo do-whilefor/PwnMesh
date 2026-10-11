@@ -161,7 +161,7 @@ func TestToolProgressDoesNotLimitNewReadsWritesOrMixedUsefulBatches(t *testing.T
 			provider := scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 				turns++
 				if turns == maxFailedToolTurns+2 {
-					return agent.Text("assistant", completedOutput("explore")), nil
+					return agent.Text("assistant", completedOutput), nil
 				}
 				name, input := "read", `{}`
 				if mode == "new read arguments" || mode == "mixed batch" {
@@ -299,7 +299,7 @@ func TestToolProgressResumeAfterSettledSaveCannotBuyAnotherTurn(t *testing.T) {
 	turns, calls := 0, 0
 	result, err := runTestWorker(context.Background(), job, Options{RunDir: dir, Tools: []agent.Tool{observationTool("read", &calls, false)}, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		turns++
-		return agent.Text("assistant", completedOutput("explore")), nil
+		return agent.Text("assistant", completedOutput), nil
 	})})
 	if err != nil || result.FailureKind != "tool_no_progress" || turns != 0 || calls != 0 {
 		t.Fatalf("crash bought another turn or tool execution: result=%+v err=%v turns=%d calls=%d", result, err, turns, calls)

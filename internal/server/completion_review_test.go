@@ -15,8 +15,7 @@ func TestCompletionPreviewReturnsAuthoritativeReviewWithoutAcceptanceOrWrites(t 
 	f.request("POST", "/projects", map[string]any{"title": "Completion review", "origin": "Request /c on prod/build-42 as anonymous", "goal": "Obtain the actual HTTP response status for /c"}, false, http.StatusCreated, &graph)
 	f.project = graph.Project.ID
 	f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "Use the specified deployment and identity"}, false, http.StatusCreated, nil)
-	live := true
-	f.register("explore", &live, 2)
+	f.register("explore")
 	negative := evidenceFixtureFact(f.run)
 	negative["description"] = "/c produced no response"
 	negative["scope"] = "prod/build-42 as anonymous"
@@ -26,7 +25,7 @@ func TestCompletionPreviewReturnsAuthoritativeReviewWithoutAcceptanceOrWrites(t 
 	f.pending(string(conclusion))
 	f.apply(http.StatusOK)
 	f.run, f.lease, f.intent = "completion-review", "planner@completion-review", ""
-	f.registerWithFields("reason", &live, 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
 	payload, _ := json.Marshal(map[string]any{"from": []string{fact.ID}, "description": "No response means that /c has been accounted for"})
 	before := f.state()
 	batch := f.batch(board.DecisionAction{Op: "complete", Payload: payload})

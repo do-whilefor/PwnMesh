@@ -108,7 +108,7 @@ func TestGraphWrapperVerificationFailurePublishesOnlyFailedResult(t *testing.T) 
 	sessionRun := func(ctx context.Context, job Job, o Options) (Result, error) {
 		// The session emits success, but it lacks the matching repair receipt.
 		// The graph verifier must reject it before any result reaches Docker.
-		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput("explore")})
+		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput})
 	}
 	r, err := runWorkerAcceptance(context.Background(), j, Options{RunDir: dir, Output: &output}, sessionRun)
 	results := graphOutputResults(t, output.Bytes())
@@ -134,7 +134,7 @@ func TestGraphWrapperBridgeRequestsRemainLive(t *testing.T) {
 		if requests != 1 || reply != `{"ready":true}` || !strings.Contains(output.String(), `"type":"message_start"`) {
 			return Result{}, errors.New("live bridge or events were buffered")
 		}
-		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput("explore")})
+		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput})
 	}
 	r, err := runWorkerAcceptance(context.Background(), j, Options{RunDir: dir, Output: stream}, sessionRun)
 	if err != nil || r.Status != "success" || len(graphOutputResults(t, output.Bytes())) != 1 {
@@ -148,7 +148,7 @@ func TestGraphWrapperActualLoopAcceptsAndReplaysOneResult(t *testing.T) {
 	calls := 0
 	opts := Options{RunDir: dir, Output: &output, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 		calls++
-		return agent.Text("assistant", completedOutput("explore")), nil
+		return agent.Text("assistant", completedOutput), nil
 	})}
 	first, err := runTestWorker(context.Background(), j, opts)
 	if err != nil || first.Status != "success" || len(graphOutputResults(t, output.Bytes())) != 1 {
@@ -184,7 +184,7 @@ func TestGraphWrapperCachedResultHonorsHardStopAndLaunchToken(t *testing.T) {
 			calls := 0
 			opts := Options{RunDir: dir, Output: &output, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 				calls++
-				return agent.Text("assistant", completedOutput("explore")), nil
+				return agent.Text("assistant", completedOutput), nil
 			})}
 			if _, err := runTestWorker(context.Background(), j, opts); err != nil {
 				t.Fatal(err)
@@ -214,7 +214,7 @@ func TestGraphWrapperRetryableResultIsEmittedOnceAndReconciled(t *testing.T) {
 	calls := 0
 	sessionRun := func(ctx context.Context, job Job, o Options) (Result, error) {
 		calls++
-		result := Result{Type: "result", Status: "success", Text: completedOutput("explore")}
+		result := Result{Type: "result", Status: "success", Text: completedOutput}
 		if calls == 1 {
 			result = Result{Type: "result", Status: "failed", Retryable: true, FailureKind: "transport", Error: "recoverable connection reset"}
 		}

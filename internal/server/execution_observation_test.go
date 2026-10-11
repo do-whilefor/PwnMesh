@@ -47,8 +47,7 @@ func TestDecisionObservationIsIndependentOfImmutableBusinessResult(t *testing.T)
 
 func TestDecisionChangesReturnOnlyBoundedGraphIndex(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("explore", &live, 2)
+	f.register("explore")
 	f.action("fact", "observation", evidenceFixtureFact(f.run))
 	state := f.state()
 	var changes []board.StateChange

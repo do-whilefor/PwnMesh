@@ -74,7 +74,7 @@ func TestAcceptanceMigratesLegacyCheckpointsWithoutRepeatingModelWork(t *testing
 			calls := 0
 			options := Options{RunDir: dir, Output: &output, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
 				calls++
-				return agent.Text("assistant", completedOutput("explore")), nil
+				return agent.Text("assistant", completedOutput), nil
 			})}
 			first, err := runTestWorker(context.Background(), job, options)
 			if err != nil || first.Status != "success" {
@@ -151,7 +151,7 @@ func TestAcceptanceSessionErrorsAndPanicsRetainRecoveryBoundary(t *testing.T) {
 					}
 					return Result{}, io.ErrUnexpectedEOF
 				}
-				return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput("explore")})
+				return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput})
 			}
 			opts := Options{RunDir: dir, Output: &output}
 			if _, err := runWorkerAcceptance(context.Background(), job, opts, sessionRun); !errors.Is(err, ErrInterrupted) || len(graphOutputResults(t, output.Bytes())) != 0 {
@@ -178,7 +178,7 @@ func TestAcceptanceInterruptedMigrationRetainsTheLegacyBoundary(t *testing.T) {
 		if calls == 1 {
 			return Result{}, io.ErrUnexpectedEOF
 		}
-		return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput("explore")})
+		return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput})
 	}
 	opts := Options{RunDir: dir, Output: &output}
 	if _, err := runWorkerAcceptance(context.Background(), job, opts, sessionRun); !errors.Is(err, ErrInterrupted) {
@@ -203,7 +203,7 @@ func TestAcceptanceDeterministicFailureNeverRestartsSession(t *testing.T) {
 	sessionRun := func(context.Context, Job, Options) (Result, error) {
 		calls++
 		// A returned candidate without its durable session cannot be accepted.
-		return Result{Type: "result", Status: "success", Text: completedOutput("explore")}, nil
+		return Result{Type: "result", Status: "success", Text: completedOutput}, nil
 	}
 	options := Options{RunDir: dir, Output: &output}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -226,7 +226,7 @@ func TestAcceptanceRejectsChangedSessionOrMalformedReceiptBeforeRecovery(t *test
 			calls := 0
 			sessionRun := func(ctx context.Context, job Job, opts Options) (Result, error) {
 				calls++
-				return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput("explore")})
+				return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput})
 			}
 			opts := Options{RunDir: dir, Output: &output}
 			if _, err := runWorkerAcceptance(context.Background(), job, opts, sessionRun); err != nil {

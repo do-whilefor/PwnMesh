@@ -3,6 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
+const {launch} = require('./visual_fixture.cjs');
 
 test('real model settings persist, probe Anthropic tools, and report failures; materials survive reload', {
   timeout:120000,
@@ -32,8 +33,7 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
   });
   await new Promise(resolve => proxy.listen(0,'0.0.0.0',resolve));
   const endpoint = `http://${process.env.PWNMESH_QA_UPSTREAM_HOST || 'host.docker.internal'}:${upstream.address().port}/anthropic`;
-  const {chromium} = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
-  const browser = await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE || undefined});
+  const browser = await launch();
   const page = await browser.newPage({viewport:{width:1440,height:900}}), errors = [];
   page.setDefaultTimeout(15000); page.on('pageerror', error => errors.push(error.message));
   const api = async (route,method = 'GET',body) => {

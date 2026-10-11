@@ -639,7 +639,7 @@ func TestCommandGraphActualLoopUsesDefaultToolWithoutExtraPlanning(t *testing.T)
 		if turns != 2 || len(history) == 0 || history[len(history)-1].Content[0].IsError {
 			t.Fatalf("graph did not complete within one tool turn: %+v", history)
 		}
-		return agent.Text("assistant", completedOutput("explore")), nil
+		return agent.Text("assistant", completedOutput), nil
 	})}
 	result, err := runTestWorker(context.Background(), job, opts)
 	if err != nil || result.Status != "success" || turns != 2 {
@@ -648,14 +648,12 @@ func TestCommandGraphActualLoopUsesDefaultToolWithoutExtraPlanning(t *testing.T)
 	if _, err := os.Stat(filepath.Join(dir, "graph-tools", "loop", "graph.json")); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"reason"} {
-		job.Kind = kind
-		options := Options{RunDir: dir}
-		if err := ConfigureRuntimeTools(job, &options); err != nil {
-			t.Fatal(err)
-		}
-		if slices.ContainsFunc(options.Tools, func(tool agent.Tool) bool { return tool.Name == "run_graph" }) {
-			t.Fatalf("command graph leaked into %s", kind)
-		}
+	job.Kind = "reason"
+	options := Options{RunDir: dir}
+	if err := ConfigureRuntimeTools(job, &options); err != nil {
+		t.Fatal(err)
+	}
+	if slices.ContainsFunc(options.Tools, func(tool agent.Tool) bool { return tool.Name == "run_graph" }) {
+		t.Fatal("command graph leaked into reason")
 	}
 }

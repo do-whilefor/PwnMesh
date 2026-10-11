@@ -11,8 +11,7 @@ import (
 
 func TestTimelineExportsProcessFactsFindingsAndFinalEvidence(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("explore", &live, 2)
+	f.register("explore")
 	fact := f.action("fact", "observed", map[string]any{"description": "PROCESS_OBSERVATION", "scope": "fixture", "observed_at": "2026-09-22T10:00:00Z", "evidence": []board.EvidenceRef{{RunID: f.run, Path: "process.txt", Excerpt: "PROCESS_EVIDENCE"}}})
 	candidate := f.action("candidate", "finding", map[string]any{"claim": "VERIFIED_FINDING", "scope": "fixture", "status": "verified", "sources": []string{fact.ID}, "reason": "The observation supports this interpretation"})
 	final := map[string]any{"description": "FINAL_OBSERVATION", "scope": "fixture", "observed_at": "2026-09-22T10:00:00Z", "evidence": []board.EvidenceRef{{RunID: f.run, Path: "final.txt", Excerpt: "FINAL_EVIDENCE"}}}

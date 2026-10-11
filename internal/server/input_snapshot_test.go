@@ -202,8 +202,7 @@ func TestPrepareSnapshotRejectsClientSuppliedInputAndCrossRoundTemplates(t *test
 
 func TestPrepareSnapshotKeepsRegistrationSmallBeyondEightMiBEvidence(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("explore", &live, 2)
+	f.register("explore")
 	const facts, refs = 70, 15
 	excerpt := strings.Repeat("x", 8192)
 	var lastFact string

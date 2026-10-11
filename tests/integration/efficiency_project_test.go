@@ -5,8 +5,10 @@ package integration
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -445,6 +447,30 @@ func TestRetainLiveWorkspacePreservesCaseAndOriginalArchive(t *testing.T) {
 		t.Fatalf("case-distinct members were lost from evidence map: %v", files)
 	}
 	assertRetainedArchive(t, output, original)
+}
+
+func TestReadRetainedLiveEvidencePreservesSourcesAndHashesCompleteArchive(t *testing.T) {
+	directory, original := t.TempDir(), retainedWorkspaceArchive(t)
+	raw := []byte("{\n  \"revision\": 17\n}\n")
+	for name, body := range map[string][]byte{"state.json": raw, "workspace.tar": original} {
+		if err := os.WriteFile(filepath.Join(directory, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, directory)
+	if state.Revision != 17 || stateSHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) || workspaceSHA256 != fmt.Sprintf("%x", sha256.Sum256(original)) {
+		t.Fatal("replay did not bind the exact original state and complete archive bytes")
+	}
+	if len(files) != 2 || string(files["/workspace/auditlab/Response.txt"]) != "uppercase evidence" || string(files["/workspace/auditlab/response.txt"]) != "lowercase evidence" {
+		t.Fatalf("replay lost case-distinct evidence: %v", files)
+	}
+	assertRetainedArchive(t, directory, original)
+	if retained, err := os.ReadFile(filepath.Join(directory, "state.json")); err != nil || !bytes.Equal(retained, raw) {
+		t.Fatalf("replay changed the retained state: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "workspace")); !os.IsNotExist(err) {
+		t.Fatalf("replay extracted files into the original evidence directory: %v", err)
+	}
 }
 
 func TestRetainLiveWorkspaceKeepsArchiveAfterExtractionFailure(t *testing.T) {

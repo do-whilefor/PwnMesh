@@ -1,6 +1,6 @@
 'use strict';
 const test=require('node:test'),assert=require('node:assert/strict');
-const {launch,projectPath,fillCreate}=require('./demo_harness.cjs');
+const {launch,projectPath,fillCreate}=require('./visual_fixture.cjs');
 test('demo workbench creates real projects and persists stop, resume, terminate, restart and delete',{
  timeout:180000,skip:process.env.PWNMESH_WEB_URL?false:'Set PWNMESH_WEB_URL to a dedicated empty service',
 },async()=>{

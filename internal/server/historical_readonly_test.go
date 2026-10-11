@@ -54,8 +54,7 @@ func TestHistoricalProjectReadsAndRejectedWritesPreserveStoredState(t *testing.T
 
 func TestRetiredExecutionCannotResumeApplyOrRetryInCurrentProject(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("explore", &live, 2)
+	f.register("explore")
 	var original board.Execution
 	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
 		e, err := tx.Execution(f.project, f.run)
@@ -104,8 +103,7 @@ func TestRetiredExecutionCannotResumeApplyOrRetryInCurrentProject(t *testing.T) 
 
 func TestRetiredLeaseRolesCannotWriteCurrentProject(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("explore", &live, 2)
+	f.register("explore")
 	before := f.state()
 	for _, role := range []string{"bootstrap", "intent"} {
 		f.kind = role

@@ -180,23 +180,7 @@ func TestRetainedReleaseAuditProject(t *testing.T) {
 	if dir == "" {
 		t.Skip("opt in with retained state.json and workspace.tar directory")
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state board.State
-	if err = json.Unmarshal(raw, &state); err != nil {
-		t.Fatal(err)
-	}
-	archive, err := os.Open(filepath.Join(dir, "workspace.tar"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer archive.Close()
-	files, err := retainLiveWorkspace(archive, t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	state, files, _, _ := readRetainedLiveEvidence(t, dir)
 	if failures := validateReleaseAuditDelivery(state, files); len(failures) != 0 {
 		t.Fatal(failures)
 	}
@@ -264,27 +248,10 @@ func TestRetainedReleaseAuditRecoveryProject(t *testing.T) {
 	if dir == "" {
 		t.Skip("opt in to independent recovery-path acceptance on retained evidence")
 	}
-	raw, err := os.ReadFile(filepath.Join(dir, "state.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var state board.State
-	if err = json.Unmarshal(raw, &state); err != nil {
-		t.Fatal(err)
-	}
-	archive, err := os.Open(filepath.Join(dir, "workspace.tar"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer archive.Close()
-	digest := sha256.New()
-	files, err := retainLiveWorkspace(io.TeeReader(archive, digest), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
+	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
 	result := validateReleaseAuditRecoveryDelivery(state, files)
-	result.StateSHA256 = fmt.Sprintf("%x", sha256.Sum256(raw))
-	result.WorkspaceSHA256 = fmt.Sprintf("%x", digest.Sum(nil))
+	result.StateSHA256 = stateSHA256
+	result.WorkspaceSHA256 = workspaceSHA256
 	if original, readErr := os.ReadFile(filepath.Join(dir, "validation.json")); readErr == nil {
 		result.OriginalValidationSHA256 = fmt.Sprintf("%x", sha256.Sum256(original))
 	}

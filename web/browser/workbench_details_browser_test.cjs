@@ -1,7 +1,7 @@
 'use strict';
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {staticServer,interceptProject,paint}=require('./visual_fixture.cjs');
+const {staticServer,interceptProject,paint,launch}=require('./visual_fixture.cjs');
 
 const created='2026-09-24T02:00:00Z';
 const boardHead='浏览器折叠验收的黑板记录开头。',boardTail='黑板记录末尾：展开后应完整可见。';
@@ -21,9 +21,9 @@ function fixture(){
 test('v5 workbench reads real-shaped logs, materials and results and preserves live canvas interactions',{
   timeout:90000,skip:process.env.PWNMESH_WEB_URL||process.env.PLAYWRIGHT_MODULE?false:'Set PWNMESH_WEB_URL or PLAYWRIGHT_MODULE for workbench browser coverage',
 },async t=>{
-  const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright'),server=process.env.PWNMESH_WEB_URL?null:await staticServer();let browser;
+  const server=process.env.PWNMESH_WEB_URL?null:await staticServer();let browser;
   try{
-    browser=await chromium.launch({headless:true,executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE||undefined});
+    browser=await launch();
     const page=await browser.newPage({viewport:{width:1440,height:960},reducedMotion:'reduce'});page.setDefaultTimeout(12000);
     const data=fixture(),state=data.state,errors=[],assetErrors=[];let unavailable=false;
     page.on('pageerror',error=>errors.push(error.message));page.on('response',response=>{if(new URL(response.url()).pathname.startsWith('/static/')&&response.status()>=400)assetErrors.push(response.url());});

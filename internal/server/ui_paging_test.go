@@ -9,8 +9,7 @@ import (
 
 func TestProjectExecutionPagingHasOneResponseShapeAndValidatesBoundaries(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	live := true
-	f.register("reason", &live, 2)
+	f.register("reason")
 	var defaults board.ExecutionViewPage
 	f.request("GET", f.base()+"/executions", nil, false, http.StatusOK, &defaults)
 	var page board.ExecutionViewPage

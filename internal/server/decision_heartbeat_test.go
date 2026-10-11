@@ -13,8 +13,7 @@ import (
 func TestReasonHeartbeatVersionIgnoresLeaseActivity(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	intent := f.newIntent()
-	live := true
-	f.registerWithFields("reason", &live, 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
 	version := board.DecisionStateVersion(f.state())
 	body := map[string]string{"worker": f.lease, "expected_version": version}
 	for _, op := range []string{"heartbeat", "heartbeat", "release", "heartbeat"} {
@@ -31,8 +30,7 @@ func TestReasonHeartbeatDetectsChangedInputWithoutPublishingState(t *testing.T) 
 		t.Run(change, func(t *testing.T) {
 			f := newExecutionProtocolFixture(t)
 			intent := f.newIntent()
-			live := true
-			f.registerWithFields("reason", &live, 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+			f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
 			version := board.DecisionStateVersion(f.state())
 			if change == "hint" {
 				f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "New evidence changes the plan"}, false, http.StatusCreated, nil)

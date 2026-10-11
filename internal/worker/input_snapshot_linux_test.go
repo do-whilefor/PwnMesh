@@ -7,8 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -71,24 +69,16 @@ func snapshotRuntimeTool(t *testing.T, opts Options, name string) agent.Tool {
 }
 
 func TestSnapshotExecutePromptUsesReadToolsWithoutGraphExport(t *testing.T) {
-	for _, kind := range []string{"explore"} {
-		t.Run(kind, func(t *testing.T) {
-			job, _ := snapshotRuntimeFixture(t, kind)
-			dir := t.TempDir()
-			prompt, err := Prompt(job, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(prompt, "Original user input remains intact") || !strings.Contains(prompt, "read_snapshot") || !strings.Contains(prompt, "read_graph") {
-				t.Fatal("snapshot prompt lost original input or its separate immutable/current read tools")
-			}
-			if strings.Contains(prompt, "graph.yaml") || strings.Contains(prompt, "complete original legacy graph") {
-				t.Fatal("snapshot prompt advertises a nonexistent complete legacy graph")
-			}
-			if _, err = os.Stat(filepath.Join(dir, "graph.yaml")); !os.IsNotExist(err) {
-				t.Fatalf("snapshot prompt wrote a partial graph.yaml: %v", err)
-			}
-		})
+	job, _ := snapshotRuntimeFixture(t, "explore")
+	prompt, err := Prompt(job, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "Original user input remains intact") || !strings.Contains(prompt, "read_snapshot") || !strings.Contains(prompt, "read_graph") {
+		t.Fatal("snapshot prompt lost original input or its separate immutable/current read tools")
+	}
+	if strings.Contains(prompt, "graph.yaml") || strings.Contains(prompt, "complete original legacy graph") {
+		t.Fatal("snapshot prompt advertises a nonexistent complete legacy graph")
 	}
 }
 
