@@ -292,6 +292,9 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	if j.Kind != "curate" && j.Graph.Project.Scenario == "pentest" {
 		o.Tools = append(o.Tools, cvssTool(), pentestSkillTool())
 	}
+	if j.Kind != "curate" && j.Graph.Project.Scenario == "audit" {
+		o.Tools = append(o.Tools, auditSkillTool())
+	}
 	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(config.Getenv) {
 		for n := range o.Tools {
 			if o.Tools[n].Name == "bash" {

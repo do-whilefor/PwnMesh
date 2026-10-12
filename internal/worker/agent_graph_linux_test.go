@@ -402,7 +402,7 @@ func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
 					requests++
 					prompt := history[0].Text()
 					ctf := tc.scenario == "ctf"
-					if strings.Contains(prompt, pentestPolicy) != (tc.scenario == "pentest") || strings.Contains(prompt, ctfPolicy) != ctf || strings.Count(prompt, executionDiscipline) != 1 {
+					if strings.Contains(prompt, pentestPolicy) != (tc.scenario == "pentest") || strings.Contains(prompt, auditPolicy) != (tc.scenario == "audit") || strings.Contains(prompt, ctfPolicy) != ctf || strings.Count(prompt, executionDiscipline) != 1 {
 						return agent.Message{}, errors.New("child scenario policy or execution limits were lost or duplicated")
 					}
 					tools := map[string]bool{}
@@ -412,15 +412,19 @@ func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
 							return agent.Message{}, errors.New("CTF submission instructions escaped their configured bash capability")
 						}
 					}
-					if tools["cvss31"] != (tc.scenario == "pentest") || tools["read_pentest_skill"] != (tc.scenario == "pentest") || tools["graph_action"] || tools["run_graph"] || tools["finish_step"] || tools["read_graph"] {
+					if tools["cvss31"] != (tc.scenario == "pentest") || tools["read_pentest_skill"] != (tc.scenario == "pentest") || tools["read_audit_skill"] != (tc.scenario == "audit") || tools["graph_action"] || tools["run_graph"] || tools["finish_step"] || tools["read_graph"] {
 						return agent.Message{}, fmt.Errorf("wrong child tool boundary: %v", tools)
 					}
-					if tc.scenario == "pentest" {
+					if tc.scenario == "pentest" || tc.scenario == "audit" {
+						toolName, title := "read_pentest_skill", "Web-Vulnhunt"
+						if tc.scenario == "audit" {
+							toolName, title = "read_audit_skill", "Flounder"
+						}
 						if requests == 1 {
-							return observationCall("read_pentest_skill", `{}`, requests), nil
+							return observationCall(toolName, `{}`, requests), nil
 						}
 						last := history[len(history)-1].Content
-						if len(last) != 1 || last[0].IsError || !strings.Contains(string(last[0].Content), "Web-Vulnhunt") {
+						if len(last) != 1 || last[0].IsError || !strings.Contains(string(last[0].Content), title) {
 							return agent.Message{}, errors.New("child could not read the bundled skill")
 						}
 					}
@@ -429,7 +433,7 @@ func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
 			}}
 			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Assess fixture", Timeout: 10, Resources: []string{}}
 			wantRequests := 1
-			if tc.scenario == "pentest" {
+			if tc.scenario == "pentest" || tc.scenario == "audit" {
 				wantRequests = 2
 			}
 			if _, err := executeAgentNode(context.Background(), j, o, "scenario", t.TempDir(), spec, nil); err != nil || requests != wantRequests {

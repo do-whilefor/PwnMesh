@@ -17,6 +17,9 @@ var prompts embed.FS
 //go:embed prompts/pentest.md
 var pentestPolicy string
 
+//go:embed prompts/audit.md
+var auditPolicy string
+
 //go:embed prompts/ctf.md
 var ctfPolicy string
 
@@ -123,6 +126,8 @@ func scenarioPrompt(j Job) string {
 	switch j.Graph.Project.Scenario {
 	case "pentest":
 		return "\n" + pentestPolicy
+	case "audit":
+		return "\n" + auditPolicy
 	case "ctf":
 		return "\n" + ctfPolicy
 	}

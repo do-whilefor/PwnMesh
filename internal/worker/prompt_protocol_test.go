@@ -176,6 +176,9 @@ func TestScenarioRulesPreserveGeneralUserGoals(t *testing.T) {
 				if scenario == "pentest" && !strings.Contains(prompt, "Apply these rules only to vulnerability assessment and reporting within the user's goal") {
 					t.Error("pentest policy can turn a code task into an unsolicited vulnerability assessment")
 				}
+				if scenario == "audit" && !strings.Contains(prompt, "Apply these rules only to source security review within the user's goal") {
+					t.Error("audit policy can turn a code task into an unsolicited source security review")
+				}
 			})
 		}
 	}
@@ -186,7 +189,7 @@ func TestPhaseInstructionsDoNotCopyTaskInputOrScenario(t *testing.T) {
 	t.Setenv("TSEC_AGENT_TOKEN", "fixture-token")
 	const version = 2
 	const kind = "explore"
-	for _, scenario := range []string{"pentest", "ctf"} {
+	for _, scenario := range []string{"pentest", "ctf", "audit"} {
 		t.Run(fmt.Sprintf("v%d/%s/%s", version, kind, scenario), func(t *testing.T) {
 			j := Job{Kind: kind, ResultContractVersion: version, Graph: board.Graph{Project: board.Project{Scenario: scenario}}}
 			original, err := Prompt(j, false)

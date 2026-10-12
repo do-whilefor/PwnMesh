@@ -43,7 +43,7 @@ func TestToolProgressStopsRepeatedErrorsAndUnchangedReads(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		fail bool
-	}{{"probe", true}, {"read", false}, {"read_snapshot", false}, {"read_pentest_skill", false}} {
+	}{{"probe", true}, {"read", false}, {"read_snapshot", false}, {"read_pentest_skill", false}, {"read_audit_skill", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			job, dir := outcomeJob(t, "explore"), t.TempDir()
 			job.Budget.Timeout = 0 // The progress bound works without a task timeout.

@@ -104,6 +104,9 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	if j.Graph.Project.Scenario == "pentest" {
 		childTools = append(childTools, cvssTool(), pentestSkillTool())
 	}
+	if j.Graph.Project.Scenario == "audit" {
+		childTools = append(childTools, auditSkillTool())
+	}
 	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(config.Getenv) {
 		for i := range childTools {
 			if childTools[i].Name == "bash" {
