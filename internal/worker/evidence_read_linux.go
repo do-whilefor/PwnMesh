@@ -130,30 +130,13 @@ func readEvidenceReference(ctx context.Context, id string, page graphPage, reque
 		return ref, err
 	}
 	if omitted.RecordOmitted {
-		if omitted.RecordOffset != page.Offset || omitted.StateVersion != page.StateVersion || omitted.RecordBytes <= 0 || omitted.RecordBytes > MaxGraphRPCBytes*4 {
+		if omitted.RecordOffset != page.Offset || omitted.StateVersion != page.StateVersion {
 			return ref, errors.New("invalid or oversized evidence reference continuation")
 		}
-		raw = nil
-		for offset := 0; ; {
-			fragment, err := request(ctx, GraphRequest{Op: "read_graph", Section: "evidence", IDs: []string{id}, Offset: page.Offset, Limit: 1, ByteOffset: &offset, ExpectedVersion: omitted.StateVersion, RecordVersion: omitted.RecordVersion, evidenceLookup: true})
-			if err != nil {
-				return ref, err
-			}
-			var part graphContentPage
-			if json.Unmarshal([]byte(fragment), &part) != nil || part.Section != "evidence" || part.Offset != page.Offset || part.StateVersion != omitted.StateVersion || part.RecordVersion != omitted.RecordVersion || part.ByteOffset != offset || part.TotalBytes != omitted.RecordBytes || len(part.Content) == 0 || len(part.Content) > omitted.RecordBytes-offset {
-				return ref, errors.New("evidence reference continuation changed its bound record")
-			}
-			raw = append(raw, part.Content...)
-			offset += len(part.Content)
-			if part.NextByteOffset == nil {
-				if offset != omitted.RecordBytes || graphRecordVersion(raw) != omitted.RecordVersion {
-					return ref, errors.New("evidence reference continuation failed its content check")
-				}
-				break
-			}
-			if *part.NextByteOffset != offset || offset >= omitted.RecordBytes {
-				return ref, errors.New("invalid evidence reference continuation offset")
-			}
+		var err error
+		raw, err = readGraphRecord(ctx, GraphRequest{Op: "read_graph", Section: "evidence", IDs: []string{id}, Offset: page.Offset, Limit: 1, ExpectedVersion: omitted.StateVersion, evidenceLookup: true}, omitted, MaxGraphRPCBytes*4, request)
+		if err != nil {
+			return ref, err
 		}
 	}
 	err := json.Unmarshal(raw, &ref)

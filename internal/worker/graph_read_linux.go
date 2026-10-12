@@ -114,7 +114,7 @@ func modelGraphRead(ctx context.Context, r GraphRequest, request func(context.Co
 		}
 		if reference.RecordOmitted {
 			r.ExpectedVersion = reference.StateVersion
-			complete, err := modelGraphRecord(ctx, r, reference, request)
+			complete, err := readGraphRecord(ctx, r, reference, maxModelGraphReadBytes, request)
 			return string(complete), err
 		}
 		if len(raw) > maxModelGraphReadBytes {
@@ -170,7 +170,7 @@ func modelGraphRead(ctx context.Context, r GraphRequest, request func(context.Co
 				if metadata != nil && marker.RecordBytes > maxModelGraphReadBytes {
 					item = metadata
 				} else {
-					item, err = modelGraphRecord(ctx, read, marker.graphRecordReference, request)
+					item, err = readGraphRecord(ctx, read, marker.graphRecordReference, maxModelGraphReadBytes, request)
 					if err != nil {
 						return "", err
 					}
@@ -229,9 +229,11 @@ func modelGraphRead(ctx context.Context, r GraphRequest, request func(context.Co
 	}
 }
 
-func modelGraphRecord(ctx context.Context, r GraphRequest, reference graphRecordReference, request func(context.Context, GraphRequest) (string, error)) (json.RawMessage, error) {
+// Both model reads and authorized evidence lookups use the same fragment
+// binding checks, while retaining their independent logical size limits.
+func readGraphRecord(ctx context.Context, r GraphRequest, reference graphRecordReference, maxBytes int, request func(context.Context, GraphRequest) (string, error)) (json.RawMessage, error) {
 	bound := reference.RecordOmitted || reference.RecordBytes != 0 || reference.RecordVersion != ""
-	if bound && (reference.RecordBytes <= 0 || reference.RecordBytes > maxModelGraphReadBytes || !graphDigest(reference.RecordVersion)) {
+	if bound && (reference.RecordBytes <= 0 || reference.RecordBytes > maxBytes || !graphDigest(reference.RecordVersion)) {
 		return nil, errors.New("invalid or oversized graph record; select narrower evidence or sources")
 	}
 	var result json.RawMessage
@@ -246,7 +248,7 @@ func modelGraphRecord(ctx context.Context, r GraphRequest, reference graphRecord
 			return nil, err
 		}
 		var part graphContentPage
-		if json.Unmarshal([]byte(raw), &part) != nil || part.Section != r.Section || part.Offset != r.Offset || part.StateVersion != r.ExpectedVersion || !graphDigest(part.RecordVersion) || part.ByteOffset != offset || part.TotalBytes <= 0 || part.TotalBytes > maxModelGraphReadBytes || len(part.Content) == 0 || len(part.Content) > part.TotalBytes-offset {
+		if json.Unmarshal([]byte(raw), &part) != nil || part.Section != r.Section || part.Offset != r.Offset || part.StateVersion != r.ExpectedVersion || !graphDigest(part.RecordVersion) || part.ByteOffset != offset || part.TotalBytes <= 0 || part.TotalBytes > maxBytes || len(part.Content) == 0 || len(part.Content) > part.TotalBytes-offset {
 			return nil, errors.New("invalid graph record continuation")
 		}
 		if offset == 0 && !bound {

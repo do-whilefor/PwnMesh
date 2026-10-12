@@ -530,3 +530,30 @@ func TestGraphByteContinuationRejectsRuntimeOnlyChanges(t *testing.T) {
 		t.Fatal("unbound later byte fragment was accepted")
 	}
 }
+
+func TestGraphFilteredPagesKeepOffsetsAndProjectedRecords(t *testing.T) {
+	state := board.State{
+		Candidates:    []board.Candidate{{ID: "hidden"}, {ID: "first", Claim: "Earlier claim"}, {ID: "second", Claim: "Later claim"}},
+		FactRelations: []board.FactRelation{{Source: "hidden", Target: "elsewhere"}, {Source: "first", Target: "shared"}, {Source: "shared", Target: "second"}},
+	}
+	for _, tc := range []struct {
+		section string
+		ids     []string
+		want    any
+	}{
+		{"candidates", []string{"second", "first", "missing"}, state.CandidateView(state.Candidates[2])},
+		{"relations", []string{"shared", "missing"}, state.FactRelations[2]},
+	} {
+		t.Run(tc.section, func(t *testing.T) {
+			request := GraphRequest{Section: tc.section, IDs: tc.ids, Offset: 1, Limit: 1}
+			page := checkedGraphPage(t, state, request)
+			want, err := json.Marshal(tc.want)
+			if err != nil || page.Total != 2 || page.Offset != 1 || len(page.Items) != 1 || page.NextOffset != nil || !reflect.DeepEqual(page.MissingIDs, []string{"missing"}) || string(page.Items[0]) != string(want) {
+				t.Fatalf("filtered page changed order, projection or selection: %+v, %v", page, err)
+			}
+			if raw := collectGraphRecord(t, state, request); string(raw) != string(want) {
+				t.Fatal("byte selection differed from the projected page record")
+			}
+		})
+	}
+}

@@ -174,90 +174,34 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 			"assets": len(s.Assets), "anchors": len(s.AssetAnchors), "history": len(s.History()),
 		}, s.Curation}
 	} else {
-		if r.Section == "evidence" || r.Section == "sources" {
-			items, found, err := graphDetails(s, r)
-			if err != nil {
-				return nil, err
-			}
-			missing := []string{}
-			if !found {
-				missing = append(missing, r.IDs[0])
-			}
-			return graphItemsPage(s, r, version, items, missing)
-		}
-		var items []json.RawMessage
-		var raw []byte
-		var err error
 		switch r.Section {
+		case "evidence", "sources":
+			return graphDetails(s, r, version)
 		case "facts":
-			raw, err = json.Marshal(s.FactRecords)
+			return graphRecordsPage(s, r, version, s.FactRecords)
 		case "goals":
-			raw, err = json.Marshal(s.Goals)
+			return graphRecordsPage(s, r, version, s.Goals)
 		case "steps":
-			raw, err = json.Marshal(s.Steps)
+			return graphRecordsPage(s, r, version, s.Steps)
 		case "findings":
-			raw, err = json.Marshal(s.Findings)
+			return graphRecordsPage(s, r, version, s.Findings)
 		case "candidates":
-			candidates := make([]board.CandidateView, 0, len(s.Candidates))
-			for _, candidate := range s.Candidates {
-				candidates = append(candidates, s.CandidateView(candidate))
-			}
-			raw, err = json.Marshal(candidates)
+			return graphRecordsPage(s, r, version, s.Candidates)
 		case "disputes":
-			raw, err = json.Marshal(s.Disputes)
+			return graphRecordsPage(s, r, version, s.Disputes)
 		case "relations":
-			raw, err = json.Marshal(s.FactRelations)
+			return graphRecordsPage(s, r, version, s.FactRelations)
 		case "hints":
-			raw, err = json.Marshal(s.Graph.Hints)
+			return graphRecordsPage(s, r, version, s.Graph.Hints)
 		case "assets":
-			raw, err = json.Marshal(s.Assets)
+			return graphRecordsPage(s, r, version, s.Assets)
 		case "anchors":
-			raw, err = json.Marshal(s.AssetAnchors)
+			return graphRecordsPage(s, r, version, s.AssetAnchors)
 		case "history":
-			raw, err = json.Marshal(s.History())
+			return graphRecordsPage(s, r, version, s.History())
 		default:
 			return nil, errors.New("unknown graph section")
 		}
-		if err != nil {
-			return nil, err
-		}
-		if err = json.Unmarshal(raw, &items); err != nil {
-			return nil, err
-		}
-		items, err = filterGraphAssets(s, r, items)
-		if err != nil {
-			return nil, err
-		}
-		missing := []string{}
-		if len(r.IDs) > 0 {
-			matched := map[string]bool{}
-			filtered := []json.RawMessage{}
-			for _, item := range items {
-				var identity struct {
-					ID, Source, Target string
-					NodeID             string `json:"node_id"`
-				}
-				if err := json.Unmarshal(item, &identity); err != nil {
-					return nil, err
-				}
-				include := false
-				for _, id := range r.IDs {
-					if identity.ID == id || (r.Section == "relations" && (identity.Source == id || identity.Target == id)) || (r.Section == "anchors" && identity.NodeID == id) {
-						include, matched[id] = true, true
-					}
-				}
-				if include {
-					filtered = append(filtered, item)
-				}
-			}
-			items = filtered
-			for _, id := range r.IDs {
-				if !matched[id] {
-					missing = append(missing, id)
-				}
-			}
-		}
-		return graphItemsPage(s, r, version, items, missing)
 	}
 	raw, err := json.Marshal(data)
 	if err != nil {
@@ -290,14 +234,67 @@ func validateGraphOffsets(r GraphRequest) error {
 	return nil
 }
 
-func graphItemsPage(s board.State, r GraphRequest, version string, items []json.RawMessage, missing []string) (any, error) {
+// Select identities before encoding payloads. A byte continuation serializes
+// only its bound record; an ordinary page serializes only its requested window.
+func graphRecordsPage[T any](s board.State, r GraphRequest, version string, records []T) (any, error) {
+	if len(r.IDs) == 0 && len(r.AssetIDs) == 0 {
+		return graphItemsPage(s, r, version, records, nil)
+	}
+	assetFilter, err := graphAssetFilter(s, r)
+	if err != nil {
+		return nil, err
+	}
+	selected := make([]T, 0, len(records))
+	matched := map[string]bool{}
+	for _, record := range records {
+		identity := graphIdentity(record)
+		if assetFilter != nil && !assetFilter(identity) {
+			continue
+		}
+		include := len(r.IDs) == 0
+		for _, id := range r.IDs {
+			if id == identity.id || id == identity.source || id == identity.target {
+				include, matched[id] = true, true
+			}
+		}
+		if include {
+			selected = append(selected, record)
+		}
+	}
+	missing := []string{}
+	for _, id := range r.IDs {
+		if !matched[id] {
+			missing = append(missing, id)
+		}
+	}
+	return graphItemsPage(s, r, version, selected, missing)
+}
+
+func graphItemsPage[T any](s board.State, r GraphRequest, version string, records []T, missing []string) (any, error) {
+	start := min(r.Offset, len(records))
+	end := start + min(r.Limit, len(records)-start)
 	if r.ByteOffset != nil {
-		if r.Offset >= len(items) {
+		if start == len(records) {
 			return nil, errors.New("graph record offset is outside the selected records")
 		}
-		return graphRecordContent(r, version, items[r.Offset])
+		end = start + 1
 	}
-	return boundedGraphPage(s, r, version, items, missing)
+	items := make([]json.RawMessage, end-start)
+	for index := start; index < end; index++ {
+		var record any = records[index]
+		if candidate, ok := record.(board.Candidate); ok {
+			record = s.CandidateView(candidate)
+		}
+		raw, err := json.Marshal(record)
+		if err != nil {
+			return nil, err
+		}
+		items[index-start] = raw
+	}
+	if r.ByteOffset != nil {
+		return graphRecordContent(r, version, items[0])
+	}
+	return boundedGraphPage(s, r, version, len(records), items, missing)
 }
 
 const graphRecordReadMore = "Read the same section and ids with offset:record_offset, byte_offset:0, expected_version:state_version and record_version. Concatenate content fragments, following next_byte_offset until absent, then parse the complete JSON record."
@@ -349,56 +346,36 @@ func graphRecordVersion(raw []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func graphDetails(s board.State, r GraphRequest) ([]json.RawMessage, bool, error) {
-	var value any
-	found := false
+func graphDetails(s board.State, r GraphRequest, version string) (any, error) {
 	if r.Section == "evidence" {
 		for _, fact := range s.FactRecords {
 			if fact.ID == r.IDs[0] {
-				value, found = fact.Evidence, true
-				break
+				return graphItemsPage(s, r, version, fact.Evidence, nil)
 			}
 		}
 	}
-	if !found {
-		for _, finding := range s.Findings {
-			if finding.ID == r.IDs[0] {
-				value, found = finding.Evidence, true
-				if r.Section == "sources" {
-					value = finding.Sources
-				}
-				break
+	for _, finding := range s.Findings {
+		if finding.ID == r.IDs[0] {
+			if r.Section == "sources" {
+				return graphItemsPage(s, r, version, finding.Sources, nil)
 			}
+			return graphItemsPage(s, r, version, finding.Evidence, nil)
 		}
 	}
-	var items []json.RawMessage
-	if !found {
-		for _, candidate := range s.Candidates {
-			if candidate.ID == r.IDs[0] {
-				value, found = candidate.Evidence, true
-				if r.Section == "sources" {
-					value = candidate.Sources
-				}
-				break
+	for _, candidate := range s.Candidates {
+		if candidate.ID == r.IDs[0] {
+			if r.Section == "sources" {
+				return graphItemsPage(s, r, version, candidate.Sources, nil)
 			}
+			return graphItemsPage(s, r, version, candidate.Evidence, nil)
 		}
 	}
-	if found {
-		raw, err := json.Marshal(value)
-		if err != nil {
-			return nil, false, err
-		}
-		if err = json.Unmarshal(raw, &items); err != nil {
-			return nil, false, err
-		}
-	}
-	return items, found, nil
+	return graphItemsPage[json.RawMessage](s, r, version, nil, r.IDs)
 }
 
-func boundedGraphPage(s board.State, r GraphRequest, version string, items []json.RawMessage, missing []string) (graphPage, error) {
-	total := len(items)
+func boundedGraphPage(s board.State, r GraphRequest, version string, total int, items []json.RawMessage, missing []string) (graphPage, error) {
 	start := min(r.Offset, total)
-	end := min(start+r.Limit, total)
+	end := start + len(items)
 	value := graphPage{Section: r.Section, Offset: start, Total: total, Revision: s.Revision, Generation: s.Graph.Project.Generation, StateVersion: version, RequestedIDs: r.IDs, MissingIDs: missing}
 	// Echoing the filter is optional; missing IDs are authoritative. Repeating
 	// maximally escaped IDs in both fields can consume the entire response frame.
@@ -408,7 +385,7 @@ func boundedGraphPage(s board.State, r GraphRequest, version string, items []jso
 		value.RequestedIDs = nil
 	}
 	for {
-		value.Items = items[start:end]
+		value.Items = items[:end-start]
 		if value.Items == nil {
 			value.Items = []json.RawMessage{}
 		}
@@ -429,7 +406,7 @@ func boundedGraphPage(s board.State, r GraphRequest, version string, items []jso
 			continue
 		}
 		if end > start {
-			compact, err := compactGraphRecord(r.Section, items[start])
+			compact, err := compactGraphRecord(r.Section, items[0])
 			if err != nil {
 				return graphPage{}, err
 			}
@@ -441,7 +418,7 @@ func boundedGraphPage(s board.State, r GraphRequest, version string, items []jso
 			if len(raw) <= maxGraphPageBytes {
 				return value, nil
 			}
-			reference, err := json.Marshal(graphRecordReference{true, start, len(items[start]), version, graphRecordVersion(items[start]), graphRecordReadMore})
+			reference, err := json.Marshal(graphRecordReference{true, start, len(items[0]), version, graphRecordVersion(items[0]), graphRecordReadMore})
 			if err != nil {
 				return graphPage{}, err
 			}
@@ -483,7 +460,7 @@ func compactGraphRecord(section string, raw json.RawMessage) (json.RawMessage, e
 		// restorations to the original record, just like scalar continuations.
 		record["record_bytes"], _ = json.Marshal(len(raw))
 		record["record_version"], _ = json.Marshal(graphRecordVersion(raw))
-		record["read_more"], _ = json.Marshal("Omitted support is not absent. Read section evidence or sources with ids:[this record's id], offset:0, then follow next_offset until absent. Sources pages apply to Findings and Candidates.")
+		record["read_more"], _ = json.Marshal("Omitted support is not absent. Use the same read tool with section evidence or sources, ids:[this record's id], offset:0; follow next_offset until absent. Sources pages apply to Findings and Candidates.")
 	}
 	return json.Marshal(record)
 }

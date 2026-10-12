@@ -381,3 +381,28 @@ func TestFailedReadEvidenceDoesNotSatisfyDecisionRecoveryReread(t *testing.T) {
 		t.Fatal("successful raw observation was not retained for the model before recovery")
 	}
 }
+
+func TestEvidenceReferenceRetainsSmallerBudgetThanModelRead(t *testing.T) {
+	ref := board.EvidenceRef{RunID: "run", Path: "/workspace/original.raw", Excerpt: strings.Repeat("x", MaxGraphRPCBytes*4)}
+	state := board.State{FactRecords: []board.FactRecord{{ID: "fact", Evidence: []board.EvidenceRef{ref}}}}
+	request := GraphRequest{Op: "read_graph", Section: "evidence", IDs: []string{"fact"}, Limit: 1}
+	page := checkedGraphPage(t, state, request)
+	var marker graphRecordReference
+	if json.Unmarshal(page.Items[0], &marker) != nil || !marker.RecordOmitted || marker.RecordBytes <= MaxGraphRPCBytes*4 || marker.RecordBytes > maxModelGraphReadBytes {
+		t.Fatal("fixture must fit only the model's logical read budget")
+	}
+	_, err := readEvidenceReference(context.Background(), "fact", page, func(context.Context, GraphRequest) (string, error) {
+		t.Fatal("oversized evidence reference must be rejected before fetching fragments")
+		return "", nil
+	})
+	if err == nil {
+		t.Fatal("evidence lookup inherited the larger model read budget")
+	}
+	raw, err := modelGraphRead(context.Background(), request, modelReadFixture(t, state, nil))
+	var result struct {
+		Items []board.EvidenceRef `json:"items"`
+	}
+	if err != nil || json.Unmarshal([]byte(raw), &result) != nil || len(result.Items) != 1 || result.Items[0] != ref {
+		t.Fatalf("bounded model read lost the complete reference: %v", err)
+	}
+}

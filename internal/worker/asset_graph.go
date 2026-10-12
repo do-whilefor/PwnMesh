@@ -31,9 +31,9 @@ func validateGraphAssetFilter(r GraphRequest) error {
 
 // Filter identities, never evidence validity. Both the catalogue and anchors
 // come from the same State, including when that State is a frozen read view.
-func filterGraphAssets(s board.State, r GraphRequest, items []json.RawMessage) ([]json.RawMessage, error) {
+func graphAssetFilter(s board.State, r GraphRequest) (func(graphRecordIdentity) bool, error) {
 	if len(r.AssetIDs) == 0 {
-		return items, nil
+		return nil, nil
 	}
 	known := map[string]bool{}
 	for _, asset := range s.Assets {
@@ -53,32 +53,57 @@ func filterGraphAssets(s board.State, r GraphRequest, items []json.RawMessage) (
 		}
 	}
 	kind := map[string]string{"facts": "fact", "steps": "step", "findings": "finding", "candidates": "candidate"}[r.Section]
-	out := []json.RawMessage{}
-	for _, raw := range items {
-		var node struct {
-			ID       string   `json:"id"`
-			AssetID  string   `json:"asset_id"`
-			AssetIDs []string `json:"asset_ids"`
-		}
-		if err := json.Unmarshal(raw, &node); err != nil {
-			return nil, err
-		}
-		include := attached[kind+":"+node.ID]
+	return func(node graphRecordIdentity) bool {
 		switch r.Section {
 		case "assets":
-			include = selected[node.ID]
+			return selected[node.id]
 		case "anchors":
-			include = selected[node.AssetID]
+			return selected[node.assetID]
 		case "history":
-			for _, id := range node.AssetIDs {
-				include = include || selected[id]
+			for _, id := range node.assetIDs {
+				if selected[id] {
+					return true
+				}
 			}
+			return false
+		default:
+			return attached[kind+":"+node.id]
 		}
-		if include {
-			out = append(out, raw)
-		}
+	}, nil
+}
+
+type graphRecordIdentity struct {
+	id, source, target, assetID string
+	assetIDs                    []string
+}
+
+func graphIdentity(record any) graphRecordIdentity {
+	switch v := record.(type) {
+	case board.FactRecord:
+		return graphRecordIdentity{id: v.ID}
+	case board.Goal:
+		return graphRecordIdentity{id: v.ID}
+	case board.Step:
+		return graphRecordIdentity{id: v.ID}
+	case board.Finding:
+		return graphRecordIdentity{id: v.ID}
+	case board.Candidate:
+		return graphRecordIdentity{id: v.ID}
+	case board.Dispute:
+		return graphRecordIdentity{id: v.ID}
+	case board.FactRelation:
+		return graphRecordIdentity{source: v.Source, target: v.Target}
+	case board.Hint:
+		return graphRecordIdentity{id: v.ID}
+	case board.Asset:
+		return graphRecordIdentity{id: v.ID}
+	case board.AssetAnchor:
+		return graphRecordIdentity{id: v.NodeID, assetID: v.AssetID}
+	case board.HistoryEntry:
+		return graphRecordIdentity{id: v.ID, assetIDs: v.AssetIDs}
+	default:
+		panic("unsupported graph record type")
 	}
-	return out, nil
 }
 
 func assetInputSchema() map[string]any {
