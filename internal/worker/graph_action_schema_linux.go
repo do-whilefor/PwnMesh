@@ -95,13 +95,15 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 				"source": text, "target": text, "reason": text,
 			}, "required": []string{"kind", "source", "target", "reason"}, "additionalProperties": false,
 		}},
-		"groups": map[string]any{"type": "array", "maxItems": 128, "description": "One group per equal candidate group_key requiring reconciliation (read-only grouping hint, not a graph ID). Identify each group with active candidate_ids; omit group_key. Combine original and review candidate IDs; unrelated singleton notes need no group.", "items": map[string]any{
+		"groups": map[string]any{"type": "array", "maxItems": 128, "description": "Reconcile complete pending groups, up to 128 per commit; remaining groups stay queued. Select exactly one of group_key (all active notes in that group) or candidate_ids (the complete group, at most 256 IDs).", "items": map[string]any{
 			"type": "object", "properties": map[string]any{
-				"candidate_ids": map[string]any{"type": "array", "items": text, "uniqueItems": true}, "status": map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}},
-				"reason": text, "question": text, "dispute_id": map[string]any{"type": []string{"string", "null"}},
+				"candidate_ids": map[string]any{"type": "array", "items": text, "minItems": 1, "maxItems": 256, "uniqueItems": true},
+				"group_key":     map[string]any{"type": "string", "minLength": 1, "description": "Use the exact group_key returned on a Candidate; the server selects every active member."},
+				"status":        map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}},
+				"reason":        text, "question": text, "dispute_id": map[string]any{"type": []string{"string", "null"}},
 				"review_fact_ids": map[string]any{"type": []string{"array", "null"}, "items": text, "uniqueItems": true, "description": "Independent review evidence for an existing dispute only; omit for ordinary corroboration."},
 				"resolution":      map[string]any{"type": []string{"string", "null"}, "enum": []any{"resolved", "uncertain", nil}, "description": "Only for an existing dispute; include its dispute_id."},
-			}, "required": []string{"candidate_ids", "status", "reason"}, "additionalProperties": false,
+			}, "required": []string{"status", "reason"}, "oneOf": []any{map[string]any{"required": []string{"candidate_ids"}}, map[string]any{"required": []string{"group_key"}}}, "additionalProperties": false,
 		}},
 	}, "required": []string{"groups"}, "additionalProperties": false}
 }

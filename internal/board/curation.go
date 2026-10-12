@@ -48,7 +48,8 @@ type Dispute struct {
 }
 
 type CurateGroup struct {
-	CandidateIDs  []string `json:"candidate_ids"`
+	CandidateIDs  []string `json:"candidate_ids,omitempty"`
+	GroupKey      string   `json:"group_key,omitempty"`
 	Status        string   `json:"status"`
 	Reason        string   `json:"reason"`
 	Question      string   `json:"question,omitempty"`
@@ -110,9 +111,9 @@ func (s State) ActiveCandidates() []Candidate {
 // not need to become shared findings before exploration can continue.
 func (s State) PendingCurationCandidateIDs() map[string]bool {
 	groups := map[string][]Candidate{}
-	shared := map[string]bool{}
+	shared := map[string]Finding{}
 	for _, finding := range s.Findings {
-		shared[findingIdentity(finding.Claim, finding.Scope)] = true
+		shared[findingIdentity(finding.Claim, finding.Scope)] = finding
 	}
 	for _, candidate := range s.ActiveCandidates() {
 		key := findingIdentity(candidate.Claim, candidate.Scope)
@@ -120,15 +121,23 @@ func (s State) PendingCurationCandidateIDs() map[string]bool {
 	}
 	selected := map[string]bool{}
 	for key, candidates := range groups {
+		finding, hasFinding := shared[key]
+		// A bounded batch can finish one identity group before the global
+		// scan finishes. Its own boundary prevents repeatedly scheduling it
+		// while other groups are still waiting at the old global cursor.
+		acknowledged := map[string]bool{}
+		for _, id := range finding.CandidateIDs {
+			acknowledged[id] = true
+		}
 		fresh, verified, refuted := false, false, false
 		producers := map[string]bool{}
 		for _, candidate := range candidates {
-			fresh = fresh || candidate.Revision > s.Curation.ThroughRevision
+			fresh = fresh || candidate.Revision > s.Curation.ThroughRevision && (candidate.Revision > finding.CuratedRevision || !acknowledged[candidate.ID])
 			verified = verified || candidate.Status == "verified"
 			refuted = refuted || candidate.Status == "refuted"
 			producers[candidate.RunID] = true
 		}
-		if fresh && (len(producers) > 1 || verified && refuted || shared[key]) {
+		if fresh && (len(producers) > 1 || verified && refuted || hasFinding) {
 			for _, candidate := range candidates {
 				selected[candidate.ID] = true
 			}
@@ -270,8 +279,21 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 	covered := map[string]bool{}
 	groupFindings := map[string]bool{}
 	for _, group := range input.Groups {
-		if len(group.CandidateIDs) == 0 || len(group.CandidateIDs) > 256 || !required(group.Reason, 8192) || !slices.Contains([]string{"candidate", "verified", "refuted"}, group.Status) || len(group.Question) > 8192 || !slices.Contains([]string{"", "resolved", "uncertain"}, group.Resolution) {
+		if (len(group.CandidateIDs) == 0) == (group.GroupKey == "") || len(group.CandidateIDs) > 256 || !required(group.Reason, 8192) || !slices.Contains([]string{"candidate", "verified", "refuted"}, group.Status) || len(group.Question) > 8192 || !slices.Contains([]string{"", "resolved", "uncertain"}, group.Resolution) {
 			return "", nil, Err(422, "invalid curation group")
+		}
+		if group.GroupKey != "" {
+			// The compact selector binds to the complete active identity group
+			// in this checked snapshot. Never let a transport ID limit hide a
+			// conflicting producer or omit it from independent review.
+			for _, candidate := range activeCandidates {
+				if findingIdentity(candidate.Claim, candidate.Scope) == group.GroupKey {
+					group.CandidateIDs = append(group.CandidateIDs, candidate.ID)
+				}
+			}
+			if len(group.CandidateIDs) == 0 {
+				return "", nil, Err(422, "group_key must identify an active candidate group")
+			}
 		}
 		selected := []Candidate{}
 		id := ""
@@ -459,14 +481,25 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			d.Findings[index] = finding
 		}
 	}
-	// A scan must cover pending reconciliation work, but may leave ordinary
-	// notes as notes. Advancing the cursor never hides them from future groups.
-	for id := range s.PendingCurationCandidateIDs() {
+	// A bounded batch may drain complete groups independently. Retain the
+	// global boundary and explicit request until every pending group is covered;
+	// each finished Finding carries its own boundary for the next scan.
+	pending, remaining, progressed := s.PendingCurationCandidateIDs(), false, false
+	for id := range pending {
 		if !covered[id] {
-			return "", nil, Err(409, "curation omitted a pending reconciliation candidate")
+			remaining = true
+		} else {
+			progressed = true
 		}
 	}
-	d.Curation = CurationProgress{Generation: s.Graph.Project.Generation, ThroughRevision: input.ThroughRevision, RunID: fence.Run, UpdatedAt: t.Now}
+	if remaining && !progressed {
+		return "", nil, Err(409, "curation must cover at least one pending reconciliation group")
+	}
+	progress := CurationProgress{Generation: s.Graph.Project.Generation, ThroughRevision: input.ThroughRevision, RunID: fence.Run, UpdatedAt: t.Now}
+	if remaining {
+		progress.ThroughRevision, progress.Request = d.Curation.ThroughRevision, d.Curation.Request
+	}
+	d.Curation = progress
 	return "curation", CurateResult{Curation: d.Curation, Findings: d.Findings, Disputes: d.Disputes, FactRelations: d.FactRelations}, nil
 }
 
