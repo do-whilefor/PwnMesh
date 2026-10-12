@@ -37,11 +37,13 @@ test('production forms render accessible dialogs, retry uploads, and atomically 
   assert.match(await page.locator('.task-progress').textContent(),/0 \/ 0 个任务/);
   await fillCreate(page,'真实材料上传');
   assert.ok(await page.getByRole('dialog',{name:'新建项目',exact:true}).isVisible());
+  assert.equal(await page.locator('#create-form .forms-shortcut').count(),0,'project creation omits the shortcut hint');
+  assert.doesNotMatch(await page.locator('#create-form').innerText(),/Ctrl|⌘/);
   assert.equal(await page.getByLabel('项目名称',{exact:true}).inputValue(),'真实材料上传');
   await page.locator('#project-files').setInputFiles({name:'client\u0085.apk',mimeType:'application/octet-stream',buffer:Buffer.from('apk')});
   assert.match(await page.locator('#create-error').textContent(),/文件名/);assert.equal(await page.locator('#selected-files li').count(),0);assert.equal(creates,0);
   await page.locator('#project-files').setInputFiles([{name:'one.http',mimeType:'text/plain',buffer:Buffer.from('GET /one')},{name:'two.apk',mimeType:'application/octet-stream',buffer:Buffer.from([0,255,13,10])}]);await page.locator('#create-form [type="submit"]').click();await page.waitForFunction(()=>document.getElementById('create-error').textContent.includes('Controlled failed upload'));assert.equal(creates,1);assert.equal(project.status,'stopped');assert.equal(await page.locator('#project-name').isDisabled(),true);assert.equal(await page.locator('#selected-files [data-remove-file]').first().isDisabled(),true);assert.equal(await page.locator('#selected-files li').count(),2);
-  await page.locator('#create-form [type="submit"]').click();await page.locator('#create-dialog').waitFor({state:'hidden'});assert.equal(creates,1);assert.deepEqual(uploaded,['one.http','two.apk','two.apk']);assert.equal(project.status,'active');
+  await page.locator('#create-form [type="submit"]').press('Control+Enter');await page.locator('#create-dialog').waitFor({state:'hidden'});assert.equal(creates,1);assert.deepEqual(uploaded,['one.http','two.apk','two.apk']);assert.equal(project.status,'active');
   await page.locator('#add-hint').click();
   assert.ok(await page.getByRole('dialog',{name:'补充信息',exact:true}).isVisible());
   await page.getByLabel('补充内容',{exact:true}).fill('只使用授权测试环境');await page.locator('#hint-files').setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('supplement bytes')});const before=writes.length;await page.locator('#hint-form [type="submit"]').click();
