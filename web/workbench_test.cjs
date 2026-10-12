@@ -10,6 +10,25 @@ const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {
 function fixture(states={a:snapshot()}){const calls=[];return {calls,async request(url,options={}){calls.push({url,options});if(url==='/projects')return Object.values(states).map(s=>s.graph.project);const [,id,suffix]=url.match(/^\/projects\/([^/]+)(.*)$/)||[];const state=states[id];if(suffix==='/state')return state;if(suffix==='/identity')return {id,generation:state.graph.project.generation};if(suffix==='/inputs')return [];if(suffix?.startsWith('/rounds'))return {items:[]};if(suffix?.startsWith('/state/events'))return [];throw new Error(url);},async projectExecutions(){return []}};}
 test('production shell is the demo document structure with real network access and no fixture routes',()=>{const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8'),app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(html,/<main id="main"><\/main>/);assert.match(html,/data-create/);assert.match(html,/project-menu-popover/);assert.match(html,/connect-src 'self'/);assert.doesNotMatch(html,/simulate-failure|workbench\.css|models\.css|#project\/atlas/);assert.doesNotMatch(app,/atlas\.example|local-.*randomUUID|模拟本次操作|lifecycle\.apply/);assert.match(app,/PwnLLMDemo\.render/);assert.match(app,/class="workspace-actions"/);});
 test('project adapter maps server lifecycle without fabricating findings or times',()=>{const state=snapshot(),p=snapshotView(state,[],[],[]);assert.equal(p.name,'a');assert.equal(p.target,'https://authorized.test');assert.equal(p.goal,'Find supported evidence');assert.equal(p.status,'running');assert.equal(p.endedAt,null);assert.deepEqual(p.state.findings,[]);for(const [status,expected] of [['stopped','paused'],['completed','done'],['terminated','terminated']])assert.equal(projectView({...state.graph.project,status}).status,expected);});
+
+test('project and archived snapshot adapters preserve unspecified and explicit scenarios',()=>{
+ for(const scenario of [undefined,'','ctf','audit','pentest']){
+  const state=snapshot();if(scenario===undefined)delete state.graph.project.scenario;else state.graph.project.scenario=scenario;
+  const raw=structuredClone(state.graph.project),previous={type:'pentest',archived:true};
+  assert.equal(projectView(state.graph.project,previous).type,scenario||'');
+  assert.equal(snapshotView(state,[],[],[],previous).type,scenario||'');
+  assert.deepEqual(state.graph.project,raw,'display projection must not change the server scenario');
+ }
+});
+
+test('refresh clears a cached pentest label for an unspecified API project and its round summaries',async()=>{
+ const state=snapshot('a',1);delete state.graph.project.scenario;
+ const api=fixture({a:state}),request=api.request.bind(api);
+ api.request=(url,options)=>url.includes('/rounds?')?{items:[{generation:0,archived_at:stamp}]}:request(url,options);
+ const service=new Service(api);service.projects=[{id:'a',type:'pentest',history:[]}];
+ const {projects,selected}=await service.refresh('a');
+ assert.equal(projects[0].type,'');assert.equal(selected.type,'');assert.equal(selected.history[0].type,'');
+});
 test('historical projects are read-only when the server omits or explicitly sends protocol zero',()=>{
  for(const version of [undefined,0])for(const status of ['active','stopped','completed','terminated']){
   const raw={...snapshot().graph.project,status};if(version===undefined)delete raw.orchestration_version;else raw.orchestration_version=version;

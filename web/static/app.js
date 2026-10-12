@@ -11,7 +11,7 @@
   let roundReadVersion = 0, materialReadVersion = 0;
   let refreshTimer, refreshing = false, connected = false, lastSnapshot = '', pendingRefresh = false;
   const statusLabels = {running:'探索中',done:'已完成',paused:'已暂停',pending:'待开始',terminated:'已终止'};
-  const types = Object.fromEntries(PROJECT_TYPES.map(({value,label}) => [value,label]));
+  const types = Object.fromEntries([['','通用'],...PROJECT_TYPES.map(({value,label}) => [value,label])]);
   const actionNames = {pause:'暂停',resume:'继续',restart:'重启',terminate:'终止',delete:'删除'};
   const actionIcons = {pause:'pause',resume:'play',restart:'rotate-ccw',terminate:'square',delete:'trash-2'};
   let graph = null, selectedNode = null, selectedEdge = null, viewTab = 'graph', toastTimer, disposeLLM, disposeInspector;

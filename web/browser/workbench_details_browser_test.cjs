@@ -18,6 +18,38 @@ function fixture(){
     inputs:[{id:'text',name:'request.http',size:Buffer.byteLength(text),path:'/workspace/inputs/request.http',sha256:'a'.repeat(64),created_at:created},{id:'binary',name:'client.apk',size:12,path:'/workspace/inputs/client.apk',sha256:'b'.repeat(64),created_at:created}],contents:{text,binary:Buffer.from([0,255,0])}};
 }
 
+test('generic projects keep their scenario and show a consistent generic label',{
+  timeout:30000,skip:process.env.PWNMESH_WEB_URL||process.env.PLAYWRIGHT_MODULE?false:'Set PWNMESH_WEB_URL or PLAYWRIGHT_MODULE for workbench browser coverage',
+},async()=>{
+  const server=process.env.PWNMESH_WEB_URL?null:await staticServer();let browser;
+  try{
+    browser=await launch();
+    for(const legacy of [true,false]){
+      const data=fixture(),project=data.state.graph.project;
+      if(legacy){delete project.scenario;delete project.orchestration_version;}else project.scenario='';
+      const page=await browser.newPage({viewport:{width:1440,height:960}});page.setDefaultTimeout(5000);
+      const errors=[];page.on('pageerror',error=>errors.push(error.message));
+      const requests=await interceptProject(page,data);
+      await page.goto(new URL('/#project/'+project.id,process.env.PWNMESH_WEB_URL||server.url).href,{waitUntil:'networkidle'});
+      await page.locator('#project-manage').waitFor();
+      assert.equal(await page.locator('.project-type').textContent(),'通用');
+      assert.equal(await page.locator('.project-identity > span').first().textContent(),'通用');
+      await page.locator('#project-manage').click();
+      assert.equal(await page.locator('.project-info-meta dd').first().textContent(),'通用');
+      await page.locator('[data-close="project-dialog"]').click();
+      await page.locator('#project-search').fill('通用');
+      assert.equal(await page.locator('.project-item').count(),1);
+      await page.locator('#project-search').fill('渗透测试');
+      assert.equal(await page.locator('.project-item').count(),0);
+      await page.locator('[data-create]').first().click();
+      assert.deepEqual(await page.locator('input[name="type"]').evaluateAll(nodes=>nodes.map(node=>node.value)),['ctf','audit','pentest']);
+      assert.equal(await page.locator('input[name="type"]:checked').inputValue(),'pentest');
+      assert.deepEqual(requests.writes,[]);assert.deepEqual(requests.unexpected,[]);assert.deepEqual(errors,[]);
+      await page.close();
+    }
+  }finally{await browser?.close();await server?.close();}
+});
+
 test('v5 workbench reads real-shaped logs, materials and results and preserves live canvas interactions',{
   timeout:90000,skip:process.env.PWNMESH_WEB_URL||process.env.PLAYWRIGHT_MODULE?false:'Set PWNMESH_WEB_URL or PLAYWRIGHT_MODULE for workbench browser coverage',
 },async t=>{
