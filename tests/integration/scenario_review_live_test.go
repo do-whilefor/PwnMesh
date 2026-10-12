@@ -85,6 +85,24 @@ Required procedure for EACH Step: %s`, server.URL, scenarioReviewClaim, scenario
 	}
 }
 
+// Recheck producer separation, curation and actual successful model overlap
+// from retained evidence, without another model call or changing that evidence.
+func TestRetainedScenarioSkillsReviewProject(t *testing.T) {
+	dir := os.Getenv("PWNMESH_SCENARIO_REVIEW_REPLAY_DIR")
+	if dir == "" {
+		t.Skip("opt in with the directory containing retained state.json and workspace.tar")
+	}
+	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
+	t.Logf("validation_scope=scenario_review_curation_and_parallel workspace_sha256=%s state_sha256=%s", workspaceSHA256, stateSHA256)
+	failures := validateScenarioReviewCuration(state)
+	parallel, parallelFailures := validateLiveParallelWorkers(state, files, 2)
+	failures = append(failures, parallelFailures...)
+	t.Logf("independent_workers=%d model_overlap_seconds=%.6f", len(parallel.Workers), parallel.OverlapSeconds)
+	if len(failures) != 0 {
+		t.Fatal(failures)
+	}
+}
+
 func validateScenarioReviewCuration(state board.State) []string {
 	failures := []string{}
 	check := func(ok bool, message string) {
@@ -98,8 +116,20 @@ func validateScenarioReviewCuration(state board.State) []string {
 		facts[fact.ID] = fact
 	}
 	for _, step := range state.Steps {
-		if step.Result != nil && !staleRepairCompletionMarker(state, step) {
+		if staleRepairCompletionMarker(state, step) {
+			continue
+		}
+		check(len(step.DependsOn) == 0, "ordinary producer Step has dependencies: "+step.ID)
+		if step.Result != nil {
 			results[*step.Result] = step
+		}
+	}
+	paths := map[string]string{}
+	for id := range results {
+		for _, evidence := range facts[id].Evidence {
+			previous, exists := paths[evidence.Path]
+			check(!exists || previous == id, "independent producer results reused evidence path: "+evidence.Path)
+			paths[evidence.Path] = id
 		}
 	}
 	check(len(results) == 2 && len(state.Candidates) == 2, "expected two distinct producer results and candidates")
@@ -156,17 +186,24 @@ func TestScenarioReviewCurationRejectsDroppedProducer(t *testing.T) {
 	if failures := validateScenarioReviewCuration(makeState()); len(failures) != 0 {
 		t.Fatal(failures)
 	}
-	for _, mutate := range []func(*board.State){
+	for index, mutate := range []func(*board.State){
 		func(s *board.State) { s.Findings[0].Sources = s.Findings[0].Sources[:1] },
 		func(s *board.State) { s.Findings[0].Evidence = s.Findings[0].Evidence[:1] },
 		func(s *board.State) { s.Candidates[1].RunID = s.Candidates[0].RunID },
 		func(s *board.State) { s.Curation.ThroughRevision = 1 },
 		func(s *board.State) { s.Findings[0].SupportValid = false },
+		func(s *board.State) { s.Steps[1].DependsOn = []string{s.Steps[0].ID} },
+		func(s *board.State) {
+			shared := s.FactRecords[0].Evidence[0].Path
+			s.FactRecords[1].Evidence[0].Path = shared
+			s.Candidates[1].Evidence[0].Path = shared
+			s.Findings[0].Evidence[1].Path = shared
+		},
 	} {
 		state := makeState()
 		mutate(&state)
 		if len(validateScenarioReviewCuration(state)) == 0 {
-			t.Fatal("accepted incomplete or mismatched independent support")
+			t.Errorf("accepted incomplete or mismatched independent support: mutation %d", index)
 		}
 	}
 }
