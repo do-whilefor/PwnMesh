@@ -75,9 +75,10 @@ type CurateRelation struct {
 	Reason string `json:"reason"`
 }
 
-// CurateResult contains records touched by this batch, not the accumulated
-// project history. Submitted relations include their canonical existing edge
-// when deduplicated, so the receipt still acknowledges each accepted proposal.
+// CurateResult reports submitted groups, reopened disputes and their findings,
+// and canonical submitted relations. Read State for all derived support changes;
+// this receipt is not a complete state delta. Deduplicated relations retain their
+// canonical existing edge to acknowledge each accepted proposal.
 type CurateResult struct {
 	Curation      CurationProgress `json:"curation"`
 	Findings      []Finding        `json:"findings"`

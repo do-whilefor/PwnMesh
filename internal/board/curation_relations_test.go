@@ -85,6 +85,48 @@ func TestCurationRelationsCommitWithFindingsAndCursor(t *testing.T) {
 	}
 }
 
+func TestCurationRelationOnlyReceiptDoesNotRepeatProjectedFindings(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	producer := f.worker("producer", "")
+	old, correction := f.fact(producer, "old"), f.fact(producer, "correction")
+	candidate := f.candidate(producer, old, "verified")
+	unrelated := f.action(producer.Fence(), "candidate", "unrelated", map[string]any{"claim": "An unrelated observation", "scope": "fixture", "status": "verified", "sources": []string{correction}, "reason": "Independently supported"}, "").ID
+	curator, input := f.curator("initial-findings")
+	f.curate(curator, input,
+		CurateGroup{CandidateIDs: []string{candidate}, Status: "verified", Reason: "Initial supported judgment"},
+		CurateGroup{CandidateIDs: []string{unrelated}, Status: "verified", Reason: "Retain the independent judgment"})
+	curator, input = f.curator("correct-support")
+	if len(input.Findings) != 2 || !input.Findings[0].SupportValid || !input.Findings[1].SupportValid {
+		t.Fatal("fixture did not establish two supported findings")
+	}
+	payload := CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: old, Reason: "Correct the original premise"}}}
+	receipt := f.action(curator.Fence(), "curate", "correct-support", payload, DecisionStateVersion(input))
+	var result CurateResult
+	if err := json.Unmarshal(receipt.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Findings)+len(result.Disputes) != 0 || len(result.FactRelations) != 1 || result.FactRelations[0].Target != old {
+		t.Fatalf("relation-only receipt repeated unsubmitted groups or lost its relation: %+v", result)
+	}
+	f.do(func(tx *Tx) error {
+		data, _, _, err := tx.stateData("p")
+		if err != nil {
+			return err
+		}
+		if len(data.Findings) != 2 || data.Findings[0].SupportValid || !data.Findings[1].SupportValid {
+			t.Fatal("relation-only curation did not persist the finding support change")
+		}
+		events, err := tx.StateEvents("p", input.Revision)
+		if err == nil && (len(events) != 1 || string(events[0].Result) != string(receipt.Result)) {
+			t.Fatal("event changed the bounded relation-only receipt")
+		}
+		return err
+	})
+	if replay := f.action(curator.Fence(), "curate", "correct-support", payload, DecisionStateVersion(input)); !reflect.DeepEqual(replay, receipt) {
+		t.Fatal("support invalidation changed its durable receipt during replay")
+	}
+}
+
 func TestCurationRelationsRejectInvalidBatchWithoutAnyCommit(t *testing.T) {
 	for _, test := range []struct {
 		name   string
