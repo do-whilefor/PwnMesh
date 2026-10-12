@@ -3,6 +3,8 @@
 package integration
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -56,42 +58,11 @@ Required procedure for EACH Step: %s`, server.URL, scenarioReviewClaim, scenario
 				scenario, "scenario_skills_multi_producer_curation", func(state board.State, files map[string][]byte) []string {
 					fixture.mu.Lock()
 					err := saveLiveJSON(filepath.Join(output, scenario, "fixture-observations.json"), map[string]any{"statuses": fixture.seen, "requests": fixture.reads})
-					var fetchFailures []string
-					paths := []string{"/audit.py"}
-					if scenario == "pentest" {
-						paths = nil
-						for path := range fixture.bodies {
-							paths = append(paths, path)
-						}
-					}
-					for _, path := range paths {
-						if fixture.reads[path] < 2 {
-							fetchFailures = append(fetchFailures, "missing repeated original fetch: "+path)
-						}
-					}
 					fixture.mu.Unlock()
 					if err != nil {
 						t.Error(err)
 					}
-					failures := validateScenarioSkillSteps(state, files, scenario, bundle, fixture, 2)
-					failures = append(failures, fetchFailures...)
-					failures = append(failures, validateScenarioReviewCuration(state)...)
-					var job worker.Job
-					run := orchestrationRunID(state.Curation.RunID)
-					decoded := json.Unmarshal(files["/workspace/.pwnmesh/runs/"+run+"/job.json"], &job) == nil
-					input := retainedCurationInput(job, files)
-					if !decoded || job.Kind != "curate" || job.RunID != run || job.Graph.Project.ID != state.Graph.Project.ID || input == nil || input.Graph.Project.ID != state.Graph.Project.ID || input.Graph.Project.Generation != state.Graph.Project.Generation || input.Revision != state.Curation.ThroughRevision {
-						failures = append(failures, "missing immutable final curation input")
-					} else {
-						for _, candidate := range state.Candidates {
-							if !slices.ContainsFunc(input.Candidates, func(original board.Candidate) bool {
-								return reflect.DeepEqual(original, candidate)
-							}) {
-								failures = append(failures, "final curator did not receive both producers")
-							}
-						}
-					}
-					return failures
+					return validateScenarioReview(state, files, scenario, bundle, fixture)
 				}, 1)
 		})
 	}
@@ -125,15 +96,72 @@ func TestRetainedScenarioSkillsReviewProject(t *testing.T) {
 	}
 	fixture := &scenarioSkillFixture{seen: observations.Statuses, reads: observations.Requests, source: oracle.Source, nonce: oracle.Nonce, bodies: oracle.Bodies}
 	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
+	var job worker.Job
+	run := orchestrationRunID(state.Curation.RunID)
+	if json.Unmarshal(files["/workspace/.pwnmesh/runs/"+run+"/job.json"], &job) == nil && job.InputSnapshot != nil {
+		id := job.InputSnapshot.ID
+		if decoded, err := hex.DecodeString(id); err != nil || len(decoded) != sha256.Size {
+			t.Fatal("invalid retained curation snapshot ID")
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "input-snapshots", id+".json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		files[curationSnapshotKey(id)] = raw
+	}
 	t.Logf("validation_scope=scenario_skills_review_and_parallel workspace_sha256=%s state_sha256=%s", workspaceSHA256, stateSHA256)
-	failures := validateScenarioSkillSteps(state, files, manifest.Scenario, scenarioSkillBundle(t, manifest.Scenario), fixture, 2)
-	failures = append(failures, validateScenarioReviewCuration(state)...)
+	failures := validateScenarioReview(state, files, manifest.Scenario, scenarioSkillBundle(t, manifest.Scenario), fixture)
 	parallel, parallelFailures := validateLiveParallelWorkers(state, files, 2)
 	failures = append(failures, parallelFailures...)
 	t.Logf("independent_workers=%d model_overlap_seconds=%.6f", len(parallel.Workers), parallel.OverlapSeconds)
 	if len(failures) != 0 {
 		t.Fatal(failures)
 	}
+}
+
+func validateScenarioReview(state board.State, files map[string][]byte, scenario string, bundle map[string][]byte, fixture *scenarioSkillFixture) []string {
+	failures := validateScenarioSkillSteps(state, files, scenario, bundle, fixture, 2)
+	failures = append(failures, validateScenarioReviewFetches(fixture, scenario)...)
+	failures = append(failures, validateScenarioReviewCuration(state)...)
+	return append(failures, validateScenarioReviewCurationInput(state, files)...)
+}
+
+func validateScenarioReviewFetches(fixture *scenarioSkillFixture, scenario string) []string {
+	fixture.mu.Lock()
+	defer fixture.mu.Unlock()
+	paths := []string{"/audit.py"}
+	if scenario == "pentest" {
+		paths = nil
+		for path := range fixture.bodies {
+			paths = append(paths, path)
+		}
+	}
+	var failures []string
+	for _, path := range paths {
+		if fixture.reads[path] < 2 {
+			failures = append(failures, "missing repeated original fetch: "+path)
+		}
+	}
+	return failures
+}
+
+func validateScenarioReviewCurationInput(state board.State, files map[string][]byte) []string {
+	var job worker.Job
+	run := orchestrationRunID(state.Curation.RunID)
+	decoded := json.Unmarshal(files["/workspace/.pwnmesh/runs/"+run+"/job.json"], &job) == nil
+	input := retainedCurationInput(job, files)
+	if !decoded || job.Kind != "curate" || job.RunID != run || job.Graph.Project.ID != state.Graph.Project.ID || input == nil || input.Graph.Project.ID != state.Graph.Project.ID || input.Graph.Project.Generation != state.Graph.Project.Generation || input.Revision != state.Curation.ThroughRevision {
+		return []string{"missing immutable final curation input"}
+	}
+	var failures []string
+	for _, candidate := range state.Candidates {
+		if !slices.ContainsFunc(input.Candidates, func(original board.Candidate) bool {
+			return reflect.DeepEqual(original, candidate)
+		}) {
+			failures = append(failures, "final curator did not receive both producers")
+		}
+	}
+	return failures
 }
 
 func validateScenarioReviewCuration(state board.State) []string {
@@ -238,5 +266,76 @@ func TestScenarioReviewCurationRejectsDroppedProducer(t *testing.T) {
 		if len(validateScenarioReviewCuration(state)) == 0 {
 			t.Errorf("accepted incomplete or mismatched independent support: mutation %d", index)
 		}
+	}
+}
+
+func TestScenarioReviewFetchesRejectInsufficientRequests(t *testing.T) {
+	for _, scenario := range []string{"audit", "pentest"} {
+		t.Run(scenario, func(t *testing.T) {
+			paths := []string{"/audit.py"}
+			if scenario == "pentest" {
+				paths = []string{"/vulnerable/invoices/1001", "/vulnerable/invoices/1002", "/fixed/invoices/1001", "/fixed/invoices/1002"}
+			}
+			fixture := &scenarioSkillFixture{reads: map[string]int{}, bodies: map[string][]byte{}}
+			for _, path := range paths {
+				fixture.reads[path], fixture.bodies[path] = 2, []byte("synthetic")
+			}
+			if failures := validateScenarioReviewFetches(fixture, scenario); len(failures) != 0 {
+				t.Fatal(failures)
+			}
+			for _, path := range paths {
+				for _, count := range []int{0, 1} {
+					fixture.reads[path] = count
+					if len(validateScenarioReviewFetches(fixture, scenario)) == 0 {
+						t.Errorf("accepted %d requests for %s", count, path)
+					}
+				}
+				fixture.reads[path] = 2
+			}
+		})
+	}
+}
+
+func TestScenarioReviewCurationInputRejectsCorruptOrIncompleteSnapshots(t *testing.T) {
+	fixture := func(t *testing.T) (board.State, map[string][]byte, worker.Job) {
+		t.Helper()
+		state, files := curationSupportDeliveryFixture(t)
+		path := "/workspace/.pwnmesh/runs/curator-run/job.json"
+		var job worker.Job
+		if err := json.Unmarshal(files[path], &job); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(job.State)
+		job.InputSnapshot = &board.InputSnapshot{Version: 1, ID: fmt.Sprintf("%x", sha256.Sum256(raw)), ProjectID: job.Graph.Project.ID, Generation: job.Graph.Project.Generation, Revision: job.State.Revision, StateVersion: board.DecisionStateVersion(*job.State)}
+		job.Graph, job.State = board.Graph{Project: job.Graph.Project}, nil
+		files[curationSnapshotKey(job.InputSnapshot.ID)] = raw
+		files[path], _ = json.Marshal(job)
+		return state, files, job
+	}
+	state, files, _ := fixture(t)
+	if failures := validateScenarioReviewCurationInput(state, files); len(failures) != 0 {
+		t.Fatal(failures)
+	}
+	for _, mode := range []string{"missing_snapshot", "changed_snapshot", "changed_candidate", "wrong_job", "wrong_revision"} {
+		t.Run(mode, func(t *testing.T) {
+			state, files, job := fixture(t)
+			key := curationSnapshotKey(job.InputSnapshot.ID)
+			switch mode {
+			case "missing_snapshot":
+				delete(files, key)
+			case "changed_snapshot":
+				files[key] = append(files[key], ' ')
+			case "changed_candidate":
+				state.Candidates[1].Reason = "Changed after the curator received its input"
+			case "wrong_job":
+				job.Kind = "explore"
+				files["/workspace/.pwnmesh/runs/curator-run/job.json"], _ = json.Marshal(job)
+			case "wrong_revision":
+				state.Curation.ThroughRevision++
+			}
+			if len(validateScenarioReviewCurationInput(state, files)) == 0 {
+				t.Fatal("accepted corrupt or incomplete final curation input")
+			}
+		})
 	}
 }
