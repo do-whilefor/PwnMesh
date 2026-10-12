@@ -50,4 +50,4 @@ Calling `read_pentest_skill({})` returns this entry point.
 | Reproduction, patch checks, negative results, vulnerability chains | [verification](references/verification.md) |
 | Evidence, finding structure, CVSS, remediation | [reporting](references/reporting.md) |
 
-Adapted from Web-Vulnhunt; see [provenance](PROVENANCE.md) and [MIT license](LICENSE).
+Adapted from Web-Vulnhunt.
