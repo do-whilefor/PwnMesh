@@ -240,7 +240,11 @@ func TestCurationRelationsReopenResolutionWithInvalidatedReviewSupport(t *testin
 	correction := f.fact(corrector, "correction-of-review")
 	f.finish(corrector, correction)
 	curator, input = f.curator("invalidate-review-support")
-	f.action(curator.Fence(), "curate", "reopen-reviewed-dispute", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: firstFact, Reason: "The independent review evidence no longer supports its conclusion"}}}, DecisionStateVersion(input))
+	receipt := f.action(curator.Fence(), "curate", "reopen-reviewed-dispute", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: firstFact, Reason: "The independent review evidence no longer supports its conclusion"}}}, DecisionStateVersion(input))
+	var changed CurateResult
+	if json.Unmarshal(receipt.Result, &changed) != nil || len(changed.Findings) != 1 || changed.Findings[0].Status != "candidate" || len(changed.Disputes) != 1 || changed.Disputes[0].Status != "open" {
+		t.Fatal("relation-only receipt omitted the reopened finding or dispute")
+	}
 	f.finish(curator, "")
 	reopened := f.state()
 	if reopened.Disputes[0].Status != "open" || len(reopened.Disputes[0].ReviewFactIDs) != 0 || !reflect.DeepEqual(reopened.Disputes[0].ReviewStepIDs, []string{firstStep}) || reopened.Findings[0].Status != "candidate" || reopened.Findings[0].SupportValid {

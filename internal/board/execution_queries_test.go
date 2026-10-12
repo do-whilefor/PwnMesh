@@ -57,6 +57,52 @@ func putQueryExecution(t *testing.T, tx *Tx, e Execution, generation int64, vers
 	}
 }
 
+func TestDecisionReadViewMigrationPrunesOnlyUnusableExecutions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "decision-views.db")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	executionQueryTx(t, store, func(tx *Tx) {
+		for _, status := range []string{"prepared", "running", "retryable", "result_pending", "failed", "succeeded", "cancelled", "rejected", "retry_requested", "retried", "revoked"} {
+			e := Execution{ID: status, Status: status}
+			if status == "revoked" {
+				e.Status = "running"
+			}
+			putQueryExecution(t, tx, e, 0, "")
+			if status == "revoked" {
+				if _, err := tx.Exec("INSERT INTO xloom_revoked_runs VALUES('p','planner@revoked')"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Recreate views retained by an older server, before lifecycle cleanup.
+			if _, err := tx.Exec("INSERT INTO xloom_decision_read_views VALUES('p',?,'pinned','{}')", status); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executionQueryTx(t, store, func(tx *Tx) {
+		var count int
+		if err := tx.QueryRow("SELECT count(*) FROM xloom_decision_read_views").Scan(&count); err != nil || count != 4 {
+			t.Fatalf("migration retained %d views, want four recoverable executions: %v", count, err)
+		}
+		for _, status := range []string{"prepared", "running", "retryable", "result_pending"} {
+			var version string
+			if err := tx.QueryRow("SELECT state_version FROM xloom_decision_read_views WHERE execution_id=?", status).Scan(&version); err != nil || version != "pinned" {
+				t.Fatalf("migration lost the %s pinned view: %s %v", status, version, err)
+			}
+		}
+	})
+}
+
 func TestExecutionPendingKeysetExcludesHistoryAndKeepsCleanup(t *testing.T) {
 	s := executionQueryStore(t)
 	executionQueryTx(t, s, func(tx *Tx) {

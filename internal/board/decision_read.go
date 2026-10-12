@@ -9,11 +9,25 @@ import (
 const decisionReadSchema = `CREATE TABLE IF NOT EXISTS xloom_decision_read_views(
  project_id TEXT NOT NULL,execution_id TEXT NOT NULL,state_version TEXT NOT NULL,state BLOB NOT NULL,
  PRIMARY KEY(project_id,execution_id),
- FOREIGN KEY(project_id,execution_id) REFERENCES xloom_executions(project_id,id) ON DELETE CASCADE);`
+ FOREIGN KEY(project_id,execution_id) REFERENCES xloom_executions(project_id,id) ON DELETE CASCADE);
+DELETE FROM xloom_decision_read_views
+ WHERE EXISTS(SELECT 1 FROM xloom_executions e
+  WHERE e.project_id=xloom_decision_read_views.project_id AND e.id=xloom_decision_read_views.execution_id
+  AND (e.status NOT IN ('prepared','running','retryable','result_pending')
+   OR EXISTS(SELECT 1 FROM xloom_revoked_runs r WHERE r.project_id=e.project_id AND r.worker=e.lease)));
+CREATE TRIGGER IF NOT EXISTS xloom_decision_read_terminal AFTER UPDATE OF status ON xloom_executions
+ WHEN NEW.status NOT IN ('prepared','running','retryable','result_pending') BEGIN
+ DELETE FROM xloom_decision_read_views WHERE project_id=NEW.project_id AND execution_id=NEW.id;
+END;
+CREATE TRIGGER IF NOT EXISTS xloom_decision_read_revoked AFTER INSERT ON xloom_revoked_runs BEGIN
+ DELETE FROM xloom_decision_read_views WHERE project_id=NEW.project_id AND execution_id IN
+  (SELECT id FROM xloom_executions WHERE project_id=NEW.project_id AND lease=NEW.worker);
+END;`
 
 // DecisionReadState pins a version 2 planner's detail reads to its last
 // overview, or its registered input before the first refresh. Only one refreshed
-// view is retained per execution. Writes still validate against current State.
+// view is retained per recoverable execution, then released on completion or
+// revocation. Writes still validate against current State.
 func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool) (State, error) {
 	if fence.Run == "" || fence.Lease != "reason" {
 		return current, nil

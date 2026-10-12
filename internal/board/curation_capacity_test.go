@@ -91,6 +91,57 @@ func TestCurationCapacityDrainsWholeGroupsAcrossExecutions(t *testing.T) {
 	assertCurationNeeded(t, f, false)
 }
 
+func TestCurationReceiptsRetainOnlyTheSubmittedGroups(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	producer := f.worker("source", "")
+	source, old, correction := f.fact(producer, "support"), f.fact(producer, "old"), f.fact(producer, "correction")
+	previous, prior := capacityCurator(f, "previous-relation")
+	f.action(previous.Fence(), "curate", "previous-relation", CuratePayload{ThroughRevision: prior.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: old, Reason: "An unrelated earlier correction"}}}, DecisionStateVersion(prior))
+	seedCurationGroups(f, 8, 2, source)
+	for group := range 8 {
+		e, input := capacityCurator(f, fmt.Sprintf("batch-%d", group))
+		key := findingIdentity(fmt.Sprintf("Capacity claim %d", group), "fixture")
+		payload := CurateGroup{GroupKey: key, Status: "candidate", Reason: "Retain this complete group", Question: "Which producer observation is supported?"}
+		receipt := f.curate(e, input, payload)
+		var result CurateResult
+		if err := json.Unmarshal(receipt.Result, &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Findings) != 1 || result.Findings[0].ID != key || len(result.Disputes) != 1 || result.Disputes[0].FindingID != key || len(result.FactRelations) != 0 {
+			t.Fatalf("batch %d retained unrelated historical records: %+v", group, result)
+		}
+		// A lost response must replay this batch even after its lease settles.
+		replay := f.curate(e, input, payload)
+		if string(replay.Result) != string(receipt.Result) || replay.Revision != receipt.Revision {
+			t.Fatal("bounded receipt changed during replay")
+		}
+	}
+	f.do(func(tx *Tx) error {
+		events, err := tx.StateEvents("p", 0)
+		if err != nil {
+			return err
+		}
+		count := 0
+		for _, event := range events {
+			if event.Op != "curate" {
+				continue
+			}
+			var result CurateResult
+			if err := json.Unmarshal(event.Result, &result); err != nil {
+				return err
+			}
+			count += len(result.Findings)
+		}
+		if count != 8 {
+			t.Fatalf("events retained %d findings for eight submitted groups", count)
+		}
+		return nil
+	})
+	if state := f.state(); len(state.Findings) != 8 || len(state.Disputes) != 8 || len(state.FactRelations) != 1 {
+		t.Fatal("bounded receipts removed canonical findings, disputes or relations")
+	}
+}
+
 func TestCurationGroupKeyIncludesConflictsBeyondExplicitIDLimit(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	producer := f.worker("support", "")

@@ -38,6 +38,9 @@ func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
 		"DELETE FROM xloom_state_events WHERE project_id=?",
 		"DELETE FROM xloom_state WHERE project_id=?",
 		"DELETE FROM xloom_executions WHERE project_id=?",
+		// The generation fence rejects every old-round cursor. Keep the
+		// revision sequence, but discard the deletion markers just generated.
+		"DELETE FROM xloom_ui_execution_changes WHERE project_id=?",
 		"DELETE FROM intents WHERE project_id=?",
 		"DELETE FROM facts WHERE project_id=? AND id NOT IN ('origin','goal')",
 	} {

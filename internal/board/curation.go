@@ -75,6 +75,9 @@ type CurateRelation struct {
 	Reason string `json:"reason"`
 }
 
+// CurateResult contains records touched by this batch, not the accumulated
+// project history. Submitted relations include their canonical existing edge
+// when deduplicated, so the receipt still acknowledges each accepted proposal.
 type CurateResult struct {
 	Curation      CurationProgress `json:"curation"`
 	Findings      []Finding        `json:"findings"`
@@ -228,14 +231,20 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 	if revision != input.ThroughRevision {
 		return "", nil, Err(409, "curation boundary does not match its registered input")
 	}
+	result := CurateResult{Findings: []Finding{}, Disputes: []Dispute{}}
+	touchedFindings, touchedDisputes := map[string]bool{}, map[string]bool{}
 	for _, relation := range input.Relations {
 		raw, err := json.Marshal(relation)
 		if err != nil {
 			return "", nil, err
 		}
-		_, _, changed, err := t.addFactRelation(s, d, fence, raw)
+		_, accepted, changed, err := t.addFactRelation(s, d, fence, raw)
 		if err != nil {
 			return "", nil, err
+		}
+		canonical := accepted.(FactRelation)
+		if !slices.Contains(result.FactRelations, canonical) {
+			result.FactRelations = append(result.FactRelations, canonical)
 		}
 		if changed {
 			// Validate later relations, candidate conclusions and review facts
@@ -258,8 +267,10 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			// but allow the primary Agent to authorize a fresh independent run.
 			dispute.Status, dispute.ReviewFactIDs = "open", []string{}
 			dispute.Reason, dispute.UpdatedAt = "Independent review evidence was invalidated by this curation batch", t.Now
+			touchedDisputes[dispute.ID] = true
 			for n := range d.Findings {
 				if d.Findings[n].ID == dispute.FindingID {
+					touchedFindings[dispute.FindingID] = true
 					d.Findings[n].Status = "candidate"
 					d.Findings[n].UpdatedAt = t.Now
 					d.Findings[n].CuratedRevision = input.ThroughRevision
@@ -399,6 +410,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 		}
 		if disputeIndex >= 0 {
 			dispute := &d.Disputes[disputeIndex]
+			touchedDisputes[dispute.ID] = true
 			newEvidence := false
 			for _, cid := range finding.CandidateIDs {
 				if !slices.Contains(dispute.CandidateIDs, cid) {
@@ -475,6 +487,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			}
 		}
 		finding.SupportValid = len(finding.Sources) > 0 && s.ValidateFactSources(finding.Sources, true) == nil
+		touchedFindings[finding.ID] = true
 		if index < 0 {
 			d.Findings = append(d.Findings, finding)
 		} else {
@@ -500,7 +513,18 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 		progress.ThroughRevision, progress.Request = d.Curation.ThroughRevision, d.Curation.Request
 	}
 	d.Curation = progress
-	return "curation", CurateResult{Curation: d.Curation, Findings: d.Findings, Disputes: d.Disputes, FactRelations: d.FactRelations}, nil
+	result.Curation = d.Curation
+	for _, finding := range d.Findings {
+		if touchedFindings[finding.ID] {
+			result.Findings = append(result.Findings, finding)
+		}
+	}
+	for _, dispute := range d.Disputes {
+		if touchedDisputes[dispute.ID] {
+			result.Disputes = append(result.Disputes, dispute)
+		}
+	}
+	return "curation", result, nil
 }
 
 func (t *Tx) executionForLease(project, lease string) (Execution, error) {

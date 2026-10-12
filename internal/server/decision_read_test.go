@@ -187,14 +187,53 @@ func TestDecisionReadViewDoesNotBypassFences(t *testing.T) {
 				f.request("PUT", f.base()+"/status", map[string]string{"status": "stopped"}, false, http.StatusOK, nil)
 			} else {
 				f.request("POST", f.base()+"/restart", map[string]int{"expected_generation": 0}, false, http.StatusOK, nil)
-				var count int
-				if err := store.Do(context.Background(), func(tx *board.Tx) error {
-					return tx.QueryRow("SELECT count(*) FROM xloom_decision_read_views WHERE project_id=?", f.project).Scan(&count)
-				}); err != nil || count != 0 {
-					t.Fatalf("restart retained stale views: %d %v", count, err)
-				}
+			}
+			var count int
+			if err := store.Do(context.Background(), func(tx *board.Tx) error {
+				return tx.QueryRow("SELECT count(*) FROM xloom_decision_read_views WHERE project_id=?", f.project).Scan(&count)
+			}); err != nil || count != 0 {
+				t.Fatalf("%s retained stale views: %d %v", operation, count, err)
 			}
 			f.request("POST", f.base()+"/state/read", worker.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_graph", Section: "facts", ExpectedVersion: view.StateVersion}, true, http.StatusConflict, nil)
+		})
+	}
+}
+
+func TestDecisionReadViewRetainedForRecoveryAndPrunedOnCompletion(t *testing.T) {
+	for _, terminal := range []string{"failed", "cancelled", "rejected", "succeeded"} {
+		t.Run(terminal, func(t *testing.T) {
+			f, store := newSnapshotHTTPFixture(t)
+			prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
+			view := decisionRead(t, f, "overview", "")
+			pinned := decisionRead(t, f, "facts", view.StateVersion)
+			if err := store.Do(context.Background(), func(tx *board.Tx) error {
+				e, err := tx.Execution(f.project, f.run)
+				if err != nil {
+					return err
+				}
+				for _, status := range []string{"running", "retryable", "result_pending", terminal} {
+					if err := tx.ExecutionStatus(e, status, json.RawMessage(`{"status":"success"}`)); err != nil {
+						return err
+					}
+					var count int
+					if err := tx.QueryRow("SELECT count(*) FROM xloom_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&count); err != nil {
+						return err
+					}
+					want := 1
+					if status == terminal {
+						want = 0
+					}
+					if count != want {
+						t.Fatalf("status %s retained %d views, want %d", status, count, want)
+					}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if pinned.StateVersion != view.StateVersion {
+				t.Fatal("fixture did not retain the refreshed read version")
+			}
 		})
 	}
 }

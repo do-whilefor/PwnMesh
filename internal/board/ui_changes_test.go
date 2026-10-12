@@ -161,3 +161,39 @@ func TestExecutionChangePagesKeepThePublicResponseByteLimit(t *testing.T) {
 		}
 	})
 }
+
+func TestRestartPrunesExecutionChangesWithoutResettingRevision(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	f.do(func(tx *Tx) error {
+		for _, id := range []string{"first", "second"} {
+			putQueryExecution(t, tx, Execution{ID: id, Status: "failed"}, 0, "")
+		}
+		before, err := tx.ProjectExecutionChanges("p", 0, 0, 0, 0, 100)
+		if err != nil {
+			return err
+		}
+		generation := int64(0)
+		if _, err := tx.RestartProject("p", &generation); err != nil {
+			return err
+		}
+		var changes int
+		if err := tx.QueryRow("SELECT count(*) FROM xloom_ui_execution_changes WHERE project_id='p'").Scan(&changes); err != nil {
+			return err
+		}
+		if changes != 0 {
+			t.Fatalf("restart retained %d obsolete execution changes", changes)
+		}
+		_, err = tx.ProjectExecutionChanges("p", 0, before.Through, 0, 0, 100)
+		requireAPIStatus(t, err, 409)
+		fresh, err := tx.ProjectExecutionChanges("p", 1, 0, 0, 0, 100)
+		if err != nil || len(fresh.Items)+len(fresh.Deleted) != 0 || fresh.Through <= before.Through {
+			t.Fatalf("restart lost the monotonic revision: %+v %v", fresh, err)
+		}
+		putQueryExecution(t, tx, Execution{ID: "new", Status: "running"}, 1, "")
+		next, err := tx.ProjectExecutionChanges("p", 1, fresh.Through, 0, 0, 100)
+		if err != nil || len(next.Items) != 1 || next.Items[0].ID != "new" || next.Through <= fresh.Through {
+			t.Fatalf("new-round execution fell behind the old cursor: %+v %v", next, err)
+		}
+		return nil
+	})
+}
