@@ -17,6 +17,19 @@ import (
 
 const PathEnv = "PWNMESH_MODEL_CONFIG_PATH"
 
+// ResolvePath gives native server and dispatcher processes the same default,
+// regardless of their working directory or a custom SQLite database location.
+func ResolvePath() (string, error) {
+	if path := os.Getenv(PathEnv); path != "" {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".local", "share", "pwnmesh", "model-settings.json"), nil
+}
+
 type Settings struct {
 	Protocol        string `json:"protocol"`
 	BaseURL         string `json:"base_url"`

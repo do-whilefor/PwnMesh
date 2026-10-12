@@ -6,9 +6,40 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/modelconfig"
 )
+
+func TestNativeModelSettingsPathIsSharedAndPreservesLegacyFiles(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(modelconfig.PathEnv, "")
+	want, err := modelconfig.ResolvePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	database := filepath.Join(t.TempDir(), "custom.db")
+	if got, err := serveModelSettingsPath(database); err != nil || got != want {
+		t.Fatalf("custom database changed shared model settings: %q %v", got, err)
+	}
+	legacy := filepath.Join(filepath.Dir(database), "model-settings.json")
+	if err := os.WriteFile(legacy, []byte("retained-legacy-settings"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := serveModelSettingsPath(database); err == nil || !strings.Contains(err.Error(), modelconfig.PathEnv) {
+		t.Fatal("server silently ignored existing database-adjacent model settings")
+	}
+	t.Setenv(modelconfig.PathEnv, legacy)
+	if got, err := serveModelSettingsPath(database); err != nil || got != legacy {
+		t.Fatalf("explicit path was not preserved: %q %v", got, err)
+	}
+	if raw, err := os.ReadFile(legacy); err != nil || string(raw) != "retained-legacy-settings" {
+		t.Fatal("legacy settings were changed")
+	}
+}
 
 func TestServeTrustedHostFlags(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())

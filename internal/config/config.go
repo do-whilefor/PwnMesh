@@ -81,7 +81,11 @@ func Load(path string) (Config, error) {
 }
 func (c *Config) Validate() error {
 	if c.ModelSettingsPath == "" {
-		c.ModelSettingsPath = os.Getenv(modelconfig.PathEnv)
+		var err error
+		c.ModelSettingsPath, err = modelconfig.ResolvePath()
+		if err != nil {
+			return err
+		}
 	}
 	modelSettings, hasModelSettings, modelSettingsErr := modelconfig.Read(c.ModelSettingsPath)
 	if modelSettingsErr != nil {

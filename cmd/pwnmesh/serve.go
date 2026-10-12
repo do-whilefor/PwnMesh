@@ -59,9 +59,9 @@ func serve(ctx context.Context, args []string, errOut io.Writer) error {
 		return err
 	}
 	defer store.Close()
-	modelSettingsPath := os.Getenv(modelconfig.PathEnv)
-	if modelSettingsPath == "" {
-		modelSettingsPath = filepath.Join(filepath.Dir(*db), "model-settings.json")
+	modelSettingsPath, err := serveModelSettingsPath(*db)
+	if err != nil {
+		return err
 	}
 	srv := &http.Server{
 		Addr: net.JoinHostPort(*host, strconv.Itoa(*port)), Handler: guard(server.NewWithModelSettings(store, modelSettingsPath)),
@@ -74,6 +74,30 @@ func serve(ctx context.Context, args []string, errOut io.Writer) error {
 	}
 	fmt.Fprintln(errOut, "PwnMesh serving", listener.Addr())
 	return serveHTTP(ctx, srv, listener)
+}
+
+func serveModelSettingsPath(database string) (string, error) {
+	path, err := modelconfig.ResolvePath()
+	if err != nil || os.Getenv(modelconfig.PathEnv) != "" {
+		return path, err
+	}
+	legacy := filepath.Join(filepath.Dir(database), "model-settings.json")
+	oldPath, err := filepath.Abs(legacy)
+	if err != nil {
+		return "", err
+	}
+	newPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if oldPath != newPath {
+		if _, err := os.Stat(oldPath); err == nil {
+			return "", fmt.Errorf("existing model settings at %s: set %s to this path for both serve and dispatch", oldPath, modelconfig.PathEnv)
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+	}
+	return path, nil
 }
 
 func serveHTTP(ctx context.Context, srv *http.Server, listener net.Listener) error {

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -34,6 +35,31 @@ func TestDispatcherCanStartBeforeWebModelSetupAndReadSavedSettings(t *testing.T)
 	for _, w := range loaded.Workers {
 		if w.Env["ANTHROPIC_AUTH_TOKEN"] != "saved-fixture" || w.Env["ANTHROPIC_MODEL"] != "saved-model" || w.Env["PWNMESH_CONNECTION_MODE"] != "proxy" {
 			t.Fatal("persisted Web config not used by dispatcher")
+		}
+	}
+}
+
+func TestDispatcherReadsDefaultNativeModelSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(modelconfig.PathEnv, "")
+	path := filepath.Join(os.Getenv("HOME"), ".local", "share", "pwnmesh", "model-settings.json")
+	store := modelconfig.Store{Path: path, Defaults: modelconfig.Defaults(func(string) string { return "" })}
+	if _, err := store.Update(func(settings *modelconfig.Settings) error {
+		settings.Token, settings.Model = "default-fixture", "default-saved-model"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(filepath.Join("..", "..", "dispatch.example.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.ModelSettingsPath != path {
+		t.Fatalf("model path = %q, want %q", loaded.ModelSettingsPath, path)
+	}
+	for _, worker := range loaded.Workers {
+		if worker.Env["ANTHROPIC_AUTH_TOKEN"] != "default-fixture" || worker.Env["ANTHROPIC_MODEL"] != "default-saved-model" {
+			t.Fatal("native dispatcher ignored the model settings saved by serve")
 		}
 	}
 }
