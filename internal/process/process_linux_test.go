@@ -4,6 +4,7 @@ package process
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -141,4 +142,86 @@ func TestRunStreamsCancellationCleansUpChildren(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("child %d still running after cancellation", childPID)
+}
+
+func TestRunStreamsConfirmsDetachedChildrenStopped(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid unavailable")
+	}
+	dir := t.TempDir()
+	output := outputFile(t, dir, "output")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := RunStreams(ctx, dir, dir, output, output, "sh", "-c",
+		`setsid sh -c 'echo $$ > detached.pid; sleep 30 & echo $! > grandchild.pid; wait' & while [ ! -s grandchild.pid ]; do sleep 0.01; done`)
+	for _, file := range []string{"detached.pid", "grandchild.pid"} {
+		raw, readErr := os.ReadFile(filepath.Join(dir, file))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		pid, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if parseErr != nil || pid <= 1 {
+			t.Fatalf("invalid %s: %q", file, raw)
+		}
+		t.Cleanup(func() { syscall.Kill(pid, syscall.SIGKILL) })
+		if processRunning(pid) {
+			t.Errorf("detached command process %d remains alive after RunStreams returned", pid)
+		}
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNoGroups(t, dir)
+}
+
+func TestKillGroupsRetainsUnconfirmedOwnership(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "group-2147483647")
+	id := identity{PID: 2147483647, Start: "1", Token: "invalid"}
+	write := func() {
+		t.Helper()
+		raw, err := json.Marshal(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(marker, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write()
+	if err := KillGroups(dir); err == nil {
+		t.Fatal("invalid ownership token was accepted")
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatalf("unconfirmed process ownership was discarded: %v", err)
+	}
+	id.Token = strings.Repeat("a", 32)
+	write()
+	if err := KillGroups(dir); err != nil {
+		t.Fatal(err)
+	}
+	assertNoGroups(t, dir)
+}
+
+func TestRunStreamsPreservesArgumentsAndRejectsStartFailures(t *testing.T) {
+	dir := t.TempDir()
+	output := outputFile(t, dir, "output")
+	args := []string{"space here", "$(touch unexpected)", "; touch unexpected; #", "'quotes'"}
+	command := append([]string{"-c", `printf '<%s>' "$@"`, "fixture"}, args...)
+	if err := RunStreams(context.Background(), dir, dir, output, output, "sh", command...); err != nil {
+		t.Fatal(err)
+	}
+	assertOutput(t, output, "<"+strings.Join(args, "><")+">")
+	if _, err := os.Stat(filepath.Join(dir, "unexpected")); !os.IsNotExist(err) {
+		t.Fatalf("command arguments were interpreted by the launch shell: %v", err)
+	}
+	if err := RunStreams(context.Background(), dir, dir, output, output, filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("missing executable was accepted")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := RunStreams(ctx, dir, dir, output, output, "sh", "-c", "touch unexpected"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled startup = %v", err)
+	}
+	assertNoGroups(t, dir)
 }

@@ -168,35 +168,44 @@ func RunStreams(ctx context.Context, dir, runDir string, stdout, stderr *os.File
 		}
 		return err
 	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	pid := cmd.Process.Pid
-	marker := filepath.Join(runDir, fmt.Sprintf("group-%d", pid))
-	id, idErr := identityOf(pid)
-	id.Token = token
-	raw, marshalErr := json.Marshal(id)
-	err := errors.Join(idErr, marshalErr)
-	if err == nil {
-		err = os.WriteFile(marker, raw, 0600)
-	}
+	var marker string
+	err := startCommand(cmd, func(pid int) error {
+		// A reused PID must not replace a retained, unconfirmed cleanup record.
+		marker = filepath.Join(runDir, "group-"+token)
+		id, err := identityOf(pid)
+		if err != nil {
+			return err
+		}
+		id.Token = token
+		return publishIdentity(marker, id)
+	})
 	if err != nil {
-		syscall.Kill(-pid, syscall.SIGKILL)
-		killToken(token)
-		cmd.Wait()
-		return err
+		if cmd.Process != nil {
+			killErr := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			if errors.Is(killErr, syscall.ESRCH) {
+				killErr = nil
+			}
+			cleanupErr := errors.Join(killErr, killToken(token))
+			_ = cmd.Wait()
+			if cleanupErr == nil && marker != "" {
+				_ = os.Remove(marker)
+			}
+			err = errors.Join(err, cleanupErr)
+		}
+		return errors.Join(err, ctx.Err())
 	}
 	err = cmd.Wait()
 	// A command owns its background children as well. No command may leave
 	// them running after returning success, failure or cancellation.
 	// The leader is now reaped: avoid signaling a numeric group ID that may
 	// have been reused. Its inherited token also identifies setsid children.
-	killToken(token)
-	os.Remove(marker)
-	if ctx.Err() != nil {
-		return ctx.Err()
+	cleanupErr := killToken(token)
+	if cleanupErr == nil {
+		if removeErr := os.Remove(marker); !os.IsNotExist(removeErr) {
+			cleanupErr = removeErr
+		}
 	}
-	return err
+	return errors.Join(err, cleanupErr, ctx.Err())
 }
 
 // Process groups handle ordinary cancellation immediately. An inherited random
@@ -209,29 +218,39 @@ func killToken(token string) error {
 	if _, err := hex.DecodeString(token); err != nil {
 		return err
 	}
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return err
-	}
-	var result error
 	needle := "\x00PWNMESH_PROCESS_TOKEN=" + token + "\x00"
-	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid <= 1 || pid == os.Getpid() {
-			continue
-		}
-		raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "environ"))
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		entries, err := os.ReadDir("/proc")
 		if err != nil {
-			continue
+			return err
 		}
-		if !strings.Contains("\x00"+string(raw), needle) {
-			continue
+		found := false
+		var result error
+		for _, entry := range entries {
+			pid, err := strconv.Atoi(entry.Name())
+			if err != nil || pid <= 1 || pid == os.Getpid() {
+				continue
+			}
+			raw, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "environ"))
+			if err != nil || !strings.Contains("\x00"+string(raw), needle) {
+				continue
+			}
+			found = true
+			if err = syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				result = errors.Join(result, err)
+			}
 		}
-		if err = syscall.Kill(pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			result = errors.Join(result, err)
+		if result != nil || !found {
+			return result
 		}
+		if time.Now().After(deadline) {
+			return errors.New("owned command processes did not stop")
+		}
+		// A process may fork while the first snapshot is being killed. Rescan
+		// until its inherited token is gone, rather than acknowledging a signal.
+		time.Sleep(5 * time.Millisecond)
 	}
-	return result
 }
 func KillGroups(runDir string) error {
 	entries, err := os.ReadDir(runDir)
@@ -252,17 +271,21 @@ func KillGroups(runDir string) error {
 			result = errors.Join(result, err)
 			continue
 		}
+		var cleanupErr error
+		if alive {
+			if err = syscall.Kill(-id.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				cleanupErr = err
+			}
+		}
 		if id.Token != "" {
-			result = errors.Join(result, killToken(id.Token))
+			cleanupErr = errors.Join(cleanupErr, killToken(id.Token))
 		}
-		if !alive {
-			os.Remove(path)
-			continue
+		if cleanupErr == nil {
+			if err = os.Remove(path); !os.IsNotExist(err) {
+				cleanupErr = err
+			}
 		}
-		if err = syscall.Kill(-id.PID, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-			result = errors.Join(result, err)
-		}
-		os.Remove(path)
+		result = errors.Join(result, cleanupErr)
 	}
 	return result
 }
