@@ -186,6 +186,11 @@ func TestLiveContentionProject(t *testing.T) {
 // validated workloads. Workload validators must not trust project completion.
 func runObservedProject(t *testing.T, title, origin, goal, validationScope string, validate func(board.State, map[string][]byte) []string, orchestrationVersion ...int) {
 	t.Helper()
+	runObservedScenarioProject(t, title, origin, goal, "", validationScope, validate, orchestrationVersion...)
+}
+
+func runObservedScenarioProject(t *testing.T, title, origin, goal, scenario, validationScope string, validate func(board.State, map[string][]byte) []string, orchestrationVersion ...int) {
+	t.Helper()
 	image, output := os.Getenv("PWNMESH_DOCKER_TEST_IMAGE"), os.Getenv("PWNMESH_LIVE_OUTPUT")
 	base, token, model := os.Getenv("ANTHROPIC_BASE_URL"), os.Getenv("ANTHROPIC_AUTH_TOKEN"), os.Getenv("ANTHROPIC_DEFAULT_FABLE_MODEL")
 	if selected := os.Getenv("ANTHROPIC_MODEL"); selected != "" {
@@ -213,7 +218,11 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 		if err != nil {
 			t.Fatal(err)
 		}
-		webGate = newLiveWebCreationGate(liveWebTask{Title: title, Origin: origin, Goal: goal, Scenario: "pentest", OrchestrationVersion: mode})
+		webScenario := scenario
+		if webScenario == "" {
+			webScenario = "pentest"
+		}
+		webGate = newLiveWebCreationGate(liveWebTask{Title: title, Origin: origin, Goal: goal, Scenario: webScenario, OrchestrationVersion: mode})
 		if err = saveLiveJSON(filepath.Join(output, "web-task.json"), webGate.want); err != nil {
 			t.Fatal(err)
 		}
@@ -276,7 +285,11 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 	started := time.Now().UTC()
 	var webCreation liveWebCreation
 	if webGate == nil {
-		if err = client.Do(context.Background(), "POST", "/projects", map[string]any{"title": title, "origin": origin, "goal": goal, "bootstrap_enabled": false, "orchestration_version": mode}, &graph, nil); err != nil {
+		payload := map[string]any{"title": title, "origin": origin, "goal": goal, "bootstrap_enabled": false, "orchestration_version": mode}
+		if scenario != "" {
+			payload["scenario"] = scenario
+		}
+		if err = client.Do(context.Background(), "POST", "/projects", payload, &graph, nil); err != nil {
 			t.Fatal(err)
 		}
 	} else {
@@ -324,6 +337,10 @@ func runObservedProject(t *testing.T, title, origin, goal, validationScope strin
 	manifest["comparison_protocol_version"] = 1
 	manifest["workload_sha256"] = knobs.workloadFingerprint(title, origin, goal, validationScope, mode)
 	manifest["parallel_worker_count"] = knobs.ParallelWorkerCount
+	if scenario != "" && webGate == nil {
+		manifest["scenario"] = scenario
+		manifest["workload_sha256"] = liveFingerprint(map[string]any{"base_workload_sha256": manifest["workload_sha256"], "scenario": scenario})
+	}
 	if webGate != nil {
 		manifest["creation_source"] = webCreation.Source
 		manifest["browser_preparation_seconds_excluded"] = started.Sub(webCreation.ReadyAt).Seconds()
