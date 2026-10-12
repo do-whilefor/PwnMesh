@@ -118,7 +118,8 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 		return false
 	}
 	var info struct {
-		Image  string `json:"Image"`
+		Image  string           `json:"Image"`
+		Mounts []workspaceMount `json:"Mounts"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
 			Env    []string          `json:"Env"`
@@ -170,6 +171,13 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 	if hasModelEnvironment(desired.Config.Env) {
 		return "", errors.New("worker image contains model provider environment; rebuild it without ANTHROPIC_ environment and keep model configuration in the dispatcher")
 	}
+	var workspaceRuntime map[string]string
+	if c.ownerID() != "" {
+		workspaceRuntime, err = c.workspaceRuntime(ctx, desired.ID)
+		if err != nil {
+			return "", err
+		}
+	}
 	if missing {
 		if err := c.checkLegacyContainer(ctx, id); err != nil {
 			return "", err
@@ -181,7 +189,18 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 		if !strings.HasPrefix(c.Config.Network, "container:") {
 			hostConfig["ExtraHosts"] = []string{"host.docker.internal:host-gateway"}
 		}
-		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": c.labels(id, modelBoundary), "HostConfig": hostConfig}
+		labels := c.labels(id, modelBoundary)
+		if c.ownerID() != "" {
+			volume, err := c.ensureWorkspace(ctx, id, workspaceRuntime)
+			if err != nil {
+				return "", err
+			}
+			labels[workspaceVolumeLabel] = volume
+			hostConfig["NetworkMode"] = workspaceRuntime["pwnmesh.workspace-network"]
+			// Default copy-up preserves the image's initialized /workspace/.git.
+			hostConfig["Mounts"] = []map[string]any{{"Type": "volume", "Source": volume, "Target": "/workspace"}}
+		}
+		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": labels, "HostConfig": hostConfig}
 		err = c.json(ctx, "POST", "/containers/create?name="+url.QueryEscape(name), input, nil)
 		if status(err, 409) {
 			missing = false
@@ -196,6 +215,11 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 	}
 	if err != nil {
 		return "", err
+	}
+	if !missing {
+		if _, err := c.checkWorkspace(ctx, id, info.Config.Labels, info.Mounts, workspaceRuntime); err != nil {
+			return "", err
+		}
 	}
 	if !missing && info.Image != desired.ID {
 		return "", fmt.Errorf("project %s container uses image %q but configured worker image %q resolves to %q; preserve and migrate its workspace before recreating the container", id, info.Image, c.Config.Image, desired.ID)
@@ -592,7 +616,8 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	unlock := c.lock(id)
 	defer unlock()
 	var info struct {
-		ID     string `json:"Id"`
+		ID     string           `json:"Id"`
+		Mounts []workspaceMount `json:"Mounts"`
 		Config struct {
 			Labels map[string]string `json:"Labels"`
 		} `json:"Config"`
@@ -600,6 +625,9 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	err := c.json(ctx, "GET", "/containers/"+url.PathEscape(c.name(id))+"/json", nil, &info)
 	if status(err, 404) {
 		c.clearPendingStops(id)
+		if state == "deleted" {
+			return c.removeWorkspace(ctx, id)
+		}
 		return nil
 	}
 	if err != nil {
@@ -611,10 +639,14 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	if info.ID == "" {
 		return errors.New("Docker returned an empty container ID during cleanup")
 	}
+	durable, err := c.checkWorkspace(ctx, id, info.Config.Labels, info.Mounts, nil)
+	if err != nil {
+		return err
+	}
 	// Names can be reassigned after inspection. Target the verified, immutable
 	// container ID so a replacement with the same name is never stopped/removed.
 	route := "/containers/" + url.PathEscape(info.ID)
-	if state == "deleted" || (state == "completed" && c.Config.CompletedAction == "remove") {
+	if state == "deleted" || (state == "completed" && c.Config.CompletedAction == "remove" && (durable || c.ownerID() == "")) {
 		err = c.json(ctx, "DELETE", route+"?force=true", nil, nil)
 	} else {
 		err = c.json(ctx, "POST", route+"/stop?t=1", nil, nil)
@@ -624,6 +656,9 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	}
 	if err == nil {
 		c.clearPendingStops(id)
+		if state == "deleted" {
+			return c.removeWorkspace(ctx, id)
+		}
 	}
 	return err
 }
@@ -648,6 +683,11 @@ func (c *Client) Projects(ctx context.Context) ([]string, error) {
 			ids = append(ids, id)
 		}
 	}
+	volumes, err := c.workspaceProjects(ctx, labels)
+	if err != nil {
+		return nil, err
+	}
+	ids = append(ids, volumes...)
 	sort.Strings(ids)
-	return ids, nil
+	return slices.Compact(ids), nil
 }

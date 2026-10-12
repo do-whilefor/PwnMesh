@@ -21,6 +21,10 @@ func TestInstallationOwnershipRejectsForeignContainers(t *testing.T) {
 			return
 		}
 		labels := map[string]string{"pwnmesh.namespace": "test", "pwnmesh.project": "p", "pwnmesh.installation": foreign}
+		if r.URL.Path == "/volumes" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"Volumes": []any{map[string]any{"Name": "foreign-volume", "Labels": labels}}})
+			return
+		}
 		if r.URL.Path == "/containers/json" {
 			var filters map[string][]string
 			if err := json.Unmarshal([]byte(r.URL.Query().Get("filters")), &filters); err != nil {
@@ -66,10 +70,19 @@ func TestInstallationCreationLabelsAndLegacyPreservation(t *testing.T) {
 		t.Run(map[bool]string{false: "fresh", true: "legacy"}[legacy], func(t *testing.T) {
 			owner := strings.Repeat("a", 32)
 			mutations := 0
+			var volume map[string]any
 			engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case r.URL.Path == "/images/worker/json":
 					_ = json.NewEncoder(w).Encode(map[string]string{"Id": "sha256:worker"})
+				case r.Method == "GET" && strings.HasPrefix(r.URL.Path, "/volumes/") && volume != nil:
+					_ = json.NewEncoder(w).Encode(volume)
+				case r.Method == "POST" && r.URL.Path == "/volumes/create":
+					mutations++
+					if err := json.NewDecoder(r.Body).Decode(&volume); err != nil {
+						t.Error(err)
+					}
+					_ = json.NewEncoder(w).Encode(volume)
 				case r.Method == "GET":
 					if legacy && r.URL.Path == "/containers/test-dispatch-p/json" {
 						_ = json.NewEncoder(w).Encode(map[string]any{"Config": map[string]any{"Labels": map[string]string{"pwnmesh.namespace": "test", "pwnmesh.project": "p"}}})
@@ -102,7 +115,7 @@ func TestInstallationCreationLabelsAndLegacyPreservation(t *testing.T) {
 				if err == nil || !strings.Contains(err.Error(), "legacy container") || mutations != 0 {
 					t.Fatalf("legacy workspace was not preserved: %v, mutations=%d", err, mutations)
 				}
-			} else if err != nil || mutations != 2 {
+			} else if err != nil || mutations != 3 {
 				t.Fatalf("creation failed: %v, mutations=%d", err, mutations)
 			}
 		})
