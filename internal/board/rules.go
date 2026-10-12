@@ -67,6 +67,46 @@ func (t *Tx) CheckExecution(g Graph, fence ExecutionFence) error {
 	return Err(409, "Intent execution no longer owns its lease")
 }
 
+// Read authority must expire even when no writer has performed housekeeping.
+// Use the same clock and SQLite comparison as ExpireProject without changing
+// stored leases or reserving the writer connection for snapshot reads.
+func (t *Tx) CheckExecutionRead(g Graph, fence ExecutionFence) error {
+	if err := t.CheckExecution(g, fence); err != nil {
+		return err
+	}
+	settings, err := t.Settings()
+	if err != nil {
+		return err
+	}
+	heartbeat, timeout := "", settings.ReasonTimeout
+	switch fence.Lease {
+	case "reason":
+		if g.Project.Reason != nil {
+			heartbeat = g.Project.Reason.Heartbeat
+		}
+	case "curate":
+		if g.Project.Curator != nil {
+			heartbeat = g.Project.Curator.Heartbeat
+		}
+	default:
+		timeout = settings.IntentTimeout
+		for _, intent := range g.Intents {
+			if intent.ID == fence.Intent {
+				heartbeat = Value(intent.Heartbeat)
+				break
+			}
+		}
+	}
+	var expired bool
+	if err := t.QueryRow("SELECT COALESCE((julianday(?)-julianday(?))*86400>?,1)", t.Now, heartbeat, timeout).Scan(&expired); err != nil {
+		return err
+	}
+	if expired {
+		return Err(409, "Execution lease has expired")
+	}
+	return nil
+}
+
 func (t *Tx) SetStatus(g *Graph, status string) error {
 	if status != "active" && status != "stopped" {
 		return Err(422, "status must be active or stopped")

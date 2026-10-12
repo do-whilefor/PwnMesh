@@ -78,6 +78,43 @@ func prepareSnapshot(t *testing.T, f *executionProtocolFixture, template board.E
 	return saved, job
 }
 
+func TestSnapshotReadRejectsExpiredLeaseWithoutMutatingState(t *testing.T) {
+	for _, kind := range []string{"reason", "explore", "curate"} {
+		t.Run(kind, func(t *testing.T) {
+			f, store := newSnapshotHTTPFixture(t)
+			if kind == "curate" {
+				prepareCurator(f)
+			} else {
+				prepareSnapshot(t, f, snapshotTemplate(f, kind))
+			}
+			read := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "overview"}
+			endpoint := f.base() + "/executions/" + f.run + "/input/read"
+			f.request("POST", endpoint, read, true, http.StatusOK, nil)
+			later := store.Now().Add(time.Hour)
+			store.Now = func() time.Time { return later }
+			var before, after board.Graph
+			load := func(out *board.Graph) {
+				t.Helper()
+				if err := store.View(context.Background(), func(tx *board.Tx) error {
+					var err error
+					*out, err = tx.Load(f.project)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			load(&before)
+			f.request("POST", endpoint, read, true, http.StatusConflict, nil)
+			load(&after)
+			if !reflect.DeepEqual(before, after) {
+				t.Fatal("snapshot read expired or changed a stored lease")
+			}
+			f.request("GET", f.base()+"/scheduling?protocol_version=1", nil, false, http.StatusOK, nil)
+			f.request("POST", endpoint, read, true, http.StatusConflict, nil)
+		})
+	}
+}
+
 func TestPrepareSnapshotCapturesServerRevisionAndReplaysExactInput(t *testing.T) {
 	for _, kind := range []string{"reason", "explore"} {
 		t.Run(kind, func(t *testing.T) {

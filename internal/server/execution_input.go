@@ -266,7 +266,7 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 	if err != nil {
 		return 0, nil, err
 	}
-	if err = guard(t, current, r); err != nil {
+	if err = t.CheckExecutionRead(current, decisionFence(r)); err != nil {
 		return 0, nil, err
 	}
 	var j worker.Job
