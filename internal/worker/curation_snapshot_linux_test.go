@@ -171,7 +171,11 @@ func TestCuratorReadsImmutableSnapshotLocallyAndKeepsCommitCAS(t *testing.T) {
 
 func TestCuratorPromptAndCandidateReadsShareGroupingAndConfidenceHints(t *testing.T) {
 	j := curationJob(t)
-	j.State.FactRecords = []board.FactRecord{{ID: "fact_a", Status: "valid"}}
+	ref, err := freezeEvidenceBytes(context.Background(), "producer-run", t.TempDir(), []byte("GET /fixture without authentication\nHTTP/1.1 200 OK\nfixture response\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	j.State.FactRecords = []board.FactRecord{{ID: "fact_a", Status: "valid", Description: "The fixture returned a successful response", Scope: "unauthenticated request", ObservedAt: "2026-09-22T10:00:00Z", RunID: ref.RunID, Evidence: []board.EvidenceRef{ref}}}
 	j.State.Candidates[0].Revision = j.State.Revision
 	j.State.Candidates[0].Status = "candidate" // Valid evidence alone does not raise producer confidence.
 	// Revisiting a shared finding requires reconciliation; an ordinary note
