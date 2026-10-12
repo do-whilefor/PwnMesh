@@ -24,7 +24,7 @@ import (
 	"pwnmesh/internal/worker"
 )
 
-var scenarioPythonCommand = regexp.MustCompile(`(?m)(?:^|&&[ \t]*|;[ \t]*)python(?:3)?[ \t]+(?:-u[ \t]+)?["']?(/workspace/[A-Za-z0-9_./-]+\.py)["']?(?:[ \t]|$)`)
+var scenarioPythonCommand = regexp.MustCompile(`(?m)(?:^|&&|;)[ \t]*(?:env[ \t]+(?:--[ \t]+)?)?python(?:3)?[ \t]+(?:-[uB]+[ \t]+)*(?:--[ \t]+)?["']?(/workspace/[A-Za-z0-9_./-]+\.py)["']?(?:[ \t]|$)`)
 
 type scenarioSkillFixture struct {
 	mu     sync.Mutex
@@ -383,6 +383,27 @@ func TestScenarioSkillReadsRejectMissingOrForgedReceipts(t *testing.T) {
 			files := map[string][]byte{"/workspace/source.py": fixture.source}
 			if !scenarioAuditExecuted(validRun, fixture.source, receipt, files) || scenarioAuditExecuted(printed, fixture.source, receipt, files) || scenarioAuditExecuted(validRun, []byte("changed source"), receipt, files) {
 				t.Fatal("audit execution validation did not bind actual source invocation")
+			}
+			for _, test := range []struct {
+				command string
+				want    bool
+			}{
+				{"{\n  python3 /workspace/source.py\n} | tee /workspace/receipt.json", true},
+				{"echo ready &&\t env python3 -B /workspace/source.py", true},
+				{"env -- python3 -u -B -- '/workspace/source.py'", true},
+				{"python3 -Bu -- \"/workspace/source.py\" | tee /workspace/receipt.json", true},
+				{"python3 -- /workspace/source.py", true},
+				{"echo python3 /workspace/source.py", false},
+				{"# python3 /workspace/source.py", false},
+				{"cat /workspace/source.py", false},
+				{"python3 -c 'print(123)' /workspace/source.py", false},
+				{"python3 -m module /workspace/source.py", false},
+				{"python3 /workspace/source.py.changed", false},
+			} {
+				actual := journal("bash", map[string]string{"command": test.command}, string(receipt), false)
+				if got := scenarioAuditExecuted(actual, fixture.source, receipt, files); got != test.want {
+					t.Errorf("source invocation %q: got %v, want %v", test.command, got, test.want)
+				}
 			}
 			body := fixture.bodies["/fixed/invoices/1002"]
 			response := []byte(fmt.Sprintf("HTTP/1.1 403 Forbidden\r\nContent-Length: %d\r\n\r\n%s", len(body), body))
