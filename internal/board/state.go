@@ -468,6 +468,12 @@ func (s State) ValidateFactSources(ids []string, requireObservation bool) error 
 				continue
 			}
 			found = true
+			// Orchestrated conclusions require an actual observation. Reopen
+			// feedback is a valid legacy Fact for planning, never evidence that
+			// the newly requested work has already been performed.
+			if requireObservation && s.Graph.Project.OrchestrationVersion == 1 && (f.Legacy || len(f.Evidence) == 0) {
+				return Err(409, "Source fact "+id+" is not an evidence-backed observation")
+			}
 			if f.SupportInvalid || (f.Status != "valid" && !(id == "origin" && !requireObservation)) {
 				return Err(409, "Source fact "+id+" is not effective evidence")
 			}

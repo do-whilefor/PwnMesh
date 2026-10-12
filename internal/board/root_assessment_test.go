@@ -32,6 +32,41 @@ func closureAction(op, gap string, payload any) DecisionAction {
 	return DecisionAction{Op: op, GapID: gap, Payload: raw}
 }
 
+func TestClosureProtocolRejectsReopenedRequirementsAsEvidence(t *testing.T) {
+	f, _, optional, _ := closureFixture(t, 1)
+	f.do(func(tx *Tx) error {
+		g, err := tx.Load("p")
+		if err != nil {
+			return err
+		}
+		g.Facts = append(g.Facts, Fact{ID: "feedback", Description: "The original result is insufficient; also verify the anonymous response"})
+		g.Intents = append(g.Intents, Intent{ID: "feedback-step", From: []string{"origin"}, To: Ptr("feedback"), Description: "external_feedback", Creator: "user", CreatedAt: tx.Now, ConcludedAt: Ptr(tx.Now)})
+		return tx.SaveUserInput(g, "reopen", "feedback", "", nil, nil)
+	})
+	state := f.state()
+	if err := state.ValidateFactSources([]string{"feedback"}, false); err != nil {
+		t.Fatalf("reopened requirement cannot be used to plan work: %v", err)
+	}
+	batch := DecisionBatch{
+		ExpectedVersion: DecisionStateVersion(state),
+		Assessment:      &RootAssessment{Status: "satisfied", From: []string{"feedback"}, Description: "Mistakenly treat the new requirement as proof of its own satisfaction"},
+		Actions: []DecisionAction{
+			closureAction("step", "", map[string]any{"action": "abandon", "id": optional, "reason": "No further work needed"}),
+			closureAction("complete", "", map[string]any{"from": []string{"feedback"}, "description": "The new condition was allegedly verified"}),
+		},
+	}
+	f.do(func(tx *Tx) error {
+		_, err := tx.PreviewDecision("p", f.planner, batch)
+		requireAPIStatus(t, err, 409)
+		_, err = tx.CommitDecision("p", f.planner, batch)
+		requireAPIStatus(t, err, 409)
+		return nil
+	})
+	if !reflect.DeepEqual(state, f.state()) {
+		t.Fatal("rejected feedback-only completion changed project state")
+	}
+}
+
 func TestClosureProtocolRejectsUnassessedAndUnanchoredExpansionAtomically(t *testing.T) {
 	for _, scenario := range []string{"missing_assessment", "missing_gap", "unknown_gap", "observation_anchor", "missing_evidence", "satisfied_expansion", "missing_complete", "satisfied_without_complete", "changed_completion_proof", "stale"} {
 		t.Run(scenario, func(t *testing.T) {
