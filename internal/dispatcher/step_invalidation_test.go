@@ -16,9 +16,10 @@ import (
 )
 
 type invalidatingRetryRunner struct {
-	client  *Client
-	planner *task
-	calls   int
+	client        *Client
+	planner       *task
+	calls         int
+	correctionErr error
 }
 
 func (r *invalidatingRetryRunner) Run(ctx context.Context, _ config.Worker, job worker.Job) (worker.Result, error) {
@@ -33,6 +34,7 @@ func (r *invalidatingRetryRunner) Run(ctx context.Context, _ config.Worker, job 
 		"payload": board.CuratePayload{ThroughRevision: r.planner.Job.InputSnapshot.Revision, Groups: []board.CurateGroup{}, Relations: []board.CurateRelation{{Kind: "refutes", Source: "f002", Target: "f001", Reason: "A separate check disproved the task's premise"}}},
 	}, nil, &r.planner.Lease)
 	if err != nil {
+		r.correctionErr = err
 		return worker.Result{}, err
 	}
 	return worker.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic interrupted connection"}, nil
@@ -60,7 +62,18 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 		if err := tx.Save(graph); err != nil {
 			return err
 		}
-		var err error
+		// Corrections require a retained observation, not a legacy input Fact.
+		data, err := json.Marshal(map[string]any{"facts": []board.FactRecord{{
+			ID: "f002", Description: graph.Facts[3].Description, Scope: "controlled fixture", ObservedAt: tx.Now,
+			Status: "valid", RunID: "observer@correction-source",
+			Evidence: []board.EvidenceRef{{RunID: "observer@correction-source", Path: "/workspace/evidence/correction.txt", Excerpt: "Independent check disproved the initial premise"}},
+		}}})
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT INTO xloom_state(project_id,data) VALUES(?,?)", graph.Project.ID, string(data)); err != nil {
+			return err
+		}
 		state, err = tx.State(graph.Project.ID)
 		return err
 	})
@@ -82,6 +95,9 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	outcome, runErr := scheduler.runRegistered(ctx, active, func() {})
+	if runner.correctionErr != nil {
+		t.Fatalf("fixture did not invalidate the source before retry: %v", runner.correctionErr)
+	}
 	if runner.calls != 1 || outcome != "cancelled" || runErr == nil || !strings.Contains(runErr.Error(), "not effective evidence") {
 		t.Fatalf("invalidated retry started another process or lost its cause: calls=%d outcome=%s err=%v", runner.calls, outcome, runErr)
 	}
