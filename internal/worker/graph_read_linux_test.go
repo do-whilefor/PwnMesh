@@ -137,3 +137,59 @@ func TestModelGraphReadRejectsStaleCollectionContinuation(t *testing.T) {
 		t.Fatalf("mixed graph versions reached the model: calls=%d err=%v bytes=%d", calls, err, len(raw))
 	}
 }
+
+func TestModelGraphReadRejectsMalformedSupportProjection(t *testing.T) {
+	state := board.State{Findings: []board.Finding{{ID: "finding", Claim: "Retained claim", Evidence: []board.EvidenceRef{{Path: "/workspace/a", Excerpt: strings.Repeat("x", 200<<10)}}}}}
+	for _, mode := range []string{"shape", "size", "digest", "count", "present", "hash"} {
+		t.Run(mode, func(t *testing.T) {
+			base := modelReadFixture(t, state, nil)
+			request := func(ctx context.Context, r GraphRequest) (string, error) {
+				raw, err := base(ctx, r)
+				if err != nil || r.ByteOffset != nil {
+					return raw, err
+				}
+				var page graphPage
+				_ = json.Unmarshal([]byte(raw), &page)
+				var item map[string]json.RawMessage
+				_ = json.Unmarshal(page.Items[0], &item)
+				switch mode {
+				case "shape":
+					page.Items[0] = json.RawMessage(`null`)
+				case "size":
+					item["record_bytes"] = json.RawMessage(`-1`)
+				case "digest":
+					item["record_version"], _ = json.Marshal(strings.Repeat("z", 64))
+				case "count":
+					item["evidence_count"] = json.RawMessage(`0`)
+				case "present":
+					item["evidence"] = json.RawMessage(`[]`)
+				case "hash":
+					item["record_version"], _ = json.Marshal(strings.Repeat("b", 64))
+				}
+				if mode != "shape" {
+					page.Items[0], _ = json.Marshal(item)
+				}
+				encoded, err := json.Marshal(page)
+				return string(encoded), err
+			}
+			if raw, err := modelGraphRead(context.Background(), GraphRequest{Op: "read_graph", Section: "findings"}, request); err == nil || raw != "" {
+				t.Fatalf("malformed metadata or changed bound content was accepted: %s %v", mode, err)
+			}
+		})
+	}
+}
+
+func TestModelGraphReadSupportFallbackIncludesPageEnvelope(t *testing.T) {
+	finding := board.Finding{ID: "finding", Claim: "Keep the metadata", Evidence: []board.EvidenceRef{{Path: "/workspace/a", Excerpt: "x"}}}
+	raw, _ := json.Marshal(finding)
+	finding.Evidence[0].Excerpt = strings.Repeat("x", maxModelGraphReadBytes-len(raw)-32)
+	state := board.State{Findings: []board.Finding{finding}}
+	raw, _ = json.Marshal(finding)
+	if len(raw) >= maxModelGraphReadBytes {
+		t.Fatal("fixture record must fit without its page envelope")
+	}
+	result, err := modelGraphRead(context.Background(), GraphRequest{Op: "read_graph", Section: "findings", Limit: 1}, modelReadFixture(t, state, nil))
+	if err != nil || len(result) > maxModelGraphReadBytes || !strings.Contains(result, `"evidence_omitted":true`) || !strings.Contains(result, finding.Claim) {
+		t.Fatalf("page envelope made otherwise readable metadata inaccessible: %v", err)
+	}
+}

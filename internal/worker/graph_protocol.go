@@ -478,7 +478,12 @@ func compactGraphRecord(section string, raw json.RawMessage) (json.RawMessage, e
 		omitted = true
 	}
 	if omitted {
-		record["read_more"], _ = json.Marshal("Omitted support is not absent. Use the same read tool with section evidence or sources, ids:[this record's id], offset:0, then follow next_offset until absent. Sources pages apply to Findings.")
+		// The runtime can retain this complete metadata projection when restoring
+		// all support would exceed its logical read budget. Bind smaller automatic
+		// restorations to the original record, just like scalar continuations.
+		record["record_bytes"], _ = json.Marshal(len(raw))
+		record["record_version"], _ = json.Marshal(graphRecordVersion(raw))
+		record["read_more"], _ = json.Marshal("Omitted support is not absent. Read section evidence or sources with ids:[this record's id], offset:0, then follow next_offset until absent. Sources pages apply to Findings and Candidates.")
 	}
 	return json.Marshal(record)
 }
