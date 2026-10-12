@@ -23,6 +23,10 @@ import (
 	"pwnmesh/internal/process"
 )
 
+const maxOutputFileBytes = 64 << 20
+
+var errOutputLimit = errors.New("tool output exceeds 64 MiB; retained prefix is incomplete")
+
 type Set struct {
 	Dir    string
 	RunDir string
@@ -40,7 +44,7 @@ func (s *Set) All() []agent.Tool {
 	}
 	return []agent.Tool{
 		def("read", "Read a text file with optional 1-based offset and line limit.", `{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":1},"limit":{"type":"integer","minimum":1}},"required":["path"],"additionalProperties":false}`, true, s.read),
-		def("bash", "Run a bash command in the current working directory. Long output is saved to a file.", `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1}},"required":["command"],"additionalProperties":false}`, false, s.bash),
+		def("bash", "Run a bash command in the current working directory. Long output is saved to a file; output above 64 MiB stops the command and retains a partial log.", `{"type":"object","properties":{"command":{"type":"string"},"timeout":{"type":"integer","minimum":1}},"required":["command"],"additionalProperties":false}`, false, s.bash),
 		def("edit", "Replace exactly one occurrence of oldText in a UTF-8 file.", `{"type":"object","properties":{"path":{"type":"string"},"oldText":{"type":"string"},"newText":{"type":"string"}},"required":["path","oldText","newText"],"additionalProperties":false}`, false, s.edit),
 		def("write", "Write a file using exactly one of content (generated text) or source_path (byte-exact copy). Optional source_start_line/source_end_line must be paired, 1-based inclusive. source_sha256 verifies the entire source file before copying. Creates parent directories; returns byte count and SHA-256.", `{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"},"source_path":{"type":"string"},"source_start_line":{"type":"integer","minimum":1},"source_end_line":{"type":"integer","minimum":1},"source_sha256":{"type":"string"}},"required":["path"],"additionalProperties":false}`, false, s.write),
 		def("grep", "Search file contents with ripgrep; regex by default.", `{"type":"object","properties":{"pattern":{"type":"string"},"path":{"type":"string"},"glob":{"type":"string"},"ignoreCase":{"type":"boolean"},"literal":{"type":"boolean"}},"required":["pattern"],"additionalProperties":false}`, true, s.grep),
@@ -109,7 +113,11 @@ func (s *Set) output(f *os.File, err error) (string, error) {
 		for start < len(tail) && !utf8.RuneStart(tail[start]) {
 			start++
 		}
-		text = string(data[:head]) + "\n[Middle omitted. Full output: " + f.Name() + "]\n" + string(tail[start:])
+		label := "Full output: "
+		if errors.Is(err, errOutputLimit) {
+			label = "Partial output: "
+		}
+		text = string(data[:head]) + "\n[Middle omitted. " + label + f.Name() + "]\n" + string(tail[start:])
 	}
 	return strings.ToValidUTF8(text, "�"), errors.Join(err, readErr)
 }
@@ -139,9 +147,49 @@ func (s *Set) run(ctx context.Context, timeout time.Duration, name string, args 
 		args = append(append(append([]string{}, s.Env...), name), args...)
 		name = "env"
 	}
-	err = process.Run(ctx, s.Dir, processDir, f, name, args...)
-	return s.output(f, err)
+	// Cap the captured streams, not every file the command may legitimately
+	// build or download. Both streams share this pipe and one retained limit.
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		return "", err
+	}
+	// A background process may clear its ownership token yet retain stdout.
+	// Its open descriptor must not keep capture waiting past the tool deadline.
+	stopCapture := context.AfterFunc(ctx, func() { reader.Close() })
+	defer stopCapture()
+	captured := make(chan error, 1)
+	go func() {
+		_, copyErr := io.Copy(&outputLimitWriter{writer: f, remaining: maxOutputFileBytes}, reader)
+		if copyErr != nil {
+			cancel()
+		}
+		reader.Close()
+		captured <- copyErr
+	}()
+	err = process.Run(ctx, s.Dir, processDir, writer, name, args...)
+	closeErr := writer.Close()
+	captureErr := <-captured
+	return s.output(f, errors.Join(err, ctx.Err(), closeErr, captureErr))
 }
+
+type outputLimitWriter struct {
+	writer    io.Writer
+	remaining int
+}
+
+func (w *outputLimitWriter) Write(data []byte) (int, error) {
+	overflow := len(data) > w.remaining
+	if overflow {
+		data = data[:w.remaining]
+	}
+	n, err := w.writer.Write(data)
+	w.remaining -= n
+	if err == nil && overflow {
+		err = errOutputLimit
+	}
+	return n, err
+}
+
 func (s *Set) capture(ctx context.Context, write func(io.Writer) error) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -154,7 +202,7 @@ func (s *Set) capture(ctx context.Context, write func(io.Writer) error) (string,
 		return "", err
 	}
 	defer f.Close()
-	err = write(f)
+	err = write(&outputLimitWriter{writer: f, remaining: maxOutputFileBytes})
 	return s.output(f, err)
 }
 func (s *Set) read(ctx context.Context, raw json.RawMessage) (string, error) {
