@@ -11,7 +11,11 @@ import (
 const inputSnapshotSchema = `CREATE TABLE IF NOT EXISTS xloom_input_snapshots(
  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  id TEXT NOT NULL,metadata BLOB NOT NULL,state BLOB NOT NULL,
- PRIMARY KEY(project_id,id));`
+ PRIMARY KEY(project_id,id));
+CREATE TABLE IF NOT EXISTS xloom_snapshot_chunks(
+ project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ sha256 TEXT NOT NULL,data BLOB NOT NULL,
+ PRIMARY KEY(project_id,sha256));`
 
 // InputSnapshot identifies an immutable input, not a promise to reconstruct a
 // historical revision from the current graph. Its state remains server-side.
@@ -29,7 +33,7 @@ type InputSnapshot struct {
 	StepCount        int    `json:"step_count"`
 }
 
-func (t *Tx) FreezeInput(state State) (*InputSnapshot, error) {
+func (t *Tx) FreezeInput(state State) (out *InputSnapshot, err error) {
 	raw, err := json.Marshal(state)
 	if err != nil {
 		return nil, err
@@ -38,11 +42,35 @@ func (t *Tx) FreezeInput(state State) (*InputSnapshot, error) {
 	ref := &InputSnapshot{Version: 1, ID: hex.EncodeToString(sum[:]), ProjectID: state.Graph.Project.ID,
 		Generation: state.Graph.Project.Generation, Revision: state.Revision, DecisionRevision: state.DecisionRevision,
 		StateVersion: DecisionStateVersion(state), FactCount: len(state.Graph.Facts), HintCount: len(state.Graph.Hints), OpenCount: state.Graph.OpenCount(), StepCount: len(state.Steps)}
+	var exists bool
+	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_input_snapshots WHERE project_id=? AND id=?)", ref.ProjectID, ref.ID).Scan(&exists); err != nil {
+		return nil, err
+	}
+	if exists {
+		return ref, nil
+	}
 	metadata, err := json.Marshal(ref)
 	if err != nil {
 		return nil, err
 	}
-	_, err = t.Exec("INSERT OR IGNORE INTO xloom_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", ref.ProjectID, ref.ID, metadata, raw)
+	// Chunks and their manifest have one lifetime even if a caller handles an
+	// insertion failure without rolling back its surrounding transaction.
+	if _, err = t.Exec("SAVEPOINT xloom_input_snapshot"); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_, rollbackErr := t.Exec("ROLLBACK TO xloom_input_snapshot")
+			err = errors.Join(err, rollbackErr)
+		}
+		_, releaseErr := t.Exec("RELEASE xloom_input_snapshot")
+		err = errors.Join(err, releaseErr)
+	}()
+	stored, err := t.encodeInputSnapshot(ref.ProjectID, raw)
+	if err != nil {
+		return nil, err
+	}
+	_, err = t.Exec("INSERT OR IGNORE INTO xloom_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", ref.ProjectID, ref.ID, metadata, stored)
 	return ref, err
 }
 
@@ -61,21 +89,32 @@ func (t *Tx) InputSnapshotMetadata(project, id string) (*InputSnapshot, error) {
 }
 
 func (t *Tx) ReadInputSnapshot(project, id string) (State, error) {
-	var raw []byte
-	err := t.QueryRow("SELECT state FROM xloom_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
-	if errors.Is(err, sql.ErrNoRows) {
-		return State{}, Err(404, "Input snapshot not found")
-	}
+	raw, err := t.readInputSnapshotBytes(project, id)
 	if err != nil {
 		return State{}, err
-	}
-	sum := sha256.Sum256(raw)
-	if hex.EncodeToString(sum[:]) != id {
-		return State{}, errors.New("input snapshot digest mismatch")
 	}
 	var state State
 	err = json.Unmarshal(raw, &state)
 	return state, err
+}
+
+func (t *Tx) readInputSnapshotBytes(project, id string) ([]byte, error) {
+	var raw []byte
+	err := t.QueryRow("SELECT state FROM xloom_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, Err(404, "Input snapshot not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if raw, err = t.decodeInputSnapshot(project, raw); err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != id {
+		return nil, errors.New("input snapshot digest mismatch")
+	}
+	return raw, nil
 }
 
 // DecisionRetryKey preserves existing retry identity while its computation

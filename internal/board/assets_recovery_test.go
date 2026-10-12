@@ -37,8 +37,8 @@ func checkRecoveredAssetSnapshot(t *testing.T, f *orchestrationFixture, ref *Inp
 		if err != nil {
 			return err
 		}
-		var raw []byte
-		if err = tx.QueryRow("SELECT state FROM xloom_input_snapshots WHERE project_id=? AND id=?", "p", ref.ID).Scan(&raw); err != nil {
+		raw, err := tx.readInputSnapshotBytes("p", ref.ID)
+		if err != nil {
 			return err
 		}
 		if !bytes.Equal(raw, wantRaw) || !reflect.DeepEqual(got, want) || !reflect.DeepEqual(metadata, ref) || DecisionStateVersion(got) != ref.StateVersion {

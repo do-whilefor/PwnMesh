@@ -8,8 +8,8 @@ import (
 )
 
 func (s *Server) registerUIRoutes(m *http.ServeMux) {
-	m.HandleFunc("GET /projects/{pid}/executions", s.wrap(s.projectExecutions))
-	m.HandleFunc("GET /projects/{pid}/identity", s.wrap(s.projectIdentity))
+	m.HandleFunc("GET /projects/{pid}/executions", s.readOnly(s.projectExecutions))
+	m.HandleFunc("GET /projects/{pid}/identity", s.readOnly(s.projectIdentity))
 }
 
 func (s *Server) projectExecutions(t *b.Tx, _ *request, r *http.Request) (int, any, error) {

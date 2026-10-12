@@ -8,9 +8,9 @@ import (
 )
 
 func (s *Server) registerRoundRoutes(m *http.ServeMux) {
-	m.HandleFunc("GET /projects/{pid}/rounds", s.wrap(s.rounds))
-	m.HandleFunc("GET /projects/{pid}/rounds/{generation}/entries", s.wrap(s.roundEntries))
-	m.HandleFunc("GET /projects/{pid}/rounds/{generation}/entries/{entry}", s.wrap(s.roundEntry))
+	m.HandleFunc("GET /projects/{pid}/rounds", s.readOnly(s.rounds))
+	m.HandleFunc("GET /projects/{pid}/rounds/{generation}/entries", s.readOnly(s.roundEntries))
+	m.HandleFunc("GET /projects/{pid}/rounds/{generation}/entries/{entry}", s.readOnly(s.roundEntry))
 }
 
 func roundManagementRead(r *http.Request) error {

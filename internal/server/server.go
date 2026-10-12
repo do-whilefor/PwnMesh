@@ -160,6 +160,17 @@ func allowBrowserMutation(r *http.Request) bool {
 }
 
 func (s *Server) wrap(fn action) http.HandlerFunc {
+	return s.wrapAction(fn, false)
+}
+
+// Observational endpoints keep expensive history, projection and blob reads
+// outside the writer reservation. Scheduling and all lease mutations still
+// expire leases under the original immediate transaction.
+func (s *Server) readOnly(fn action) http.HandlerFunc {
+	return s.wrapAction(fn, true)
+}
+
+func (s *Server) wrapAction(fn action, readOnly bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		in := &request{fields: map[string]any{}}
 		if r.Method == "POST" || r.Method == "PUT" {
@@ -177,7 +188,11 @@ func (s *Server) wrap(fn action) http.HandlerFunc {
 		}
 		status := 200
 		var body any
-		err := s.Store.Do(r.Context(), func(t *b.Tx) error {
+		transaction := s.Store.Do
+		if readOnly {
+			transaction = s.Store.View
+		}
+		err := transaction(r.Context(), func(t *b.Tx) error {
 			project := r.PathValue("pid")
 			if project != "" {
 				var version int
@@ -192,11 +207,15 @@ func (s *Server) wrap(fn action) http.HandlerFunc {
 					if r.Method != http.MethodGet && r.Method != http.MethodHead {
 						return b.Err(409, "Historical projects are read-only; create a new project to continue")
 					}
-				} else if err := t.ExpireProject(project); err != nil {
+				} else if !readOnly {
+					if err := t.ExpireProject(project); err != nil {
+						return err
+					}
+				}
+			} else if !readOnly {
+				if err := t.ExpireProject(""); err != nil {
 					return err
 				}
-			} else if err := t.ExpireProject(""); err != nil {
-				return err
 			}
 			var err error
 			status, body, err = fn(t, in, r)

@@ -32,8 +32,9 @@ CREATE TABLE IF NOT EXISTS scoped_counters(project_id TEXT NOT NULL REFERENCES p
 CREATE TABLE IF NOT EXISTS xloom_revoked_runs(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,worker TEXT NOT NULL,PRIMARY KEY(project_id,worker));`
 
 type Store struct {
-	db  *sql.DB
-	Now func() time.Time
+	db      *sql.DB
+	readers *sql.DB
+	Now     func() time.Time
 }
 type Tx struct {
 	*sql.Tx
@@ -139,9 +140,50 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if path != ":memory:" {
+		// WAL readers keep a consistent view without reserving the only writer.
+		// This pool is query-only at the connection level, so routing a mutation
+		// through View fails instead of silently weakening its write fence.
+		s.readers, err = sql.Open("sqlite", path+separator+"_txlock=deferred&_pragma=query_only(1)&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
+		if err == nil {
+			s.readers.SetMaxOpenConns(4)
+			err = s.readers.Ping()
+		}
+		if err != nil {
+			if s.readers != nil {
+				s.readers.Close()
+			}
+			db.Close()
+			return nil, err
+		}
+	}
 	return s, nil
 }
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	var readErr error
+	if s.readers != nil {
+		readErr = s.readers.Close()
+	}
+	return errors.Join(readErr, s.db.Close())
+}
+
+// View is for observational reads only; lease expiry and state changes remain
+// in Do. A private :memory: database has only one connection, so test callers
+// retain its serial transaction semantics instead of opening an empty database.
+func (s *Store) View(ctx context.Context, fn func(*Tx) error) error {
+	if s.readers == nil {
+		return s.Do(ctx, fn)
+	}
+	t, err := s.readers.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer t.Rollback()
+	if err := fn(&Tx{Tx: t, Now: s.Now().UTC().Format(time.RFC3339)}); err != nil {
+		return err
+	}
+	return t.Commit()
+}
 
 // The one-connection pool serializes transactions with context-aware waiting.
 // SQLite's immediate transactions also serialize other Store instances.

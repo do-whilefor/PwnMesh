@@ -9,7 +9,7 @@ import (
 func (s *Server) registerDeploymentRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /deployment", func(w http.ResponseWriter, r *http.Request) {
 		var id string
-		err := s.Store.Do(r.Context(), func(t *b.Tx) error {
+		err := s.Store.View(r.Context(), func(t *b.Tx) error {
 			var err error
 			id, err = t.InstallationID()
 			return err

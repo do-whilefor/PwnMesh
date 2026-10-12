@@ -9,10 +9,10 @@ import (
 )
 
 func (s *Server) registerStateRoutes(m *http.ServeMux) {
-	m.HandleFunc("GET /projects/{pid}/state", s.wrap(s.projectState))
+	m.HandleFunc("GET /projects/{pid}/state", s.readOnly(s.projectState))
 	m.HandleFunc("POST /projects/{pid}/state/read", s.wrap(s.graphRead))
 	m.HandleFunc("POST /projects/{pid}/state/actions", s.wrap(s.stateAction))
-	m.HandleFunc("GET /projects/{pid}/state/events", s.wrap(s.stateEvents))
+	m.HandleFunc("GET /projects/{pid}/state/events", s.readOnly(s.stateEvents))
 	m.HandleFunc("POST /projects/{pid}/state/decisions/preview", s.wrap(s.decisionPreview))
 	m.HandleFunc("POST /projects/{pid}/state/decisions/commit", s.wrap(s.decisionCommit))
 	m.HandleFunc("GET /projects/{pid}/state/decisions/receipt", s.wrap(s.decisionReceipt))

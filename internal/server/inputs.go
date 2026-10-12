@@ -14,7 +14,7 @@ import (
 )
 
 func (s *Server) registerInputRoutes(m *http.ServeMux) {
-	m.HandleFunc("GET /projects/{pid}/inputs", s.wrap(func(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
+	m.HandleFunc("GET /projects/{pid}/inputs", s.readOnly(func(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
 		files, err := t.InputFiles(r.PathValue("pid"))
 		return 200, files, err
 	}))
@@ -86,7 +86,7 @@ func (s *Server) downloadInput(w http.ResponseWriter, r *http.Request) {
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute))
 	var file b.InputFile
 	var data []byte
-	err := s.Store.Do(r.Context(), func(t *b.Tx) error {
+	err := s.Store.View(r.Context(), func(t *b.Tx) error {
 		var e error
 		file, data, e = t.InputData(r.PathValue("pid"), r.PathValue("fid"))
 		return e
