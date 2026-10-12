@@ -7,7 +7,48 @@ const lifecycle=require('./static/lifecycle.js');
 const stamp='2026-10-10T02:00:00Z';
 const snapshot=(id='a',generation=0,revision=1)=>({graph:{project:{id,title:id,scenario:'pentest',status:'active',orchestration_version:1,generation,created_at:stamp},facts:[{id:'origin',description:'https://authorized.test',created_at:stamp},{id:'goal',description:'Find supported evidence',created_at:stamp}],intents:[],hints:[]},goals:[],steps:[],fact_records:[],findings:[],revision});
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
+// Keep refresh behavior deterministic without loading browser geometry or timers.
+function workspaceHarness(project,run='current'){
+ const vm=require('node:vm'),nodes=new Map(),node=()=>({textContent:'',innerHTML:'',hidden:false,scrollTop:0,querySelector(){return null;},querySelectorAll(){return [];},replaceWith(){}});
+ for(const selector of ['#main','#project-menu','#view-tab-materials small','.project-page'])nodes.set(selector,node());
+ const badge=nodes.get('#view-tab-materials small'),main=nodes.get('#main');
+ Object.defineProperty(main,'innerHTML',{set(value){this.markup=value;const count=value.match(/id="view-tab-materials"[^]*?<small>([^<]*)<\/small>/);if(count)badge.textContent=count[1];},get(){return this.markup;}});
+ const service={scope:{},async refresh(){return {projects:[project]};}};
+ const context={document:{hidden:false,activeElement:null,querySelector:selector=>nodes.get(selector)||null,querySelectorAll:()=>[],createElement:node},location:{hash:'#project/'+project.id},PwnDemoModel:model,PwnDemoLifecycle:lifecycle,PwnMeshService:{Service:function(){return service;}},lucide:{createIcons(){}},setTimeout(){},clearTimeout(){},localStorage:{setItem(){}}};
+ const source=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');
+ vm.runInNewContext(source.slice(0,source.indexOf("  document.addEventListener('visibilitychange'"))+`
+   renderSidebar=()=>{};renderActivity=()=>{};mountGraph=()=>{graph={setState(){},getStatusFilter(){},destroy(){}};};
+   globalThis.app={projects,activityStates,activityRecords,activityState,render,refreshWorkspace,setRun(value){selectedRun=value;}};
+ })();`,context);
+ context.app.projects.push(project);context.app.setRun(run);context.app.render();
+ return {app:context.app,service,badge};
+}
 function fixture(states={a:snapshot()}){const calls=[];return {calls,async request(url,options={}){calls.push({url,options});if(url==='/projects')return Object.values(states).map(s=>s.graph.project);const [,id,suffix]=url.match(/^\/projects\/([^/]+)(.*)$/)||[];const state=states[id];if(suffix==='/state')return state;if(suffix==='/identity')return {id,generation:state.graph.project.generation};if(suffix==='/inputs')return [];if(suffix?.startsWith('/rounds'))return {items:[]};if(suffix?.startsWith('/state/events'))return [];throw new Error(url);},async executionChanges(){return {items:[],deleted:[],through:0}}};}
+test('workspace refresh updates the material badge when the file list changes',async()=>{
+ const project=snapshotView(snapshot()),h=workspaceHarness(project);
+ assert.equal(h.badge.textContent,'0');
+ h.service.refresh=async()=>({projects:[{...project,files:[{id:'new',name:'new.txt'}]}]});
+ await h.app.refreshWorkspace();
+ assert.equal(h.badge.textContent,'1');
+});
+test('workspace refresh keeps the selected archive material count and unknown manifests',async()=>{
+ for(const filesKnown of [true,false]){
+  const project=snapshotView(snapshot('a',1)),archived={...snapshotView(snapshot()),filesKnown};project.history=[archived];
+  const h=workspaceHarness(project,'0');
+  h.service.refresh=async()=>({projects:[{...project,files:[{id:'current-only'}]}]});
+  await h.app.refreshWorkspace();assert.equal(h.badge.textContent,filesKnown?'0':'?');
+ }
+});
+test('workspace refresh releases deleted project activity while preserving live round state',async()=>{
+ const project=snapshotView(snapshot('a',1)),h=workspaceHarness(project),live=h.app.activityState();live.query='keep';
+ h.app.activityStates.set('deleted:0',{projectId:'deleted',query:'old',revision:'old body'});
+ h.app.activityStates.set('a:0',{projectId:'a',query:'archive'});
+ await h.app.refreshWorkspace();
+ assert.equal(h.app.activityStates.has('deleted:0'),false);assert.equal(h.app.activityState(),live);assert.equal(h.app.activityStates.has('a:0'),true);
+ h.app.activityRecords.set('old',{body:'deleted project body'});h.service.refresh=async()=>({projects:[]});
+ await h.app.refreshWorkspace();
+ assert.equal(h.app.activityStates.size,0);assert.equal(h.app.activityRecords.size,0);
+});
 test('production shell is the demo document structure with real network access and no fixture routes',()=>{const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8'),app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(html,/<main id="main"><\/main>/);assert.match(html,/data-create/);assert.match(html,/project-menu-popover/);assert.match(html,/connect-src 'self'/);assert.doesNotMatch(html,/simulate-failure|workbench\.css|models\.css|#project\/atlas/);assert.doesNotMatch(app,/atlas\.example|local-.*randomUUID|模拟本次操作|lifecycle\.apply/);assert.match(app,/PwnLLMDemo\.render/);assert.match(app,/class="workspace-actions"/);});
 test('project adapter maps server lifecycle without fabricating findings or times',()=>{const state=snapshot(),p=snapshotView(state,[],[],[]);assert.equal(p.name,'a');assert.equal(p.target,'https://authorized.test');assert.equal(p.goal,'Find supported evidence');assert.equal(p.status,'running');assert.equal(p.endedAt,null);assert.deepEqual(p.state.findings,[]);for(const [status,expected] of [['stopped','paused'],['completed','done'],['terminated','terminated']])assert.equal(projectView({...state.graph.project,status}).status,expected);});
 

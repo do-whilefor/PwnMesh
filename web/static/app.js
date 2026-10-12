@@ -21,7 +21,7 @@
   const activityStates = new Map(), graphLayouts = new Map();
   function activityState() {
     const p = viewed(), key = p.id+':'+(p.generation || 0);
-    if (!activityStates.has(key)) activityStates.set(key,{query:'',expanded:new Set(),scrollTop:0,revision:null});
+    if (!activityStates.has(key)) activityStates.set(key,{projectId:p.id,query:'',expanded:new Set(),scrollTop:0,revision:null});
     return activityStates.get(key);
   }
   const route = () => {
@@ -278,7 +278,7 @@
   function render() {
     materialReadVersion++;
     closeMenu(); disposeRecord?.(); disposeActivity?.(); disposeActivity = null; disposeInspector?.(); disposeInspector = null; graph?.destroy(); graph = null; disposeLLM?.(); disposeLLM = null; selectedNode = null; selectedEdge = null;
-    activityOrigin = null;
+    activityOrigin = null; activityRecords.clear();
     const page = route(), p = viewed();
     if (page === 'llm') {
       const origin = projects.find(project => project.id === llmReturn?.id) || projects[0];
@@ -344,6 +344,7 @@
       const before = current()?.id, result = await service.refresh(id); if (!result) return;
       projects.splice(0,projects.length,...result.projects); connected = true;
       for (const [key,layout] of graphLayouts) if (!projects.some(project=>project.id===layout.projectId)) graphLayouts.delete(key);
+      for (const [key,ui] of activityStates) if (!projects.some(project=>project.id===ui.projectId)) activityStates.delete(key);
       const p = current(), snapshotInputs = [p?.id,p?.generation,p?.state,p?.logs,p?.files,JSON.stringify(p?.history.map(h=>[h.generation,h.archivedAt]))];
       const signature = lastSnapshotInputs?.every((value,index)=>value===snapshotInputs[index]) ? lastSnapshot : JSON.stringify(snapshotInputs);
       if (route() !== 'llm' && ((!p && !$('.empty-project-page')) || before !== p?.id || !$('.project-page'))) render();
@@ -352,6 +353,7 @@
         const shown = viewed(), state = projectState(shown), holder = document.createElement('div'); holder.innerHTML = projectHeading(shown)+workspaceActions();
         $('.project-heading')?.replaceWith(holder.querySelector('.project-heading'));
         $('.workspace-actions')?.replaceWith(holder.querySelector('.workspace-actions'));
+        const materialCount = $('#view-tab-materials small'); if (materialCount) materialCount.textContent = shown.filesKnown === false ? '?' : String(shown.files.length);
         if (graph) graph.setState(state);
         else {
           const container = $('#project-view'), top = container?.scrollTop || 0;

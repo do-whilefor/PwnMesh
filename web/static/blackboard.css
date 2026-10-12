@@ -50,10 +50,6 @@
 .activity-pane .log-long-content:not([open]) .log-label-open,.activity-pane .log-long-content[open] .log-label-closed{display:none}
 
 /* One newest-first timeline; findings keep title and marker emphasis. */
-.activity-pane .timeline-entry[data-phase="INPUT"]{--log-marker:#6d93c2;--log-marker-soft:#eaf1fa}
-.activity-pane .timeline-entry[data-phase="DISCOVER"]{--log-marker:#538fac;--log-marker-soft:#e8f3f8}
-.activity-pane .timeline-entry[data-phase="EXECUTE"]{--log-marker:#9077b9;--log-marker-soft:#f1ecf8}
-.activity-pane .timeline-entry[data-phase="CONTEXT"]{--log-marker:#4d9a8e;--log-marker-soft:#e7f4f0}
 .activity-pane .timeline-entry[data-phase="WORKSPACE"]{--log-marker:#68978a;--log-marker-soft:#edf5f1}
 .activity-pane .timeline-entry[data-phase="FINDING"]{--log-marker:var(--accent);--log-marker-soft:#fff1e8}
 .activity-pane .log-stream>.timeline-entry{padding:0 0 23px 19px;margin:0;border:0;background:transparent}

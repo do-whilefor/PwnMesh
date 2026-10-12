@@ -14,7 +14,7 @@ test('execution changes preserve a frozen revision across pages and include dele
   }
 });
 
-test('execution history follows every page without changing its upper boundary', async () => {
+test('initial execution changes follow every page and forward cancellation', async () => {
   const client = new Client();
   const signal = new AbortController().signal;
   const paths = [];
@@ -22,11 +22,11 @@ test('execution history follows every page without changing its upper boundary',
     paths.push(path);
     assert.equal(options.signal, signal);
     return paths.length === 1
-      ? {items:[{id:'first'},{id:'second'}],next_cursor:2,through:3}
-      : {items:[{id:'third'}],through:3};
+      ? {items:[{id:'first'},{id:'second'}],deleted:[],generation:0,next_cursor:2,through:3}
+      : {items:[{id:'third'}],deleted:[],generation:0,through:3};
   };
-  assert.deepEqual(await client.projectExecutions('/projects/example', {signal}), [{id:'first'},{id:'second'},{id:'third'}]);
-  assert.deepEqual(paths, ['/projects/example/executions?limit=20&cursor=0&through=0','/projects/example/executions?limit=20&cursor=2&through=3']);
+  assert.deepEqual(await client.executionChanges('/projects/example',0,0,{signal}), {items:[{id:'first'},{id:'second'},{id:'third'}],deleted:[],through:3});
+  assert.deepEqual(paths, ['/projects/example/executions/changes?generation=0&after=0&cursor=0&through=0&limit=20','/projects/example/executions/changes?generation=0&after=0&cursor=2&through=3&limit=20']);
 });
 
 test('deleting a project accepts an empty 204 and keeps requests same-origin', async () => {
@@ -101,11 +101,11 @@ test('timeout aborts the request without replaying it', async () => {
 });
 
 test('broken continuation fails instead of silently presenting partial history', async () => {
-  for (const tail of [{items:[],next_cursor:1,through:2},{items:[],through:3}]) {
+  for (const tail of [{next_cursor:1,through:2},{through:3},{through:2,next_cursor:3},{through:2,next_cursor:1.5},{through:2,generation:1},{through:2,deleted:null}]) {
     const client = new Client();
     let calls = 0;
-    client.request = async () => ++calls === 1 ? {items:[{id:'first'}],next_cursor:1,through:2} : tail;
-    await assert.rejects(client.projectExecutions('/projects/example'), /分页边界无效/);
+    client.request = async () => ++calls === 1 ? {items:[{id:'first'}],deleted:[],generation:0,next_cursor:1,through:2} : {items:[],deleted:[],generation:0,...tail};
+    await assert.rejects(client.executionChanges('/projects/example',0,0), /分页边界无效/);
   }
 });
 
