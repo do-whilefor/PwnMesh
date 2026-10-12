@@ -437,7 +437,7 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 			t.Fatal("final Worker receipt did not settle")
 		}
 	}
-	files, err := collectLiveWorkspace(ctx, conf.Container.Namespace+"-dispatch-"+project.Project.ID, t.TempDir())
+	files, err := collectLiveWorkspace(ctx, runner.ContainerName(project.Project.ID), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

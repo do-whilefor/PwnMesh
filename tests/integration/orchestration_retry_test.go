@@ -361,7 +361,7 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 	}
 	proofs := map[string]string{first.Lease: failedProof, second.Lease: successfulProof}
 	retained := map[string]bool{}
-	container := conf.Container.Namespace + "-dispatch-" + project.Project.ID
+	container := runner.ContainerName(project.Project.ID)
 	for _, fact := range state.FactRecords {
 		proof, exists := proofs[fact.RunID]
 		if !exists {

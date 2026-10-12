@@ -93,6 +93,7 @@ func testDockerRunResumesWithoutRepeatingSideEffects(t *testing.T, hardCrash boo
 	defer model.Close()
 	c := config.Container{Socket: "/var/run/docker.sock", Image: image, Network: testContainerNetwork(t), Namespace: fmt.Sprintf("pwnmesh-interrupt-%d", time.Now().UnixNano()), CompletedAction: "stop"}
 	runner := docker.New(c)
+	bindTestContainerOwner(t, runner, nil)
 	runner.SetGraphHandler(func(_ context.Context, j worker.Job, r worker.GraphRequest) (any, error) {
 		if r.Op != "read_updates" {
 			return nil, fmt.Errorf("unexpected interruption fixture graph request %s", r.Op)
@@ -120,7 +121,7 @@ func testDockerRunResumesWithoutRepeatingSideEffects(t *testing.T, hardCrash boo
 	defer interrupt(worker.ErrInterrupted)
 	done := make(chan error, 1)
 	go func() { _, err := runner.Run(runCtx, backend, job); done <- err }()
-	container := c.Namespace + "-dispatch-" + projectID
+	container := runner.ContainerName(projectID)
 	type checkpoint struct {
 		RecoveryCount     int             `json:"recovery_count"`
 		RepairCount       int             `json:"repair_count"`

@@ -485,7 +485,7 @@ func runDockerCurationRelations(t *testing.T, withCandidates bool) {
 			t.Fatal("completed project still has an unfinished Worker receipt")
 		}
 	}
-	files, err := collectLiveWorkspace(ctx, conf.Container.Namespace+"-dispatch-"+project.Project.ID, t.TempDir())
+	files, err := collectLiveWorkspace(ctx, runner.ContainerName(project.Project.ID), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}

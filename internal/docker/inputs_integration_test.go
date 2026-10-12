@@ -118,6 +118,15 @@ func TestDockerUploadedInputsRoundTrip(t *testing.T) {
 	}
 	c := New(config.Container{Image: image, Socket: socket, Network: "none", Namespace: "pwn-input-test-" + hex.EncodeToString(suffix[:])})
 	t.Cleanup(c.Close)
+	if err = store.View(ctx, func(tx *board.Tx) error {
+		owner, err := tx.InstallationID()
+		if err != nil {
+			return err
+		}
+		return c.BindOwner(owner)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cleanupCancel()

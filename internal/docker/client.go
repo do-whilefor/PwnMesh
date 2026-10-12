@@ -36,6 +36,9 @@ type Client struct {
 	graphHandler    func(context.Context, worker.Job, worker.GraphRequest) (any, error)
 	inputReader     func(context.Context, worker.Job, board.InputFile) (io.ReadCloser, error)
 	lookupProxyHost func(context.Context, string) ([]net.IPAddr, error)
+	ownerMu         sync.RWMutex
+	owner           string
+	requiresOwner   bool
 }
 type APIError struct{ Status int }
 
@@ -44,10 +47,10 @@ func New(c config.Container) *Client {
 	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", c.Socket)
 	}, ResponseHeaderTimeout: 30 * time.Second}
-	return &Client{Config: c, http: &http.Client{Transport: transport}}
+	return &Client{Config: c, http: &http.Client{Transport: transport}, requiresOwner: true}
 }
 func (c *Client) Close()                { c.http.CloseIdleConnections() }
-func (c *Client) name(id string) string { return c.Config.Namespace + "-dispatch-" + id }
+func (c *Client) name(id string) string { return c.ContainerName(id) }
 func (c *Client) lock(id string) func() {
 	value, _ := c.locks.LoadOrStore(id, &sync.Mutex{})
 	mu := value.(*sync.Mutex)
@@ -94,6 +97,9 @@ func (c *Client) json(ctx context.Context, method, route string, input, output a
 }
 func status(err error, code int) bool { var e *APIError; return errors.As(err, &e) && e.Status == code }
 func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (string, error) {
+	if err := c.requireOwner(); err != nil {
+		return "", err
+	}
 	unlock := c.lock(id)
 	defer unlock()
 	name := c.name(id)
@@ -122,7 +128,7 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 		} `json:"HostConfig"`
 	}
 	err := c.json(ctx, "GET", "/containers/"+url.PathEscape(name)+"/json", nil, &info)
-	if err == nil && (info.Config.Labels["pwnmesh.namespace"] != c.Config.Namespace || info.Config.Labels["pwnmesh.project"] != id) {
+	if err == nil && !c.owns(info.Config.Labels, id) {
 		return "", errors.New("container name belongs to a different project or dispatcher namespace")
 	}
 	missing := status(err, 404)
@@ -161,6 +167,9 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 		return "", errors.New("worker image contains model provider environment; rebuild it without ANTHROPIC_ environment and keep model configuration in the dispatcher")
 	}
 	if missing {
+		if err := c.checkLegacyContainer(ctx, id); err != nil {
+			return "", err
+		}
 		hostConfig := map[string]any{"NetworkMode": c.Config.Network, "CapAdd": c.Config.CapAdd, "Init": true}
 		// Docker rejects ExtraHosts with container:<id> networking. That mode
 		// shares the target container's hosts file, so its owner supplies any
@@ -168,12 +177,12 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 		if !strings.HasPrefix(c.Config.Network, "container:") {
 			hostConfig["ExtraHosts"] = []string{"host.docker.internal:host-gateway"}
 		}
-		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": map[string]string{"pwnmesh.namespace": c.Config.Namespace, "pwnmesh.project": id, "pwnmesh.model-boundary": modelBoundary}, "HostConfig": hostConfig}
+		input := map[string]any{"Image": desired.ID, "Entrypoint": []string{"/bin/sh", "-c"}, "Cmd": []string{"exec sleep infinity"}, "WorkingDir": "/workspace", "Labels": c.labels(id, modelBoundary), "HostConfig": hostConfig}
 		err = c.json(ctx, "POST", "/containers/create?name="+url.QueryEscape(name), input, nil)
 		if status(err, 409) {
 			missing = false
 			err = c.json(ctx, "GET", "/containers/"+url.PathEscape(name)+"/json", nil, &info)
-			if err == nil && (info.Config.Labels["pwnmesh.namespace"] != c.Config.Namespace || info.Config.Labels["pwnmesh.project"] != id) {
+			if err == nil && !c.owns(info.Config.Labels, id) {
 				return "", errors.New("container creation raced with a different project or dispatcher namespace")
 			}
 			if err == nil {
@@ -565,6 +574,9 @@ func (c *Client) cancel(name, runDir string) {
 	c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--cancel", runDir, "--force"}, nil, io.Discard)
 }
 func (c *Client) Cleanup(ctx context.Context, id, state string) error {
+	if err := c.requireOwner(); err != nil {
+		return err
+	}
 	unlock := c.lock(id)
 	defer unlock()
 	var info struct {
@@ -580,7 +592,7 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	if err != nil {
 		return err
 	}
-	if info.Config.Labels["pwnmesh.namespace"] != c.Config.Namespace || info.Config.Labels["pwnmesh.project"] != id {
+	if !c.owns(info.Config.Labels, id) {
 		return errors.New("refusing to clean up a container belonging to a different project or dispatcher namespace")
 	}
 	if info.ID == "" {
@@ -595,12 +607,19 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 		err = c.json(ctx, "POST", route+"/stop?t=1", nil, nil)
 	}
 	if status(err, 404) || status(err, 304) {
-		return nil
+		err = nil
 	}
 	return err
 }
 func (c *Client) Projects(ctx context.Context) ([]string, error) {
-	filters, _ := json.Marshal(map[string][]string{"label": {"pwnmesh.namespace=" + c.Config.Namespace}})
+	if err := c.requireOwner(); err != nil {
+		return nil, err
+	}
+	labels := []string{"pwnmesh.namespace=" + c.Config.Namespace}
+	if owner := c.ownerID(); owner != "" {
+		labels = append(labels, "pwnmesh.installation="+owner)
+	}
+	filters, _ := json.Marshal(map[string][]string{"label": labels})
 	var containers []struct {
 		Labels map[string]string `json:"Labels"`
 	}
@@ -609,7 +628,7 @@ func (c *Client) Projects(ctx context.Context) ([]string, error) {
 	}
 	ids := []string{}
 	for _, item := range containers {
-		if id := item.Labels["pwnmesh.project"]; id != "" {
+		if id := item.Labels["pwnmesh.project"]; id != "" && c.owns(item.Labels, id) {
 			ids = append(ids, id)
 		}
 	}

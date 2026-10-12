@@ -182,6 +182,7 @@ func TestDockerModelCredentialsStayOutsideWorker(t *testing.T) {
 
 	c := config.Container{Socket: "/var/run/docker.sock", Image: image, Network: testContainerNetwork(t), Namespace: fmt.Sprintf("pwnmesh-isolation-%d", time.Now().UnixNano()), CompletedAction: "stop"}
 	runner := docker.New(c)
+	bindTestContainerOwner(t, runner, nil)
 	defer runner.Close()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -225,7 +226,7 @@ func TestDockerModelCredentialsStayOutsideWorker(t *testing.T) {
 	}
 	// Repeat after final session, model response, child receipts and accepted
 	// graph result have all been persisted. The exec receives only the digest.
-	text, err := dockerExec(ctx, c.Namespace+"-dispatch-"+projectID, []string{"bash", "-c", probe("/tmp/isolation-final.json")})
+	text, err := dockerExec(ctx, runner.ContainerName(projectID), []string{"bash", "-c", probe("/tmp/isolation-final.json")})
 	if err != nil {
 		t.Fatal("final retained-file probe failed", err)
 	}

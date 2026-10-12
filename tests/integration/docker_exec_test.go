@@ -20,7 +20,27 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/docker"
 )
+
+// Direct runner fixtures have no Scheduler to bind their container ownership.
+// Store-backed fixtures bind before computing names or starting model handlers.
+func bindTestContainerOwner(t *testing.T, runner *docker.Client, store *board.Store) {
+	t.Helper()
+	owner := "00000000000000000000000000000001"
+	if store != nil {
+		if err := store.View(context.Background(), func(tx *board.Tx) error {
+			var err error
+			owner, err = tx.InstallationID()
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := runner.BindOwner(owner); err != nil {
+		t.Fatal(err)
+	}
+}
 
 // Acceptance diagnostics read the test-owned store, not a production endpoint
 // that exports every immutable job and result in the namespace.

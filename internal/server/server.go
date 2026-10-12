@@ -99,6 +99,7 @@ func NewWithModelSettings(store *b.Store, modelSettingsPath string) http.Handler
 	s.registerExecutionRoutes(m)
 	s.registerObservationRoutes(m)
 	s.registerUIRoutes(m)
+	s.registerDeploymentRoutes(m)
 	s.registerRoundRoutes(m)
 	s.registerInputRoutes(m)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

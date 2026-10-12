@@ -124,6 +124,15 @@ func (s *Scheduler) Health(ctx context.Context, force bool) error {
 	return result
 }
 func (s *Scheduler) Run(ctx context.Context) error {
+	if err := s.bindOwnership(ctx); err != nil {
+		return err
+	}
+	parent := ctx
+	ctx, release, err := s.acquireDispatcher(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
 	var settings board.Settings
 	if err := s.Client.Do(ctx, "GET", "/settings", nil, &settings, nil); err != nil {
 		return err
@@ -170,6 +179,9 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 		select {
 		case <-ctx.Done():
+			if parent.Err() == nil {
+				return context.Cause(ctx)
+			}
 			return nil
 		case <-tick.C:
 		case <-s.wakeup:
@@ -260,6 +272,9 @@ cleanup:
 func (s *Scheduler) Step(ctx context.Context) error {
 	s.nextWake = time.Time{}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := s.bindOwnership(ctx); err != nil {
 		return err
 	}
 	s.reap()

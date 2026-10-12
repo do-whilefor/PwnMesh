@@ -139,6 +139,7 @@ func TestDockerModelAndWorkerUseSameConfiguredProxy(t *testing.T) {
 	defer proxy.Close()
 	c := config.Container{Socket: "/var/run/docker.sock", Image: image, Network: testContainerNetwork(t), Namespace: fmt.Sprintf("pwnmesh-proxy-%d", time.Now().UnixNano()), CompletedAction: "stop"}
 	runner := docker.New(c)
+	bindTestContainerOwner(t, runner, nil)
 	defer runner.Close()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -169,7 +170,7 @@ func TestDockerModelAndWorkerUseSameConfiguredProxy(t *testing.T) {
 	if err != nil || result.Status != "success" || result.Conclude {
 		t.Fatalf("proxied worker failed: status=%s conclude=%v error=%v", result.Status, result.Conclude, err)
 	}
-	container := c.Namespace + "-dispatch-" + projectID
+	container := runner.ContainerName(projectID)
 	environment, err := dockerExec(ctx, container, []string{"cat", runDir + "/worker-env.txt"})
 	if err != nil {
 		t.Fatal("cannot inspect synthetic worker environment", err)

@@ -279,6 +279,7 @@ func runObservedScenarioProject(t *testing.T, title, origin, goal, scenario, val
 		t.Fatal(err)
 	}
 	runner := &liveObservedRunner{Client: docker.New(c.Container)}
+	bindTestContainerOwner(t, runner.Client, store)
 	defer runner.Close()
 	client := &dispatcher.Client{Base: api.URL}
 	var graph board.Graph
@@ -327,7 +328,7 @@ func runObservedScenarioProject(t *testing.T, title, origin, goal, scenario, val
 		}
 	}
 	pid := graph.Project.ID
-	container := namespace + "-dispatch-" + pid
+	container := runner.ContainerName(pid)
 	publicUpstream.User, publicUpstream.RawQuery, publicUpstream.Fragment = nil, "", ""
 	manifest := map[string]any{"project_id": pid, "started": started, "model": model, "upstream": publicUpstream.String(), "reasoning_effort": "max", "reasoning_effort_by_role": knobs.effectiveEfforts(), "request_timeout_seconds": 180, "decision_timeout_seconds": 300, "max_workers": c.Runtime.MaxWorkers, "max_project_workers": c.Runtime.MaxProjectWorkers, "worker_max_running": c.Workers[0].MaxRunning, "require_parallel_workers": knobs.RequireParallelWorkers, "source_commit": os.Getenv("PWNMESH_SOURCE_COMMIT"), "image": image, "namespace": namespace, "healthcheck": "disabled", "cost_status": "unknown_no_verified_account_pricing", "scope": "synthetic local files; real model, scheduler and Docker workers"}
 	manifest["http_observation_mode"] = observationMode
