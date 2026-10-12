@@ -290,7 +290,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 		o.Tools = append(o.Tools, workerTraceTool(j, o, request))
 	}
 	if j.Kind != "curate" && j.Graph.Project.Scenario == "pentest" {
-		o.Tools = append(o.Tools, cvssTool())
+		o.Tools = append(o.Tools, cvssTool(), pentestSkillTool())
 	}
 	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(config.Getenv) {
 		for n := range o.Tools {

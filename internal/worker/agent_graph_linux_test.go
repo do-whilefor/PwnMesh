@@ -387,7 +387,7 @@ func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
 	for _, tc := range []struct {
 		scenario   string
 		submission bool
-	}{{"", false}, {"pentest", true}, {"ctf", false}, {"ctf", true}} {
+	}{{"", false}, {"audit", false}, {"pentest", true}, {"ctf", false}, {"ctf", true}} {
 		t.Run(fmt.Sprintf("%s/submission=%v", tc.scenario, tc.submission), func(t *testing.T) {
 			t.Setenv("TSEC_SERVER_HOST", "")
 			t.Setenv("TSEC_AGENT_TOKEN", "")
@@ -412,14 +412,27 @@ func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
 							return agent.Message{}, errors.New("CTF submission instructions escaped their configured bash capability")
 						}
 					}
-					if tools["cvss31"] != (tc.scenario == "pentest") || tools["graph_action"] || tools["run_graph"] || tools["finish_step"] || tools["read_graph"] {
+					if tools["cvss31"] != (tc.scenario == "pentest") || tools["read_pentest_skill"] != (tc.scenario == "pentest") || tools["graph_action"] || tools["run_graph"] || tools["finish_step"] || tools["read_graph"] {
 						return agent.Message{}, fmt.Errorf("wrong child tool boundary: %v", tools)
+					}
+					if tc.scenario == "pentest" {
+						if requests == 1 {
+							return observationCall("read_pentest_skill", `{}`, requests), nil
+						}
+						last := history[len(history)-1].Content
+						if len(last) != 1 || last[0].IsError || !strings.Contains(string(last[0].Content), "Web-Vulnhunt") {
+							return agent.Message{}, errors.New("child could not read the bundled skill")
+						}
 					}
 					return agent.Text("assistant", "Scenario constraints reviewed."), nil
 				}), nil
 			}}
 			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Assess fixture", Timeout: 10, Resources: []string{}}
-			if _, err := executeAgentNode(context.Background(), j, o, "scenario", t.TempDir(), spec, nil); err != nil || requests != 1 {
+			wantRequests := 1
+			if tc.scenario == "pentest" {
+				wantRequests = 2
+			}
+			if _, err := executeAgentNode(context.Background(), j, o, "scenario", t.TempDir(), spec, nil); err != nil || requests != wantRequests {
 				t.Fatalf("child scenario delivery failed: %v requests=%d", err, requests)
 			}
 		})

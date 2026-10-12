@@ -102,7 +102,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	set := tools.Set{Dir: dir, RunDir: dir, ProcessDir: o.RunDir, Env: graphNodeEnvironment(j.Workspace, dir)}
 	childTools := set.All()
 	if j.Graph.Project.Scenario == "pentest" {
-		childTools = append(childTools, cvssTool())
+		childTools = append(childTools, cvssTool(), pentestSkillTool())
 	}
 	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(config.Getenv) {
 		for i := range childTools {
