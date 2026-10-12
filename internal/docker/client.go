@@ -39,6 +39,7 @@ type Client struct {
 	ownerMu         sync.RWMutex
 	owner           string
 	requiresOwner   bool
+	pendingStops    sync.Map // run directory -> pendingStop; removed only after confirmed exit.
 }
 type APIError struct{ Status int }
 
@@ -102,6 +103,9 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 	}
 	unlock := c.lock(id)
 	defer unlock()
+	if err := c.confirmPendingStops(ctx, id); err != nil {
+		return "", err
+	}
 	name := c.name(id)
 	const modelBoundary = "dispatcher-v1"
 	hasModelEnvironment := func(env []string) bool {
@@ -542,11 +546,19 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 		}
 	}
 	if err != nil || ctx.Err() != nil {
-		if ctx.Err() != nil && !errors.Is(context.Cause(ctx), worker.ErrInterrupted) {
-			c.cancel(name, path.Dir(target))
-		} else if stopErr := c.interrupt(name, path.Dir(target)); stopErr != nil {
-			return worker.Result{}, errors.Join(err, fmt.Errorf("cannot confirm execution interruption: %w", stopErr))
+		dir := path.Dir(target)
+		hard := ctx.Err() != nil && !errors.Is(context.Cause(ctx), worker.ErrInterrupted)
+		c.pendingStops.Store(dir, pendingStop{project: j.Graph.Project.ID, hard: hard})
+		var stopErr error
+		if hard {
+			stopErr = c.cancel(name, dir)
+		} else {
+			stopErr = c.interrupt(name, dir)
 		}
+		if stopErr != nil {
+			return worker.Result{}, errors.Join(err, ctx.Err(), fmt.Errorf("execution stop is unconfirmed; project remains quarantined: %w", stopErr))
+		}
+		c.pendingStops.Delete(dir)
 		if ctx.Err() != nil {
 			return worker.Result{}, ctx.Err()
 		}
@@ -560,18 +572,18 @@ func (c *Client) interrupt(name, runDir string) error {
 	defer cancel()
 	return c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--interrupt", runDir}, nil, io.Discard)
 }
-func (c *Client) cancel(name, runDir string) {
+func (c *Client) cancel(name, runDir string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--cancel", runDir}, nil, io.Discard)
+	_ = c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--cancel", runDir}, nil, io.Discard)
 	timer := time.NewTimer(time.Second)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
-		return
+		return ctx.Err()
 	case <-timer.C:
 	}
-	c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--cancel", runDir, "--force"}, nil, io.Discard)
+	return c.exec(ctx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--cancel", runDir, "--force"}, nil, io.Discard)
 }
 func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	if err := c.requireOwner(); err != nil {
@@ -587,6 +599,7 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	}
 	err := c.json(ctx, "GET", "/containers/"+url.PathEscape(c.name(id))+"/json", nil, &info)
 	if status(err, 404) {
+		c.clearPendingStops(id)
 		return nil
 	}
 	if err != nil {
@@ -608,6 +621,9 @@ func (c *Client) Cleanup(ctx context.Context, id, state string) error {
 	}
 	if status(err, 404) || status(err, 304) {
 		err = nil
+	}
+	if err == nil {
+		c.clearPendingStops(id)
 	}
 	return err
 }

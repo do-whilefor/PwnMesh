@@ -273,6 +273,11 @@ func Cancel(runDir string, force bool) error {
 	if err := os.WriteFile(filepath.Join(runDir, "cancelled"), []byte("hard stop\n"), 0600); err != nil {
 		return err
 	}
+	if force {
+		// Confirm the execution lock is released and invalidate delayed launches,
+		// rather than acknowledging only that a kill signal was delivered.
+		return Interrupt(runDir)
+	}
 	id, alive, err := readIdentity(filepath.Join(runDir, "worker.pid"))
 	if err != nil {
 		return errors.Join(err, KillGroups(runDir))
@@ -283,11 +288,7 @@ func Cancel(runDir string, force bool) error {
 	// Kill owned command groups before terminating their parent worker, while
 	// their leader identities can still be verified.
 	groupErr := KillGroups(runDir)
-	signal := syscall.SIGTERM
-	if force {
-		signal = syscall.SIGKILL
-	}
-	err = syscall.Kill(id.PID, signal)
+	err = syscall.Kill(id.PID, syscall.SIGTERM)
 	if errors.Is(err, syscall.ESRCH) {
 		err = nil
 	}
