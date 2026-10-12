@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"slices"
@@ -50,7 +51,24 @@ type Worker struct {
 	MaxRunning int               `yaml:"max_running"`
 	Priority   int               `yaml:"priority"`
 	Env        map[string]string `yaml:"env"`
+	baseEnv    map[string]string
 }
+
+// WithModelSettings preserves the environment configured before a saved model
+// overlay. Removing that file restores this baseline without changing live jobs.
+func (w Worker) WithModelSettings(settings *modelconfig.Settings) Worker {
+	if w.baseEnv == nil {
+		w.baseEnv = make(map[string]string, len(w.Env))
+		maps.Copy(w.baseEnv, w.Env)
+	}
+	if settings == nil {
+		w.Env = maps.Clone(w.baseEnv)
+	} else {
+		w.Env = settings.Overlay(w.baseEnv)
+	}
+	return w
+}
+
 type Config struct {
 	ModelSettingsPath string            `yaml:"-"`
 	Server            string            `yaml:"server"`
@@ -188,7 +206,7 @@ func (c *Config) Validate() error {
 				}
 				return value
 			})
-			if missing != "" && !(c.ModelSettingsPath != "" && strings.HasPrefix(missing, "ANTHROPIC_")) {
+			if missing != "" && !strings.HasPrefix(missing, "ANTHROPIC_") {
 				return fmt.Errorf("environment variable %s is required for worker %q", missing, w.Name)
 			}
 		}
@@ -203,16 +221,11 @@ func (c *Config) Validate() error {
 			}
 		}
 		w.Env = env
-		if hasModelSettings {
-			w.Env = modelSettings.Overlay(w.Env)
-		}
 		if w.Env["ANTHROPIC_MODEL"] == "" {
 			w.Env["ANTHROPIC_MODEL"] = w.Env["ANTHROPIC_DEFAULT_FABLE_MODEL"]
 		}
-		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_MODEL"} {
-			if strings.TrimSpace(w.Env[key]) == "" && c.ModelSettingsPath == "" {
-				return fmt.Errorf("worker %q is missing %s", w.Name, key)
-			}
+		if hasModelSettings {
+			*w = w.WithModelSettings(&modelSettings)
 		}
 	}
 	for _, role := range []struct{ kind, name string }{{"reason", "Decide"}, {"curate", "Curate"}, {"explore", "Execute"}} {

@@ -1,6 +1,8 @@
 package dispatcher
 
 import (
+	"maps"
+
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelconfig"
 )
@@ -12,16 +14,27 @@ func (s *Scheduler) refreshModelSettings() error {
 	if err != nil {
 		return err
 	}
-	if !found || settings == s.modelSettings {
+	if s.modelLoaded && settings == s.modelSettings {
 		return nil
 	}
+	var overlay *modelconfig.Settings
+	if found {
+		overlay = &settings
+	}
+	changed := false
 	for n := range s.Config.Workers {
-		s.Config.Workers[n].Env = settings.Overlay(s.Config.Workers[n].Env)
+		previous := s.Config.Workers[n]
+		next := previous.WithModelSettings(overlay)
+		changed = changed || !maps.Equal(previous.Env, next.Env)
+		s.Config.Workers[n] = next
 	}
 	s.modelSettings = settings
-	clear(s.incompatible)
-	clear(s.unhealthy)
-	clear(s.rejected)
+	s.modelLoaded = true
+	if changed {
+		clear(s.incompatible)
+		clear(s.unhealthy)
+		clear(s.rejected)
+	}
 	return nil
 }
 

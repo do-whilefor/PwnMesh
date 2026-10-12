@@ -36,6 +36,10 @@ func TestDispatcherCanStartBeforeWebModelSetupAndReadSavedSettings(t *testing.T)
 		if w.Env["ANTHROPIC_AUTH_TOKEN"] != "saved-fixture" || w.Env["ANTHROPIC_MODEL"] != "saved-model" || w.Env["PWNMESH_CONNECTION_MODE"] != "proxy" {
 			t.Fatal("persisted Web config not used by dispatcher")
 		}
+		fallback := w.WithModelSettings(nil)
+		if fallback.Env["ANTHROPIC_AUTH_TOKEN"] != "" || fallback.Env["ANTHROPIC_MODEL"] != "" || fallback.Env["PWNMESH_CONNECTION_MODE"] != "" || w.Env["ANTHROPIC_MODEL"] != "saved-model" {
+			t.Fatal("saved settings destroyed the unconfigured baseline or changed an existing worker")
+		}
 	}
 }
 

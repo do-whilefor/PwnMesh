@@ -60,6 +60,7 @@ type cleaned struct {
 }
 type Scheduler struct {
 	modelSettings     modelconfig.Settings
+	modelLoaded       bool
 	modelSettingsErr  error
 	Config            config.Config
 	Client            *Client

@@ -3,6 +3,7 @@ package dispatcher
 import (
 	"context"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"testing"
@@ -125,5 +126,73 @@ func TestOldLaunchHealthDoesNotRejectRotatedCredentials(t *testing.T) {
 	s.reap()
 	if s.incompatible["worker"] != "configuration" {
 		t.Fatal("current launch rejection was discarded")
+	}
+}
+
+func TestSettingsRemovalRestoresConfiguredEnvironment(t *testing.T) {
+	for _, scenario := range []string{"hot_reload", "saved_at_startup", "removed_before_first_refresh"} {
+		t.Run(scenario, func(t *testing.T) {
+			savedAtStartup := scenario != "hot_reload"
+			path := filepath.Join(t.TempDir(), "settings.json")
+			t.Setenv(modelconfig.PathEnv, path)
+			t.Setenv("ANTHROPIC_AUTH_TOKEN", "environment-token")
+			t.Setenv("ANTHROPIC_BASE_URL", "https://environment.invalid")
+			t.Setenv("ANTHROPIC_DEFAULT_FABLE_MODEL", "environment-model")
+			store := modelconfig.Store{Path: path, Defaults: modelconfig.Defaults(func(string) string { return "" })}
+			save := func() {
+				t.Helper()
+				if _, err := store.Update(func(settings *modelconfig.Settings) error {
+					settings.Model, settings.Token, settings.ConnectionMode = "saved-model", "saved-token", "proxy"
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if savedAtStartup {
+				save()
+			}
+			cfg, err := config.Load(filepath.Join("..", "..", "dispatch.example.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s := New(cfg, nil)
+			if !savedAtStartup {
+				save()
+			}
+			if scenario != "removed_before_first_refresh" {
+				if err := s.refreshModelSettings(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			running := s.Config.Workers[0]
+			if running.Env["ANTHROPIC_MODEL"] != "saved-model" {
+				t.Fatal("saved model was not applied")
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			fallback, err := config.Load(filepath.Join("..", "..", "dispatch.example.yaml"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.incompatible = map[string]string{"general": "configuration"}
+			if err := s.refreshModelSettings(); err != nil {
+				t.Fatal(err)
+			}
+			if !maps.Equal(s.Config.Workers[0].Env, fallback.Workers[0].Env) || len(s.incompatible) != 0 {
+				t.Fatal("removed settings did not restore the configured environment and release its health gate")
+			}
+			if running.Env["ANTHROPIC_MODEL"] != "saved-model" || running.Env["ANTHROPIC_AUTH_TOKEN"] != "saved-token" || s.currentModelSettings(running) {
+				t.Fatal("fallback changed an existing launch or accepted its stale health result")
+			}
+			s.incompatible["general"] = "configuration"
+			if err := s.refreshModelSettings(); err != nil || len(s.incompatible) != 1 {
+				t.Fatal("unchanged fallback erased a readiness rejection")
+			}
+			save()
+			if err := s.refreshModelSettings(); err != nil || s.Config.Workers[0].Env["ANTHROPIC_MODEL"] != "saved-model" || len(s.incompatible) != 0 {
+				t.Fatal("recreated settings were not applied")
+			}
+		})
 	}
 }
