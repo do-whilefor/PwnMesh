@@ -13,7 +13,7 @@ test('production forms render accessible dialogs, retry uploads, and atomically 
    if(method!=='GET')writes.push(method+' '+pathname);
    if(pathname==='/projects'&&method==='POST'){creates++;const data=req.postDataJSON();assert.equal(data.start_paused,true);project={id:'uploaded',title:data.title,status:'stopped',scenario:data.scenario,orchestration_version:1,generation:0,created_at:'2026-10-10T02:00:00Z'};return reply({project},201);}
    if(pathname==='/projects')return reply(project?[project]:[]);
-   if(pathname.endsWith('/rounds'))return reply({items:[]});if(pathname.endsWith('/state/events'))return reply([]);if(pathname.endsWith('/state'))return reply(stateFor(project));if(pathname.endsWith('/identity'))return reply({id:project.id,generation:0});if(pathname.endsWith('/executions'))return reply({items:[],through:0});
+   if(pathname.endsWith('/rounds'))return reply({items:[]});if(pathname.endsWith('/state/events'))return reply([]);if(pathname.endsWith('/state'))return reply({...stateFor(project),revision:inputs.length+1});if(pathname.endsWith('/identity'))return reply({id:project.id,generation:0});if(pathname.endsWith('/executions'))return reply({items:[],through:0});if(pathname.endsWith('/executions/changes'))return reply({items:[],deleted:[],through:0,generation:0});
    if(pathname.endsWith('/inputs')&&method==='GET')return reply(inputs);
    if(pathname.endsWith('/inputs')&&method==='POST'){
     const form=await new Response(req.postDataBuffer(),{headers:{'Content-Type':req.headers()['content-type']}}).formData(),file=form.get('file');uploaded.push(file.name);assert.deepEqual(Buffer.from(await file.arrayBuffer()),Buffer.from(file.name==='one.http'?'GET /one':[0,255,13,10]));

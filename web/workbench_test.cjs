@@ -7,7 +7,7 @@ const lifecycle=require('./static/lifecycle.js');
 const stamp='2026-10-10T02:00:00Z';
 const snapshot=(id='a',generation=0,revision=1)=>({graph:{project:{id,title:id,scenario:'pentest',status:'active',orchestration_version:1,generation,created_at:stamp},facts:[{id:'origin',description:'https://authorized.test',created_at:stamp},{id:'goal',description:'Find supported evidence',created_at:stamp}],intents:[],hints:[]},goals:[],steps:[],fact_records:[],findings:[],revision});
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
-function fixture(states={a:snapshot()}){const calls=[];return {calls,async request(url,options={}){calls.push({url,options});if(url==='/projects')return Object.values(states).map(s=>s.graph.project);const [,id,suffix]=url.match(/^\/projects\/([^/]+)(.*)$/)||[];const state=states[id];if(suffix==='/state')return state;if(suffix==='/identity')return {id,generation:state.graph.project.generation};if(suffix==='/inputs')return [];if(suffix?.startsWith('/rounds'))return {items:[]};if(suffix?.startsWith('/state/events'))return [];throw new Error(url);},async projectExecutions(){return []}};}
+function fixture(states={a:snapshot()}){const calls=[];return {calls,async request(url,options={}){calls.push({url,options});if(url==='/projects')return Object.values(states).map(s=>s.graph.project);const [,id,suffix]=url.match(/^\/projects\/([^/]+)(.*)$/)||[];const state=states[id];if(suffix==='/state')return state;if(suffix==='/identity')return {id,generation:state.graph.project.generation};if(suffix==='/inputs')return [];if(suffix?.startsWith('/rounds'))return {items:[]};if(suffix?.startsWith('/state/events'))return [];throw new Error(url);},async executionChanges(){return {items:[],deleted:[],through:0}}};}
 test('production shell is the demo document structure with real network access and no fixture routes',()=>{const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8'),app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(html,/<main id="main"><\/main>/);assert.match(html,/data-create/);assert.match(html,/project-menu-popover/);assert.match(html,/connect-src 'self'/);assert.doesNotMatch(html,/simulate-failure|workbench\.css|models\.css|#project\/atlas/);assert.doesNotMatch(app,/atlas\.example|local-.*randomUUID|模拟本次操作|lifecycle\.apply/);assert.match(app,/PwnLLMDemo\.render/);assert.match(app,/class="workspace-actions"/);});
 test('project adapter maps server lifecycle without fabricating findings or times',()=>{const state=snapshot(),p=snapshotView(state,[],[],[]);assert.equal(p.name,'a');assert.equal(p.target,'https://authorized.test');assert.equal(p.goal,'Find supported evidence');assert.equal(p.status,'running');assert.equal(p.endedAt,null);assert.deepEqual(p.state.findings,[]);for(const [status,expected] of [['stopped','paused'],['completed','done'],['terminated','terminated']])assert.equal(projectView({...state.graph.project,status}).status,expected);});
 
@@ -46,7 +46,7 @@ test('refresh rejects restarts on either side of the parallel state read without
   // The list and round summaries were read before restart; the state request
   // may finish on either side, and the final identity sees the new round.
   api.request=(url,options)=>url==='/projects/a/state'?snapshot('a',stateGeneration):url==='/projects/a/identity'?{id:'a',generation:1}:original(url,options);
-  api.projectExecutions=async()=>[{id:'previous-round',generation:0}];
+  api.executionChanges=async()=>({items:[{id:'previous-round',generation:0}],deleted:[],through:1});
   await assert.rejects(service.refresh('a'),error=>error.status===409,'state generation '+stateGeneration);
   assert.equal(service.projects,before);assert.equal(service.projects[0].generation,0);assert.equal(service.events.has('a'),false);
  }
@@ -54,12 +54,47 @@ test('refresh rejects restarts on either side of the parallel state read without
 test('refresh accepts one stable round and treats missing legacy generations as round zero',async()=>{
  for(const generation of [undefined,0,4]){
   const state=snapshot('a',generation);if(generation===undefined)delete state.graph.project.generation;
-  const api=fixture({a:state});api.projectExecutions=async()=>[{id:'current',generation:generation||0}];
+  const api=fixture({a:state});api.executionChanges=async()=>({items:[{id:'current',generation:generation||0}],deleted:[],through:1});
   const result=await new Service(api).refresh('a');assert.equal(result.selected.generation,generation||0);assert.deepEqual(result.selected.runs.map(run=>run.id),['current']);
  }
 });
 test('failed refresh preserves the last accepted project state',async()=>{const api=fixture(),service=new Service(api);await service.refresh('a');const before=service.projects;api.request=()=>{throw new APIError('offline');};await assert.rejects(service.refresh('a'),/offline/);assert.equal(service.projects,before);});
-test('refresh filters executions from old rounds and bounds event projection to state revision',async()=>{const state=snapshot('a',2,2),api=fixture({a:state}),old=api.request.bind(api);api.projectExecutions=async()=>[{id:'old',generation:1},{id:'current',generation:2}];api.request=(url,opts)=>url.includes('/state/events?')?[{revision:2,op:'event'},{revision:3,op:'event'}]:old(url,opts);const service=new Service(api),result=await service.refresh('a');assert.deepEqual(result.selected.runs.map(r=>r.id),['current']);assert.equal(result.selected.events.length,1);assert.equal(service.events.get('a').after,3);});
+test('unchanged completed projects reuse snapshots and histories but still observe late execution results',async()=>{
+ const state=snapshot();state.graph.project.status='completed';const api=fixture({a:state}),changes=[];
+ let finish=false;
+ api.executionChanges=async(base,after)=>{changes.push(after);return after===0?{items:[{id:'planner',generation:0,status:'running'}],deleted:[],through:1}:finish?{items:[{id:'planner',generation:0,status:'succeeded',result:{text:'Final answer'}}],deleted:[],through:2}:{items:[],deleted:[],through:1};};
+ const service=new Service(api);const first=(await service.refresh('a')).selected;api.calls.length=0;
+ const second=(await service.refresh('a')).selected;
+ assert.deepEqual(api.calls.map(call=>call.url),['/projects','/projects/a/identity']);
+ assert.equal(second.state,first.state);assert.equal(second.logs,first.logs);assert.equal(second.files,first.files);
+ finish=true;const third=(await service.refresh('a')).selected;
+ assert.equal(third.runs.length,1);assert.equal(third.runs[0].status,'succeeded');assert.equal(third.runs[0].result.text,'Final answer');assert.deepEqual(changes,[0,1,1]);
+});
+test('active refresh merges changed existing executions and deletions without reloading round or input history',async()=>{
+ const state=snapshot(),api=fixture({a:state}),changes=[];let turn=0;
+ api.executionChanges=async(base,after)=>{changes.push(after);return ++turn===1?{items:[{id:'running',generation:0,status:'running'},{id:'old',generation:0,status:'failed'}],deleted:[],through:2}:{items:[{id:'running',generation:0,status:'succeeded'}],deleted:['old'],through:4};};
+ const service=new Service(api);await service.refresh('a');api.calls.length=0;
+ const next=(await service.refresh('a')).selected;
+ assert.deepEqual(next.runs.map(run=>[run.id,run.status]),[['running','succeeded']]);assert.deepEqual(changes,[0,2]);
+ assert.ok(api.calls.some(call=>call.url==='/projects/a/state'));
+ assert.ok(!api.calls.some(call=>call.url.includes('/rounds?')||call.url.endsWith('/inputs')||call.url.includes('/state/events?')));
+});
+test('a restart resets execution and input caches while preserving the response generation fence',async()=>{
+ const states={a:snapshot()},api=fixture(states),revisions=[];
+ api.executionChanges=async(base,after,generation)=>{revisions.push(after);return {items:[{id:'run-'+generation,generation,status:'running'}],deleted:[],through:generation+1};};
+ const service=new Service(api);await service.refresh('a');states.a=snapshot('a',1);api.calls.length=0;
+ const next=(await service.refresh('a')).selected;
+ assert.deepEqual(revisions,[0,0]);assert.deepEqual(next.runs.map(run=>run.id),['run-1']);
+ assert.ok(api.calls.some(call=>call.url.includes('/rounds?')));assert.ok(api.calls.some(call=>call.url.endsWith('/inputs')));
+});
+test('a reset execution cursor invalidates the cache and recovers on the next refresh',async()=>{
+ const api=fixture(),seen=[];let reset=false;
+ api.executionChanges=async(base,after)=>{seen.push(after);if(reset&&after)throw new APIError('cursor reset',409);return {items:[],deleted:[],through:reset?1:7};};
+ const service=new Service(api);await service.refresh('a');reset=true;
+ await assert.rejects(service.refresh('a'),error=>error.status===409);
+ await service.refresh('a');assert.deepEqual(seen,[0,7,0]);
+});
+test('refresh filters executions from old rounds and bounds event projection to state revision',async()=>{const state=snapshot('a',2,2),api=fixture({a:state}),old=api.request.bind(api);api.executionChanges=async()=>({items:[{id:'old',generation:1},{id:'current',generation:2}],deleted:[],through:2});api.request=(url,opts)=>url.includes('/state/events?')?[{revision:2,op:'event'},{revision:3,op:'event'}]:old(url,opts);const service=new Service(api),result=await service.refresh('a');assert.deepEqual(result.selected.runs.map(r=>r.id),['current']);assert.equal(result.selected.events.length,1);assert.equal(service.events.get('a').after,3);});
 test('project creation retries only unfinished uploads on the same paused project',async()=>{const calls=[],files=[new File(['a'],'a.txt'),new File(['b'],'b.txt')];let fail=true;const service=new Service({async request(url,options){calls.push({url,options});return {project:{id:'created'}};},async uploadInput(base,file){calls.push({upload:file.name});if(file.name==='b.txt'&&fail){fail=false;throw new APIError('upload interrupted',503);}}});const values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files};await assert.rejects(service.create(values),error=>error.pendingCreate);assert.equal(calls[0].options.body.start_paused,true);assert.equal(await service.create(values),'created');assert.equal(calls.filter(c=>c.url==='/projects').length,1);assert.deepEqual(calls.filter(c=>c.upload).map(c=>c.upload),['a.txt','b.txt','b.txt']);assert.deepEqual(calls.at(-1).options.body,{status:'active'});});
 test('ambiguous creation is never blindly retried',async()=>{let creates=0;const service=new Service({async request(){creates++;throw new APIError('lost connection',0);}}),values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files:[]};await assert.rejects(service.create(values),error=>error.uncertainCreate);await assert.rejects(service.create(values),/尚未确认/);assert.equal(creates,1);});
 test('lifecycle operations use real endpoints and generation fencing',async()=>{const calls=[],service=new Service({async request(url,options){calls.push({url,options});}});for(const action of ['pause','resume','restart','terminate','delete'])await service.change('a/b',action,7);assert.equal(calls[0].url,'/projects/a%2Fb/status');assert.deepEqual(calls[0].options.body,{status:'stopped'});assert.deepEqual(calls[2].options.body,{expected_generation:7});assert.equal(calls.at(-1).options.method,'DELETE');});

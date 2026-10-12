@@ -2,6 +2,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const {Client, APIError, RequestScope} = require('./static/api.js');
 
+test('execution changes preserve a frozen revision across pages and include deletions', async () => {
+  const client=new Client(), paths=[];
+  client.request=async path=>{paths.push(path);return paths.length===1
+    ? {items:[{id:'mutable',status:'succeeded'}],deleted:[],through:9,generation:2,next_cursor:8}
+    : {items:[],deleted:['removed'],through:9,generation:2};};
+  assert.deepEqual(await client.executionChanges('/projects/p',7,2),{items:[{id:'mutable',status:'succeeded'}],deleted:['removed'],through:9});
+  assert.deepEqual(paths,['/projects/p/executions/changes?generation=2&after=7&cursor=7&through=0&limit=20','/projects/p/executions/changes?generation=2&after=7&cursor=8&through=9&limit=20']);
+  for(const page of [{items:[],deleted:[],through:6,generation:2},{items:[],deleted:[],through:9,generation:3},{items:[],deleted:[],through:9,generation:2,next_cursor:7}]){
+    client.request=async()=>page;await assert.rejects(client.executionChanges('/projects/p',7,2),/分页边界无效/);
+  }
+});
+
 test('execution history follows every page without changing its upper boundary', async () => {
   const client = new Client();
   const signal = new AbortController().signal;

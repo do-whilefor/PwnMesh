@@ -38,6 +38,22 @@ func TestProjectIdentityTracksRestartsWithoutGraphPayload(t *testing.T) {
 	f.request("GET", "/projects/missing/identity", nil, false, http.StatusNotFound, nil)
 }
 
+func TestExecutionChangeEndpointRequiresGenerationAndReportsRestartConflict(t *testing.T) {
+	f := newExecutionProtocolFixture(t)
+	f.register("reason")
+	var page board.ExecutionChangePage
+	f.request("GET", f.base()+"/executions/changes?generation=0", nil, false, http.StatusOK, &page)
+	if len(page.Items) != 1 || page.Through == 0 || page.Generation != 0 {
+		t.Fatalf("missing execution change projection: %+v", page)
+	}
+	for _, query := range []string{"", "generation=-1", "generation=bad", "generation=0&after=-1", "generation=0&cursor=bad", "generation=0&limit=101"} {
+		f.request("GET", f.base()+"/executions/changes?"+query, nil, false, http.StatusUnprocessableEntity, nil)
+	}
+	f.request("POST", f.base()+"/restart", map[string]int{"expected_generation": 0}, false, http.StatusOK, nil)
+	f.request("GET", f.base()+"/executions/changes?generation=0", nil, false, http.StatusConflict, nil)
+	f.request("GET", f.base()+"/executions/changes?generation=1", nil, false, http.StatusOK, nil)
+}
+
 func TestRetiredHTTPRoutesAreUnavailable(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	for _, path := range []string{"/ui/overview", "/executions?namespace=protocol-test", f.base() + "/state/changes?after=0&through=1"} {

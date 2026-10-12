@@ -51,6 +51,7 @@ async function interceptProject(page,fixture,{unavailable = () => false} = {}) {
     else if(pathname===base+'/state') {if(unavailable())return route.abort('failed');body=state;}
     else if(pathname===base+'/state/events')body=[];
     else if(pathname===base+'/executions')body={items:runs,through:runs.length};
+    else if(pathname===base+'/executions/changes')body={items:runs,deleted:[],through:runs.length,generation:project.generation||0};
     else if(pathname===base+'/identity')body={id:project.id,generation:project.generation||0};
     else if(pathname===base+'/inputs')body=inputs;
     else if(pathname===base+'/rounds')body={items:[],next_cursor:null};

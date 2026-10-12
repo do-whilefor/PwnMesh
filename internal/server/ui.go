@@ -9,7 +9,28 @@ import (
 
 func (s *Server) registerUIRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /projects/{pid}/executions", s.readOnly(s.projectExecutions))
+	m.HandleFunc("GET /projects/{pid}/executions/changes", s.readOnly(s.projectExecutionChanges))
 	m.HandleFunc("GET /projects/{pid}/identity", s.readOnly(s.projectIdentity))
+}
+
+func (s *Server) projectExecutionChanges(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
+	query := r.URL.Query()
+	limit := int64(20)
+	generation, after, cursor, through := int64(0), int64(0), int64(0), int64(0)
+	if !query.Has("generation") {
+		return 0, nil, b.Err(422, "execution changes require a project generation")
+	}
+	for key, target := range map[string]*int64{"generation": &generation, "after": &after, "cursor": &cursor, "through": &through, "limit": &limit} {
+		if query.Has(key) {
+			value, err := strconv.ParseInt(query.Get(key), 10, 64)
+			if err != nil || value < 0 || (key == "limit" && (value == 0 || value > 100)) {
+				return 0, nil, b.Err(422, "invalid execution change "+key)
+			}
+			*target = value
+		}
+	}
+	page, err := t.ProjectExecutionChanges(r.PathValue("pid"), generation, after, cursor, through, int(limit))
+	return http.StatusOK, page, err
 }
 
 func (s *Server) projectExecutions(t *b.Tx, _ *request, r *http.Request) (int, any, error) {

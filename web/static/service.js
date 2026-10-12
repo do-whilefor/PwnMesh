@@ -15,7 +15,7 @@
     return {...project,state,logs:Data.buildLogs(state,events,runs),runs,events,files,target:facts.find(f=>f.id==='origin')?.description || '',goal:facts.find(f=>f.id==='goal')?.description || state.goals?.find(g=>g.id==='goal')?.condition || '',startedAt:timing.startedAt,endedAt:timing.endedAt || null};
   }
   class Service {
-    constructor(api=new API.Client()){this.api=api;this.scope=new API.RequestScope();this.projects=[];this.events=new Map();this.pendingCreate=null;this.uncertainCreate=false;this.pendingHints=new Map();}
+    constructor(api=new API.Client()){this.api=api;this.scope=new API.RequestScope();this.projects=[];this.events=new Map();this.views=new Map();this.pendingCreate=null;this.uncertainCreate=false;this.pendingHints=new Map();}
     cancel(){this.scope.cancel();}
     async pages(path,options={},cursor=-1){const items=[];for(;;){const page=await this.api.request(path+'?limit=100&cursor='+cursor,options);if(!Array.isArray(page.items))throw new Error('历史记录分页格式无效');items.push(...page.items);if(page.next_cursor==null)return items;if(!Number.isSafeInteger(page.next_cursor)||page.next_cursor<=cursor)throw new Error('历史记录分页边界无效');cursor=page.next_cursor;}}
     async refresh(preferred='') {
@@ -24,30 +24,50 @@
       const projects=list.map(raw=>projectView(raw,this.projects.find(p=>p.id===raw.id))).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt))||b.id.localeCompare(a.id));
       const selected=projects.find(p=>p.id===preferred)||projects[0];
       if(selected){
-        const base=pathFor(selected.id);
-        const [state,runs,files,rounds]=await Promise.all([this.api.request(base+'/state',options),this.api.projectExecutions(base,options),this.api.request(base+'/inputs',options),this.pages(base+'/rounds',options)]);
+        const base=pathFor(selected.id), previous=this.views.get(selected.id), summary=JSON.stringify(selected.raw);
+        const sameRound=previous?.generation===selected.generation;
+        // Closed rounds cannot publish graph/input changes. A changed list
+        // projection (including reopen/restart/title) still forces a fresh read.
+        const stableTerminal=sameRound&&['done','terminated'].includes(selected.status)&&previous.summary===summary;
+        const [state,changes,rounds]=await Promise.all([
+          stableTerminal?previous.state:this.api.request(base+'/state',options),
+          this.api.executionChanges(base,sameRound?previous.executionRevision:0,selected.generation,options).catch(error=>{
+            if(error.status===409&&this.scope.current(request.version)){this.views.delete(selected.id);this.events.delete(selected.id);}throw error;
+          }),
+          sameRound?previous.rounds:this.pages(base+'/rounds',options)
+        ]);
         if(!this.scope.current(request.version))return null;
         const generation=state.graph.project.generation||0;
-        let cache=this.events.get(selected.id)||{generation,revision:0,after:0,items:[]};
-        if(cache.generation!==generation||state.revision<cache.revision)cache={generation,revision:0,after:0,items:[]};
-        let after=cache.after;const batch=[];
-        for(let page=0;page<5;page++){const items=await this.api.request(base+'/state/events?after='+after,options);if(!items.length)break;const next=Math.max(...items.map(e=>e.revision));if(next<=after)break;batch.push(...items);after=next;if(items.length<1000)break;}
+        const files=sameRound&&state.revision===previous.state.revision?previous.files:await this.api.request(base+'/inputs',options);
+        if(!this.scope.current(request.version))return null;
+        const runsByID=new Map((sameRound?previous.runs:[]).map(run=>[run.id,run]));
+        for(const id of changes.deleted)runsByID.delete(id);
+        for(const run of changes.items)if((run.generation||0)===generation)runsByID.set(run.id,run);
+        const runs=[...runsByID.values()];
+        let cache=this.events.get(selected.id)||{generation,revision:0,after:0,items:[],caughtUp:false};
+        if(cache.generation!==generation||state.revision<cache.revision)cache={generation,revision:0,after:0,items:[],caughtUp:false};
+        let after=cache.after,caughtUp=cache.caughtUp;const batch=[];
+        if(!caughtUp||state.revision!==cache.revision){
+          caughtUp=false;
+          for(let page=0;page<5;page++){const items=await this.api.request(base+'/state/events?after='+after,options);if(!items.length){caughtUp=true;break;}const next=Math.max(...items.map(e=>e.revision));if(next<=after){caughtUp=true;break;}batch.push(...items);after=next;if(items.length<1000){caughtUp=true;break;}}
+        }
         const identity=await this.api.request(base+'/identity',options);if(!this.scope.current(request.version))return null;
         // Fence both sides of the parallel reads: state can already be from a
         // new round while execution and archive pages still describe the old one.
-        if(selected.generation!==generation||(identity.generation||0)!==generation){this.events.delete(selected.id);throw new API.APIError('项目已进入新轮次，正在重新同步。',409);}
-        cache={generation,revision:state.revision,after,items:cache.items.concat(batch)};this.events.set(selected.id,cache);
-        Object.assign(selected,snapshotView(state,cache.items.filter(e=>e.revision<=state.revision),runs.filter(r=>(r.generation||0)===generation),files,selected));
+        if(selected.generation!==generation||(identity.generation||0)!==generation){this.events.delete(selected.id);this.views.delete(selected.id);throw new API.APIError('项目已进入新轮次，正在重新同步。',409);}
+        cache={generation,revision:state.revision,after,caughtUp,items:batch.length?cache.items.concat(batch):cache.items};this.events.set(selected.id,cache);
+        if(!stableTerminal||changes.items.length||changes.deleted.length||batch.length)Object.assign(selected,snapshotView(state,cache.items.filter(e=>e.revision<=state.revision),runs,files,selected));
         selected.history=rounds.map(round=>{const previous=selected.history.find(p=>p.generation===round.generation);return Object.assign(previous||{status:'paused'},{id:selected.id,name:selected.name,type:selected.type,generation:round.generation,archived:true,archivedAt:round.archived_at,endedAt:previous?.endedAt || round.archived_at,files:files.filter(f=>f.created_at<=round.archived_at),history:[]});});
+        this.views.set(selected.id,{generation,summary,state,runs,files,rounds,executionRevision:changes.through});
       }
-      if(!this.scope.current(request.version))return null;this.projects=projects;return {projects,selected};
+      if(!this.scope.current(request.version))return null;for(const id of this.views.keys())if(!projects.some(project=>project.id===id)){this.views.delete(id);this.events.delete(id);}this.projects=projects;return {projects,selected};
     }
     async change(id,action,generation){
       const base=pathFor(id);this.cancel();
-      if(action==='delete'){await this.api.request(base,{method:'DELETE'});this.events.delete(id);this.pendingHints.delete(id);if(this.pendingCreate?.created.project.id===id)this.pendingCreate=null;return;}
+      if(action==='delete'){await this.api.request(base,{method:'DELETE'});this.events.delete(id);this.views.delete(id);this.pendingHints.delete(id);if(this.pendingCreate?.created.project.id===id)this.pendingCreate=null;return;}
       if(action==='pause'||action==='resume')return this.api.request(base+'/status',{method:'PUT',body:{status:action==='pause'?'stopped':'active'}});
       if(!['restart','terminate'].includes(action))throw new Error('不支持的项目操作。');
-      const result=await this.api.request(base+'/'+action,{method:'POST',body:{expected_generation:generation}});this.events.delete(id);return result;
+      const result=await this.api.request(base+'/'+action,{method:'POST',body:{expected_generation:generation}});this.events.delete(id);this.views.delete(id);return result;
     }
     async create(values){
       if(this.uncertainCreate)throw new Error('上次创建结果尚未确认。请关闭窗口并在项目列表核对，刷新页面后再创建。');

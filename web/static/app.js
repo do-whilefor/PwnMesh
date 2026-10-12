@@ -9,7 +9,7 @@
   const lifecycle = PwnDemoLifecycle;
   const service = new PwnMeshService.Service(), projects = [];
   let roundReadVersion = 0, materialReadVersion = 0;
-  let refreshTimer, refreshing = false, connected = false, lastSnapshot = '', pendingRefresh = false;
+  let refreshTimer, refreshing = false, connected = false, lastSnapshot = '', lastSnapshotInputs = null, pendingRefresh = false;
   const statusLabels = {running:'探索中',done:'已完成',paused:'已暂停',pending:'待开始',terminated:'已终止'};
   const types = Object.fromEntries([['','通用'],...PROJECT_TYPES.map(({value,label}) => [value,label])]);
   const actionNames = {pause:'暂停',resume:'继续',restart:'重启',terminate:'终止',delete:'删除'};
@@ -344,7 +344,8 @@
       const before = current()?.id, result = await service.refresh(id); if (!result) return;
       projects.splice(0,projects.length,...result.projects); connected = true;
       for (const [key,layout] of graphLayouts) if (!projects.some(project=>project.id===layout.projectId)) graphLayouts.delete(key);
-      const p = current(), signature = JSON.stringify([p?.id,p?.generation,p?.state,p?.logs,p?.files,p?.history.map(h=>[h.generation,h.archivedAt])]);
+      const p = current(), snapshotInputs = [p?.id,p?.generation,p?.state,p?.logs,p?.files,JSON.stringify(p?.history.map(h=>[h.generation,h.archivedAt]))];
+      const signature = lastSnapshotInputs?.every((value,index)=>value===snapshotInputs[index]) ? lastSnapshot : JSON.stringify(snapshotInputs);
       if (route() !== 'llm' && ((!p && !$('.empty-project-page')) || before !== p?.id || !$('.project-page'))) render();
       else if (route() !== 'llm' && p && signature !== lastSnapshot) {
         if (selectedRun !== 'current' && !p.history.some(h=>String(h.generation)===selectedRun && h.state)) selectedRun = 'current';
@@ -361,7 +362,7 @@
         syncStatusFilter();
         const input=document.activeElement?.id==='activity-search'?document.activeElement:null, selection=input&&[input.selectionStart,input.selectionEnd]; renderActivity(); if(input&&$('#activity-search')){$('#activity-search').focus({preventScroll:true});$('#activity-search').setSelectionRange(...selection);}
       }
-      lastSnapshot = signature; renderSidebar();
+      lastSnapshot = signature; lastSnapshotInputs = snapshotInputs; renderSidebar();
       if(p)try{localStorage.setItem('pwnmesh.selected-project',p.id);}catch{}
     } catch(error) { if (error.name !== 'AbortError' && !service.scope.controller?.signal.aborted) { connected = false; toast(error.message); updateBusy(); } }
     finally { refreshing = false; const retry=pendingRefresh; pendingRefresh=false;refreshTimer=setTimeout(()=>refreshWorkspace(true),retry?0:document.hidden?10000:2500); }

@@ -29,7 +29,7 @@ func TestObservationalHTTPReadsDoNotWaitForWriter(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	for _, suffix := range []string{"/state", "/state/events", "/rounds", "/inputs", "/executions", "/identity"} {
+	for _, suffix := range []string{"/state", "/state/events", "/rounds", "/inputs", "/executions", "/executions/changes?generation=0", "/identity"} {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		request := httptest.NewRequest(http.MethodGet, f.base()+suffix, nil).WithContext(ctx)
 		response := httptest.NewRecorder()

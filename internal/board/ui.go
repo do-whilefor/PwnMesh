@@ -10,7 +10,42 @@ import (
 // legacy schemas and clients continue to work without inventing a scenario.
 const projectMetadataSchema = `CREATE TABLE IF NOT EXISTS xloom_project_metadata(
  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
- scenario TEXT NOT NULL CHECK(scenario IN ('ctf','pentest','audit')));`
+ scenario TEXT NOT NULL CHECK(scenario IN ('ctf','pentest','audit')));` + executionChangeSchema
+
+// Keep only the latest change per execution. A persistent sequence observes
+// updates within one second, including result observations without updated_at.
+const executionChangeSchema = `
+CREATE TABLE IF NOT EXISTS xloom_ui_execution_revisions(
+ project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS xloom_ui_execution_changes(
+ project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ execution_id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,
+ PRIMARY KEY(project_id,execution_id));
+CREATE INDEX IF NOT EXISTS xloom_ui_execution_changes_revision ON xloom_ui_execution_changes(project_id,revision);
+INSERT OR IGNORE INTO xloom_ui_execution_revisions(project_id,revision)
+ SELECT project_id,MAX(rowid) FROM xloom_executions GROUP BY project_id;
+INSERT OR IGNORE INTO xloom_ui_execution_changes(project_id,execution_id,revision)
+ SELECT project_id,id,rowid FROM xloom_executions;
+CREATE TRIGGER IF NOT EXISTS xloom_ui_execution_insert AFTER INSERT ON xloom_executions BEGIN
+ INSERT INTO xloom_ui_execution_revisions VALUES(NEW.project_id,1)
+ ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
+ INSERT INTO xloom_ui_execution_changes VALUES(NEW.project_id,NEW.id,(SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=NEW.project_id),0)
+ ON CONFLICT(project_id,execution_id) DO UPDATE SET revision=excluded.revision,deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS xloom_ui_execution_update AFTER UPDATE ON xloom_executions BEGIN
+ INSERT INTO xloom_ui_execution_revisions VALUES(NEW.project_id,1)
+ ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
+ INSERT INTO xloom_ui_execution_changes VALUES(NEW.project_id,NEW.id,(SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=NEW.project_id),0)
+ ON CONFLICT(project_id,execution_id) DO UPDATE SET revision=excluded.revision,deleted=0;
+END;
+CREATE TRIGGER IF NOT EXISTS xloom_ui_execution_delete AFTER DELETE ON xloom_executions
+WHEN EXISTS(SELECT 1 FROM projects WHERE id=OLD.project_id) BEGIN
+ INSERT INTO xloom_ui_execution_revisions VALUES(OLD.project_id,1)
+ ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
+ INSERT INTO xloom_ui_execution_changes VALUES(OLD.project_id,OLD.id,(SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=OLD.project_id),1)
+ ON CONFLICT(project_id,execution_id) DO UPDATE SET revision=excluded.revision,deleted=1;
+END;`
 
 func ValidScenario(scenario string) bool {
 	return scenario == "ctf" || scenario == "pentest" || scenario == "audit"
@@ -70,6 +105,87 @@ type ExecutionViewPage struct {
 	Items      []ExecutionView `json:"items"`
 	NextCursor int64           `json:"next_cursor,omitempty"`
 	Through    int64           `json:"through"`
+}
+
+type ExecutionChangePage struct {
+	Items      []ExecutionView `json:"items"`
+	Deleted    []string        `json:"deleted"`
+	NextCursor int64           `json:"next_cursor,omitempty"`
+	Through    int64           `json:"through"`
+	Generation int64           `json:"generation"`
+}
+
+// A row updated after Through moves to the next refresh rather than being lost
+// behind an append-only rowid cursor. Changes and projections share one Tx.
+func (t *Tx) ProjectExecutionChanges(project string, generation, after, cursor, through int64, limit int) (ExecutionChangePage, error) {
+	out := ExecutionChangePage{Items: []ExecutionView{}, Deleted: []string{}, Through: through, Generation: generation}
+	if generation < 0 || after < 0 || cursor < 0 || through < 0 || limit < 1 || limit > 100 || (through != 0 && max(after, cursor) > through) {
+		return out, Err(422, "invalid execution change boundary")
+	}
+	identity, err := t.ProjectIdentity(project)
+	if err != nil {
+		return out, err
+	}
+	if identity.Generation != generation {
+		return out, Err(409, "Project round changed; refresh before reading execution changes")
+	}
+	var latest int64
+	if err = t.QueryRow("SELECT COALESCE((SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=?),0)", project).Scan(&latest); err != nil {
+		return out, err
+	}
+	if through == 0 {
+		out.Through = latest
+	}
+	if max(after, cursor) > out.Through || out.Through > latest {
+		return out, Err(409, "Execution change cursor is no longer current")
+	}
+	// An initial snapshot has no cached rows to remove, so old-round tombstones
+	// must not make a new round reload every prior execution's deletion.
+	rows, err := t.Query("SELECT execution_id,revision,deleted FROM xloom_ui_execution_changes WHERE project_id=? AND revision>? AND revision<=? AND (? > 0 OR deleted=0) ORDER BY revision LIMIT ?", project, max(after, cursor), out.Through, after, limit+1)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	used, last, count := 128, max(after, cursor), 0
+	for rows.Next() {
+		var id string
+		var revision int64
+		var deleted bool
+		if err = rows.Scan(&id, &revision, &deleted); err != nil {
+			return out, err
+		}
+		var entry ExecutionView
+		var raw []byte
+		if deleted {
+			raw, err = json.Marshal(id)
+		} else {
+			var row int64
+			var text, failure string
+			err = t.QueryRow("SELECT "+executionViewColumns+" FROM xloom_executions WHERE project_id=? AND id=?", project, id).Scan(&row, &entry.ID, &entry.ProjectID, &entry.Generation, &entry.Kind, &entry.Backend, &entry.Intent, &entry.Status, &entry.Resumes, &entry.CreatedAt, &entry.UpdatedAt, &text, &failure)
+			if err == nil {
+				entry.Result = executionResultView(text, failure)
+				raw, err = json.Marshal(entry)
+			}
+		}
+		if err != nil {
+			return out, err
+		}
+		if len(raw)+128 > MaxExecutionViewPageBytes {
+			return out, Err(422, "execution metadata exceeds page size")
+		}
+		if count == limit || used+len(raw)+1 > MaxExecutionViewPageBytes {
+			out.NextCursor = last
+			break
+		}
+		if deleted {
+			out.Deleted = append(out.Deleted, id)
+		} else {
+			out.Items = append(out.Items, entry)
+		}
+		used += len(raw) + 1
+		last, count = revision, count+1
+	}
+	return out, rows.Err()
 }
 
 // Through freezes the set of executions to enumerate, not their changing

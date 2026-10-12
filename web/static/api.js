@@ -28,6 +28,21 @@
       } while (cursor);
       return items;
     }
+    async executionChanges(projectPath, after, generation, options = {}) {
+      const items = [], deleted = [];
+      let cursor = after, through = 0;
+      do {
+        const page = await this.request(projectPath + '/executions/changes?generation=' + generation + '&after=' + after + '&cursor=' + cursor + '&through=' + through + '&limit=20', options);
+        if (!Array.isArray(page.items) || !Array.isArray(page.deleted) || page.generation !== generation ||
+            !Number.isSafeInteger(page.through) || page.through < after ||
+            (page.next_cursor !== undefined && (!Number.isSafeInteger(page.next_cursor) || page.next_cursor <= cursor || page.next_cursor > page.through)) ||
+            (through !== 0 && page.through !== through)) throw new APIError('执行记录分页边界无效');
+        items.push(...page.items); deleted.push(...page.deleted);
+        through = page.through;
+        cursor = page.next_cursor || 0;
+      } while (cursor);
+      return {items, deleted, through};
+    }
     async uploadInput(projectPath, file) {
       const body = new FormData(); body.append('file', file, file.name);
       return this.request(projectPath + '/inputs', {method:'POST', body, timeout:300000});
