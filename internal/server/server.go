@@ -459,6 +459,10 @@ func (s *Server) reason(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 	if op == "claim" {
 		trigger = q.text("trigger")
 	}
+	fence := decisionFence(r)
+	if fence.Run != "" && (fence.Run != worker || fence.Lease != "reason" || fence.Intent != "") {
+		return 0, nil, b.Err(403, "Planner lease identity mismatch")
+	}
 	g, err := t.Load(r.PathValue("pid"))
 	if err != nil {
 		return 0, nil, err
@@ -467,7 +471,7 @@ func (s *Server) reason(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 		return 0, nil, err
 	}
 	if op == "claim" || op == "heartbeat" {
-		if err := guardClaim(t, g.Project.ID, worker, decisionFence(r)); err != nil {
+		if err := guardClaim(t, g.Project.ID, worker, fence); err != nil {
 			return 0, nil, err
 		}
 	}

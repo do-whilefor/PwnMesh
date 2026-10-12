@@ -368,6 +368,37 @@ func TestInputBatchTextOnlyRetryDoesNotDuplicateInstructions(t *testing.T) {
 	}
 }
 
+func TestInputBatchTextOnlyCannotModifyHistoricalProject(t *testing.T) {
+	f := newExecutionProtocolFixture(t)
+	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+		_, err := tx.Exec("DELETE FROM xloom_project_orchestration WHERE project_id=?", f.project)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, events := f.state(), storedEvents(f)
+	if before.Graph.Project.OrchestrationVersion != 0 {
+		t.Fatal("fixture is not historical")
+	}
+	body, contentType := inputBatchBody(t, nil, "Do not change retained historical evidence.", "historical-text")
+	inputBatchRequest(t, f, body, contentType, http.StatusConflict)
+	if !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
+		t.Fatal("text-only upload changed a historical project")
+	}
+	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+		var count int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM xloom_input_batches WHERE project_id=?", f.project).Scan(&count); err != nil {
+			return err
+		}
+		if count != 0 {
+			t.Fatal("rejected historical upload retained a receipt")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInputBatchKeyBindsFilesOrderNamesBytesAndContent(t *testing.T) {
 	f, _ := newSnapshotHTTPFixture(t)
 	dir := isolatedInputBatchTemp(t)

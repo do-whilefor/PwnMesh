@@ -25,6 +25,30 @@ func TestReasonHeartbeatVersionIgnoresLeaseActivity(t *testing.T) {
 	}
 }
 
+func TestReasonLeaseRejectsMismatchedExecutionIdentity(t *testing.T) {
+	for _, op := range []string{"claim", "heartbeat", "release"} {
+		for _, mismatch := range []string{"worker", "role", "intent"} {
+			t.Run(op+"/"+mismatch, func(t *testing.T) {
+				f := newDecisionBatchFixture(t)
+				before := f.state()
+				body := map[string]string{"worker": f.lease, "trigger": "initial"}
+				switch mismatch {
+				case "worker":
+					f.lease = "different-execution"
+				case "role":
+					f.kind = "explore"
+				case "intent":
+					f.intent = "different-step"
+				}
+				f.request("POST", f.base()+"/reason/"+op, body, true, http.StatusForbidden, nil)
+				if !reflect.DeepEqual(before, f.state()) {
+					t.Fatal("mismatched execution identity changed the planner lease")
+				}
+			})
+		}
+	}
+}
+
 func TestReasonHeartbeatDetectsChangedInputWithoutPublishingState(t *testing.T) {
 	for _, change := range []string{"hint", "step_completed"} {
 		t.Run(change, func(t *testing.T) {

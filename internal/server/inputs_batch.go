@@ -152,6 +152,15 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 	inputs := make([]b.InputFile, 0, len(files))
 	err = s.Store.Do(r.Context(), func(t *b.Tx) error {
 		project := r.PathValue("pid")
+		graph, err := t.Load(project)
+		if err != nil {
+			return err
+		}
+		// Multipart requests do not pass through wrap. Text-only batches also
+		// skip AddInput, so enforce the same historical read-only boundary here.
+		if graph.Project.OrchestrationVersion != 1 {
+			return b.Err(409, "Historical projects are read-only; create a new project to continue")
+		}
 		if saved, found, err := t.InputBatchReceipt(project, key, requestSHA256); found || err != nil {
 			inputs = saved
 			return err
