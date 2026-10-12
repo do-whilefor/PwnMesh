@@ -44,6 +44,19 @@ func (t *Tx) archiveRound(project string) error {
 	if err = save("state", "state", raw); err != nil {
 		return err
 	}
+	// Capture membership under the same write transaction as the round. Upload
+	// timestamps have only second precision and cannot identify this boundary.
+	inputs, err := t.InputFiles(project)
+	if err != nil {
+		return err
+	}
+	raw, err = json.Marshal(inputs)
+	if err != nil {
+		return err
+	}
+	if err = save("inputs", "inputs", raw); err != nil {
+		return err
+	}
 	// Stream records one by one rather than materializing every historical Job
 	// or all evidence-bearing events in an archive-sized in-memory slice.
 	rows, err := t.Query("SELECT revision,event FROM xloom_state_events WHERE project_id=? ORDER BY revision", project)

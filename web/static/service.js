@@ -26,16 +26,18 @@
       if(selected){
         const base=pathFor(selected.id), previous=this.views.get(selected.id), summary=JSON.stringify(selected.raw);
         const sameRound=previous?.generation===selected.generation;
-        // Closed rounds cannot publish graph/input changes. A changed list
-        // projection (including reopen/restart/title) still forces a fresh read.
-        const stableTerminal=sameRound&&['done','terminated'].includes(selected.status)&&previous.summary===summary;
-        const [state,changes,rounds]=await Promise.all([
+        // Terminal projects usually remain stable, but late execution cleanup
+        // can still append events without changing the project list summary.
+        const terminal=['done','terminated'].includes(selected.status), stableTerminal=sameRound&&terminal&&previous.summary===summary;
+        const [loadedState,changes,rounds]=await Promise.all([
           stableTerminal?previous.state:this.api.request(base+'/state',options),
           this.api.executionChanges(base,sameRound?previous.executionRevision:0,selected.generation,options).catch(error=>{
             if(error.status===409&&this.scope.current(request.version)){this.views.delete(selected.id);this.events.delete(selected.id);}throw error;
           }),
           sameRound?previous.rounds:this.pages(base+'/rounds',options)
         ]);
+        if(!this.scope.current(request.version))return null;
+        const state=terminal&&(changes.items.length||changes.deleted.length)?await this.api.request(base+'/state',options):loadedState;
         if(!this.scope.current(request.version))return null;
         const generation=state.graph.project.generation||0;
         const files=sameRound&&state.revision===previous.state.revision?previous.files:await this.api.request(base+'/inputs',options);
@@ -57,7 +59,7 @@
         if(selected.generation!==generation||(identity.generation||0)!==generation){this.events.delete(selected.id);this.views.delete(selected.id);throw new API.APIError('项目已进入新轮次，正在重新同步。',409);}
         cache={generation,revision:state.revision,after,caughtUp,items:batch.length?cache.items.concat(batch):cache.items};this.events.set(selected.id,cache);
         if(!stableTerminal||changes.items.length||changes.deleted.length||batch.length)Object.assign(selected,snapshotView(state,cache.items.filter(e=>e.revision<=state.revision),runs,files,selected));
-        selected.history=rounds.map(round=>{const previous=selected.history.find(p=>p.generation===round.generation);return Object.assign(previous||{status:'paused'},{id:selected.id,name:selected.name,type:selected.type,generation:round.generation,archived:true,archivedAt:round.archived_at,endedAt:previous?.endedAt || round.archived_at,files:files.filter(f=>f.created_at<=round.archived_at),history:[]});});
+        selected.history=rounds.map(round=>{const previous=selected.history.find(p=>p.generation===round.generation);return Object.assign(previous||{status:'paused'},{id:selected.id,name:selected.name,type:selected.type,generation:round.generation,archived:true,archivedAt:round.archived_at,endedAt:previous?.endedAt || round.archived_at,files:previous?.files||[],filesKnown:previous?.filesKnown===true,history:[]});});
         this.views.set(selected.id,{generation,summary,state,runs,files,rounds,executionRevision:changes.through});
       }
       if(!this.scope.current(request.version))return null;for(const id of this.views.keys())if(!projects.some(project=>project.id===id)){this.views.delete(id);this.events.delete(id);}this.projects=projects;return {projects,selected};
@@ -65,7 +67,7 @@
     async change(id,action,generation){
       const base=pathFor(id);this.cancel();
       if(action==='delete'){await this.api.request(base,{method:'DELETE'});this.events.delete(id);this.views.delete(id);this.pendingHints.delete(id);if(this.pendingCreate?.created.project.id===id)this.pendingCreate=null;return;}
-      if(action==='pause'||action==='resume')return this.api.request(base+'/status',{method:'PUT',body:{status:action==='pause'?'stopped':'active'}});
+      if(action==='pause'||action==='resume')return this.api.request(base+'/status',{method:'PUT',body:{status:action==='pause'?'stopped':'active',expected_generation:generation}});
       if(!['restart','terminate'].includes(action))throw new Error('不支持的项目操作。');
       const result=await this.api.request(base+'/'+action,{method:'POST',body:{expected_generation:generation}});this.events.delete(id);this.views.delete(id);return result;
     }
@@ -80,7 +82,7 @@
       const pending=this.pendingCreate,id=pending.created.project.id;
       try{
         for(;pending.uploaded<pending.files.length;pending.uploaded++)await this.api.uploadInput(pathFor(id),pending.files[pending.uploaded]);
-        if(pending.files.length)await this.api.request(pathFor(id)+'/status',{method:'PUT',body:{status:'active'}});
+        if(pending.files.length)await this.api.request(pathFor(id)+'/status',{method:'PUT',body:{status:'active',expected_generation:pending.created.project.generation||0}});
         this.pendingCreate=null;return id;
       }catch(error){error.pendingCreate=true;error.message+='；项目已保存，已导入材料保留。重试将继续上传并启动同一项目。';throw error;}
     }
@@ -98,15 +100,17 @@
     async archive(project,generation){
       const base=pathFor(project.id)+'/rounds/'+generation, summary=project.history.find(p=>p.generation===generation);
       if(!summary)throw new Error('此历史轮次不存在。');if(summary.state)return summary;
-      const entries=await this.pages(base+'/entries',{},0), records={state:[],event:[],execution:[]};
+      const entries=await this.pages(base+'/entries',{},0), records={state:[],event:[],execution:[],inputs:[]};
       for(const entry of entries){if(!Object.hasOwn(records,entry.kind))continue;if(entry.bytes>32*1024*1024)throw new Error('单条历史记录超过 32 MiB，无法在页面完整读取。');
         const bytes=new Uint8Array(entry.bytes);let offset=0;
         for(;;){const chunk=await this.api.request(base+'/entries/'+entry.cursor+'?offset='+offset+'&limit=32768');if(chunk.encoding!=='base64'||chunk.offset!==offset||chunk.total_bytes!==entry.bytes)throw new Error('历史记录分块不一致');const raw=atob(chunk.data);for(let i=0;i<raw.length;i++)bytes[offset+i]=raw.charCodeAt(i);if(chunk.next_offset==null)break;if(chunk.next_offset<=offset)throw new Error('历史记录分块边界无效');offset=chunk.next_offset;}
         records[entry.kind].push(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
       }
       if(!records.state.length)throw new Error('历史轮次缺少状态快照。');
-      const snapshot=snapshotView(records.state[0],records.event,records.execution,summary.files,summary);
-      const value={...snapshot,archived:true,endedAt:snapshot.endedAt || summary.archivedAt,history:[]};Object.assign(summary,value);const latest=this.projects.find(p=>p.id===project.id)?.history.find(p=>p.generation===generation);if(latest&&latest!==summary)Object.assign(latest,value);return latest||summary;
+      if(records.inputs.length>1||(records.inputs.length===1&&!Array.isArray(records.inputs[0])))throw new Error('历史材料清单格式无效。');
+      const filesKnown=records.inputs.length===1;
+      const snapshot=snapshotView(records.state[0],records.event,records.execution,filesKnown?records.inputs[0]:[],summary);
+      const value={...snapshot,archived:true,filesKnown,endedAt:snapshot.endedAt || summary.archivedAt,history:[]};Object.assign(summary,value);const latest=this.projects.find(p=>p.id===project.id)?.history.find(p=>p.generation===generation);if(latest&&latest!==summary)Object.assign(latest,value);return latest||summary;
     }
   }
   return {Service,projectView,snapshotView};

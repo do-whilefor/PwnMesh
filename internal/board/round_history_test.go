@@ -29,6 +29,7 @@ func TestRestartArchivesCompleteRoundAndReadsEveryByte(t *testing.T) {
 	before := f.state()
 	expected := map[string][]byte{}
 	expected["state/state"], _ = json.Marshal(before)
+	expected["inputs/inputs"] = []byte("[]")
 	f.tx(func(tx *Tx) error {
 		events, err := tx.StateEvents("proj_001", 0)
 		if err != nil {
@@ -143,6 +144,51 @@ func TestRestartArchivesCompleteRoundAndReadsEveryByte(t *testing.T) {
 		last, err := tx.RoundHistory("proj_001", *first.NextCursor, 1)
 		if len(last.Items) != 1 || last.Items[0].Generation != 1 || last.NextCursor != nil {
 			t.Fatalf("second generation page: %+v", last)
+		}
+		return err
+	})
+}
+
+func TestRoundInputManifestUsesTheArchiveTransactionNotTimestamps(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	var first, second InputFile
+	f.do(func(tx *Tx) error {
+		var err error
+		first, err = tx.AddInput("p", "before.txt", []byte("original input"))
+		return err
+	})
+	f.do(func(tx *Tx) error { _, err := tx.RestartProject("p", nil); return err })
+	f.do(func(tx *Tx) error {
+		var err error
+		second, err = tx.AddInput("p", "after.txt", []byte("next round input"))
+		return err
+	})
+	if first.CreatedAt != second.CreatedAt {
+		t.Fatal("fixture must reproduce uploads and restart within one second")
+	}
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var err error
+	f.store, err = Open(f.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.do(func(tx *Tx) error {
+		var raw []byte
+		if err := tx.QueryRow("SELECT data FROM xloom_round_entries WHERE project_id='p' AND generation=0 AND kind='inputs' AND id='inputs'").Scan(&raw); err != nil {
+			return err
+		}
+		var inputs []InputFile
+		if err := json.Unmarshal(raw, &inputs); err != nil {
+			return err
+		}
+		if len(inputs) != 1 || inputs[0] != first {
+			t.Fatalf("archive substituted current inputs: %+v", inputs)
+		}
+		current, err := tx.InputFiles("p")
+		if err == nil && len(current) != 2 {
+			t.Fatal("current project lost retained inputs")
 		}
 		return err
 	})

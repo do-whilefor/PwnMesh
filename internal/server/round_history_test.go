@@ -49,7 +49,7 @@ func TestRoundHistoryHTTPPreservesEvidenceAndFencesOldWorker(t *testing.T) {
 		}
 		cursor = *entries.NextCursor
 	}
-	for _, kind := range []string{"state", "event", "action", "execution"} {
+	for _, kind := range []string{"state", "inputs", "event", "action", "execution"} {
 		if counts[kind] == 0 {
 			t.Fatalf("HTTP archive lost %s entries: %v", kind, counts)
 		}

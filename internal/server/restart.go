@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strconv"
 
 	b "pwnmesh/internal/board"
@@ -20,9 +21,12 @@ func (s *Server) restart(t *b.Tx, q *request, r *http.Request) (int, any, error)
 	return http.StatusOK, g, err
 }
 
-func managementGeneration(q *request, action string) (*int64, error) {
+func managementGeneration(q *request, action string, allowedFields ...string) (*int64, error) {
 	var expected *int64
 	for field, raw := range q.fields {
+		if slices.Contains(allowedFields, field) {
+			continue
+		}
 		if field != "expected_generation" {
 			return nil, b.Err(422, "unknown "+action+" field: "+field)
 		}

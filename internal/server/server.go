@@ -460,9 +460,19 @@ func (s *Server) status(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 	if status != "active" && status != "stopped" {
 		q.invalid("status", "must be active or stopped")
 	}
+	if q.err != nil {
+		return 0, nil, q.err
+	}
+	expected, err := managementGeneration(q, "status", "status")
+	if err != nil {
+		return 0, nil, err
+	}
 	g, err := t.Load(r.PathValue("pid"))
 	if err != nil {
 		return 0, nil, err
+	}
+	if expected != nil && *expected != g.Project.Generation {
+		return 0, nil, b.Err(409, "Project round changed; refresh before changing status")
 	}
 	if err := t.SetStatus(&g, status); err != nil {
 		return 0, nil, err

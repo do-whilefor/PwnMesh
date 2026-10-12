@@ -70,6 +70,51 @@ test('unchanged completed projects reuse snapshots and histories but still obser
  finish=true;const third=(await service.refresh('a')).selected;
  assert.equal(third.runs.length,1);assert.equal(third.runs[0].status,'succeeded');assert.equal(third.runs[0].result.text,'Final answer');assert.deepEqual(changes,[0,1,1]);
 });
+
+test('late terminal execution changes refresh state and events once',async()=>{
+ const states={a:snapshot('a',0,6)};states.a.graph.project.status='completed';
+ const api=fixture(states),request=api.request.bind(api);let cancelled=false;
+ api.executionChanges=async(base,after)=>({items:after===(cancelled?2:1)?[]:[{id:'auxiliary',generation:0,status:cancelled?'cancelled':'running'}],deleted:[],through:cancelled?2:1});
+ api.request=(url,options)=>url.includes('/state/events?')?(cancelled?[{revision:7,op:'execution_failed',id:'auxiliary',payload:{reason:'Cancellation confirmed'}}]:[]):request(url,options);
+ const service=new Service(api);await service.refresh('a');
+ states.a={...states.a,revision:7};cancelled=true;api.calls.length=0;
+ const updated=(await service.refresh('a')).selected;
+ assert.equal(updated.state.revision,7);assert.equal(updated.events.at(-1).revision,7);assert.equal(updated.runs[0].status,'cancelled');
+ assert.ok(api.calls.some(call=>call.url==='/projects/a/state'));
+ api.calls.length=0;await service.refresh('a');assert.deepEqual(api.calls.map(call=>call.url),['/projects','/projects/a/identity']);
+});
+
+test('first terminal refresh observes execution changes committed after its parallel state read',async t=>{
+ for(const status of ['completed','terminated'])for(const cachedActive of [false,true])await t.test(status+(cachedActive?' after active view':' on initial load'),async()=>{
+  const states={a:snapshot('a',0,6)},api=fixture(states),request=api.request.bind(api),service=new Service(api);
+  if(cachedActive)await service.refresh('a');
+  states.a={...states.a,graph:{...states.a.graph,project:{...states.a.graph.project,status}}};
+  let changed=false;
+  api.request=(url,options)=>url.includes('/state/events?')?(changed?[{revision:7,op:'execution_failed',id:'auxiliary',payload:{reason:'Cancellation confirmed'}}]:[]):request(url,options);
+  api.executionChanges=async()=>{
+   if(changed)return {items:[],deleted:[],through:2};
+   // The parallel state response already owns revision 6; the execution update
+   // advances both its cursor and the graph before that refresh completes.
+   changed=true;states.a={...states.a,revision:7};
+   return {items:[{id:'auxiliary',generation:0,status:'cancelled'}],deleted:[],through:2};
+  };
+  const updated=(await service.refresh('a')).selected;
+  assert.equal(updated.state.revision,7);assert.equal(updated.events.at(-1).revision,7);assert.equal(updated.runs[0].status,'cancelled');
+  api.calls.length=0;const unchanged=(await service.refresh('a')).selected;
+  assert.equal(unchanged.state.revision,7);assert.equal(unchanged.events.at(-1).revision,7);
+  assert.deepEqual(api.calls.map(call=>call.url),['/projects','/projects/a/identity']);
+ });
+});
+
+test('a terminal state reload still rejects a concurrent project restart',async()=>{
+ const state=snapshot('a',0,6);state.graph.project.status='completed';
+ const api=fixture({a:state}),request=api.request.bind(api);let restarted=false;
+ api.executionChanges=async()=>({items:restarted?[{id:'late',generation:0,status:'cancelled'}]:[],deleted:[],through:restarted?2:1});
+ api.request=(url,options)=>restarted&&url==='/projects/a/state'?snapshot('a',1,0):request(url,options);
+ const service=new Service(api);await service.refresh('a');const accepted=service.projects;
+ restarted=true;await assert.rejects(service.refresh('a'),error=>error.status===409);
+ assert.equal(service.projects,accepted);assert.equal(service.views.has('a'),false);
+});
 test('active refresh merges changed existing executions and deletions without reloading round or input history',async()=>{
  const state=snapshot(),api=fixture({a:state}),changes=[];let turn=0;
  api.executionChanges=async(base,after)=>{changes.push(after);return ++turn===1?{items:[{id:'running',generation:0,status:'running'},{id:'old',generation:0,status:'failed'}],deleted:[],through:2}:{items:[{id:'running',generation:0,status:'succeeded'}],deleted:['old'],through:4};};
@@ -95,9 +140,9 @@ test('a reset execution cursor invalidates the cache and recovers on the next re
  await service.refresh('a');assert.deepEqual(seen,[0,7,0]);
 });
 test('refresh filters executions from old rounds and bounds event projection to state revision',async()=>{const state=snapshot('a',2,2),api=fixture({a:state}),old=api.request.bind(api);api.executionChanges=async()=>({items:[{id:'old',generation:1},{id:'current',generation:2}],deleted:[],through:2});api.request=(url,opts)=>url.includes('/state/events?')?[{revision:2,op:'event'},{revision:3,op:'event'}]:old(url,opts);const service=new Service(api),result=await service.refresh('a');assert.deepEqual(result.selected.runs.map(r=>r.id),['current']);assert.equal(result.selected.events.length,1);assert.equal(service.events.get('a').after,3);});
-test('project creation retries only unfinished uploads on the same paused project',async()=>{const calls=[],files=[new File(['a'],'a.txt'),new File(['b'],'b.txt')];let fail=true;const service=new Service({async request(url,options){calls.push({url,options});return {project:{id:'created'}};},async uploadInput(base,file){calls.push({upload:file.name});if(file.name==='b.txt'&&fail){fail=false;throw new APIError('upload interrupted',503);}}});const values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files};await assert.rejects(service.create(values),error=>error.pendingCreate);assert.equal(calls[0].options.body.start_paused,true);assert.equal(await service.create(values),'created');assert.equal(calls.filter(c=>c.url==='/projects').length,1);assert.deepEqual(calls.filter(c=>c.upload).map(c=>c.upload),['a.txt','b.txt','b.txt']);assert.deepEqual(calls.at(-1).options.body,{status:'active'});});
+test('project creation retries only unfinished uploads on the same paused project',async()=>{const calls=[],files=[new File(['a'],'a.txt'),new File(['b'],'b.txt')];let fail=true;const service=new Service({async request(url,options){calls.push({url,options});return {project:{id:'created'}};},async uploadInput(base,file){calls.push({upload:file.name});if(file.name==='b.txt'&&fail){fail=false;throw new APIError('upload interrupted',503);}}});const values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files};await assert.rejects(service.create(values),error=>error.pendingCreate);assert.equal(calls[0].options.body.start_paused,true);assert.equal(await service.create(values),'created');assert.equal(calls.filter(c=>c.url==='/projects').length,1);assert.deepEqual(calls.filter(c=>c.upload).map(c=>c.upload),['a.txt','b.txt','b.txt']);assert.deepEqual(calls.at(-1).options.body,{status:'active',expected_generation:0});});
 test('ambiguous creation is never blindly retried',async()=>{let creates=0;const service=new Service({async request(){creates++;throw new APIError('lost connection',0);}}),values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files:[]};await assert.rejects(service.create(values),error=>error.uncertainCreate);await assert.rejects(service.create(values),/尚未确认/);assert.equal(creates,1);});
-test('lifecycle operations use real endpoints and generation fencing',async()=>{const calls=[],service=new Service({async request(url,options){calls.push({url,options});}});for(const action of ['pause','resume','restart','terminate','delete'])await service.change('a/b',action,7);assert.equal(calls[0].url,'/projects/a%2Fb/status');assert.deepEqual(calls[0].options.body,{status:'stopped'});assert.deepEqual(calls[2].options.body,{expected_generation:7});assert.equal(calls.at(-1).options.method,'DELETE');});
+test('lifecycle operations use real endpoints and generation fencing',async()=>{const calls=[],service=new Service({async request(url,options){calls.push({url,options});}});for(const action of ['pause','resume','restart','terminate','delete'])await service.change('a/b',action,7);assert.equal(calls[0].url,'/projects/a%2Fb/status');assert.deepEqual(calls[0].options.body,{status:'stopped',expected_generation:7});assert.deepEqual(calls[1].options.body,{status:'active',expected_generation:7});assert.deepEqual(calls[2].options.body,{expected_generation:7});assert.equal(calls.at(-1).options.method,'DELETE');});
 test('supplement files and text use one atomic batch request',async()=>{const calls=[],file=new File(['bytes'],'request.http'),service=new Service({async uploadInputs(...args){calls.push(args);}});await service.hint('a',{text:'scope',files:[file]});assert.equal(calls.length,1);assert.equal(calls[0][1][0],file);assert.equal(calls[0][2],'scope');await service.hint('a',{text:'more scope',files:[]});assert.equal(calls[1][0],'/projects/a');assert.deepEqual(calls[1][1],[]);assert.equal(calls[1][2],'more scope');assert.ok(calls[1][3]);});
 test('supplement retries reuse their key until the submitted project, text or file references change',async()=>{
  const calls=[],files=[new File(['apk'],'client.apk'),new File(['http'],'capture.http')];let fail=true;
@@ -170,6 +215,33 @@ test('archived UTF-8 state chunks join without corrupting a split multibyte char
  const state=snapshot('a',0);state.graph.project.title='中文项目';const bytes=Buffer.from(JSON.stringify(state)),split=bytes.indexOf(Buffer.from('中文'))+1;
  const summary={id:'a',generation:0,archivedAt:stamp,files:[]},project={id:'a',history:[summary]};
  const service=new Service({async request(url){if(url.endsWith('/entries?limit=100&cursor=0'))return {items:[{cursor:1,kind:'state',bytes:bytes.length}]};const offset=Number(new URL(url,'http://local').searchParams.get('offset'));return {encoding:'base64',offset,total_bytes:bytes.length,data:bytes.subarray(offset,offset?bytes.length:split).toString('base64'),...(offset?{}:{next_offset:split})};}});service.projects=[project];const archived=await service.archive(project,0);assert.equal(archived.name,'中文项目');
+});
+
+test('archive materials come from the retained manifest and survive later refreshes',async()=>{
+ const oldState=snapshot('a',0),api=fixture({a:snapshot('a',1)}),request=api.request.bind(api);
+ const original={id:'before',name:'before.txt',created_at:stamp},later={id:'after',name:'after.txt',created_at:stamp};
+ const records=[['state',oldState],['inputs',[original]]].map(([kind,value],index)=>({kind,cursor:index+1,bytes:Buffer.from(JSON.stringify(value))}));
+ api.request=(url,options)=>{
+  if(url==='/projects/a/inputs')return [original,later];
+  if(url==='/projects/a/rounds?limit=100&cursor=-1')return {items:[{generation:0,archived_at:stamp}]};
+  if(url==='/projects/a/rounds/0/entries?limit=100&cursor=0')return {items:records.map(record=>({kind:record.kind,cursor:record.cursor,bytes:record.bytes.length}))};
+  const match=url.match(/\/rounds\/0\/entries\/(\d+)\?/);if(match){const bytes=records[Number(match[1])-1].bytes;return {encoding:'base64',offset:0,total_bytes:bytes.length,data:bytes.toString('base64')};}
+  return request(url,options);
+ };
+ const service=new Service(api);await service.refresh('a');
+ assert.deepEqual(service.projects[0].history[0].files,[],'unhydrated history must not guess file membership');
+ const archived=await service.archive(service.projects[0],0);assert.deepEqual(archived.files,[original]);assert.equal(archived.filesKnown,true);
+ await service.refresh('a');assert.deepEqual(service.projects[0].history[0].files,[original]);
+});
+
+test('legacy archives distinguish an unavailable manifest from an empty manifest',async()=>{
+ for(const manifest of [undefined,[]]){
+  const state=snapshot(),records=[['state',state],...(manifest===undefined?[]:[['inputs',manifest]])].map(([kind,value],index)=>({kind,cursor:index+1,bytes:Buffer.from(JSON.stringify(value))}));
+  const project={id:'a',history:[{id:'a',generation:0,archivedAt:stamp,files:[{id:'unproven'}]}]};
+  const service=new Service({async request(url){if(url.endsWith('/entries?limit=100&cursor=0'))return {items:records.map(record=>({kind:record.kind,cursor:record.cursor,bytes:record.bytes.length}))};const record=records[Number(url.match(/\/entries\/(\d+)\?/)[1])-1];return {encoding:'base64',offset:0,total_bytes:record.bytes.length,data:record.bytes.toString('base64')};}});
+  service.projects=[project];const archived=await service.archive(project,0);assert.deepEqual(archived.files,[]);assert.equal(archived.filesKnown,manifest!==undefined);
+ }
+ const app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(app,/filesKnown === false/);assert.match(app,/此历史轮次未保存材料清单/);
 });
 
 test('archived rounds retain their real completion or termination time across live refreshes',async()=>{
