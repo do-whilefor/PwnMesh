@@ -29,13 +29,14 @@ var scenarioPythonCommand = regexp.MustCompile(`(?m)(?:^|&&[ \t]*|;[ \t]*)python
 type scenarioSkillFixture struct {
 	mu     sync.Mutex
 	seen   map[string]int
+	reads  map[string]int
 	bodies map[string][]byte
 	source []byte
 	nonce  string
 }
 
 func newScenarioSkillFixture() (*scenarioSkillFixture, *httptest.Server) {
-	f := &scenarioSkillFixture{seen: map[string]int{}, bodies: map[string][]byte{}, nonce: fmt.Sprintf("%x", randomSkillNonce())}
+	f := &scenarioSkillFixture{seen: map[string]int{}, reads: map[string]int{}, bodies: map[string][]byte{}, nonce: fmt.Sprintf("%x", randomSkillNonce())}
 	f.source = []byte(fmt.Sprintf(`import hashlib
 import json
 from pathlib import Path
@@ -121,6 +122,7 @@ func (f *scenarioSkillFixture) record(path string, status int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.seen[path] = status
+	f.reads[path]++
 }
 
 // Run each scenario separately so its durable archive and database are isolated.
@@ -139,11 +141,7 @@ func TestLiveScenarioSkillsProject(t *testing.T) {
 			fixture, server := newScenarioSkillFixture()
 			defer server.Close()
 			origin := fmt.Sprintf("Use only synthetic local resources at %s and a Step-private directory under /workspace. Do not install packages, access credentials, or contact other targets. Authorize exactly one ordinary Step. Publish one evidence-backed fact and finish using that fact; no candidates, curation, extra report-writing Step or scoring are needed. ", server.URL)
-			if scenario == "audit" {
-				origin += "Review /audit.py for object ownership enforcement. Fetch and preserve the original source, inspect the vulnerable_invoice and fixed_invoice paths, then execute the unchanged file with Python 3 using its absolute path in the private directory. Its built-in smoke exercises alice against objects 1001 and 1002 in both variants. Save AND print the actual JSON stdout. Cite both original source and stdout as evidence, explain the code path causing the observed difference, and distinguish this synthetic execution from a deployed-system claim."
-			} else {
-				origin += "Test the HTTP API using the synthetic account alice via header X-Test-User: alice. Objects 1001 and 1002 belong to alice and bob respectively; both are expressly authorized test data. Compare GET /vulnerable/invoices/1001, /vulnerable/invoices/1002, /fixed/invoices/1001, and /fixed/invoices/1002. These four read-only requests are the whole target scope. Preserve and cite each original response BODY in a separate evidence file, record actual HTTP status, and explain whether foreign-owner access is possible and whether the fixed control enforces ownership."
-			}
+			origin += scenarioOwnershipTask(scenario)
 			bundle := scenarioSkillBundle(t, scenario)
 			runObservedScenarioProject(t, "Synthetic "+scenario+" Skills smoke", origin, "Complete the bounded ownership check with original target and control evidence.", scenario, "scenario_skills_and_ownership_controls", func(state board.State, files map[string][]byte) []string {
 				fixture.mu.Lock()
@@ -156,6 +154,13 @@ func TestLiveScenarioSkillsProject(t *testing.T) {
 			}, 1)
 		})
 	}
+}
+
+func scenarioOwnershipTask(scenario string) string {
+	if scenario == "audit" {
+		return "Review /audit.py for object ownership enforcement. Fetch and preserve the original source, inspect the vulnerable_invoice and fixed_invoice paths, then execute the unchanged file with Python 3 using its absolute path in the private directory. Its built-in smoke exercises alice against objects 1001 and 1002 in both variants. Save AND print the actual JSON stdout. Cite both original source and stdout as evidence, explain the code path causing the observed difference, and distinguish this synthetic execution from a deployed-system claim."
+	}
+	return "Test the HTTP API using the synthetic account alice via header X-Test-User: alice. Objects 1001 and 1002 belong to alice and bob respectively; both are expressly authorized test data. Compare GET /vulnerable/invoices/1001, /vulnerable/invoices/1002, /fixed/invoices/1001, and /fixed/invoices/1002. These four read-only requests are the whole target scope. Preserve and cite each original response BODY in a separate evidence file, record actual HTTP status, and explain whether foreign-owner access is possible and whether the fixed control enforces ownership."
 }
 
 func scenarioSkillBundle(t *testing.T, scenario string) map[string][]byte {
@@ -229,6 +234,10 @@ func scenarioHTTPResponse(raw, body []byte, status int) bool {
 }
 
 func validateScenarioSkills(state board.State, files map[string][]byte, scenario string, bundle map[string][]byte, fixture *scenarioSkillFixture) []string {
+	return validateScenarioSkillSteps(state, files, scenario, bundle, fixture, 1)
+}
+
+func validateScenarioSkillSteps(state board.State, files map[string][]byte, scenario string, bundle map[string][]byte, fixture *scenarioSkillFixture, expectedSteps int) []string {
 	failures := []string{}
 	check := func(ok bool, message string) {
 		if !ok {
@@ -257,18 +266,33 @@ func validateScenarioSkills(state board.State, files map[string][]byte, scenario
 			steps = append(steps, step)
 		}
 	}
-	check(len(steps) == 1, "expected one ordinary Step")
+	check(len(steps) == expectedSteps, fmt.Sprintf("expected %d ordinary Steps", expectedSteps))
 	facts := map[string]board.FactRecord{}
 	for _, fact := range state.FactRecords {
 		facts[fact.ID] = fact
 	}
-	if len(steps) != 1 || steps[0].Worker == nil || steps[0].Result == nil {
-		return append(failures, "missing completed Step result")
+	for _, step := range steps {
+		failures = append(failures, validateScenarioSkillStep(project, step, facts, files, scenario, bundle, fixture)...)
 	}
-	step := steps[0]
+	return failures
+}
+
+func validateScenarioSkillStep(project board.Project, step board.Step, facts map[string]board.FactRecord, files map[string][]byte, scenario string, bundle map[string][]byte, fixture *scenarioSkillFixture) []string {
+	failures := []string{}
+	check := func(ok bool, message string) {
+		if !ok {
+			failures = append(failures, step.ID+": "+message)
+		}
+	}
+	if step.Worker == nil || step.Result == nil {
+		return []string{step.ID + ": missing completed Step result"}
+	}
 	_, successful := orchestrationSuccessfulRun(project, step, *step.Worker, facts, files)
 	check(successful, "Step lacks its successful production run and valid result fact")
 	fact := facts[*step.Result]
+	journal := files["/workspace/.pwnmesh/runs/"+orchestrationRunID(fact.RunID)+"/events.jsonl"]
+	entry, _ := scenarioSkillReads(journal, scenario, bundle)
+	check(entry, "successful Step lacks its own byte-exact Skill entry read")
 	observed := map[string]bool{}
 	auditReceipt := false
 	for _, evidence := range fact.Evidence {
