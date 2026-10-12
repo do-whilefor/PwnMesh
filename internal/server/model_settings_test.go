@@ -189,10 +189,10 @@ func TestModelSimulationUsesMessagesToolRoundTripWithoutSavingDraft(t *testing.T
 				}
 				w.Header().Set("Content-Type", "application/json")
 				if calls == 1 {
-					if len(payload.Tools) != 1 || payload.Tools[0].Name != "connection_check" {
+					if len(payload.Tools) != 1 || payload.Tools[0].Name != "readiness_check" {
 						t.Error("simulation omitted its protocol tool")
 					}
-					_, _ = w.Write([]byte(`{"role":"assistant","content":[{"type":"tool_use","id":"check-1","name":"connection_check","input":{"ready":true}}],"stop_reason":"tool_use"}`))
+					_, _ = w.Write([]byte(`{"role":"assistant","content":[{"type":"tool_use","id":"check-1","name":"readiness_check","input":{"ready":true}}],"stop_reason":"tool_use"}`))
 					return
 				}
 				if len(payload.Messages) != 3 || payload.Messages[2].Content[0].ToolUseID != "check-1" {
@@ -200,7 +200,10 @@ func TestModelSimulationUsesMessagesToolRoundTripWithoutSavingDraft(t *testing.T
 					return
 				}
 				var receipt string
-				if json.Unmarshal(payload.Messages[2].Content[0].Content, &receipt) != nil || !strings.HasPrefix(receipt, "PWNMESH_OK_") || strings.Contains(payload.Messages[0].Text(), receipt) || len(payload.Tools) != 0 {
+				var challenge struct {
+					Ready string `json:"ready"`
+				}
+				if json.Unmarshal(payload.Messages[2].Content[0].Content, &receipt) != nil || json.Unmarshal([]byte(receipt), &challenge) != nil || len(challenge.Ready) != 32 || strings.Contains(payload.Messages[0].Text(), receipt) || len(payload.Tools) != 0 {
 					t.Error("simulation did not challenge tool-result consumption without more tools")
 				}
 				_ = json.NewEncoder(w).Encode(agent.Message{Role: "assistant", Content: []agent.Block{{Type: "text", Text: receipt}}, StopReason: "end_turn"})
@@ -255,7 +258,7 @@ func TestModelSimulationRejectsFalseSuccessAndRedactsUpstreamError(t *testing.T)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls++
 				w.Header().Set("Content-Type", "application/json")
-				response := agent.Message{Role: "assistant", Content: []agent.Block{{Type: "tool_use", ID: "check-1", Name: "connection_check", Input: json.RawMessage(`{"ready":true}`)}}, StopReason: "tool_use"}
+				response := agent.Message{Role: "assistant", Content: []agent.Block{{Type: "tool_use", ID: "check-1", Name: "readiness_check", Input: json.RawMessage(`{"ready":true}`)}}, StopReason: "tool_use"}
 				if calls == 1 {
 					switch scenario {
 					case "extra_argument":

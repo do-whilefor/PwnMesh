@@ -3,17 +3,13 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
-	"pwnmesh/internal/agent"
 	b "pwnmesh/internal/board"
 	"pwnmesh/internal/modelconfig"
 	"pwnmesh/internal/provider"
@@ -102,7 +98,8 @@ func registerModelSettings(m *http.ServeMux, path string) {
 		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(min(current.RequestTimeout, 45))*time.Second)
 		defer cancel()
 		started := time.Now()
-		err = probeModel(ctx, p)
+		p.MaxTokens = min(p.MaxTokens, provider.ProbeMaxTokens)
+		err = provider.Probe(ctx, p)
 		message := "Anthropic Messages and tool round trip verified"
 		if err != nil {
 			message = "Model did not complete the Messages tool round trip; check endpoint, protocol and model support"
@@ -122,55 +119,4 @@ func modelJSON(w http.ResponseWriter, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = json.NewEncoder(w).Encode(body)
-}
-
-// The simulation has no real tools or project side effects. It exercises the
-// exact streaming provider used by workers, including one tool-result exchange.
-func probeModel(ctx context.Context, p *provider.Anthropic) error {
-	p.MaxTokens = min(p.MaxTokens, 1024)
-	definition := agent.Definition{Name: "connection_check", Description: "Call once with ready:true, then repeat exactly the receipt in its result.", Schema: json.RawMessage(`{"type":"object","properties":{"ready":{"type":"boolean","enum":[true]}},"required":["ready"],"additionalProperties":false}`)}
-	history := []agent.Message{agent.Text("user", "Connection test only. Call connection_check once with {\"ready\":true}. After the tool result, reply exactly with its receipt and no other text.")}
-	first, err := p.Generate(ctx, history, []agent.Definition{definition}, nil)
-	if err != nil {
-		return err
-	}
-	id := ""
-	for _, block := range first.Content {
-		if block.Type != "tool_use" {
-			continue
-		}
-		if id != "" || block.Name != definition.Name || block.ID == "" || agent.ValidateArguments(definition.Schema, block.Input) != nil {
-			return errors.New("invalid simulation tool call")
-		}
-		id = block.ID
-	}
-	if id == "" || first.Role != "assistant" || first.StopReason != "tool_use" {
-		return errors.New("model did not call simulation tool")
-	}
-	// Only the tool result reveals this receipt. A canned reply must not pass a
-	// test intended to prove that the model consumes tool-result history.
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return err
-	}
-	receipt := "PWNMESH_OK_" + hex.EncodeToString(nonce[:])
-	content, _ := json.Marshal(receipt)
-	history = append(history, first, agent.Message{Role: "user", Content: []agent.Block{{Type: "tool_result", ToolUseID: id, Content: content}}})
-	second, err := p.Generate(ctx, history, nil, nil)
-	if err != nil {
-		return err
-	}
-	var answer strings.Builder
-	for _, block := range second.Content {
-		if block.Type == "tool_use" {
-			return errors.New("unexpected simulation tool call")
-		}
-		if block.Type == "text" {
-			answer.WriteString(block.Text)
-		}
-	}
-	if strings.TrimSpace(answer.String()) != receipt || second.Role != "assistant" || second.StopReason != "end_turn" {
-		return errors.New("model did not return simulation receipt")
-	}
-	return nil
 }

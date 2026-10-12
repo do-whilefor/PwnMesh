@@ -123,7 +123,7 @@ func TestHealthBlocksKnownIncompatibilityUntilSuccessfulRecheck(t *testing.T) {
 }
 
 func TestHealthRejectsIncompleteOrIncompatibleProtocolWithoutExtraTurns(t *testing.T) {
-	for _, scenario := range []string{"text_only", "wrong_tool", "invalid_arguments", "multiple_calls", "truncated_first", "wrong_receipt", "duplicate_receipt", "extra_call", "truncated_last"} {
+	for _, scenario := range []string{"text_only", "wrong_tool", "invalid_arguments", "multiple_calls", "truncated_first", "wrong_first_role", "wrong_first_stop", "wrong_receipt", "duplicate_receipt", "extra_call", "truncated_last", "wrong_last_role", "wrong_last_stop"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
 			p := healthProvider(func(_ context.Context, messages []agent.Message, _ []agent.Definition) (agent.Message, error) {
@@ -141,6 +141,10 @@ func TestHealthRejectsIncompleteOrIncompatibleProtocolWithoutExtraTurns(t *testi
 						m.Content = append(m.Content, m.Content[0])
 					case "truncated_first":
 						m.StopReason = "max_tokens"
+					case "wrong_first_role":
+						m.Role = "user"
+					case "wrong_first_stop":
+						m.StopReason = "end_turn"
 					}
 					return m, nil
 				}
@@ -154,6 +158,10 @@ func TestHealthRejectsIncompleteOrIncompatibleProtocolWithoutExtraTurns(t *testi
 					m.Content = append(m.Content, healthCall().Content[0])
 				case "truncated_last":
 					m.StopReason = "length"
+				case "wrong_last_role":
+					m.Role = "user"
+				case "wrong_last_stop":
+					m.StopReason = "tool_use"
 				}
 				return m, nil
 			})

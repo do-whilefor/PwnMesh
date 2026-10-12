@@ -1,11 +1,7 @@
 package dispatcher
 
 import (
-	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,7 +15,7 @@ import (
 // Readiness verifies a small tool round trip, not task quality or the model's
 // full context window. Each strategy gets two turns under one worker deadline;
 // provider transport retries remain bounded by that same deadline.
-const healthMaxTokens = 1024
+const healthMaxTokens = provider.ProbeMaxTokens
 
 type healthFailure struct {
 	Kind string
@@ -120,60 +116,8 @@ func healthRequestFailure(err error) error {
 }
 
 func probeHealth(ctx context.Context, p agent.Provider) error {
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return &healthFailure{Kind: "unverified", Err: err}
-	}
-	tool := agent.Definition{Name: "readiness_check", Description: "A no-effect protocol check. Call once with ready:true, then return exactly the JSON object supplied in its result.", Schema: json.RawMessage(`{"type":"object","properties":{"ready":{"type":"boolean","enum":[true]}},"required":["ready"],"additionalProperties":false}`)}
-	history := []agent.Message{agent.Text("user", "Verify tool support. Call readiness_check exactly once with {\"ready\":true}. After receiving its result, return exactly that JSON object, without commentary or further calls.")}
-	first, err := p.Generate(ctx, history, []agent.Definition{tool}, nil)
-	if err != nil {
+	if err := provider.Probe(ctx, p); err != nil {
 		return healthRequestFailure(err)
-	}
-	check := func(m agent.Message) error {
-		if m.StopReason == "max_tokens" || m.StopReason == "length" {
-			return &healthFailure{Kind: "unverified", Err: errors.New("probe output allowance exhausted")}
-		}
-		if m.Role != "assistant" || m.StopReason == "" {
-			return &healthFailure{Kind: "unverified", Err: errors.New("invalid assistant response")}
-		}
-		return nil
-	}
-	if err := check(first); err != nil {
-		return err
-	}
-	var calls []agent.Block
-	for _, block := range first.Content {
-		if block.Type == "tool_use" {
-			calls = append(calls, block)
-		}
-	}
-	if len(calls) != 1 || calls[0].ID == "" || calls[0].Name != tool.Name || agent.ValidateArguments(tool.Schema, calls[0].Input) != nil {
-		return &healthFailure{Kind: "unverified", Err: errors.New("probe requires exactly one valid readiness_check call")}
-	}
-	// The challenge only appears in the tool result, so a canned first-turn
-	// answer cannot demonstrate that the model accepts tool-result history.
-	expected := hex.EncodeToString(nonce[:])
-	result, _ := json.Marshal(map[string]string{"ready": expected})
-	content, _ := json.Marshal(string(result))
-	history = append(history, first, agent.Message{Role: "user", Content: []agent.Block{{Type: "tool_result", ToolUseID: calls[0].ID, Content: content}}})
-	last, err := p.Generate(ctx, history, nil, nil)
-	if err != nil {
-		return healthRequestFailure(err)
-	}
-	if err := check(last); err != nil {
-		return err
-	}
-	for _, block := range last.Content {
-		if block.Type == "tool_use" {
-			return &healthFailure{Kind: "unverified", Err: errors.New("probe returned another tool call instead of its receipt")}
-		}
-	}
-	// Require the complete receipt, allowing JSON whitespace but no duplicate
-	// keys, additional fields, prose or trailing values.
-	var compact bytes.Buffer
-	if json.Compact(&compact, []byte(last.Text())) != nil || !bytes.Equal(compact.Bytes(), result) {
-		return &healthFailure{Kind: "unverified", Err: errors.New("probe did not return the exact tool receipt")}
 	}
 	return nil
 }
