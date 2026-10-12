@@ -457,7 +457,7 @@ func TestDecisionDraftConflictRequiresFreshEvidenceRead(t *testing.T) {
 	commits := 0
 	opts, read, action := draftTestTools(t, func(request GraphRequest) (any, error) {
 		if request.Op == "read_graph" {
-			return map[string]any{"state_version": newVersion, "items": []map[string]string{{"id": "corrected", "description": "The initial premise was refuted"}}}, nil
+			return map[string]any{"section": request.Section, "offset": 0, "total": 1, "state_version": newVersion, "items": []map[string]string{{"id": "corrected", "description": "The initial premise was refuted"}}}, nil
 		}
 		if request.Op == "decision_commit" {
 			commits++
@@ -646,7 +646,7 @@ func TestDecisionDraftRunDiscardsUncommittedPlanOnResume(t *testing.T) {
 			return board.DecisionReceipt{}, nil
 		case "read_graph":
 			reads = append(reads, request.Section)
-			return map[string]any{"state_version": version, "items": []board.Fact{{ID: "origin", Description: "Current user scope"}}}, nil
+			return map[string]any{"section": request.Section, "offset": 0, "total": 1, "state_version": version, "items": []board.Fact{{ID: "origin", Description: "Current user scope"}}}, nil
 		case "decision_commit":
 			commits++
 			if len(request.Batch.Actions) != 1 || request.Batch.Actions[0].Ref != "fresh" || request.Batch.ExpectedVersion != version || strings.Contains(string(request.Batch.Actions[0].Payload), "$old") {
@@ -794,7 +794,7 @@ func TestDecisionDraftRunRecoversSavedRepairIntoPlanning(t *testing.T) {
 		case "decision_receipt":
 			return board.DecisionReceipt{}, nil
 		case "read_graph":
-			return map[string]any{"state_version": version, "items": []board.Fact{{ID: "origin", Description: "Original bounded scope"}}}, nil
+			return map[string]any{"section": request.Section, "offset": 0, "total": 1, "state_version": version, "items": []board.Fact{{ID: "origin", Description: "Original bounded scope"}}}, nil
 		case "decision_commit":
 			commits++
 			return board.DecisionReceipt{Committed: true, StateVersion: version}, nil

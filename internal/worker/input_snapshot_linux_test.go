@@ -119,8 +119,11 @@ func TestSnapshotReadDoesNotRebindLiveGraphVersion(t *testing.T) {
 	if version != liveVersion {
 		t.Fatal("read_graph did not refresh the runtime version")
 	}
+	if _, err := frozenRead.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["fact_original"],"expected_version":"model-selected-input"}`)); err == nil {
+		t.Fatal("model supplied a transport-only snapshot version")
+	}
 	for n := 0; n < 2; n++ {
-		result, err := frozenRead.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["fact_original"],"expected_version":"model-must-not-select-a-different-input"}`))
+		result, err := frozenRead.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["fact_original"]}`))
 		if err != nil || !strings.Contains(result, "Frozen fixture observation") || strings.Contains(result, "New live fixture observation") {
 			t.Fatalf("original input was replaced by current evidence: %s %v", result, err)
 		}

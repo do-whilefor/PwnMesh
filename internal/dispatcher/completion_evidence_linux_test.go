@@ -85,15 +85,26 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 			var initial board.State
 			f.do("GET", projectPath(f.project.ID)+"/state", nil, &initial, nil)
 			version := run.Job.Decision.StateVersion
-			calls, previews, commits, pages, next := 0, 0, 0, 0, 0
+			calls, previews, commits, factReads, fragments := 0, 0, 0, 0, 0
+			evidenceDelivered := false
 			forward := runner.handler
 			runner.handler = func(ctx context.Context, job worker.Job, request worker.GraphRequest) (any, error) {
+				if request.Op == "read_graph" && request.Section == "facts" && reflect.DeepEqual(request.IDs, []string{fact.ID}) {
+					if request.ByteOffset == nil {
+						factReads++
+					} else {
+						fragments++
+						if request.ExpectedVersion != version {
+							t.Fatal("automatic evidence reconstruction lost its state fence")
+						}
+					}
+				}
 				if request.Op == "decision_preview" {
 					previews++
 				}
 				if request.Op == "decision_commit" {
 					commits++
-					if calls != 6 && (accepted || calls != 7) {
+					if !evidenceDelivered || calls != 4 && (accepted || calls != 5) {
 						t.Fatal("commit reached the Dispatcher before evidence delivery")
 					}
 					if !accepted && (request.Batch.Assessment == nil || request.Batch.Assessment.Status != "missing" || len(request.Batch.Actions) != 1 || request.Batch.Actions[0].GapID != "acceptance") {
@@ -102,7 +113,6 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 				}
 				return forward(ctx, job, request)
 			}
-			var delivered []board.EvidenceRef
 			provider := updateProvider(func(_ context.Context, history []agent.Message, definitions []agent.Definition, _ agent.Emit) (agent.Message, error) {
 				calls++
 				if len(definitions) == 0 {
@@ -158,35 +168,14 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 					if err := json.Unmarshal(completionEvidenceToolResult(t, history, "fact", false), &page); err != nil {
 						t.Fatal(err)
 					}
-					if page.StateVersion != version || len(page.Items) != 1 || page.Items[0].ID != fact.ID || !page.Items[0].EvidenceOmitted || page.Items[0].EvidenceCount != len(fact.Evidence) || len(page.Items[0].Evidence) != 0 {
-						t.Fatal("fact page did not expose its omitted evidence")
+					if page.StateVersion != version || len(page.Items) != 1 || page.Items[0].ID != fact.ID || page.Items[0].EvidenceOmitted || page.Items[0].EvidenceCount != 0 || !reflect.DeepEqual(page.Items[0].Evidence, fact.Evidence) {
+						t.Fatal("complete retained evidence did not reach the provider losslessly in the fact result")
 					}
-					return updateToolCall("evidence-0", "read_graph", `{"section":"evidence","ids":["f001"],"limit":50}`), nil
-				case 5, 6:
-					var page struct {
-						StateVersion string              `json:"state_version"`
-						Items        []board.EvidenceRef `json:"items"`
-						Offset       int                 `json:"offset"`
-						Next         *int                `json:"next_offset"`
+					if factReads != 1 || fragments < 2 {
+						t.Fatal("fixture did not exercise automatic reconstruction across transport pages")
 					}
-					if err := json.Unmarshal(completionEvidenceToolResult(t, history, fmt.Sprintf("evidence-%d", next), false), &page); err != nil {
-						t.Fatal(err)
-					}
-					if page.StateVersion != version || page.Offset != len(delivered) || len(page.Items) == 0 {
-						t.Fatal("evidence paging lost its pinned version or progress")
-					}
-					delivered = append(delivered, page.Items...)
-					pages++
-					if page.Next != nil {
-						if calls != 5 || *page.Next <= next || len(delivered) >= len(fact.Evidence) {
-							t.Fatal("decisive response did not require a second evidence page")
-						}
-						next = *page.Next
-						return updateToolCall(fmt.Sprintf("evidence-%d", next), "read_graph", fmt.Sprintf(`{"section":"evidence","ids":["f001"],"offset":%d,"limit":50}`, next)), nil
-					}
-					if calls != 6 || !reflect.DeepEqual(delivered, fact.Evidence) {
-						t.Fatal("complete retained evidence did not reach the provider losslessly")
-					}
+					evidenceDelivered = true
+					delivered := page.Items[0].Evidence
 					var response struct {
 						Accepted bool `json:"accepted"`
 					}
@@ -200,7 +189,7 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 					message.Content = append(message.Content,
 						updateToolCall("reassessment", "assess_root", `{"status":"missing","from":["f001"],"description":"The complete retained response explicitly refuses R17.","gaps":[{"id":"acceptance","input_ids":["goal"],"description":"Obtain the required verifier acceptance of R17."}]}`).Content[0])
 					return message, nil
-				case 7:
+				case 5:
 					if accepted || len(completionEvidenceToolResult(t, history, "reassessment", false)) == 0 {
 						t.Fatal("follow-up did not observe the revised missing requirement")
 					}
@@ -214,12 +203,12 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 			})
 			runner.options = worker.Options{Provider: provider, RunDir: t.TempDir(), ContextBytes: worker.DefaultContextBytes, ContextTokens: worker.DefaultContextTokens, ContextTargetTokens: worker.DefaultContextTargetTokens}
 			result, err := runner.Run(ctx, run.Worker, run.Job)
-			wantCalls := 6
+			wantCalls := 4
 			if !accepted {
-				wantCalls = 7
+				wantCalls = 5
 			}
-			if err != nil || result.Status != "success" || calls != wantCalls || previews != 1 || commits != 1 || pages != 2 {
-				t.Fatalf("evidence completion flow failed: result=%+v err=%v calls=%d previews=%d commits=%d pages=%d", result, err, calls, previews, commits, pages)
+			if err != nil || result.Status != "success" || calls != wantCalls || previews != 1 || commits != 1 || factReads != 1 || fragments < 2 || !evidenceDelivered {
+				t.Fatalf("evidence completion flow failed: result=%+v err=%v calls=%d previews=%d commits=%d fact_reads=%d fragments=%d delivered=%t", result, err, calls, previews, commits, factReads, fragments, evidenceDelivered)
 			}
 			var final board.State
 			f.do("GET", projectPath(f.project.ID)+"/state", nil, &final, nil)

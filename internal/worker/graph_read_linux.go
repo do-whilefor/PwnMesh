@@ -1,0 +1,195 @@
+//go:build linux
+
+package worker
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"slices"
+)
+
+// A model read can span several small RPC frames. Keep the complete logical
+// result bounded independently of the transport, without truncating records.
+const maxModelGraphReadBytes = 1 << 20
+
+func graphReadArguments(raw json.RawMessage, op string) (GraphRequest, error) {
+	var input struct {
+		Section  string   `json:"section"`
+		IDs      []string `json:"ids"`
+		AssetIDs []string `json:"asset_ids"`
+		Offset   int      `json:"offset"`
+		Limit    int      `json:"limit"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil {
+		return GraphRequest{}, err
+	}
+	if decoder.Decode(new(any)) != io.EOF {
+		return GraphRequest{}, errors.New("graph read requires one JSON object")
+	}
+	return GraphRequest{Op: op, Section: input.Section, IDs: input.IDs, AssetIDs: input.AssetIDs, Offset: input.Offset, Limit: input.Limit}, nil
+}
+
+// Read transport pages under one state fence. The caller records only the
+// assembled result as a decision observation; hidden fragments are not evidence
+// that the model has reviewed a refreshed overview or its supporting records.
+func modelGraphRead(ctx context.Context, r GraphRequest, request func(context.Context, GraphRequest) (string, error)) (string, error) {
+	if r.Section == "" {
+		r.Section = "overview"
+	}
+	if r.Limit == 0 {
+		r.Limit = 20
+	}
+	r.evidenceLookup = true
+	raw, err := request(ctx, r)
+	if err != nil {
+		return "", err
+	}
+	if r.Section == "overview" {
+		var reference graphRecordReference
+		if err := json.Unmarshal([]byte(raw), &reference); err != nil {
+			return "", err
+		}
+		if reference.RecordOmitted {
+			r.ExpectedVersion = reference.StateVersion
+			complete, err := modelGraphRecord(ctx, r, reference, request)
+			return string(complete), err
+		}
+		if len(raw) > maxModelGraphReadBytes {
+			return "", errors.New("graph overview exceeds the model read budget")
+		}
+		return raw, nil
+	}
+	var result graphPage
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		return "", err
+	}
+	if result.Section != r.Section || result.Total < 0 || result.Offset != min(r.Offset, result.Total) || len(result.StateVersion) != 64 {
+		return "", errors.New("invalid graph read page")
+	}
+	r.ExpectedVersion = result.StateVersion
+	page := result
+	result.Items = []json.RawMessage{}
+	result.NextOffset = nil
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		if len(page.Items) > r.Limit-len(result.Items) || page.Offset+len(page.Items) > result.Total ||
+			(page.NextOffset != nil && (*page.NextOffset != page.Offset+len(page.Items) || *page.NextOffset >= result.Total || len(page.Items) == 0)) ||
+			(page.NextOffset == nil && page.Offset+len(page.Items) != result.Total) {
+			return "", errors.New("invalid graph read continuation offset")
+		}
+		for index, item := range page.Items {
+			var marker struct {
+				graphRecordReference
+				ID              string `json:"id"`
+				EvidenceOmitted bool   `json:"evidence_omitted"`
+				SourcesOmitted  bool   `json:"sources_omitted"`
+			}
+			// Support pages may contain source ID strings, not object records.
+			if len(item) > 0 && item[0] == '{' {
+				if err := json.Unmarshal(item, &marker); err != nil {
+					return "", err
+				}
+			}
+			offset := page.Offset + index
+			if marker.RecordOmitted || marker.EvidenceOmitted || marker.SourcesOmitted {
+				read := r
+				read.Offset, read.Limit = offset, 1
+				if marker.RecordOmitted && (marker.RecordOffset != offset || marker.StateVersion != result.StateVersion) {
+					return "", errors.New("graph record continuation changed its bound page")
+				}
+				item, err = modelGraphRecord(ctx, read, marker.graphRecordReference, request)
+				if err != nil {
+					return "", err
+				}
+				if marker.ID != "" {
+					var identity struct{ ID string }
+					if json.Unmarshal(item, &identity) != nil || identity.ID != marker.ID {
+						return "", errors.New("graph record continuation changed its identity")
+					}
+				}
+			}
+			result.Items = append(result.Items, item)
+			next := offset + 1
+			result.NextOffset = nil
+			if next < result.Total {
+				result.NextOffset = &next
+			}
+			encoded, err := json.Marshal(result)
+			if err != nil {
+				return "", err
+			}
+			if len(encoded) > maxModelGraphReadBytes {
+				result.Items = result.Items[:len(result.Items)-1]
+				if len(result.Items) == 0 {
+					return "", errors.New("graph record exceeds the model read budget; select its evidence or sources separately")
+				}
+				result.NextOffset = &offset
+				encoded, err = json.Marshal(result)
+				return string(encoded), err
+			}
+		}
+		if len(result.Items) == r.Limit || page.NextOffset == nil {
+			encoded, err := json.Marshal(result)
+			return string(encoded), err
+		}
+		next := r
+		next.Offset = *page.NextOffset
+		next.Limit = r.Limit - len(result.Items)
+		raw, err = request(ctx, next)
+		if err != nil {
+			return "", err
+		}
+		// A fresh page owns fresh RawMessage buffers. Reusing the previous page
+		// would overwrite records already retained in the assembled result.
+		page = graphPage{}
+		if json.Unmarshal([]byte(raw), &page) != nil || page.Section != result.Section || page.Offset != next.Offset || page.StateVersion != result.StateVersion || page.Total != result.Total || page.Revision != result.Revision || page.Generation != result.Generation || !slices.Equal(page.MissingIDs, result.MissingIDs) {
+			return "", errors.New("graph read continuation changed its bound page")
+		}
+	}
+}
+
+func modelGraphRecord(ctx context.Context, r GraphRequest, reference graphRecordReference, request func(context.Context, GraphRequest) (string, error)) (json.RawMessage, error) {
+	if reference.RecordOmitted && (reference.RecordBytes <= 0 || reference.RecordBytes > maxModelGraphReadBytes || len(reference.RecordVersion) != 64) {
+		return nil, errors.New("invalid or oversized graph record; select narrower evidence or sources")
+	}
+	var result json.RawMessage
+	total, version := reference.RecordBytes, reference.RecordVersion
+	for offset := 0; ; {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		r.ByteOffset, r.RecordVersion = &offset, version
+		raw, err := request(ctx, r)
+		if err != nil {
+			return nil, err
+		}
+		var part graphContentPage
+		if json.Unmarshal([]byte(raw), &part) != nil || part.Section != r.Section || part.Offset != r.Offset || part.StateVersion != r.ExpectedVersion || len(part.RecordVersion) != 64 || part.ByteOffset != offset || part.TotalBytes <= 0 || part.TotalBytes > maxModelGraphReadBytes || len(part.Content) == 0 || len(part.Content) > part.TotalBytes-offset {
+			return nil, errors.New("invalid graph record continuation")
+		}
+		if offset == 0 && !reference.RecordOmitted {
+			total, version = part.TotalBytes, part.RecordVersion
+		}
+		if part.TotalBytes != total || part.RecordVersion != version {
+			return nil, errors.New("graph record continuation changed its bound record")
+		}
+		result = append(result, part.Content...)
+		offset += len(part.Content)
+		if part.NextByteOffset == nil {
+			if offset != total || graphRecordVersion(result) != version || !json.Valid(result) {
+				return nil, errors.New("graph record continuation failed its content check")
+			}
+			return result, nil
+		}
+		if *part.NextByteOffset != offset || offset >= total {
+			return nil, errors.New("invalid graph record continuation offset")
+		}
+	}
+}

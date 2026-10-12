@@ -58,37 +58,17 @@ func TestCuratorSnapshotReadsRetainedPagesAndBindsCommit(t *testing.T) {
 	if err != nil || len(view) > board.DefaultContextViewBytes {
 		t.Fatal("unbounded curator prompt")
 	}
-	read := func(request GraphRequest) string {
-		input, _ := json.Marshal(request)
-		raw, err := o.Tools[0].Execute(context.Background(), input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return raw
+	result, err := o.Tools[0].Execute(context.Background(), json.RawMessage(`{"section":"candidates","ids":["candidate_a"]}`))
+	if err != nil {
+		t.Fatal(err)
 	}
 	var page graphPage
-	if json.Unmarshal([]byte(read(GraphRequest{Section: "candidates", IDs: []string{"candidate_a"}})), &page) != nil || len(page.Items) != 1 {
+	if json.Unmarshal([]byte(result), &page) != nil || len(page.Items) != 1 {
 		t.Fatal("snapshot candidate missing")
 	}
-	var ref graphRecordReference
-	if json.Unmarshal(page.Items[0], &ref) != nil || !ref.RecordOmitted {
-		t.Fatal("large record did not offer continuation")
-	}
-	content, offset := "", 0
-	for {
-		var part graphContentPage
-		if json.Unmarshal([]byte(read(GraphRequest{Section: "candidates", IDs: []string{"candidate_a"}, ByteOffset: &offset, RecordVersion: ref.RecordVersion})), &part) != nil {
-			t.Fatal("invalid continuation")
-		}
-		content += part.Content
-		if part.NextByteOffset == nil {
-			break
-		}
-		offset = *part.NextByteOffset
-	}
 	var candidate board.Candidate
-	if json.Unmarshal([]byte(content), &candidate) != nil || candidate.Reason != frozen.Candidates[0].Reason {
-		t.Fatal("snapshot changed original bytes")
+	if json.Unmarshal(page.Items[0], &candidate) != nil || candidate.Reason != frozen.Candidates[0].Reason || strings.Contains(result, "record_omitted") {
+		t.Fatal("runtime did not restore the original snapshot record")
 	}
 	if _, err := o.Tools[1].Execute(context.Background(), json.RawMessage(`{"op":"curate","payload":{"groups":[]}}`)); err != nil {
 		t.Fatal(err)
@@ -119,7 +99,7 @@ func TestCuratorReadsImmutableSnapshotLocallyAndKeepsCommitCAS(t *testing.T) {
 		t.Fatal("curator read protocol must not suggest replacing its immutable input")
 	}
 	call := func(request GraphRequest) (string, error) {
-		raw, _ := json.Marshal(request)
+		raw, _ := json.Marshal(map[string]any{"section": request.Section, "ids": request.IDs, "limit": request.Limit})
 		return read.Execute(context.Background(), raw)
 	}
 	for _, section := range []string{"overview", "facts", "steps", "disputes", "relations", "sources"} {
@@ -134,32 +114,15 @@ func TestCuratorReadsImmutableSnapshotLocallyAndKeepsCommitCAS(t *testing.T) {
 	raw, err := call(GraphRequest{Section: "candidates", IDs: []string{"candidate_a"}, Limit: 1})
 	var page graphPage
 	if err != nil || json.Unmarshal([]byte(raw), &page) != nil || len(page.Items) != 1 {
-		t.Fatalf("missing oversized candidate reference: %s %v", raw, err)
-	}
-	var reference graphRecordReference
-	if json.Unmarshal(page.Items[0], &reference) != nil || !reference.RecordOmitted {
-		t.Fatalf("oversized candidate bypassed record paging: %s", raw)
-	}
-	content, offset := "", 0
-	for {
-		raw, err := call(GraphRequest{Section: "candidates", IDs: []string{"candidate_a"}, ByteOffset: &offset, ExpectedVersion: version, RecordVersion: reference.RecordVersion})
-		var fragment graphContentPage
-		if err != nil || json.Unmarshal([]byte(raw), &fragment) != nil {
-			t.Fatalf("snapshot continuation failed: %s %v", raw, err)
-		}
-		content += fragment.Content
-		if fragment.NextByteOffset == nil {
-			break
-		}
-		offset = *fragment.NextByteOffset
+		t.Fatalf("missing assembled candidate: %v", err)
 	}
 	var candidate board.CandidateView
 	want := j.State.CandidateView(j.State.Candidates[0])
-	if json.Unmarshal([]byte(content), &candidate) != nil || candidate.Reason != j.State.Candidates[0].Reason || candidate.GroupKey != want.GroupKey || candidate.SupportValid == nil || *candidate.SupportValid != *want.SupportValid {
+	if json.Unmarshal(page.Items[0], &candidate) != nil || candidate.Reason != j.State.Candidates[0].Reason || candidate.GroupKey != want.GroupKey || candidate.SupportValid == nil || *candidate.SupportValid != *want.SupportValid {
 		t.Fatal("snapshot paging changed original candidate bytes")
 	}
-	if _, err := call(GraphRequest{Section: "candidates", ExpectedVersion: strings.Repeat("f", 64)}); err == nil || !strings.Contains(err.Error(), "state_changed") {
-		t.Fatalf("explicit wrong snapshot version accepted: %v", err)
+	if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"candidates","expected_version":"model-version"}`)); err == nil {
+		t.Fatal("model supplied a transport-only snapshot version")
 	}
 	if rpcs != 0 || *o.GraphVersion != version {
 		t.Fatalf("reads used RPC or replaced immutable input: %d %s", rpcs, *o.GraphVersion)
@@ -207,16 +170,18 @@ func TestCuratorPromptAndCandidateReadsShareGroupingAndConfidenceHints(t *testin
 		t.Fatalf("prompt/read grouping diverged or candidate confidence was promoted: %+v", candidate)
 	}
 	contract := o.Tools[1].Description + "\n" + string(o.Tools[1].Schema)
-	for _, rule := range []string{"equal candidate group_key", "not a graph ID", "same-status producer candidate with support_valid=true", "Independent review evidence for an existing dispute only"} {
+	for _, rule := range []string{"group_key", "complete group", "support_valid=true", "Independent review evidence for an existing dispute only"} {
 		if !strings.Contains(contract, rule) {
 			t.Fatalf("curator contract does not explain %q", rule)
 		}
 	}
-	if !strings.Contains(string(o.Tools[1].Schema), "read-only grouping hint") || !strings.Contains(string(o.Tools[1].Schema), "omit group_key") {
-		t.Fatal("curation group fields do not distinguish input hints from writable fields")
+	if !strings.Contains(string(o.Tools[1].Schema), "exact group_key") || !strings.Contains(string(o.Tools[1].Schema), "remaining groups stay queued") {
+		t.Fatal("curation selectors do not explain complete groups and bounded batches")
 	}
-	if err := agent.ValidateArguments(o.Tools[1].Schema, json.RawMessage(`{"op":"curate","payload":{"groups":[{"candidate_ids":["candidate_a"],"status":"candidate","reason":"Uncertain","group_key":"read-only"}]}}`)); err == nil || !strings.Contains(err.Error(), "group_key") {
-		t.Fatalf("read-only group hint was accepted as a write: %v", err)
+	for _, selector := range []string{`"candidate_ids":["candidate_a"]`, `"group_key":"` + candidate.GroupKey + `"`} {
+		if err := agent.ValidateArguments(o.Tools[1].Schema, json.RawMessage(`{"op":"curate","payload":{"groups":[{`+selector+`,"status":"candidate","reason":"Uncertain"}]}}`)); err != nil {
+			t.Fatalf("complete group selector is unavailable to the model: %v", err)
+		}
 	}
 	after, _ := json.Marshal(j)
 	if string(before) != string(after) || page.StateVersion != version || board.DecisionStateVersion(*j.State) != version {

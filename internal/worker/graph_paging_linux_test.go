@@ -75,34 +75,11 @@ func TestReadGraphRuntimeContinuesOversizedOverview(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var reference graphRecordReference
-				if err = json.Unmarshal([]byte(initial), &reference); err != nil || !reference.RecordOmitted {
-					t.Fatal("runtime hid the oversized overview continuation")
-				}
-				zero := 0
-				request := GraphRequest{Section: "overview", ByteOffset: &zero, ExpectedVersion: reference.StateVersion, RecordVersion: reference.RecordVersion}
-				var result strings.Builder
-				for {
-					raw, _ := json.Marshal(request)
-					fragment, err := tool.Execute(context.Background(), raw)
-					if err != nil {
-						t.Fatal(err)
-					}
-					var page graphContentPage
-					if err = json.Unmarshal([]byte(fragment), &page); err != nil {
-						t.Fatal(err)
-					}
-					result.WriteString(page.Content)
-					if page.NextByteOffset == nil {
-						break
-					}
-					request.ByteOffset = page.NextByteOffset
-				}
 				var overview struct {
 					Inputs []board.Fact `json:"user_inputs"`
 				}
-				if err = json.Unmarshal([]byte(result.String()), &overview); err != nil || !reflect.DeepEqual(overview.Inputs, state.Graph.Facts) {
-					t.Fatal("runtime could not recover the original overview inputs")
+				if err = json.Unmarshal([]byte(initial), &overview); err != nil || !reflect.DeepEqual(overview.Inputs, state.Graph.Facts) || strings.Contains(initial, `"next_byte_offset"`) {
+					t.Fatal("runtime did not assemble the complete overview in one model read")
 				}
 				return
 			}

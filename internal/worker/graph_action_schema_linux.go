@@ -18,14 +18,11 @@ func graphReadSchema(orchestration bool) json.RawMessage {
 	sections = append(sections, "assets", "anchors", "history")
 	raw, _ := json.Marshal(map[string]any{
 		"type": "object", "properties": map[string]any{
-			"section":          map[string]any{"type": "string", "description": "Record sections support listing. evidence and sources require exactly one ID; use them only for omitted support.", "enum": sections},
-			"ids":              map[string]any{"type": "array", "description": "Exactly one owning record ID is required for evidence or sources. Evidence accepts Fact/Finding/Candidate IDs; sources accepts Finding/Candidate IDs. Other sections may omit IDs to list records.", "items": map[string]any{"type": "string"}, "maxItems": 50, "uniqueItems": true},
-			"asset_ids":        map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "maxItems": 32, "uniqueItems": true, "description": "Match any of these assets in assets/anchors/facts/steps/findings/candidates/history. Combine with ids to narrow records; preserve filters while paging."},
-			"offset":           map[string]any{"type": "integer", "minimum": 0},
-			"byte_offset":      map[string]any{"type": "integer", "minimum": 0},
-			"expected_version": map[string]any{"type": "string"},
-			"record_version":   map[string]any{"type": "string"},
-			"limit":            map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
+			"section":   map[string]any{"type": "string", "description": "Record sections support listing. evidence and sources require exactly one ID to select its support.", "enum": sections},
+			"ids":       map[string]any{"type": "array", "description": "Exactly one owning record ID is required for evidence or sources. Evidence accepts Fact/Finding/Candidate IDs; sources accepts Finding/Candidate IDs. Other sections may omit IDs to list records.", "items": map[string]any{"type": "string"}, "maxItems": 50, "uniqueItems": true},
+			"asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "maxItems": 32, "uniqueItems": true, "description": "Match any of these assets in assets/anchors/facts/steps/findings/candidates/history. Combine with ids to narrow records; preserve filters while paging."},
+			"offset":    map[string]any{"type": "integer", "minimum": 0},
+			"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
 		}, "required": []string{"section"}, "additionalProperties": false,
 	})
 	return raw

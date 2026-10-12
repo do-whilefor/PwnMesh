@@ -50,7 +50,7 @@ func TestGraphReadSchemasPreserveModeSectionsAndSnapshotContract(t *testing.T) {
 				}
 				for _, raw := range []string{
 					`{"section":"facts","ids":["f1"],"asset_ids":["a1"],"offset":2,"limit":1}`,
-					`{"section":"evidence","ids":["f1"],"offset":0,"byte_offset":4,"expected_version":"state","record_version":"record"}`,
+					`{"section":"evidence","ids":["f1"],"offset":0,"limit":1}`,
 				} {
 					if err := agent.ValidateArguments(schema, json.RawMessage(raw)); err != nil {
 						t.Errorf("%s lost a supported read shape: %s: %v", tool, raw, err)
@@ -60,7 +60,8 @@ func TestGraphReadSchemasPreserveModeSectionsAndSnapshotContract(t *testing.T) {
 					`{}`, `{"section":"unknown"}`, `{"section":"facts","extra":true}`,
 					`{"section":"facts","ids":[7]}`, `{"section":"facts","asset_ids":null}`,
 					`{"section":"facts","asset_ids":[7]}`, `{"section":"facts","offset":-1}`,
-					`{"section":"facts","byte_offset":-1}`, `{"section":"facts","limit":0}`, `{"section":"facts","limit":51}`,
+					`{"section":"facts","byte_offset":0}`, `{"section":"facts","expected_version":"state"}`, `{"section":"facts","record_version":"record"}`,
+					`{"section":"facts","limit":0}`, `{"section":"facts","limit":51}`,
 				} {
 					if err := agent.ValidateArguments(schema, json.RawMessage(raw)); err == nil {
 						t.Errorf("%s accepted malformed read: %s", tool, raw)

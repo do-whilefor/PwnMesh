@@ -229,7 +229,7 @@ func TestDecisionMetricsRuntimeOperationsAndLostCommit(t *testing.T) {
 			if conflict && event.Request.Section == "facts" {
 				response.Error, conflict = "state_changed: updated evidence", false
 			} else {
-				response.Result, _ = json.Marshal(map[string]string{"state_version": version})
+				response.Result, _ = json.Marshal(map[string]any{"section": event.Request.Section, "offset": 0, "total": 0, "state_version": version, "items": []any{}})
 			}
 		case "decision_preview":
 			response.Result, _ = json.Marshal(board.DecisionReceipt{StateVersion: version})

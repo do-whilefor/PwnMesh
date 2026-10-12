@@ -32,7 +32,7 @@ func TestDecisionConflictRefreshesInSameSessionWithoutReusingDraft(t *testing.T)
 					return board.DecisionReceipt{}, nil
 				case "read_graph":
 					reads++
-					return map[string]any{"state_version": current, "items": []map[string]string{{"id": "corrected", "description": "Use the corrected observation"}}}, nil
+					return map[string]any{"section": request.Section, "offset": 0, "total": 1, "state_version": current, "items": []map[string]string{{"id": "corrected", "description": "Use the corrected observation"}}}, nil
 				case "decision_preview", "decision_commit":
 					writes++
 					if writes == 1 {

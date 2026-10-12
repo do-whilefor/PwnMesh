@@ -47,7 +47,7 @@ func TestDecideUsesOnePlannerDespiteRetiredShadowSettings(t *testing.T) {
 					case "decision_receipt":
 						return board.DecisionReceipt{}, nil
 					case "read_graph":
-						return map[string]any{"state_version": job.Decision.StateVersion, "items": []board.Fact{{ID: "origin", Description: "Current fixture scope"}}}, nil
+						return map[string]any{"section": request.Section, "offset": 0, "total": 1, "state_version": job.Decision.StateVersion, "items": []board.Fact{{ID: "origin", Description: "Current fixture scope"}}}, nil
 					case "decision_commit":
 						commits++
 						if request.Batch == nil || len(request.Batch.Actions) != 1 || request.Batch.Actions[0].Op != "step" {
