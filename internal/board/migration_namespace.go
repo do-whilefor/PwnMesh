@@ -158,7 +158,7 @@ func migratePwnMeshNamespace(tx *sql.Tx) error {
 	return checkStoreForeignKeys(tx)
 }
 
-func checkStoreForeignKeys(tx *sql.Tx) error {
+func checkStoreForeignKeys(tx transactionQueries) error {
 	rows, err := tx.Query("PRAGMA foreign_key_check")
 	if err != nil {
 		return err

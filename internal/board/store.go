@@ -18,8 +18,17 @@ type Store struct {
 	readers *sql.DB
 	Now     func() time.Time
 }
+
+// Store.Do/View owns transaction finalization. Board operations retain their
+// query surface without exposing the underlying sql.Tx or its lifecycle methods.
+type transactionQueries interface {
+	Exec(string, ...any) (sql.Result, error)
+	Query(string, ...any) (*sql.Rows, error)
+	QueryRow(string, ...any) *sql.Row
+}
+
 type Tx struct {
-	*sql.Tx
+	transactionQueries
 	Now             string
 	inDecisionBatch bool
 }
@@ -93,7 +102,7 @@ func (s *Store) View(ctx context.Context, fn func(*Tx) error) error {
 		return err
 	}
 	defer t.Rollback()
-	if err := fn(&Tx{Tx: t, Now: s.Now().UTC().Format(time.RFC3339)}); err != nil {
+	if err := fn(&Tx{transactionQueries: t, Now: s.Now().UTC().Format(time.RFC3339)}); err != nil {
 		return err
 	}
 	return t.Commit()
@@ -107,7 +116,7 @@ func (s *Store) Do(ctx context.Context, fn func(*Tx) error) error {
 		return err
 	}
 	defer t.Rollback()
-	x := &Tx{Tx: t, Now: s.Now().UTC().Format(time.RFC3339)}
+	x := &Tx{transactionQueries: t, Now: s.Now().UTC().Format(time.RFC3339)}
 	if err = fn(x); err != nil {
 		return err
 	}

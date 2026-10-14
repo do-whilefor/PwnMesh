@@ -252,7 +252,7 @@ func checkNamespaceTriggerBehavior(t *testing.T, store *Store) {
 				t.Fatalf("renamed FK did not cascade %s: %d %v", table, count, err)
 			}
 		}
-		return checkStoreForeignKeys(tx.Tx)
+		return checkStoreForeignKeys(tx)
 	})
 	if err != nil {
 		t.Fatal(err)
