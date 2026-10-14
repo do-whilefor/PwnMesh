@@ -30,7 +30,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
 | `internal/board/` | Transactional business operations, admission, mutations and consistent state assembly |
 | `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
-| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph/execution/lease rows, snapshot bytes, projection inputs, schema and migrations |
+| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph/execution/lease rows, state metadata, events and receipts, snapshot bytes, projection inputs, schema and migrations |
 | `internal/board/internal/projection/` | Metadata decoding and pure state, dependency support and asset derivation |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
@@ -70,8 +70,20 @@ keep archived Job/Result bodies out of scheduling and state projection. Executio
 registration, result updates, revocation and resume counters use that same caller
 transaction; Board still validates transitions and combines them with review
 state, revisions and failure events. Historical execution archival streams rows
-in registration order. Specialized mutations, receipt lookups and event queries
-still contain SQL in Board. There is one canonical model, not a duplicate transport model.
+in registration order. Specialized graph mutations, round archive rows and lifecycle
+queries still contain SQL in Board. There is one canonical model, not a duplicate transport model.
+
+Sqlstore owns state metadata, event and action receipt rows. Board supplies the
+encoded metadata, initial state, revision changes and canonical receipt bytes,
+then combines them with graph mutations and execution settlement. Event-only
+increments retain existing metadata bytes. Event reads stream raw bytes for Board
+to decode, or for round archival to retain unchanged; discovery remains bounded
+to 1000 entries while archival has no page limit. Change indexes use the SQL
+revision and project only the requested JSON fields. Curate folds streamed event
+markers into its own review and correction policy. Receipt storage preserves
+request/response text and insertion order; Board alone decides replay eligibility.
+Restart deletes the current state records only after archival and revocation,
+within the same caller transaction.
 
 The private `projection` package consumes canonical graph/runtime values and
 compact metadata without querying storage or changing its input. Metadata decoding

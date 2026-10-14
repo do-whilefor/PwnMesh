@@ -2,11 +2,6 @@ package sqlstore
 
 import "pwnmesh/internal/board/model"
 
-func StateMetadata(q Queries, project string) (raw []byte, revision, decision int64, err error) {
-	err = q.QueryRow("SELECT data,revision,decision_revision FROM pwnmesh_state WHERE project_id=?", project).Scan(&raw, &revision, &decision)
-	return
-}
-
 // Only runtime identity is needed for the current graph. Keep archived Job and
 // Result bodies out of this read, including when a retained body is malformed.
 // Registration order selects the latest attempt across namespaces/generations;

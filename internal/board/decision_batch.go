@@ -84,8 +84,7 @@ func emptyDecisionReceipt() DecisionReceipt {
 
 func (t *Tx) savedDecision(project, lease string) (DecisionReceipt, string, error) {
 	out := emptyDecisionReceipt()
-	var request, response string
-	err := t.QueryRow("SELECT request,response FROM pwnmesh_state_actions WHERE project_id=? AND idempotency_key=?", project, "decision:"+lease).Scan(&request, &response)
+	request, response, err := sqlstore.ActionReceipt(t.transactionQueries, project, "decision:"+lease)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, "", nil
 	}
@@ -339,7 +338,7 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	if err != nil {
 		return out, err
 	}
-	if _, err = t.Exec("INSERT INTO pwnmesh_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, "decision:"+fence.Run, string(canonical), string(response)); err != nil {
+	if err = sqlstore.InsertActionReceipt(t.transactionQueries, project, "decision:"+fence.Run, string(canonical), string(response)); err != nil {
 		return out, err
 	}
 	result, _ := json.Marshal(map[string]any{"status": "success", "type": "result", "text": `{"accepted":true,"data":{"decided":true}}`, "state_version": out.StateVersion})

@@ -142,38 +142,23 @@ func (t *Tx) curationNeeded(s State) (bool, error) {
 	// Version 1 records corrective relations inside the atomic curation event.
 	// A scan without relations only acknowledges its input and must not wake
 	// another scan solely because an unsupported conclusion remains retained.
-	rows, err := t.Query(`SELECT json_extract(event,'$.op'),json_extract(event,'$.id'),json_extract(event,'$.run_id'),
-		CASE WHEN json_extract(event,'$.op')='fact_relation' THEN json_extract(event,'$.result') ELSE '{}' END
-		FROM pwnmesh_state_events WHERE project_id=? AND revision>? AND (
-		json_extract(event,'$.op') IN ('step_completed','fact_relation') OR
-		(json_extract(event,'$.op')='curate' AND json_array_length(event,'$.payload.relations')>0))`, s.Graph.Project.ID, s.Curation.ThroughRevision)
-	if err != nil {
-		return false, err
-	}
 	completed, curators := map[string]bool{}, map[string]bool{}
 	relations := map[FactRelation]bool{}
-	for rows.Next() {
-		var op, id, run, result string
-		if err := rows.Scan(&op, &id, &run, &result); err != nil {
-			rows.Close()
-			return false, err
-		}
-		switch op {
+	err := sqlstore.VisitCurationEvents(t, s.Graph.Project.ID, s.Curation.ThroughRevision, func(event sqlstore.CurationEvent) error {
+		switch event.Op {
 		case "step_completed":
-			completed[id] = true
+			completed[event.ID] = true
 		case "curate":
-			curators[run] = true
+			curators[event.RunID] = true
 		case "fact_relation":
 			var relation FactRelation
-			if err := json.Unmarshal([]byte(result), &relation); err != nil {
-				rows.Close()
-				return false, err
+			if err := json.Unmarshal([]byte(event.Result), &relation); err != nil {
+				return err
 			}
 			relations[relation] = true
 		}
-	}
-	err = rows.Err()
-	rows.Close()
+		return nil
+	})
 	if err != nil {
 		return false, err
 	}
@@ -215,8 +200,7 @@ func CurationRetryKey(s State) string { return "curate:" + DecisionStateVersion(
 // Receipt reads remain available after the live lease ends. The HTTP layer
 // checks that the caller possesses the registered immutable run identity.
 func (t *Tx) CurationReceipt(project, run string) (StateActionResult, error) {
-	var response string
-	err := t.QueryRow(`SELECT a.response FROM pwnmesh_state_actions a WHERE a.project_id=? AND json_extract(a.request,'$.Run')=? AND json_extract(a.request,'$.Op')='curate' LIMIT 1`, project, run).Scan(&response)
+	response, err := sqlstore.CurationResponse(t, project, run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return StateActionResult{}, Err(404, "Curation receipt not found")
 	}

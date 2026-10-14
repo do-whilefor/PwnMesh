@@ -1,6 +1,10 @@
 package board
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"pwnmesh/internal/board/internal/sqlstore"
+)
 
 // ConcludeEvidenceStep shares the process-fact command and validations. Its
 // caller commits this mutation and the execution receipt in one transaction.
@@ -78,7 +82,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 		payload, _ := json.Marshal(map[string]string{"fact_id": factID})
 		encoded, _ := json.Marshal(result)
 		event, _ := json.Marshal(StateEvent{Revision: revision, Op: "step_completed", ID: fence.Intent, RunID: fence.Run, CreatedAt: t.Now, Payload: payload, Result: encoded})
-		_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", project, revision, string(event))
+		err = sqlstore.InsertStateEvent(t, project, revision, string(event))
 		return result, err
 	}
 	return Conclusion{}, Err(404, "Step not found")

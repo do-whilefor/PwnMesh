@@ -1,5 +1,7 @@
 package board
 
+import "pwnmesh/internal/board/internal/sqlstore"
+
 // RestartProject begins a fresh board round, preserving human inputs. Lease
 // tombstones and ID counters deliberately survive: late workers must never
 // regain authority or accidentally address a replacement step with an old ID.
@@ -28,11 +30,13 @@ func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
 	if err = t.RevokeRuns(project); err != nil {
 		return Graph{}, err
 	}
+	if _, err = t.Exec("DELETE FROM pwnmesh_project_termination WHERE project_id=?", project); err != nil {
+		return Graph{}, err
+	}
+	if err = sqlstore.DeleteStateRecords(t, project); err != nil {
+		return Graph{}, err
+	}
 	for _, query := range []string{
-		"DELETE FROM pwnmesh_project_termination WHERE project_id=?",
-		"DELETE FROM pwnmesh_state_actions WHERE project_id=?",
-		"DELETE FROM pwnmesh_state_events WHERE project_id=?",
-		"DELETE FROM pwnmesh_state WHERE project_id=?",
 		"DELETE FROM pwnmesh_executions WHERE project_id=?",
 		// The generation fence rejects every old-round cursor. Keep the
 		// revision sequence, but discard the deletion markers just generated.

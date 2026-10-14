@@ -3,6 +3,8 @@ package board
 import (
 	"encoding/json"
 	"slices"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 const MaxDisputeReviews = 2
@@ -133,7 +135,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 		if err != nil {
 			return err
 		}
-		if _, err = t.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id=?", string(raw), e.ProjectID); err != nil {
+		if err = sqlstore.UpdateStateMetadata(t, e.ProjectID, string(raw)); err != nil {
 			return err
 		}
 		// Without an invalidated in-flight plan, authorized startup is execution
@@ -145,8 +147,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 		result, _ := json.Marshal(dispute)
 		payload, _ := json.Marshal(map[string]string{"step_id": e.Intent, "status": status})
 		event, _ := json.Marshal(StateEvent{Revision: revision, Op: "dispute", ID: dispute.ID, RunID: e.Lease, CreatedAt: t.Now, Payload: payload, Result: result})
-		_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", e.ProjectID, revision, string(event))
-		return err
+		return sqlstore.InsertStateEvent(t, e.ProjectID, revision, string(event))
 	}
 	return nil
 }

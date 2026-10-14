@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 )
 
@@ -106,8 +107,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if err != nil {
 		return StateActionResult{}, err
 	}
-	var oldRequest, oldResponse string
-	err = t.QueryRow("SELECT request,response FROM pwnmesh_state_actions WHERE project_id=? AND idempotency_key=?", project, action.IdempotencyKey).Scan(&oldRequest, &oldResponse)
+	oldRequest, oldResponse, err := sqlstore.ActionReceipt(t, project, action.IdempotencyKey)
 	if err == nil {
 		if oldRequest != string(canonical) {
 			return StateActionResult{}, Err(409, "idempotency key was used for a different action")
@@ -120,8 +120,8 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		return StateActionResult{}, err
 	}
 	if action.Op == "curate" {
-		var committed bool
-		if err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_state_actions WHERE project_id=? AND json_extract(request,'$.Run')=? AND json_extract(request,'$.Op')='curate')`, project, fence.Run).Scan(&committed); err != nil {
+		committed, err := sqlstore.HasCurationReceipt(t, project, fence.Run)
+		if err != nil {
 			return StateActionResult{}, err
 		}
 		if committed {
@@ -182,7 +182,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		if err != nil {
 			return StateActionResult{}, err
 		}
-		if _, err = t.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", project, string(raw), s.Revision, s.DecisionRevision); err != nil {
+		if err = sqlstore.SaveStateMetadata(t, project, string(raw), s.Revision, s.DecisionRevision); err != nil {
 			return StateActionResult{}, err
 		}
 	}
@@ -212,7 +212,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	out.AssetIDs = current.AssetIDs(action.Op, id)
 	out.Committed = action.Op == "curate"
 	response, _ := json.Marshal(out)
-	if _, err = t.Exec("INSERT INTO pwnmesh_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
+	if err = sqlstore.InsertActionReceipt(t, project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
 		return StateActionResult{}, err
 	}
 	if !changed {
@@ -220,7 +220,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		return out, nil
 	}
 	event, _ := json.Marshal(StateEvent{Revision: s.Revision, Op: action.Op, ID: id, RunID: fence.Run, CreatedAt: t.Now, Payload: action.Payload, Result: resultJSON})
-	_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", project, s.Revision, string(event))
+	err = sqlstore.InsertStateEvent(t, project, s.Revision, string(event))
 	if err == nil {
 		*snapshot = current
 	}

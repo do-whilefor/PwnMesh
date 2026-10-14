@@ -2,6 +2,12 @@ package model
 
 import "encoding/json"
 
+type StateChange struct {
+	Revision int64  `json:"revision"`
+	Op       string `json:"op"`
+	ID       string `json:"id"`
+}
+
 type StateEvent struct {
 	Revision  int64           `json:"revision"`
 	Op        string          `json:"op"`

@@ -1,6 +1,10 @@
 package board
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"pwnmesh/internal/board/internal/sqlstore"
+)
 
 // SaveUserInput persists human hints and reopen feedback with their ordered
 // change event. Graph commands own their events and use Save directly.
@@ -44,6 +48,5 @@ func (t *Tx) SaveUserInput(g Graph, op, id, run string, payload, result any) err
 	if err != nil {
 		return err
 	}
-	_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", g.Project.ID, revision, string(event))
-	return err
+	return sqlstore.InsertStateEvent(t, g.Project.ID, revision, string(event))
 }

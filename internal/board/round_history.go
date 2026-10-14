@@ -49,47 +49,20 @@ func (t *Tx) archiveRound(project string) error {
 	}
 	// Stream records one by one rather than materializing every historical Job
 	// or all evidence-bearing events in an archive-sized in-memory slice.
-	rows, err := t.Query("SELECT revision,event FROM pwnmesh_state_events WHERE project_id=? ORDER BY revision", project)
+	err = sqlstore.VisitStateEvents(t, project, nil, 0, func(revision int64, event []byte) error {
+		return save("event", strconv.FormatInt(revision, 10), event)
+	})
 	if err != nil {
 		return err
 	}
-	for rows.Next() {
-		var revision int64
-		var event []byte
-		if err = rows.Scan(&revision, &event); err == nil {
-			err = save("event", strconv.FormatInt(revision, 10), event)
-		}
+	err = sqlstore.VisitActionReceipts(t, project, func(id, request, response string) error {
+		// Keep even legacy request/response text byte-for-byte.
+		data, err := json.Marshal(map[string]string{"request": request, "response": response})
 		if err != nil {
-			rows.Close()
 			return err
 		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	rows, err = t.Query("SELECT idempotency_key,request,response FROM pwnmesh_state_actions WHERE project_id=? ORDER BY rowid", project)
-	if err != nil {
-		return err
-	}
-	for rows.Next() {
-		var id, request, response string
-		if err = rows.Scan(&id, &request, &response); err == nil {
-			var data []byte
-			// Keep even legacy request/response text byte-for-byte.
-			data, err = json.Marshal(map[string]string{"request": request, "response": response})
-			if err == nil {
-				err = save("action", id, data)
-			}
-		}
-		if err != nil {
-			rows.Close()
-			return err
-		}
-	}
-	err = rows.Err()
-	rows.Close()
+		return save("action", id, data)
+	})
 	if err != nil {
 		return err
 	}

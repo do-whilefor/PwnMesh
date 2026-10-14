@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 // CompleteCurationExecution settles the accepted batch in the same transaction
@@ -80,8 +81,7 @@ func (t *Tx) replayCuration(project string, fence ExecutionFence, action StateAc
 	if err != nil {
 		return StateActionResult{}, false, err
 	}
-	var request, response string
-	err = t.QueryRow("SELECT request,response FROM pwnmesh_state_actions WHERE project_id=? AND idempotency_key=?", project, action.IdempotencyKey).Scan(&request, &response)
+	request, response, err := sqlstore.ActionReceipt(t.transactionQueries, project, action.IdempotencyKey)
 	if errors.Is(err, sql.ErrNoRows) {
 		return StateActionResult{}, false, nil
 	}
