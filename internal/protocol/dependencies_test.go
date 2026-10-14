@@ -69,6 +69,7 @@ func TestTransitiveDependencyBoundaries(t *testing.T) {
 		{"board/model", []string{"board", "worker", "protocol", "provider", "agent", "server", "dispatcher", "docker", "config", "process", "tools"}, true},
 		{"worker/dag", []string{"board", "board/model", "worker", "protocol", "provider", "agent"}, true},
 		{"worker/internal/phase", []string{"board", "board/model", "worker", "protocol", "provider", "agent", "config", "process", "tools"}, true},
+		{"worker/internal/journal", []string{"board", "board/model", "worker", "protocol", "provider", "config", "process", "tools"}, true},
 		{"board/internal/sqlstore", []string{"board", "worker", "protocol", "provider", "agent", "server", "dispatcher", "docker", "config"}, false},
 		{"server", []string{"worker"}, false},
 	} {

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"strings"
 	"testing"
 	"time"
@@ -271,11 +272,11 @@ func TestToolProgressResumeAfterSettledSaveCannotBuyAnotherTurn(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := openJournal(dir, nil)
+	journal, err := eventlog.Open(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.file.Close()
+	defer journal.Close()
 	task := agent.Text("user", "Original task")
 	task.Sequence = 1
 	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, RunID: job.RunID, Kind: job.Kind, StartedAt: time.Now(), TaskPrompt: task.Text(), History: []agent.Message{task}}
@@ -287,7 +288,7 @@ func TestToolProgressResumeAfterSettledSaveCannotBuyAnotherTurn(t *testing.T) {
 	}
 	saved.ContextCheckpoint = &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion, LastSequence: saved.History[len(saved.History)-1].Sequence}
 	for _, message := range saved.History {
-		if err := journal.append(agent.Event{Type: "message_end", Message: &message}); err != nil {
+		if err := journal.Append(agent.Event{Type: "message_end", Message: &message}); err != nil {
 			t.Fatal(err)
 		}
 	}

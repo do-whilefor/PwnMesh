@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"reflect"
 	"strings"
 	"testing"
@@ -101,13 +102,13 @@ func testCompactedPublicationEvidence(t *testing.T, legacyExcerpt bool) {
 	}
 	result := Result{Status: "success", Text: `{"accepted":true,"outcome":"completed","data":{"fact_id":"f_published"}}`}
 	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, RunID: j.RunID, Kind: j.Kind, StartedAt: time.Now(), Result: &result, History: history}
-	journal, err := openJournal(dir, nil)
+	journal, err := eventlog.Open(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.file.Close()
+	defer journal.Close()
 	for _, message := range history {
-		if err := journal.append(agent.Event{Type: "message_end", Message: &message}); err != nil {
+		if err := journal.Append(agent.Event{Type: "message_end", Message: &message}); err != nil {
 			t.Fatal(err)
 		}
 	}

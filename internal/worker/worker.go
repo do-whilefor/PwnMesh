@@ -83,7 +83,7 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	defer runtime.journal.file.Close()
+	defer runtime.journal.Close()
 	if result, done, err := runtime.recover(ctx); done || err != nil {
 		return result, err
 	}

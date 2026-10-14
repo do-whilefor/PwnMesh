@@ -22,6 +22,7 @@ import (
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/agent"
 	board "pwnmesh/internal/board/model"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 )
 
 const maxTraceBytes = 64 << 20
@@ -366,9 +367,9 @@ func readTraceJournal(ctx context.Context, workspace string, run board.TraceRun,
 		return nil, bound, errors.New("trace unavailable: checkpoint is unreadable or exceeds the 16 MiB bound")
 	}
 	var saved struct {
-		SchemaVersion int               `json:"schema_version"`
-		Identity      executionIdentity `json:"identity"`
-		Log           journalCheckpoint `json:"log_checkpoint"`
+		SchemaVersion int                 `json:"schema_version"`
+		Identity      executionIdentity   `json:"identity"`
+		Log           eventlog.Checkpoint `json:"log_checkpoint"`
 	}
 	if json.Unmarshal(raw, &saved) != nil || saved.SchemaVersion != sessionSchemaVersion || saved.Identity.ProjectID != run.ProjectID || saved.Identity.RunID != run.RunID || saved.Identity.StepID != run.StepID || saved.Identity.Kind != "explore" || saved.Identity.Workspace != root || saved.Identity.WorkspaceTarget != root || saved.Identity.RunDir != filepath.Join(root, ".pwnmesh", "runs", run.RunID) || saved.Identity.RunDirTarget != saved.Identity.RunDir || saved.Identity.JobDigest != run.JobSHA256 {
 		return nil, bound, errors.New("trace unavailable: retained checkpoint does not match the registered execution")

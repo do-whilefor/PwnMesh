@@ -18,10 +18,10 @@ func TestCommittedTranscriptBindsResultAndExcludesCrashTail(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer runtime.journal.file.Close()
+	defer runtime.journal.Close()
 	message := agent.Text("assistant", "committed observation")
 	message.Sequence = 1
-	if err := runtime.journal.append(agent.Event{Type: "message_end", Message: &message}); err != nil {
+	if err := runtime.journal.Append(agent.Event{Type: "message_end", Message: &message}); err != nil {
 		t.Fatal(err)
 	}
 	runtime.state.Result = &Result{Type: "result", Status: "success", Text: completedOutput}
@@ -38,7 +38,7 @@ func TestCommittedTranscriptBindsResultAndExcludesCrashTail(t *testing.T) {
 	}
 	tail := agent.Text("assistant", "uncommitted observation")
 	tail.Sequence = 2
-	if err := runtime.journal.append(agent.Event{Type: "message_end", Message: &tail}); err != nil {
+	if err := runtime.journal.Append(agent.Event{Type: "message_end", Message: &tail}); err != nil {
 		t.Fatal(err)
 	}
 	for _, visit := range []func(func(agent.Message) error) error{transcript.visitCurrent, func(consume func(agent.Message) error) error {

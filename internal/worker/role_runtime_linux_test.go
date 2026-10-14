@@ -59,7 +59,7 @@ func TestSessionSaveUsesSuppliedCheckpointAndRollsBackRejectedSave(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = runtime.journal.file.Close() })
+	t.Cleanup(func() { _ = runtime.journal.Close() })
 	runtime.roles = &roleRuntime{graph: graphRuntimeState{Version: "accepted"}}
 	runtime.loop = &agent.Loop{Checkpoint: &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion, LastSequence: 99}, TaskPrompt: "original task"}
 	supplied := &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion, LastSequence: 3}
@@ -93,7 +93,7 @@ func TestSessionSaveUsesSuppliedCheckpointAndRollsBackRejectedSave(t *testing.T)
 		t.Fatal("role mutation rewrote the saved session outside persistence")
 	}
 	old := runtime.state
-	if err := runtime.journal.file.Close(); err != nil {
+	if err := runtime.journal.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := runtime.saveAgentState([]agent.Message{agent.Text("user", "not committed")}, &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion, LastSequence: 4}); err == nil {

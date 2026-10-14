@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,7 +29,7 @@ type updateSessionFixture struct {
 	job      Job
 	state    *session
 	loop     *agent.Loop
-	journal  *eventJournal
+	journal  *eventlog.Log
 	failSave bool
 	logErr   error
 }
@@ -47,11 +48,11 @@ func newUpdateSessionFixture(t *testing.T) *updateSessionFixture {
 	f.state = &session{SchemaVersion: sessionSchemaVersion, Identity: id, RunID: f.job.RunID, Kind: f.job.Kind,
 		StartedAt: started, ExecutionDeadline: started.Add(90 * time.Second), RecoveryCount: 1,
 		ContextCheckpoint: &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion}}
-	f.journal, err = openJournal(f.dir, nil)
+	f.journal, err = eventlog.Open(f.dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = f.journal.file.Close() })
+	t.Cleanup(func() { _ = f.journal.Close() })
 	f.bindLoop()
 	if err := f.loop.AppendInstruction("Immutable original task"); err != nil {
 		t.Fatal(err)
@@ -62,7 +63,7 @@ func newUpdateSessionFixture(t *testing.T) *updateSessionFixture {
 func (f *updateSessionFixture) bindLoop() {
 	f.loop = &agent.Loop{History: f.state.History, Checkpoint: f.state.ContextCheckpoint, ContextData: f.state.ExecuteUpdates.contextData(), Emit: func(event agent.Event) {
 		if f.logErr == nil {
-			f.logErr = f.journal.append(event)
+			f.logErr = f.journal.Append(event)
 		}
 	}}
 	f.loop.SaveState = func(history []agent.Message, _ *agent.ContextCheckpoint) error { return f.save(history) }
@@ -106,18 +107,18 @@ func (f *updateSessionFixture) diskState() *session {
 func (f *updateSessionFixture) reopen() {
 	f.t.Helper()
 	saved := f.diskState()
-	if err := f.journal.file.Close(); err != nil {
+	if err := f.journal.Close(); err != nil {
 		f.t.Fatal(err)
 	}
 	var err error
-	f.journal, err = openJournal(f.dir, &saved.Log)
+	f.journal, err = eventlog.Open(f.dir, &saved.Log, nil)
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	// Match Run's sequence reservation: uncommitted events remain auditable,
 	// but their messages and cursors are not restored as committed context.
-	if saved.ContextCheckpoint.LastSequence < f.journal.lastSequence {
-		saved.ContextCheckpoint.LastSequence = f.journal.lastSequence
+	if saved.ContextCheckpoint.LastSequence < f.journal.Recovery().LastSequence {
+		saved.ContextCheckpoint.LastSequence = f.journal.Recovery().LastSequence
 	}
 	f.state, f.failSave, f.logErr = saved, false, nil
 	f.bindLoop()
@@ -174,11 +175,15 @@ func TestExecuteUpdateCheckpointRecoversAfterJournalBeforeSessionSave(t *testing
 	if saved.ExecuteUpdates != nil || updateNoticeCount(saved.History) != 0 || f.state.ExecuteUpdates != nil || len(f.loop.ContextData) != 0 || saved.Log != before.Log {
 		t.Fatal("failed save committed a cursor without its notice")
 	}
-	if f.journal.offset <= saved.Log.Offset {
+	checkpoint, err := f.journal.SyncCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Offset <= saved.Log.Offset {
 		t.Fatal("failure did not leave the intended uncommitted journal message")
 	}
 	f.reopen()
-	if f.journal.uncommitted <= 0 || f.loop.Checkpoint.LastSequence != 2 {
+	if f.journal.Recovery().Uncommitted <= 0 || f.loop.Checkpoint.LastSequence != 2 {
 		t.Fatal("recovery lost uncommitted provenance or reused its sequence")
 	}
 	if err := f.refresh(read); err != nil {
@@ -209,7 +214,7 @@ func TestExecuteUpdateCheckpointSavedBeforeRequestSurvivesRecovery(t *testing.T)
 	if saved.ExecuteUpdates.Cursor.Revision != 8 || saved.ExecuteUpdates.NoticeSequence != committed.ExecuteUpdates.NoticeSequence || updateNoticeCount(saved.History) != 1 || !strings.Contains(saved.History[len(saved.History)-1].Text(), "Exact correction evidence") {
 		t.Fatal("saved-before-request recovery lost or duplicated the correction")
 	}
-	if f.journal.uncommitted != 0 {
+	if f.journal.Recovery().Uncommitted != 0 {
 		t.Fatal("fully committed session was treated as a journal-only update")
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/process"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"pwnmesh/internal/worker/internal/phase"
 	"time"
 )
@@ -21,7 +22,8 @@ type sessionRuntime struct {
 	job                  Job
 	options              Options
 	state                session
-	journal              *eventJournal
+	journal              *eventlog.Log
+	metrics              decisionMetrics
 	encoder              *json.Encoder
 	loop                 *agent.Loop
 	roles                *roleRuntime
@@ -65,16 +67,17 @@ func restoreSession(j Job, o Options) (*sessionRuntime, error) {
 	if err := validateExecuteUpdateState(j, &state); err != nil {
 		return nil, err
 	}
-	var checkpoint *journalCheckpoint
+	var checkpoint *eventlog.Checkpoint
 	if resuming {
 		checkpoint = &state.Log
 	}
-	journal, err := openJournal(o.RunDir, checkpoint)
+	metrics := newDecisionMetrics()
+	journal, err := eventlog.Open(o.RunDir, checkpoint, metrics.observeRecovered)
 	if err != nil {
 		return nil, err
 	}
 
-	runtime := &sessionRuntime{job: j, options: o, state: state, journal: journal, encoder: json.NewEncoder(o.Output), resuming: resuming}
+	runtime := &sessionRuntime{job: j, options: o, state: state, journal: journal, metrics: metrics, encoder: json.NewEncoder(o.Output), resuming: resuming}
 	return runtime, nil
 }
 
@@ -84,7 +87,10 @@ func (r *sessionRuntime) emit(e agent.Event) {
 		state.setPhaseState(state.phaseState().RepairResponded())
 	}
 	if r.logErr == nil {
-		r.logErr = journal.append(e)
+		r.logErr = journal.Append(e)
+		if r.logErr == nil {
+			r.metrics.observe(e)
+		}
 	}
 	if r.logErr == nil {
 		r.logErr = enc.Encode(e)
@@ -165,13 +171,13 @@ func (runtime *sessionRuntime) finish(ctx context.Context, r Result) (Result, er
 	}
 	r.StateVersion = state.GraphVersion
 	if controlJob(j) {
-		metrics := journal.metrics.finish(j, r, state.StartedAt, o.Now())
+		metrics := runtime.metrics.finish(j, r, state.StartedAt, o.Now())
 		if runtime.roles != nil && runtime.roles.curation != nil && runtime.roles.curation.committed {
 			metrics.Committed, metrics.Outcome = true, "curation_committed"
 		}
 		r.Metrics = &metrics
 	}
-	if err := journal.append(r); err != nil {
+	if err := journal.Append(r); err != nil {
 		return r, err
 	}
 	state.Result = &r

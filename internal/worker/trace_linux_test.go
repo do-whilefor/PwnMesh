@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"strings"
 	"testing"
 
@@ -57,7 +58,7 @@ func newTraceFixture(t *testing.T, contents ...string) traceFixture {
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: journalCheckpoint{Offset: int64(len(raw)), SHA256: graphRecordVersion(raw)}, TaskPrompt: "job-secret-must-not-leak"}
+	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: eventlog.Checkpoint{Offset: int64(len(raw)), SHA256: graphRecordVersion(raw)}, TaskPrompt: "job-secret-must-not-leak"}
 	b, _ := json.Marshal(saved)
 	if err := os.WriteFile(filepath.Join(dir, "session.json"), b, 0600); err != nil {
 		t.Fatal(err)
@@ -182,7 +183,7 @@ func TestWorkerTraceRegisteredMapOrderingMatchesSessionIdentity(t *testing.T) {
 	if f.run.JobSHA256 != identity.JobDigest || f.run.JobSHA256 == graphRecordVersion(registered) || f.run.RegisteredJob != nil {
 		t.Fatal("trace binding used raw JSON instead of runtime Job serialization")
 	}
-	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: journalCheckpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}}
+	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}}
 	raw, _ := json.Marshal(saved)
 	if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
 		t.Fatal(err)
@@ -255,7 +256,7 @@ func TestWorkerTraceContinuationKeepsPrefixAfterCheckpointAdvances(t *testing.T)
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		t.Fatal(err)
 	}
-	saved.Log = journalCheckpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}
+	saved.Log = eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}
 	raw, _ = json.Marshal(saved)
 	if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
 		t.Fatal(err)
@@ -552,7 +553,7 @@ func TestWorkerTraceDetailRetainsObservationProvenance(t *testing.T) {
 			if err := json.Unmarshal(raw, &saved); err != nil {
 				t.Fatal(err)
 			}
-			saved.Log = journalCheckpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}
+			saved.Log = eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}
 			raw, _ = json.Marshal(saved)
 			if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
 				t.Fatal(err)

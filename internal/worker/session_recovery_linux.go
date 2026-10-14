@@ -67,16 +67,17 @@ func (runtime *sessionRuntime) recover(ctx context.Context) (Result, bool, error
 			return finish(Result{Type: "result", Status: "failed", Conclude: state.Concluding, FailureKind: "recovery_exhausted", FailureCause: resumeFailureCause, Error: "same-run infrastructure recovery exhausted after 2 attempts"})
 		}
 		state.RecoveryCount++
-		if state.ContextCheckpoint == nil && (journal.lastSequence > 0 || journal.lastCompaction > 0) {
+		retained := journal.Recovery()
+		if state.ContextCheckpoint == nil && (retained.LastSequence > 0 || retained.LastCompaction > 0) {
 			state.ContextCheckpoint = &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion}
 		}
-		if state.ContextCheckpoint != nil && state.ContextCheckpoint.LastSequence < journal.lastSequence {
-			state.ContextCheckpoint.LastSequence = journal.lastSequence
+		if state.ContextCheckpoint != nil && state.ContextCheckpoint.LastSequence < retained.LastSequence {
+			state.ContextCheckpoint.LastSequence = retained.LastSequence
 		}
-		if state.ContextCheckpoint != nil && state.ContextCheckpoint.CompactionCount < journal.lastCompaction {
-			state.ContextCheckpoint.CompactionCount = journal.lastCompaction
+		if state.ContextCheckpoint != nil && state.ContextCheckpoint.CompactionCount < retained.LastCompaction {
+			state.ContextCheckpoint.CompactionCount = retained.LastCompaction
 		}
-		emit(agent.Event{Type: "recovery", Text: fmt.Sprintf("same run recovery %d/%d; retained %d uncommitted log bytes; incomplete tail archive: %s", state.RecoveryCount, maxRunRecoveries, journal.uncommitted, journal.partialArchive)})
+		emit(agent.Event{Type: "recovery", Text: fmt.Sprintf("same run recovery %d/%d; retained %d uncommitted log bytes; incomplete tail archive: %s", state.RecoveryCount, maxRunRecoveries, retained.Uncommitted, retained.PartialArchive)})
 	}
 	// The identity, budget and consumed recovery allowance precede any request.
 	if err := save(state.History); err != nil {

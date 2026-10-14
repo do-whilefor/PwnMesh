@@ -32,6 +32,13 @@ a second live owner. Acceptance reads
 only the identity-bound saved transcript or its verified committed journal prefix,
 never an uncommitted crash tail.
 
+The private journal owner verifies the saved byte offset and checksum before
+recovery. Complete crash-tail records remain append-only; an incomplete final
+record is archived and synced before truncation. Session saves obtain a synced
+journal checkpoint before replacing the session file. Acceptance visits only the
+verified committed prefix. Historical `replan_*` metrics are adapted while
+replaying retained records; current event handling does not normalize them.
+
 For Execute, an accepted receipt binds the run and input hash to retained session
 and artifact hashes. Evidence is verified again on read. A changed repair target
 cannot reuse the previous success. Deterministic acceptance failure is terminal;

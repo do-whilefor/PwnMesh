@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"reflect"
 	"strings"
 	"testing"
@@ -771,7 +772,7 @@ func TestDecisionDraftRunRecoversSavedRepairIntoPlanning(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := openJournal(runDir, nil)
+	journal, err := eventlog.Open(runDir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -779,7 +780,7 @@ func TestDecisionDraftRunRecoversSavedRepairIntoPlanning(t *testing.T) {
 	history := []agent.Message{agent.Text("user", "Check the original bounded scope"), agent.Text("assistant", "Unfinished JSON"), agent.Text("user", oldRepair)}
 	for n := range history {
 		history[n].Sequence = uint64(n + 1)
-		if err := journal.append(agent.Event{Type: "message_end", Message: &history[n]}); err != nil {
+		if err := journal.Append(agent.Event{Type: "message_end", Message: &history[n]}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -793,7 +794,7 @@ func TestDecisionDraftRunRecoversSavedRepairIntoPlanning(t *testing.T) {
 	if err := saved.save(runDir, journal); err != nil {
 		t.Fatal(err)
 	}
-	if err := journal.file.Close(); err != nil {
+	if err := journal.Close(); err != nil {
 		t.Fatal(err)
 	}
 	version, calls, commits := strings.Repeat("f", 64), 0, 0

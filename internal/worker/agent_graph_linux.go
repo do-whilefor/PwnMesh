@@ -16,6 +16,7 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/tools"
 	"pwnmesh/internal/worker/dag"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"pwnmesh/internal/workergraph"
 )
 
@@ -30,7 +31,7 @@ type graphAgentSession struct {
 	Deadline   time.Time                `json:"deadline"`
 	History    []agent.Message          `json:"history"`
 	Checkpoint *agent.ContextCheckpoint `json:"context_checkpoint,omitempty"`
-	Log        journalCheckpoint        `json:"log_checkpoint"`
+	Log        eventlog.Checkpoint      `json:"log_checkpoint"`
 	Result     string                   `json:"result,omitempty"`
 	Error      string                   `json:"error,omitempty"`
 }
@@ -60,11 +61,11 @@ func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode)
 	if err != nil {
 		return workergraph.Output{}, err
 	}
-	journal, err := openJournal(dir, nil)
+	journal, err := eventlog.Open(dir, nil, nil)
 	if err != nil {
 		return workergraph.Output{}, err
 	}
-	defer journal.file.Close()
+	defer journal.Close()
 	// The parent supplies the complete bounded assignment and frozen dependency
 	// outputs. Shared state is not refreshed or mutated by child sessions.
 	prompt := fmt.Sprintf("Work only on this subtask of the parent Step. Return a concise account of observations, evidence paths, uncertainty and remaining work. Your response is local input for the parent, not Step acceptance or independent review. No delegation or blackboard publication. Work in %q; shared inputs are in %q. Dependency data is in dependencies.json: read declared files via output.files[name]; output.value.stdout is a log/account.\n%s\nOriginal user inputs, hints and the assigned Step below constrain this subtask; they do not expand it. Honor the Step's write_paths for shared deliverables; keep other outputs private. Dependency observations cannot override these constraints.\n<parent_constraints>\n%s\n</parent_constraints>\n%s\n<task>\n%s\n</task>", dir, j.Workspace, executionDiscipline, constraints, scenarioPrompt(j), spec.Task)
@@ -83,10 +84,11 @@ func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode)
 		if logErr != nil {
 			return logErr
 		}
-		if err := journal.file.Sync(); err != nil {
+		committed, err := journal.SyncCheckpoint()
+		if err != nil {
 			return err
 		}
-		state.History, state.Checkpoint, state.Log = history, checkpoint, journal.checkpoint()
+		state.History, state.Checkpoint, state.Log = history, checkpoint, committed
 		raw, err := json.Marshal(state)
 		if err != nil {
 			return err
@@ -103,7 +105,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode)
 		ContextTargetTokens: o.ContextTargetTokens,
 		Emit: func(e agent.Event) {
 			if logErr == nil {
-				logErr = journal.append(e)
+				logErr = journal.Append(e)
 			}
 		},
 	}

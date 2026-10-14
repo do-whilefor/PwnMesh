@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"strings"
 	"testing"
 	"time"
@@ -180,11 +181,11 @@ func seedOutcomeSession(t *testing.T, j Job, runDir, text string, consumed int, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := openJournal(runDir, nil)
+	journal, err := eventlog.Open(runDir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.file.Close()
+	defer journal.Close()
 	m := agent.Text("assistant", text)
 	m.Sequence = 1
 	s := session{SchemaVersion: sessionSchemaVersion, Identity: id, RunID: j.RunID, Kind: j.Kind, StartedAt: time.Now(), History: []agent.Message{m}, ContextCheckpoint: &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion, LastSequence: 1}, ContinuationCount: consumed}
@@ -197,7 +198,7 @@ func seedOutcomeSession(t *testing.T, j Job, runDir, text string, consumed int, 
 	if savedResult {
 		s.Result = &Result{Type: "result", Status: "success", Text: text}
 	}
-	if err := journal.append(agent.Event{Type: "message_end", Message: &m}); err != nil {
+	if err := journal.Append(agent.Event{Type: "message_end", Message: &m}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.save(runDir, journal); err != nil {

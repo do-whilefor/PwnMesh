@@ -36,6 +36,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
 | `internal/worker/` | Session lifecycle, recovery, runtime tools, evidence acceptance |
 | `internal/worker/internal/phase/` | Pure deadline, allowance, recovery and phase transition policy |
+| `internal/worker/internal/journal/` | Append-only event bytes, committed-prefix verification, crash-tail archival and journal checkpoints |
 | `internal/worker/dag/` | Mixed-node execution, artifact inputs, snapshots and verified reuse |
 | `internal/agent/` | Provider-independent model/tool loop and context checkpoints |
 | `internal/provider/`, `internal/modelrpc/` | Anthropic-compatible model client and bridge wire contract |
@@ -84,6 +85,11 @@ Worker's `worker.go` coordinates its session. The `session_*_linux.go` files own
 locking and cancellation, persisted state, recovery, Agent setup and phase
 effects. The private `phase` package receives values and decides transitions,
 without access to the session, Agent, prompts, filesystem or provider.
+The private `journal` package owns its file handle, digest, append position and
+crash-tail archive. It returns a synced checkpoint and recovery values; Session
+owns the identity, transcript and atomic session replacement. Decision metrics
+belong to the per-run runtime, with historical shadow-event adaptation applied
+only during replay. Neither Session nor nested Agents access the journal handle.
 `graph_run_linux.go` and `acceptance_linux.go` enforce the outer
 evidence receipt boundary. Journals/checkpoints precede side effects; durable
 receipts are checked before issuing more model or tool calls.

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,7 +94,8 @@ func TestDecisionMetricsCountCompletionEvidenceOutsideView(t *testing.T) {
 
 func TestDecisionMetricsReplayJournalReceipts(t *testing.T) {
 	dir := t.TempDir()
-	journal, err := openJournal(dir, nil)
+	want := newDecisionMetrics()
+	journal, err := eventlog.Open(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,21 +107,90 @@ func TestDecisionMetricsReplayJournalReceipts(t *testing.T) {
 		{Op: "decision_receipt", Committed: true, Actions: 2},
 		{Op: "decision_receipt", Committed: true, Actions: 2},
 	} {
-		if err := journal.append(operation.event()); err != nil {
+		event := operation.event()
+		if err := journal.Append(event); err != nil {
 			t.Fatal(err)
 		}
+		want.observe(event)
 	}
-	checkpoint, want := journal.checkpoint(), journal.metrics
-	if err := journal.file.Close(); err != nil {
-		t.Fatal(err)
-	}
-	recovered, err := openJournal(dir, &checkpoint)
+	checkpoint, err := journal.SyncCheckpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer recovered.file.Close()
-	if !reflect.DeepEqual(recovered.metrics, want) || !recovered.metrics.Committed || recovered.metrics.CommittedActions != 2 {
-		t.Fatalf("replay changed observations: got %+v; want %+v", recovered.metrics, want)
+	if err := journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	metrics := newDecisionMetrics()
+	recovered, err := eventlog.Open(dir, &checkpoint, metrics.observeRecovered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer recovered.Close()
+	if !reflect.DeepEqual(metrics, want) || !metrics.Committed || metrics.CommittedActions != 2 {
+		t.Fatalf("replay changed observations: got %+v; want %+v", metrics, want)
+	}
+}
+
+func TestDecisionMetricsHistoricalAdapterRunsOnlyDuringRecovery(t *testing.T) {
+	shadow := []agent.Event{
+		{Type: "replan_model_call_start", Request: &agent.RequestObservation{Kind: "turn", InputBytes: 70, InputBasis: "fixture"}},
+		{Type: "replan_model_call_end", Request: &agent.RequestObservation{Usage: &agent.Usage{InputTokens: 9}}},
+		{Type: "replan_tool_start", ToolName: "read_graph"},
+		{Type: "replan_tool_start", ToolName: "graph_action"},
+		{Type: "replan_tool_end", ToolName: "graph_action"},
+		{Type: "replan_decision_operation", Text: `{"op":"decision_commit","committed":true,"actions":9}`},
+	}
+	live := newDecisionMetrics()
+	for _, event := range shadow {
+		live.observe(event)
+	}
+	if !reflect.DeepEqual(live, newDecisionMetrics()) {
+		t.Fatalf("live metrics adapted retired events: %+v", live)
+	}
+	job, dir := outcomeJob(t, "explore"), t.TempDir()
+	runtime, err := restoreSession(job, Options{RunDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range shadow {
+		if err := runtime.journal.Append(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	current := agent.Event{Type: "model_call_start", Request: &agent.RequestObservation{Kind: "turn", InputBytes: 25, InputBasis: "fixture"}}
+	runtime.emit(current)
+	if runtime.metrics.ModelCalls != 1 || runtime.metrics.InitialInputBytes != 25 {
+		t.Fatalf("runtime did not own live observations: %+v", runtime.metrics)
+	}
+	if err := runtime.save(nil); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := restoreSession(job, Options{RunDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.journal.Close()
+	metrics := restored.metrics
+	if metrics.ModelCalls != 2 || metrics.CompletedCalls != 1 || metrics.InitialInputBytes != 25 || metrics.TotalInputBytes != 95 || metrics.Usage.InputTokens != 9 || metrics.GraphReads != 1 || metrics.GraphActions != 0 || metrics.Committed {
+		t.Fatalf("historical adapter changed accounting or authority: %+v", metrics)
+	}
+	after, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+	if err != nil || string(before) != string(after) {
+		t.Fatalf("metrics recovery rewrote the retained journal: %v", err)
+	}
+	if err := restored.journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	restored.emit(current)
+	if restored.logErr == nil || !reflect.DeepEqual(restored.metrics, metrics) {
+		t.Fatal("failed journal append changed live metrics")
 	}
 }
 
@@ -127,15 +198,18 @@ func TestJournalRejectsInvalidCheckpoints(t *testing.T) {
 	for _, mode := range []string{"checksum", "short_log", "record_boundary", "malformed_record", "unbound"} {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
-			journal, err := openJournal(dir, nil)
+			journal, err := eventlog.Open(dir, nil, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := journal.append(agent.Event{Type: "model_call_start", Request: &agent.RequestObservation{Kind: "turn"}}); err != nil {
+			if err := journal.Append(agent.Event{Type: "model_call_start", Request: &agent.RequestObservation{Kind: "turn"}}); err != nil {
 				t.Fatal(err)
 			}
-			checkpoint := journal.checkpoint()
-			if err := journal.file.Close(); err != nil {
+			checkpoint, err := journal.SyncCheckpoint()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := journal.Close(); err != nil {
 				t.Fatal(err)
 			}
 			saved, want := &checkpoint, ""
@@ -157,9 +231,9 @@ func TestJournalRejectsInvalidCheckpoints(t *testing.T) {
 			case "unbound":
 				saved, want = nil, "without a bound session"
 			}
-			recovered, err := openJournal(dir, saved)
+			recovered, err := eventlog.Open(dir, saved, nil)
 			if recovered != nil {
-				recovered.file.Close()
+				recovered.Close()
 			}
 			if err == nil || !strings.Contains(err.Error(), want) {
 				t.Fatalf("invalid journal was not rejected: got %v, want %q", err, want)

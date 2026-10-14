@@ -32,24 +32,26 @@ func newDecisionMetrics() decisionMetrics {
 	return decisionMetrics{DecisionMetrics{Version: 1, UsageStatus: "unknown", CostStatus: "unknown", Outcome: "unknown"}}
 }
 
-func (m *decisionMetrics) observe(event agent.Event) {
-	// Historical shadow events still contribute to recovered call totals.
-	// Their private transcript and unavailable writes are not planning actions.
-	shadow := strings.HasPrefix(event.Type, "replan_")
-	if shadow {
-		event.Type = strings.TrimPrefix(event.Type, "replan_")
-		// The read-only check cannot send graph mutations. Keep attempts at
-		// unavailable write tools in its own metrics; they cannot make the
-		// real planner's noop look like an uncertain server write.
-		if event.ToolName == "graph_action" {
-			return
-		}
+// observeRecovered is the retained shadow-event adapter. It runs only while
+// loading the journal: historical calls count, but unavailable writes cannot
+// become current planner authority and shadow input is never initial input.
+func (m *decisionMetrics) observeRecovered(event agent.Event) {
+	if !strings.HasPrefix(event.Type, "replan_") {
+		m.observe(event)
+		return
 	}
+	event.Type = strings.TrimPrefix(event.Type, "replan_")
+	if event.Type == "decision_operation" || event.ToolName == "graph_action" {
+		return
+	}
+	initial := m.InitialInputBytes
+	m.observe(event)
+	m.InitialInputBytes = initial
+}
+
+func (m *decisionMetrics) observe(event agent.Event) {
 	switch event.Type {
 	case "decision_operation":
-		if shadow {
-			return
-		}
 		var operation decisionOperation
 		if json.Unmarshal([]byte(event.Text), &operation) != nil {
 			return
@@ -63,7 +65,7 @@ func (m *decisionMetrics) observe(event agent.Event) {
 		if event.Request.Kind == "summary" {
 			m.SummaryCalls++
 		}
-		if !shadow && m.InitialInputBytes == 0 && event.Request.Kind == "turn" {
+		if m.InitialInputBytes == 0 && event.Request.Kind == "turn" {
 			m.InitialInputBytes = event.Request.InputBytes
 		}
 		m.TotalInputBytes += int64(event.Request.InputBytes)

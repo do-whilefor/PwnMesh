@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"strings"
 	"testing"
 	"time"
@@ -277,13 +278,13 @@ func savedFinishPublication(t *testing.T, j Job, dir, variant string) board.Fact
 		t.Fatal(err)
 	}
 	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, RunID: j.RunID, Kind: j.Kind, StartedAt: time.Now(), History: history}
-	journal, err := openJournal(dir, nil)
+	journal, err := eventlog.Open(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.file.Close()
+	defer journal.Close()
 	for _, message := range history {
-		if err := journal.append(agent.Event{Type: "message_end", Message: &message}); err != nil {
+		if err := journal.Append(agent.Event{Type: "message_end", Message: &message}); err != nil {
 			t.Fatal(err)
 		}
 	}

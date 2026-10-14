@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"strings"
 	"testing"
 	"time"
@@ -108,14 +109,14 @@ func seedHistoricalShadowSession(t *testing.T, job Job, dir string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := openJournal(dir, nil)
+	journal, err := eventlog.Open(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.file.Close()
+	defer journal.Close()
 	message := agent.Text("assistant", "private shadow transcript")
 	message.Sequence = 999
-	if err := journal.append(agent.Event{Type: "replan_message_end", Message: &message}); err != nil {
+	if err := journal.Append(agent.Event{Type: "replan_message_end", Message: &message}); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()

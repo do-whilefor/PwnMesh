@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"strings"
 	"sync"
 	"testing"
@@ -274,13 +275,13 @@ func TestGraphWrapperPublishedFactEvidenceAndCompactedHistory(t *testing.T) {
 					return Result{}, err
 				}
 				saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, RunID: job.RunID, Kind: job.Kind, StartedAt: time.Now(), Result: &result, History: history}
-				journal, err := openJournal(o.RunDir, nil)
+				journal, err := eventlog.Open(o.RunDir, nil, nil)
 				if err != nil {
 					return Result{}, err
 				}
-				defer journal.file.Close()
+				defer journal.Close()
 				for _, message := range history {
-					if err = journal.append(agent.Event{Type: "message_end", Message: &message}); err != nil {
+					if err = journal.Append(agent.Event{Type: "message_end", Message: &message}); err != nil {
 						return Result{}, err
 					}
 				}
@@ -298,7 +299,12 @@ func TestGraphWrapperPublishedFactEvidenceAndCompactedHistory(t *testing.T) {
 					}
 				}
 				if test == "uncommitted_tail" {
-					if _, err = journal.file.Write([]byte("uncommitted partial crash tail")); err != nil {
+					tail, err := os.OpenFile(filepath.Join(o.RunDir, "events.jsonl"), os.O_WRONLY|os.O_APPEND, 0600)
+					if err != nil {
+						return Result{}, err
+					}
+					_, err = tail.Write([]byte("uncommitted partial crash tail"))
+					if err = errors.Join(err, tail.Close()); err != nil {
 						return Result{}, err
 					}
 				}

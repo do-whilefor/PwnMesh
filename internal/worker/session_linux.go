@@ -3,22 +3,19 @@
 package worker
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"pwnmesh/internal/agent"
 	board "pwnmesh/internal/board/model"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 )
 
 const sessionSchemaVersion = 1
@@ -61,16 +58,11 @@ func identityFor(j Job, runDir string) (executionIdentity, error) {
 	return i, nil
 }
 
-type journalCheckpoint struct {
-	Offset int64  `json:"offset"`
-	SHA256 string `json:"sha256"`
-}
-
 type session struct {
 	RepairCheck            *RepairCheck             `json:"repair_check,omitempty"`
 	SchemaVersion          int                      `json:"schema_version"`
 	Identity               executionIdentity        `json:"identity"`
-	Log                    journalCheckpoint        `json:"log_checkpoint"`
+	Log                    eventlog.Checkpoint      `json:"log_checkpoint"`
 	ContextCheckpoint      *agent.ContextCheckpoint `json:"context_checkpoint,omitempty"`
 	GraphVersion           string                   `json:"graph_version,omitempty"`
 	DecisionConflict       string                   `json:"decision_conflict,omitempty"`
@@ -130,11 +122,12 @@ func (s *session) validate(i executionIdentity) error {
 	return s.phaseState().ValidateDeadlines(phaseBudget(i.OriginalBudget))
 }
 
-func (s *session) save(runDir string, journal *eventJournal) error {
-	if err := journal.file.Sync(); err != nil {
+func (s *session) save(runDir string, journal *eventlog.Log) error {
+	checkpoint, err := journal.SyncCheckpoint()
+	if err != nil {
 		return err
 	}
-	s.Log = journal.checkpoint()
+	s.Log = checkpoint
 	s.Phase = "execute"
 	if s.Concluding {
 		s.Phase = "conclude"
@@ -180,141 +173,4 @@ func atomicSessionFile(runDir string, raw []byte) error {
 		return err
 	}
 	return syncDirectory(runDir)
-}
-
-type eventJournal struct {
-	file           *os.File
-	digest         hash.Hash
-	offset         int64
-	lastSequence   uint64
-	lastCompaction uint64
-	uncommitted    int64
-	partialArchive string
-	metrics        decisionMetrics
-}
-
-// Complete raw records are append-only. Only an incomplete, uncommitted final
-// record may be removed, after its exact bytes have been synced to an archive.
-func openJournal(runDir string, saved *journalCheckpoint) (*eventJournal, error) {
-	f, err := os.OpenFile(filepath.Join(runDir, "events.jsonl"), os.O_CREATE|os.O_RDWR|os.O_APPEND, 0600)
-	if err != nil {
-		return nil, err
-	}
-	ok := false
-	defer func() {
-		if !ok {
-			f.Close()
-		}
-	}()
-	j := &eventJournal{file: f, digest: sha256.New(), metrics: newDecisionMetrics()}
-	stat, err := f.Stat()
-	if err != nil {
-		return nil, err
-	}
-	if saved == nil && stat.Size() > 0 {
-		return nil, errors.New("event history exists without a bound session")
-	}
-	if saved != nil && (saved.Offset < 0 || saved.Offset > stat.Size()) {
-		return nil, errors.New("event log is shorter than its committed checkpoint")
-	}
-	verified := saved == nil
-	verify := func() error {
-		if saved != nil && j.offset == saved.Offset {
-			if hex.EncodeToString(j.digest.Sum(nil)) != saved.SHA256 {
-				return errors.New("committed event log checksum mismatch")
-			}
-			verified = true
-		}
-		return nil
-	}
-	if err = verify(); err != nil {
-		return nil, err
-	}
-	r := bufio.NewReader(f)
-	for {
-		line, readErr := r.ReadBytes('\n')
-		if readErr != nil && readErr != io.EOF {
-			return nil, readErr
-		}
-		if len(line) == 0 {
-			break
-		}
-		if readErr == io.EOF {
-			if !verified {
-				return nil, errors.New("committed event checkpoint includes a partial record")
-			}
-			archive, err := os.CreateTemp(runDir, "events-incomplete-*.jsonl")
-			if err != nil {
-				return nil, err
-			}
-			if _, err = archive.Write(line); err == nil {
-				err = archive.Sync()
-			}
-			err = errors.Join(err, archive.Close())
-			if err != nil {
-				return nil, err
-			}
-			if err = syncDirectory(runDir); err != nil {
-				return nil, err
-			}
-			if err = f.Truncate(j.offset); err != nil {
-				return nil, err
-			}
-			if err = f.Sync(); err != nil {
-				return nil, err
-			}
-			j.partialArchive = filepath.Base(archive.Name())
-			break
-		}
-		var event agent.Event
-		if err = json.Unmarshal(line, &event); err != nil || event.Type == "" {
-			return nil, fmt.Errorf("invalid complete event record at byte %d", j.offset)
-		}
-		// Historical shadow transcripts used their own sequence space.
-		if !strings.HasPrefix(event.Type, "replan_") && event.Message != nil && event.Message.Sequence > j.lastSequence {
-			j.lastSequence = event.Message.Sequence
-		}
-		if !strings.HasPrefix(event.Type, "replan_") && event.Compaction != nil && event.Compaction.ID > j.lastCompaction {
-			j.lastCompaction = event.Compaction.ID
-		}
-		j.metrics.observe(event)
-		j.digest.Write(line)
-		j.offset += int64(len(line))
-		if err = verify(); err != nil {
-			return nil, err
-		}
-	}
-	if !verified {
-		return nil, errors.New("event checkpoint is not at a record boundary")
-	}
-	if saved != nil {
-		j.uncommitted = j.offset - saved.Offset
-	}
-	ok = true
-	return j, nil
-}
-
-func (j *eventJournal) checkpoint() journalCheckpoint {
-	return journalCheckpoint{Offset: j.offset, SHA256: hex.EncodeToString(j.digest.Sum(nil))}
-}
-
-func (j *eventJournal) append(v any) error {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	raw = append(raw, '\n')
-	n, err := j.file.Write(raw)
-	if err != nil {
-		return err
-	}
-	if n != len(raw) {
-		return io.ErrShortWrite
-	}
-	j.digest.Write(raw)
-	j.offset += int64(n)
-	if event, ok := v.(agent.Event); ok {
-		j.metrics.observe(event)
-	}
-	return nil
 }

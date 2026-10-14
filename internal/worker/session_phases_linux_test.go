@@ -23,7 +23,7 @@ func TestPhaseTransitionSaveFailureKeepsCommittedState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer runtime.journal.file.Close()
+			defer runtime.journal.Close()
 			message := agent.Text("assistant", continueOutput)
 			message.Sequence = 2
 			runtime.loop = &agent.Loop{TaskPrompt: "pinned task", History: []agent.Message{agent.Text("user", "pinned task"), message}, Checkpoint: &agent.ContextCheckpoint{Version: agent.ContextCheckpointVersion, LastSequence: 2}, SaveState: runtime.saveAgentState, Emit: runtime.emit}
@@ -46,7 +46,7 @@ func TestPhaseTransitionSaveFailureKeepsCommittedState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := runtime.journal.file.Close(); err != nil {
+			if err := runtime.journal.Close(); err != nil {
 				t.Fatal(err)
 			}
 			phases := &sessionPhases{runtime: runtime, ctx: context.Background(), phaseCtx: context.Background(), endCancel: func() {}}

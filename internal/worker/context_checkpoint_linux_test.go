@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"reflect"
 	"strings"
 	"testing"
@@ -22,11 +23,11 @@ func TestCompactedSessionKeepsReplayViewInJournal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	journal, err := openJournal(dir, nil)
+	journal, err := eventlog.Open(dir, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer journal.file.Close()
+	defer journal.Close()
 	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, RunID: job.RunID, Kind: job.Kind, StartedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}
 	turns := 0
 	loop := agent.Loop{ContextBytes: 12000, SummaryBytes: 4096, RecentBytes: 128, TaskPrompt: "Inspect the fixed fixture.",
@@ -39,7 +40,7 @@ func TestCompactedSessionKeepsReplayViewInJournal(t *testing.T) {
 			return agent.Text("assistant", "done"), nil
 		}),
 		Emit: func(event agent.Event) {
-			if err := journal.append(event); err != nil {
+			if err := journal.Append(event); err != nil {
 				t.Fatal(err)
 			}
 		},
