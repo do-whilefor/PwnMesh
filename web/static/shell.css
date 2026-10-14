@@ -242,7 +242,6 @@ dialog{padding:25px;border-color:#e2e9ed;border-radius:14px;box-shadow:0 20px 65
 .result-scope>.lucide{flex:none;margin-top:3px}.result-scope code{font:11px/1.8 var(--font);overflow-wrap:anywhere;white-space:pre-wrap;min-width:0;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .result-card .result-locate{display:inline-flex;align-items:center;gap:6px}.result-locate>.lucide{width:13px;height:13px}
 
-/* PwnMesh desktop refinement: clear typography, compact surfaces and quiet scrolling. */
 :root{--ink:#273743;--text:#3e5361;--muted:#5c6f7c;--line:#d9e1e6;--bg:#f2f5f7;--accent:#ee805f;--accent-soft:#fff3ed}
 *{scrollbar-width:none}
 *::-webkit-scrollbar{display:none;width:0;height:0}

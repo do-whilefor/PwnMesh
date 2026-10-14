@@ -2,7 +2,6 @@
 ARG PWNMESH_IMAGE=pwnmesh:dev
 FROM --platform=linux/amd64 ${PWNMESH_IMAGE} AS application
 
-# kali-linux-headless is an APT metapackage: install its toolset in the official Kali base image.
 FROM --platform=linux/amd64 kalilinux/kali-rolling@sha256:30399bd65187e06525008dd13eecc2b3439d26a82b2c6b0ba32dee72bd843117 AS runtime
 
 ARG KALI_MIRROR=
@@ -16,12 +15,10 @@ ENV TZ=Asia/Shanghai \
     PLAYWRIGHT_MCP_SANDBOX=false \
     NO_UPDATE_NOTIFIER=1
 
-# Supply CA certificates from the existing control image before the first APT request to bootstrap HTTPS mirrors.
-# Kali's ca-certificates then manages updates; keep TLS and APT signature verification enabled.
+# Bootstrap HTTPS mirrors; Kali manages CA updates after installation.
 COPY --from=application /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 
-# Do not start Apache, SSH, databases, or other services during package installation; start them as needed at runtime.
-# An optional mirror replaces only the URI, preserving suites, components, and signature verification settings.
+# Block service startup during installation; mirror overrides preserve APT verification.
 RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && chmod 0755 /usr/sbin/policy-rc.d \
     && if [ -n "$KALI_MIRROR" ]; then \
@@ -80,7 +77,7 @@ RUN curl --fail --show-error --location --retry 3 \
     && install -m 0755 /tmp/aliyun-install/aliyun /usr/local/bin/aliyun \
     && rm -rf /tmp/aliyun.tgz /tmp/aliyun-install
 
-# Resolve latest as needed; initialize only in a temporary directory without injecting project configuration or skills.
+# Initialize outside /workspace to avoid injecting project configuration or skills.
 RUN npm install --global --no-audit --no-fund @playwright/cli@latest \
     && mkdir /tmp/playwright-setup \
     && cd /tmp/playwright-setup \
@@ -103,8 +100,7 @@ RUN if ! id kali >/dev/null 2>&1; then useradd -m -s /bin/bash kali; fi \
 
 COPY container/environment.md container/check-worker.sh /usr/local/share/pwnmesh/
 COPY container/pwn-http.py /usr/local/bin/pwn-http
-# Kali's CAP_NET_ADMIN for Nmap exceeds Docker's default permissions, preventing even --version from running.
-# Remove file capabilities so the default root process uses the container's existing permissions.
+# Nmap's file capabilities exceed Docker defaults; use the container's existing permissions.
 RUN chmod 0755 /usr/local/share/pwnmesh/check-worker.sh /usr/local/bin/pwn-http \
     && if [ -f /usr/lib/nmap/nmap ] && [ -n "$(getcap /usr/lib/nmap/nmap)" ]; then \
         setcap -r /usr/lib/nmap/nmap; \

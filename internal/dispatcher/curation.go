@@ -91,7 +91,7 @@ func (s *Scheduler) curationCommitted(ctx context.Context, t *task) (bool, error
 
 // Keep one slot available to control roles when concurrency permits. A
 // one-slot installation executes serially; no Worker waits inside its slot
-// for another Agent to run. This limit is only applied to the new mode.
+// for another Agent to run.
 func (s *Scheduler) executionCapacity(project string) bool {
 	executions, projectExecutions := 0, 0
 	for _, running := range s.running {

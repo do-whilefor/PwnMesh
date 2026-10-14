@@ -19,7 +19,6 @@ import (
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/config"
 	"pwnmesh/internal/tools"
 )
 
@@ -297,7 +296,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	if j.Kind != "curate" && j.Graph.Project.Scenario == "audit" {
 		o.Tools = append(o.Tools, auditSkillTool())
 	}
-	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(config.Getenv) {
+	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(os.Getenv) {
 		for n := range o.Tools {
 			if o.Tools[n].Name == "bash" {
 				o.Tools[n].Description += "\n" + ctfExecution

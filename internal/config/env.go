@@ -7,11 +7,6 @@ import (
 	"strings"
 )
 
-// Getenv reads an exact process setting without aliases.
-func Getenv(key string) string {
-	return os.Getenv(key)
-}
-
 // Getenv reads only this worker's environment. It never inherits dispatcher
 // process settings or resolves another setting name.
 func (w Worker) Getenv(key string) string {

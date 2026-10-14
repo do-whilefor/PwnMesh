@@ -1,4 +1,4 @@
-// Package agent implements the small, two-level Pi-style execution loop.
+// Package agent runs the model and tool execution loop.
 package agent
 
 import (

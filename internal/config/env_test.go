@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestGetenvUsesExactSettingNames(t *testing.T) {
+func TestWorkerGetenvUsesExactSettingNames(t *testing.T) {
 	for _, tc := range []struct {
 		name, key, legacyKey, value, legacyValue, want string
 		setValue, setLegacy                            bool
@@ -22,22 +22,11 @@ func TestGetenvUsesExactSettingNames(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			env := map[string]string{}
-			for _, key := range []string{tc.key, tc.legacyKey} {
-				t.Setenv(key, "") // Restore the original process environment on cleanup.
-				if err := os.Unsetenv(key); err != nil {
-					t.Fatal(err)
-				}
-			}
 			if tc.setValue {
-				t.Setenv(tc.key, tc.value)
 				env[tc.key] = tc.value
 			}
 			if tc.setLegacy {
-				t.Setenv(tc.legacyKey, tc.legacyValue)
 				env[tc.legacyKey] = tc.legacyValue
-			}
-			if got := Getenv(tc.key); got != tc.want {
-				t.Errorf("Getenv returned %q, want %q", got, tc.want)
 			}
 			before := maps.Clone(env)
 			if got := (Worker{Env: env}).Getenv(tc.key); got != tc.want {

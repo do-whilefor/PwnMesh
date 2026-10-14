@@ -14,6 +14,7 @@ import (
 )
 
 func TestInitialPromptDescribesActualWorkspaceAndDeclaredEnvironment(t *testing.T) {
+	t.Setenv("XLOOM_WORKER_ENVIRONMENT", "kali-headless")
 	for _, environment := range []string{"", "unknown", "kali-headless"} {
 		for _, kind := range []string{"explore", "reason"} {
 			for _, workspace := range []string{"/workspace", "/workspace/team \"blue\"\nscan\\results"} {

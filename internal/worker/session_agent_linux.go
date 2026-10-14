@@ -5,8 +5,8 @@ package worker
 import (
 	"context"
 	"errors"
+	"os"
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/config"
 	"strconv"
 )
 
@@ -166,7 +166,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 	return finish(r)
 }
 func envInt(key string, fallback int) int {
-	n, err := strconv.Atoi(config.Getenv(key))
+	n, err := strconv.Atoi(os.Getenv(key))
 	if err != nil || n <= 0 {
 		return fallback
 	}

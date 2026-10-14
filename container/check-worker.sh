@@ -17,9 +17,7 @@ for tool in bash curl wget rg fd python python3 pip pip3 jq git cat ps ip dig un
     command -v "$tool" >/dev/null
 done
 su -s /bin/sh kali -c 'test -w /workspace && test "$(sudo -n id -u)" = 0'
-# /workspace 是 git 仓库且 Worker 以 root 运行，而目录属主是 kali。
-# 必须能真正执行 git 操作，否则依赖 git 的任务会以 128 (dubious ownership) 失败。
-# 仅检查 git 命令存在无法覆盖这一点，故这里实际执行一次仓库操作。
+# Root must access the kali-owned repository without Git's dubious-ownership error.
 git -C /workspace status --short >/dev/null
 smoke_dir=$(mktemp -d /workspace/.pwnmesh-smoke.XXXXXX)
 trap 'rm -rf -- "$smoke_dir"' EXIT HUP INT TERM
@@ -47,7 +45,7 @@ test -x "$PLAYWRIGHT_MCP_EXECUTABLE_PATH"
 test "$PLAYWRIGHT_BROWSERS_PATH" = /opt/ms-playwright
 test -d "$PLAYWRIGHT_BROWSERS_PATH"
 
-# 仅连接回环地址，因此构建及 --network none 下的测试均无需外网。
+# All network checks use loopback and work with --network none.
 python - "$smoke_dir" <<'PY'
 import http.server
 import hashlib
@@ -71,7 +69,6 @@ smoke_dir = pathlib.Path(sys.argv[1])
 os.environ["XDG_CACHE_HOME"] = str(smoke_dir / ".cache")
 os.environ["PWNLIB_NOTERM"] = "1"
 
-# Exercise the added text tools and YAML bridge with local fixture bytes.
 columns = subprocess.check_output(
     ["column", "-t", "-s", ","], input="name,value\npwnmesh,42\n", text=True, timeout=10,
 ).splitlines()
@@ -84,8 +81,7 @@ assert subprocess.check_output(
     ["yq", "-r", ".service.name"], input="service:\n  name: pwnmesh-worker\n", text=True, timeout=10,
 ).strip() == "pwnmesh-worker"
 
-# Build synthetic local inputs; decompile actual bytecode and decode a real APK.
-# Nothing is downloaded and no device or production package is needed.
+# Generate local bytecode and APK fixtures without downloads or devices.
 java_source = smoke_dir / "ClientProbe.java"
 java_source.write_text('package example; public class ClientProbe { public String endpoint() { return "https://api.example.invalid/v1"; } }\n')
 subprocess.run(["javac", "--release", "8", "-Xlint:-options", "-d", str(smoke_dir), str(java_source)], check=True, timeout=30)
@@ -188,7 +184,6 @@ assert hashlib.sha256(apk_file.read_bytes()).digest() == apk_digest, "analysis c
 file_type = subprocess.check_output(["file", "-b", str(apk_file)], text=True, timeout=10).lower()
 assert any(kind in file_type for kind in ("archive", "android package")), file_type
 
-# Read a local database without modifying the supplied input.
 database = smoke_dir / "client.db"
 subprocess.run(["sqlite3", str(database), "CREATE TABLE config(name TEXT, value TEXT); INSERT INTO config VALUES ('api', 'https://api.example.invalid');"], check=True, timeout=10)
 assert subprocess.check_output(["sqlite3", "-readonly", str(database), "SELECT value FROM config WHERE name='api';"], text=True, timeout=10).strip() == "https://api.example.invalid"
@@ -224,7 +219,6 @@ assert settings['verify'] == '/etc/ssl/certs/ca-certificates.crt', settings['ver
 for interpreter in (sys.executable, "/opt/tccli-venv/bin/python"):
     subprocess.run([interpreter, "-c", requests_ca_check], check=True, timeout=10)
 
-# Exercise native assembly and encoding without a target process or service.
 from pwn import asm, context, cyclic, cyclic_find
 from pwnlib.util.safeeval import const
 assert const("1") == 1
@@ -303,8 +297,7 @@ with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         assert json.loads((evidence / "response.json").read_text())["status"] == 200
         session = "pwnmesh-smoke-" + str(os.getpid())
         cli = ["playwright-cli", "-s=" + session]
-        # Use the installed CLI and its Chromium defaults, not a separate Node API.
-        # Its run-code command exits nonzero when either browser assertion fails.
+        # Exercise the installed CLI and its default Chromium configuration.
         try:
             subprocess.run(cli + ["open", url + "browser"], cwd=smoke_dir, check=True, timeout=45)
             subprocess.run(cli + ["run-code", """async page => {
@@ -318,7 +311,7 @@ with http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
         thread.join()
 PY
 
-# 不恢复原竞赛环境的额外知识库或项目 Agent 指令。
+# Keep competition knowledge and project-specific agent instructions out of the image.
 for path in /home/kali/knowledges /home/kali/tools /home/kali/pocs /workspace/.agents /workspace/.claude /workspace/AGENTS.md /workspace/CLAUDE.md; do
     test ! -e "$path"
 done

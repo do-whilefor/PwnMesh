@@ -9,12 +9,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/config"
 	"pwnmesh/internal/tools"
 	"pwnmesh/internal/workergraph"
 )
@@ -107,7 +107,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	if j.Graph.Project.Scenario == "audit" {
 		childTools = append(childTools, auditSkillTool())
 	}
-	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(config.Getenv) {
+	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(os.Getenv) {
 		for i := range childTools {
 			if childTools[i].Name == "bash" {
 				childTools[i].Description += "\n" + ctfExecution

@@ -1,6 +1,6 @@
 //go:build linux
 
-// Package tools exposes exactly the seven initial PwnMesh tools.
+// Package tools provides PwnMesh file and shell tools.
 package tools
 
 import (

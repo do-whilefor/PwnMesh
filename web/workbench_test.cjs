@@ -67,7 +67,17 @@ test('workspace refresh releases deleted project activity while preserving live 
  await h.app.refreshWorkspace();
  assert.equal(h.app.activityStates.size,0);assert.equal(h.app.activityRecords.size,0);
 });
-test('production shell is the demo document structure with real network access and no fixture routes',()=>{const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8'),app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(html,/<main id="main"><\/main>/);assert.match(html,/data-create/);assert.match(html,/project-menu-popover/);assert.match(html,/connect-src 'self'/);assert.doesNotMatch(html,/simulate-failure|workbench\.css|models\.css|#project\/atlas/);assert.doesNotMatch(app,/atlas\.example|local-.*randomUUID|模拟本次操作|lifecycle\.apply/);assert.match(app,/PwnMeshLLM\.render/);assert.match(app,/class="workspace-actions"/);});
+test('production shell uses real network access and no fixture routes',()=>{const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8'),app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(html,/<main id="main"><\/main>/);assert.match(html,/data-create/);assert.match(html,/project-menu-popover/);assert.match(html,/connect-src 'self'/);assert.doesNotMatch(html,/simulate-failure|workbench\.css|models\.css|#project\/atlas/);assert.doesNotMatch(app,/atlas\.example|local-.*randomUUID|模拟本次操作|lifecycle\.apply/);assert.match(app,/PwnMeshLLM\.render/);assert.match(app,/class="workspace-actions"/);});
+
+test('workbench and documentation reference shipped visual assets and resolve static resources',()=>{
+ const root=path.join(__dirname,'static'),files=fs.readdirSync(root,{recursive:true}).filter(name=>fs.statSync(path.join(root,name)).isFile());
+ const source=files.filter(name=>/\.(?:html|css|js)$/.test(name)).map(name=>fs.readFileSync(path.join(root,name),'utf8')).join('\n')+'\n'+fs.readFileSync(path.join(__dirname,'..','README.md'),'utf8');
+ const references=new Set([...source.matchAll(/\/static\/([\w./-]+\.[\w]+)/g)].map(match=>match[1]));
+ for(const name of references)assert.ok(fs.existsSync(path.join(root,name)),`Missing static resource: ${name}`);
+ for(const name of files.filter(name=>/\.(?:png|svg|webp|jpe?g|gif|ico|woff2?)$/.test(name))){
+  assert.ok(references.has(name.split(path.sep).join('/')),`Unused embedded visual asset: ${name}`);
+ }
+});
 test('project adapter maps server lifecycle without fabricating findings or times',()=>{const state=snapshot(),p=snapshotView(state,[],[],[]);assert.equal(p.name,'a');assert.equal(p.target,'https://authorized.test');assert.equal(p.goal,'Find supported evidence');assert.equal(p.status,'running');assert.equal(p.endedAt,null);assert.deepEqual(p.state.findings,[]);for(const [status,expected] of [['stopped','paused'],['completed','done'],['terminated','terminated']])assert.equal(projectView({...state.graph.project,status}).status,expected);});
 
 test('project and archived snapshot adapters preserve unspecified and explicit scenarios',()=>{

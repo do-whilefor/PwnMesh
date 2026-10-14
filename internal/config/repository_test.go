@@ -12,6 +12,8 @@ func TestRepositoryDocumentationContainsNoChinese(t *testing.T) {
 	for _, file := range []string{
 		"README.md", "SECURITY.md", "LICENSE", "container/README.md", "container/environment.md",
 		"Dockerfile", "container/Dockerfile", "compose.yaml", "dispatch.example.yaml", ".env.example",
+		".gitignore", ".gitattributes", ".dockerignore", "tests/integration/README.md",
+		"docs/architecture.md", "docs/development.md", "docs/formats.md", "docs/protocol.md", "docs/recovery.md",
 	} {
 		t.Run(file, func(t *testing.T) {
 			body, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(file)))

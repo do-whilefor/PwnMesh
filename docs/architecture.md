@@ -35,13 +35,17 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
 | `internal/worker/` | Session lifecycle, recovery, runtime tools, evidence acceptance |
 | `internal/agent/` | Provider-independent model/tool loop and context checkpoints |
+| `internal/provider/`, `internal/modelrpc/` | Anthropic-compatible model client and bridge wire contract |
+| `internal/tools/`, `internal/process/` | Workspace tools and Linux process lifecycle |
+| `internal/config/`, `internal/modelconfig/` | Dispatcher configuration, model settings and environment resolution |
 | `internal/contract/` | Result/evidence contracts and policy checks |
+| `internal/artifactcheck/`, `internal/cvss/` | Deterministic artifact validation and vulnerability scoring |
 | `internal/workergraph/` | Local dependency graphs within a Worker run |
 | `web/` | Embedded browser UI and browser/Node regressions |
 | `tests/` | Cross-component scenarios and opt-in acceptance |
 | `container/` | Worker image, tool environment and HTTP replay helper |
 | `scripts/` | Linux build, checks and explicit acceptance commands |
-| `docs/` | Maintained architecture, protocol, recovery and development guides |
+| `docs/` | Maintained architecture, protocol, recovery, format and development guides |
 
 `protocol` no longer imports Worker, but it still uses `board.State` and other
 Board types. It is not fully independent of SQLite's package dependency graph.

@@ -1,4 +1,3 @@
-/* Full journal content, with a steady reading rhythm beside the canvas. */
 :root{--activity:250px}
 @media(min-width:1700px){:root{--activity:270px}}
 .activity-pane{position:relative;min-width:0;background:#fff;border-color:#d7e3ee;border-radius:12px}
@@ -16,7 +15,6 @@
 .activity-pane .activity-content::-webkit-scrollbar{display:none;width:0;height:0}
 .activity-pane .activity-content:focus-visible{outline:1px solid #acc5dc;border-radius:8px}
 
-/* Titles keep their own reading action; body text remains in the journal. */
 .activity-pane .timeline-entry{position:relative;display:block;min-width:0;padding:0;margin:0;border:0;border-radius:0;background:transparent;box-shadow:none}
 .activity-pane .entry-headline{display:flex;align-items:flex-start;gap:8px;margin:0 0 5px;min-width:0}
 .activity-pane .entry-title{display:flex;align-items:flex-start;flex:1;min-width:0;margin:0;gap:0}
@@ -49,7 +47,6 @@
 .activity-pane .log-long-content[open] .log-read-sticky{display:inline-flex}
 .activity-pane .log-long-content:not([open]) .log-label-open,.activity-pane .log-long-content[open] .log-label-closed{display:none}
 
-/* One newest-first timeline; findings keep title and marker emphasis. */
 .activity-pane .timeline-entry[data-phase="WORKSPACE"]{--log-marker:#68978a;--log-marker-soft:#edf5f1}
 .activity-pane .timeline-entry[data-phase="FINDING"]{--log-marker:var(--accent);--log-marker-soft:#fff1e8}
 .activity-pane .log-stream>.timeline-entry{padding:0 0 23px 19px;margin:0;border:0;background:transparent}

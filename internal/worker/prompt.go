@@ -5,8 +5,8 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"os"
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/config"
 	"strconv"
 	"text/template"
 )
@@ -92,7 +92,7 @@ func environmentPrompt(j Job) string {
 	text := "Environment:\n"
 	// The shipped Kali image declares its capabilities. Other Worker
 	// deployments must not inherit claims about that image's installed tools.
-	if config.Getenv("PWNMESH_WORKER_ENVIRONMENT") == "kali-headless" {
+	if os.Getenv("PWNMESH_WORKER_ENVIRONMENT") == "kali-headless" {
 		text += "- This Worker runs in a Kali Linux container with kali-linux-headless installed.\n"
 	}
 	text += "- The shared project workspace is " + strconv.Quote(j.Workspace) + "; it can store scripts, command logs and large scan results.\n"

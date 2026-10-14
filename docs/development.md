@@ -79,6 +79,11 @@ root. Only the five maintained guides are allowed into `docs/`; historical local
 notes and acceptance output remain ignored. `refer/`, local development plans,
 credentials, build outputs and temporary test artifacts are not source inputs.
 
+Use `PwnMesh` in product text, `pwnmesh` in executable/module/storage names and
+`PWNMESH_*` for project settings. Historical names belong only in migration or
+rejection boundaries, their fixtures, and artifact exclusions. Keep comments that
+explain constraints or failure modes; omit narration of the code itself.
+
 Keep regression tests beside the owning Go package or in the existing integration
 package. Preserve transaction, wire/hash and recovery boundaries described in
 [architecture](architecture.md) and [supported formats](formats.md). Before a

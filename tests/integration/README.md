@@ -1,6 +1,6 @@
-# Integration and acceptance suites
+# PwnMesh integration and acceptance suites
 
-All commands run on Linux, from any directory. Dependencies must already be
+Run these commands on Linux from the repository root. Dependencies must already be
 available: Go, a C compiler for race detection, Python 3 and ripgrep. Offline
 tests use local fixtures, loopback HTTP servers and temporary files. They do
 not require Docker or a model service.

@@ -1,9 +1,4 @@
-# ============================================================
-# PwnMesh
-# ============================================================
-
-# ---- 第三方参考源码（不纳入版本控制）----
-# pi-main / 参考资料，仅作本地重写参考
+# Local references and maintained guides
 /refer/
 # Track maintained guides only; local evidence and historical notes stay local.
 /docs/*
@@ -15,12 +10,12 @@
 /design/
 /tpm/
 
-# ---- 开发计划与验收记录仅保留本地 ----
+# Local plans and acceptance records
 /DEVELOPMENT*.md
 /VALIDATION*.md
 /internal/dispatcher/testdata/fgs-live-20260923.md
 
-# ---- 本地开发镜像与验收工具 ----
+# Local images and acceptance tools
 /container/Dockerfile.dev
 /container/check-worker-dev.sh
 /tests/integration/analyze_efficiency.py
@@ -33,10 +28,10 @@
 /tests/integration/test_analyze_tail_latency.py
 /tests/integration/test_efficiency_fixture.py
 
-# ---- 本地 AI 协作说明（不纳入版本控制）----
+# Local agent instructions
 /AGENTS.md
 
-# ---- Go ----
+# Build outputs
 *.exe
 *.exe~
 *.dll
@@ -49,15 +44,16 @@ bin/
 dist/
 build/
 
-# ---- 环境变量与密钥 ----
+# Credentials and deployment configuration
 .env
 .env.*
 !.env.example
 *.pem
 *.key
 *.p12
+/dispatch.yaml
 
-# ---- 运行时生成 ----
+# Runtime artifacts, including historical workspaces
 .webounty/
 *.log
 logs/
@@ -71,10 +67,9 @@ tmp/
 __pycache__/
 .pytest_cache/
 
-# ---- 编辑器 / 系统 ----
+# Editor and system files
 .idea/
 .vscode/
 *.swp
 .DS_Store
 Thumbs.db
-/dispatch.yaml

@@ -144,7 +144,7 @@ func TestLiveModelReadiness(t *testing.T) {
 		"PWNMESH_REASONING_EFFORT": "max",
 	}
 	for _, key := range []string{"PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_REQUEST_TIMEOUT"} {
-		if value := config.Getenv(key); value != "" {
+		if value := os.Getenv(key); value != "" {
 			env[key] = value
 		}
 	}
