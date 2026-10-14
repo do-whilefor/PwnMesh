@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 )
 
@@ -24,8 +26,7 @@ func (t *Tx) InputBatchReceipt(project, key, requestSHA256 string) ([]InputFile,
 	if key == "" {
 		return nil, false, nil
 	}
-	var digest, response string
-	err := t.QueryRow("SELECT request_sha256,response FROM pwnmesh_input_batches WHERE project_id=? AND idempotency_key=?", project, key).Scan(&digest, &response)
+	digest, response, err := sqlstore.InputBatchReceipt(t, project, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -48,57 +49,45 @@ func (t *Tx) SaveInputBatchReceipt(project, key, requestSHA256 string, inputs []
 	if err != nil {
 		return err
 	}
-	_, err = t.Exec("INSERT INTO pwnmesh_input_batches(project_id,idempotency_key,request_sha256,response) VALUES(?,?,?,?)", project, key, requestSHA256, string(response))
-	return err
+	return sqlstore.InsertInputBatchReceipt(t, project, key, requestSHA256, string(response))
 }
 
 func ValidInputName(name string) bool { return model.ValidInputName(name) }
 
-func scanInput(row interface{ Scan(...any) error }) (InputFile, error) {
-	var f InputFile
-	err := row.Scan(&f.ID, &f.Name, &f.Size, &f.SHA256, &f.CreatedAt)
+func inputPath(f InputFile) InputFile {
 	f.Path = path.Join("/workspace/.pwnmesh/inputs", f.ID, f.Name)
-	return f, err
+	return f
 }
 
 func (t *Tx) InputFiles(project string) ([]InputFile, error) {
-	var exists bool
-	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?)", project).Scan(&exists); err != nil {
+	exists, err := sqlstore.ProjectExists(t, project)
+	if err != nil {
 		return nil, err
 	}
 	if !exists {
 		return nil, Err(404, "Project not found")
 	}
-	rows, err := t.Query("SELECT id,name,size,sha256,created_at FROM pwnmesh_input_files WHERE project_id=? ORDER BY created_at,id", project)
-	if err != nil {
-		return nil, err
+	items, err := sqlstore.InputFiles(t, project)
+	for n := range items {
+		items[n] = inputPath(items[n])
 	}
-	defer rows.Close()
-	items := []InputFile{}
-	for rows.Next() {
-		f, err := scanInput(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, f)
-	}
-	return items, rows.Err()
+	return items, err
 }
 
 func (t *Tx) InputData(project, id string) (InputFile, []byte, error) {
-	f, err := scanInput(t.QueryRow("SELECT id,name,size,sha256,created_at FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id))
+	f, err := sqlstore.InputFile(t, project, id)
+	f = inputPath(f)
 	if errors.Is(err, sql.ErrNoRows) {
 		return f, nil, Err(404, "Input file not found")
 	}
 	if err != nil {
 		return f, nil, err
 	}
-	var data []byte
-	err = t.QueryRow("SELECT data FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id).Scan(&data)
+	data, err := sqlstore.InputData(t, project, id)
 	return f, data, err
 }
 
-func (t *Tx) AddInput(project, name string, data []byte) (InputFile, error) {
+func (t *Tx) AddInput(project, name string, data []byte) (out InputFile, err error) {
 	if !ValidInputName(name) {
 		return InputFile{}, Err(422, "Invalid input filename")
 	}
@@ -116,23 +105,26 @@ func (t *Tx) AddInput(project, name string, data []byte) (InputFile, error) {
 	digest := hex.EncodeToString(sum[:])
 	idHash := sha256.Sum256([]byte(name + "\x00" + digest))
 	id := hex.EncodeToString(idHash[:])
-	old, err := scanInput(t.QueryRow("SELECT id,name,size,sha256,created_at FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id))
+	old, err := sqlstore.InputFile(t, project, id)
 	if err == nil {
-		return old, nil
+		return inputPath(old), nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return InputFile{}, err
 	}
-	var size int64
-	var count int
-	if err = t.QueryRow("SELECT COUNT(*),COALESCE(SUM(size),0) FROM pwnmesh_input_files WHERE project_id=?", project).Scan(&count, &size); err != nil {
+	count, size, err := sqlstore.InputUsage(t, project)
+	if err != nil {
 		return InputFile{}, err
 	}
 	if count >= MaxProjectInputs || size+int64(len(data)) > MaxProjectInputBytes {
 		return InputFile{}, Err(413, "Project input limit is 32 files and 512 MiB")
 	}
-	f := InputFile{ID: id, Name: name, Size: int64(len(data)), SHA256: digest, Path: path.Join("/workspace/.pwnmesh/inputs", id, name), CreatedAt: t.Now}
-	if _, err = t.Exec("INSERT INTO pwnmesh_input_files(project_id,id,name,size,sha256,created_at,data) VALUES(?,?,?,?,?,?,?)", project, id, name, f.Size, digest, t.Now, data); err != nil {
+	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+		return InputFile{}, err
+	}
+	defer t.finishManagement(&err)
+	f := inputPath(InputFile{ID: id, Name: name, Size: int64(len(data)), SHA256: digest, CreatedAt: t.Now})
+	if err = sqlstore.InsertInputFile(t, project, f, data); err != nil {
 		return InputFile{}, err
 	}
 	hintID, err := t.Next(project, "hint")
