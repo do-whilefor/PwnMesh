@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 )
 
@@ -155,6 +156,12 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			s, err = t.projectState(s.Graph, *d, s.Revision, s.DecisionRevision)
 			if err != nil {
 				return "", nil, err
+			}
+			// Curation owns persistence of changed support. The read projection
+			// stays detached so later finding replacements cannot erase this
+			// batch's originally pending groups before its progress check.
+			for n := range d.Findings {
+				d.Findings[n].SupportValid = s.Findings[n].SupportValid
 			}
 		}
 	}
@@ -430,7 +437,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 }
 
 func (t *Tx) executionForLease(project, lease string) (Execution, error) {
-	return scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND lease=?", project, lease))
+	return sqlstore.ExecutionByLease(t, project, lease, "")
 }
 
 func (t *Tx) validateReviewFacts(s State, dispute Dispute, ids []string) error {

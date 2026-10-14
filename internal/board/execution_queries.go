@@ -48,10 +48,6 @@ func executionInputMetadata(raw json.RawMessage) (ExecutionSummary, error) {
 	return e, nil
 }
 
-func executionMetadataValues(e ExecutionSummary) []any {
-	return []any{e.Generation, e.InputRevision, e.DecisionRevision, e.StateVersion, e.HasState, e.FactCount, e.HintCount, e.OpenCount}
-}
-
 func (t *Tx) PendingExecutions(namespace string, after int64, limit int) (ExecutionPage, error) {
 	if namespace == "" || after < 0 || limit < 1 || limit > 100 {
 		return ExecutionPage{Items: []ExecutionSummary{}}, Err(422, "namespace, nonnegative after and limit between 1 and 100 are required")

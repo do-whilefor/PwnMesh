@@ -54,7 +54,7 @@ func (t *Tx) SaveInputBatchReceipt(project, key, requestSHA256 string, inputs []
 
 func ValidInputName(name string) bool { return model.ValidInputName(name) }
 
-func scanInput(row scanner) (InputFile, error) {
+func scanInput(row interface{ Scan(...any) error }) (InputFile, error) {
 	var f InputFile
 	err := row.Scan(&f.ID, &f.Name, &f.Size, &f.SHA256, &f.CreatedAt)
 	f.Path = path.Join("/workspace/.pwnmesh/inputs", f.ID, f.Name)

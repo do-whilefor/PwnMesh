@@ -1,6 +1,9 @@
 package board
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 func (t *Tx) recordExecutionFailure(e Execution, status string, failure json.RawMessage) error {
 	d, _, _, err := t.stateData(e.ProjectID)
@@ -62,4 +65,31 @@ func (t *Tx) StateEvents(project string, after int64) ([]StateEvent, error) {
 		out = append(out, event)
 	}
 	return out, rows.Err()
+}
+
+func executionFailureDescription(status string, raw json.RawMessage) string {
+	var result struct {
+		Error       string `json:"error"`
+		FailureKind string `json:"failure_kind"`
+		Text        string `json:"text"`
+	}
+	_ = json.Unmarshal(raw, &result)
+	description := strings.TrimSpace(result.Error)
+	if description == "" && status == "rejected" {
+		var declined struct {
+			Reason string `json:"reason"`
+		}
+		_ = json.Unmarshal([]byte(result.Text), &declined)
+		description = strings.TrimSpace(declined.Reason)
+	}
+	if result.FailureKind != "" {
+		description = result.FailureKind + ": " + description
+	}
+	if description == "" {
+		description = "execution " + status
+	}
+	if len(description) > 2048 {
+		description = strings.ToValidUTF8(description[:2048], "�") + "…"
+	}
+	return description
 }

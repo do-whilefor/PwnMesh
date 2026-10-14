@@ -1,9 +1,92 @@
 package board
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestExecutionWritesRollbackWithReviewEvents(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	dispute, _, _ := f.conflict()
+	step := f.step("independent review rollback", dispute.ID)
+	previous := f.worker("old-review", step)
+	f.do(func(tx *Tx) error {
+		return tx.ExecutionStatus(previous, "failed", json.RawMessage(`{"status":"failed","error":"try again"}`))
+	})
+	grantMainRetry(f, "review-retry", previous)
+	f.do(func(tx *Tx) error {
+		_, err := tx.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", step)
+		return err
+	})
+	next := dependencyRun(f, "new-review", step)
+	var job map[string]any
+	if err := json.Unmarshal(next.Job, &job); err != nil {
+		t.Fatal(err)
+	}
+	job["previous_run_id"] = previous.ID
+	next.Job, _ = json.Marshal(job)
+
+	setEventFailure := func(enabled bool) {
+		t.Helper()
+		f.do(func(tx *Tx) error {
+			query := "DROP TRIGGER reject_review_event"
+			if enabled {
+				query = `CREATE TRIGGER reject_review_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'event refused'); END`
+			}
+			_, err := tx.Exec(query)
+			return err
+		})
+	}
+	before := f.state()
+	setEventFailure(true)
+	err := f.store.Do(context.Background(), func(tx *Tx) error { return tx.RegisterExecution(next) })
+	if err == nil || !strings.Contains(err.Error(), "event refused") {
+		t.Fatalf("registration did not reach review event: %v", err)
+	}
+	if after := f.state(); !reflect.DeepEqual(after, before) {
+		t.Fatal("failed review event retained registration state or revisions")
+	}
+	f.do(func(tx *Tx) error {
+		grant, err := tx.Execution("p", previous.ID)
+		if err != nil || grant.Status != "retry_requested" {
+			t.Fatalf("failed registration consumed its grant: %+v, %v", grant, err)
+		}
+		_, err = tx.Execution("p", next.ID)
+		requireAPIStatus(t, err, 404)
+		return nil
+	})
+	setEventFailure(false)
+	f.do(func(tx *Tx) error { return tx.RegisterExecution(next) })
+	before = f.state()
+	setEventFailure(true)
+	err = f.store.Do(context.Background(), func(tx *Tx) error {
+		return tx.ExecutionStatus(next, "failed", json.RawMessage(`{"status":"failed","error":"review interrupted"}`))
+	})
+	if err == nil || !strings.Contains(err.Error(), "event refused") {
+		t.Fatalf("outcome did not reach its failure event: %v", err)
+	}
+	if after := f.state(); !reflect.DeepEqual(after, before) {
+		t.Fatal("failed outcome event retained failure/review state or revisions")
+	}
+	f.do(func(tx *Tx) error {
+		stored, err := tx.Execution("p", next.ID)
+		if err != nil || stored.Status != "prepared" || len(stored.Result) != 0 {
+			t.Fatalf("failed outcome event retained terminal result: %+v, %v", stored, err)
+		}
+		revoked, err := tx.RunRevoked("p", next.Lease)
+		if err != nil || revoked {
+			t.Fatalf("failed outcome event retained revocation: %v, %v", revoked, err)
+		}
+		events, err := tx.StateEvents("p", before.Revision)
+		if err != nil || len(events) != 0 {
+			t.Fatalf("failed outcome event became visible: %+v, %v", events, err)
+		}
+		return nil
+	})
+}
 
 func TestReviewStartDoesNotRequestDecisionButPreservesVersionAndEvents(t *testing.T) {
 	for _, outcome := range []string{"failed", "rejected", "cancelled", "new_evidence"} {

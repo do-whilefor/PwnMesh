@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 // DecisionReadState pins a version 2 planner's detail reads to its last
@@ -14,7 +15,7 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 	if fence.Run == "" || fence.Lease != "reason" {
 		return current, nil
 	}
-	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", current.Graph.Project.ID, fence.Run))
+	e, err := sqlstore.ExecutionByLease(t, current.Graph.Project.ID, fence.Run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return current, nil
 	}

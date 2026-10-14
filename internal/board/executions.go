@@ -15,21 +15,8 @@ import (
 // immutable input supplied to the Worker, not a newly loaded project snapshot.
 type Execution = model.Execution
 
-const executionColumns = `project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,result,resumes,created_at,updated_at`
-const executionMetadataColumns = sqlstore.ExecutionMetadataColumns
-const pendingExecutionSQL = sqlstore.PendingExecutionSQL
-
-type scanner interface{ Scan(...any) error }
-
-func scanExecution(s scanner) (Execution, error) {
-	var e Execution
-	var job, result []byte
-	err := s.Scan(&e.ProjectID, &e.ID, &e.Namespace, &e.Backend, &e.Kind, &e.Intent, &e.Lease, &job, &e.RetryKey, &e.Status, &result, &e.Resumes, &e.CreatedAt, &e.UpdatedAt)
-	e.Job, e.Result = job, result
-	return e, err
-}
 func (t *Tx) Execution(project, id string) (Execution, error) {
-	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND id=?", project, id))
+	e, err := sqlstore.Execution(t, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Execution not found")
 	}
@@ -151,24 +138,18 @@ func (t *Tx) RegisterExecution(e Execution) error {
 		}
 		grant = &previous
 	}
-	var blocked bool
-	err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE project_id=? AND namespace=? AND retry_key=? AND status IN ('prepared','running','retryable','result_pending','failed','rejected','cancelled','succeeded','retry_requested','retried'))`, e.ProjectID, e.Namespace, e.RetryKey).Scan(&blocked)
+	blocked, err := sqlstore.ExecutionRetryKeyRecorded(t, e.ProjectID, e.Namespace, e.RetryKey)
 	if err != nil {
 		return err
 	}
 	if blocked && grant == nil {
 		return Err(409, "Execution requires new task evidence or an explicit retry")
 	}
-	if grant != nil {
-		// Consume the one-use authorization in the same transaction as the new
-		// registration. A competing attempt cannot reuse this parent afterward.
-		if _, err = t.Exec("UPDATE pwnmesh_executions SET status='retried',updated_at=? WHERE project_id=? AND id=? AND status='retry_requested'", t.Now, grant.ProjectID, grant.ID); err != nil {
-			return err
-		}
-	}
-	args := []any{e.ProjectID, e.ID, e.Namespace, e.Backend, e.Kind, e.Intent, e.Lease, []byte(e.Job), e.RetryKey, t.Now, t.Now}
-	args = append(args, executionMetadataValues(metadata)...)
-	_, err = t.Exec(`INSERT INTO pwnmesh_executions(`+executionColumns+`,`+executionMetadataColumns+`,metadata_version) VALUES(?,?,?,?,?,?,?,?,?,'prepared',NULL,0,?,?,?,?,?,?,?,?,?,?,1)`, args...)
+	// Consume the one-use authorization in the same transaction as the new
+	// registration and its review transition.
+	e.Status, e.Result, e.Resumes = "prepared", nil, 0
+	e.CreatedAt, e.UpdatedAt = t.Now, t.Now
+	err = sqlstore.InsertExecution(t, e, metadata, job.PreviousRunID)
 	if err == nil && !controlKind(e.Kind) {
 		err = t.reviewExecutionTransition(e, "prepared")
 	}
@@ -224,10 +205,9 @@ func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage)
 			return err
 		}
 	}
-	_, err = t.Exec(`UPDATE pwnmesh_executions SET status=?,result=?,updated_at=? WHERE project_id=? AND id=?`, status, []byte(result), t.Now, e.ProjectID, e.ID)
-	if err == nil && slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status) {
-		_, err = t.Exec("INSERT OR IGNORE INTO pwnmesh_revoked_runs(project_id,worker) VALUES(?,?)", e.ProjectID, current.Lease)
-	}
+	updated := current
+	updated.Status, updated.Result, updated.UpdatedAt = status, result, t.Now
+	err = sqlstore.SaveExecutionOutcome(t, updated, slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status))
 	if err == nil && !controlKind(current.Kind) && slices.Contains([]string{"failed", "rejected", "cancelled"}, status) {
 		err = t.recordExecutionFailure(current, status, failure)
 		if err == nil {
@@ -327,16 +307,14 @@ func (t *Tx) ResumeExecution(e Execution) error {
 	if err = t.Save(g); err != nil {
 		return err
 	}
-	_, err = t.Exec(`UPDATE pwnmesh_executions SET resumes=resumes+?,updated_at=? WHERE project_id=? AND id=?`, resume, t.Now, e.ProjectID, e.ID)
-	return err
+	return sqlstore.AddExecutionResume(t, e.ProjectID, e.ID, t.Now, resume)
 }
 
 // CheckNewStepLimit counts every direction this decision already created,
 // including subsequently abandoned steps. Tool submissions and the final
 // structured result share one registered budget.
 func (t *Tx) CheckNewStepLimit(project, run string) error {
-	var raw []byte
-	err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason' ORDER BY rowid DESC LIMIT 1", project, run).Scan(&raw)
+	raw, err := sqlstore.LatestExecutionJob(t, project, run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // Legacy clients may use leases without execution registration.
 	}
@@ -354,8 +332,8 @@ func (t *Tx) CheckNewStepLimit(project, run string) error {
 	if job.Budget.MaxIntents <= 0 {
 		return Err(422, "registered decision has no valid direction budget")
 	}
-	var count int
-	if err = t.QueryRow("SELECT COUNT(*) FROM intents WHERE project_id=? AND creator=? AND (to_fact_id IS NULL OR to_fact_id!='goal')", project, run).Scan(&count); err != nil {
+	count, err := sqlstore.CreatedDirectionCount(t, project, run)
+	if err != nil {
 		return err
 	}
 	if count >= job.Budget.MaxIntents {

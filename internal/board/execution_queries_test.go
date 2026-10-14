@@ -9,12 +9,13 @@ import (
 	"go/parser"
 	"go/token"
 	"path/filepath"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"strings"
 	"testing"
 )
 
-func TestReadOperationsUseStorageBoundary(t *testing.T) {
-	for _, name := range []string{"execution_queries.go", "input_snapshot.go"} {
+func TestOperationsUseStorageBoundary(t *testing.T) {
+	for _, name := range []string{"executions.go", "execution_queries.go", "input_snapshot.go", "state_projection.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -107,7 +108,8 @@ func putQueryExecution(t *testing.T, tx *Tx, e Execution, generation int64, vers
 	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(id,title,status,created_at) VALUES(?,'fixture','active',?)`, e.ProjectID, tx.Now); err != nil {
 		t.Fatal(err)
 	}
-	_, err := tx.Exec(`INSERT INTO pwnmesh_executions(`+executionColumns+`,`+executionMetadataColumns+`,metadata_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`, e.ProjectID, e.ID, e.Namespace, "planner", e.Kind, e.Intent, "planner@"+e.ID, []byte(e.Job), e.RetryKey, e.Status, []byte(e.Result), e.Resumes, e.CreatedAt, e.CreatedAt, generation, 10, 9, version, version != "", 3, 2, 1)
+	e.Backend, e.Lease, e.UpdatedAt = "planner", "planner@"+e.ID, e.CreatedAt
+	err := sqlstore.InsertExecution(tx, e, ExecutionSummary{Generation: generation, InputRevision: 10, DecisionRevision: 9, StateVersion: version, HasState: version != "", FactCount: 3, HintCount: 2, OpenCount: 1}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,8 +478,14 @@ func TestExecutionRegistrationValidatesMetadataBeforeConsumingRetry(t *testing.T
 			t.Fatalf("invalid successor consumed its grant: %+v err=%v", grant, err)
 		}
 		e.Job = json.RawMessage(`{"graph":{"project":{"id":"p"}},"previous_run_id":"original"}`)
+		e.Status, e.Result, e.Resumes = "succeeded", json.RawMessage(`{"status":"success"}`), 99
+		e.CreatedAt, e.UpdatedAt = "caller-created", "caller-updated"
 		if err := tx.RegisterExecution(e); err != nil {
 			t.Fatalf("valid successor could not consume compact grant identity: %v", err)
+		}
+		registered, err := tx.Execution("p", e.ID)
+		if err != nil || registered.Status != "prepared" || registered.Result != nil || registered.Resumes != 0 || registered.CreatedAt != tx.Now || registered.UpdatedAt != tx.Now {
+			t.Fatalf("caller overrode initial execution state: %+v, %v", registered, err)
 		}
 		grant, err = tx.GetExecutionSummary("ns", "p", "original")
 		if err != nil || grant.Status != "retried" {

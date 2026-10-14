@@ -28,9 +28,10 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | --- | --- |
 | `cmd/` | CLI configuration and process wiring |
 | `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
-| `internal/board/` | Transactional business operations, admission, mutations and SQL-backed projections |
+| `internal/board/` | Transactional business operations, admission, mutations and consistent state assembly |
 | `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
-| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph rows, snapshot bytes, execution summary reads, schema and migrations |
+| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph/execution rows, snapshot bytes, projection inputs, schema and migrations |
+| `internal/board/internal/projection/` | Metadata decoding and pure state, dependency support and asset derivation |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
@@ -60,14 +61,26 @@ aggregate Board or SQLite.
 Board retains business validation and transactional operation composition.
 Its private `sqlstore` package maps canonical graph values to rows using the
 caller's existing transaction. It also owns immutable snapshot storage, chunk
-verification and execution summary reads. Board constructs snapshot identities
+verification and execution row persistence. Board constructs snapshot identities
 and decodes canonical State; storage retains the exact bytes and keeps chunks
 and manifests together with a savepoint. Execution admission queries return
 observed pending work, retry grants and prior attempts. Board chooses their
 scope and decides blocking, write conflicts and retry eligibility. Summary reads
-keep archived Job/Result bodies out of scheduling. State projections and execution
-mutations still contain SQL in Board. There is one canonical model, not a duplicate
-transport model.
+keep archived Job/Result bodies out of scheduling and state projection. Execution
+registration, result updates, revocation and resume counters use that same caller
+transaction; Board still validates transitions and combines them with review
+state, revisions and failure events. Historical execution archival streams rows
+in registration order. Specialized mutations, leases and event queries still
+contain SQL in Board. There is one canonical model, not a duplicate transport model.
+
+The private `projection` package consumes canonical graph/runtime values and
+compact metadata without querying storage or changing its input. Metadata decoding
+keeps historical status adaptation at the read boundary. Board loads metadata,
+latest attempts, failure diagnostics and assets within one transaction snapshot.
+Pure projection computes effective evidence, Step dependencies and finding asset
+associations. Derived Finding support uses a separate slice: Curate explicitly
+retains the recalculated support in its pending metadata after each correction,
+without changing the input used to measure progress through remaining groups.
 
 The embedded frontend keeps project form rules in `project-model.js`, provider
 settings in `model-settings.js`, and activity rendering in `activity-view.js`.

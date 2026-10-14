@@ -5,7 +5,71 @@ import (
 	"encoding/json"
 	"reflect"
 	"testing"
+
+	"pwnmesh/internal/board/model"
 )
+
+func TestPartialCurationWithRelationRetainsCoveredGroupProgress(t *testing.T) {
+	for _, withRelation := range []bool{false, true} {
+		name := "groups_only"
+		if withRelation {
+			name = "groups_and_relation"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			producer := f.worker("fresh-notes", "")
+			old, correction := f.fact(producer, "old"), f.fact(producer, "correction")
+			seedCurationGroups(f, 2, 2, "")
+			groups := []CurateGroup{
+				{GroupKey: model.FindingIdentity("Capacity claim 0", "fixture"), Status: "candidate", Reason: "Retain the first complete group"},
+				{GroupKey: model.FindingIdentity("Capacity claim 1", "fixture"), Status: "candidate", Reason: "Retain the second complete group"},
+			}
+			curator, input := capacityCurator(f, "initial-findings")
+			f.curate(curator, input, groups...)
+			for _, claim := range []string{"Capacity claim 0", "Capacity claim 1"} {
+				f.action(producer.Fence(), "candidate", "fresh:"+claim, map[string]any{
+					"claim": claim, "scope": "fixture", "status": "candidate", "reason": "A fresh producer note needs reconciliation",
+				}, "")
+			}
+			curator, input = capacityCurator(f, "partial-with-fresh-notes")
+			if len(input.Findings) != 2 || len(input.PendingCurationCandidateIDs()) != 6 {
+				t.Fatal("fixture did not establish two existing findings with pending notes")
+			}
+			payload := CuratePayload{ThroughRevision: input.Revision, Groups: groups[:1]}
+			if withRelation {
+				// This correction is unrelated to either group's support. Its
+				// intermediate projection must not erase progress on the first group.
+				payload.Relations = []CurateRelation{{Kind: "refutes", Source: correction, Target: old, Reason: "Correct an unrelated observation"}}
+			}
+			receipt := f.action(curator.Fence(), "curate", "partial", payload, DecisionStateVersion(input))
+			partial := f.state()
+			pending := partial.PendingCurationCandidateIDs()
+			if len(pending) != 3 || partial.Curation.ThroughRevision != input.Curation.ThroughRevision {
+				t.Fatalf("partial batch lost its remaining group or advanced the global cursor: pending=%d cursor=%d", len(pending), partial.Curation.ThroughRevision)
+			}
+			for _, candidate := range partial.Candidates {
+				if pending[candidate.ID] && candidate.Claim != "Capacity claim 1" {
+					t.Fatal("the successfully covered first group remained pending")
+				}
+			}
+			var result CurateResult
+			if err := json.Unmarshal(receipt.Result, &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Findings) != 1 || result.Findings[0].ID != groups[0].GroupKey || len(result.FactRelations) != len(payload.Relations) {
+				t.Fatal("partial receipt lost the covered group or included an unsubmitted group")
+			}
+			if replay := f.action(curator.Fence(), "curate", "partial", payload, DecisionStateVersion(input)); !reflect.DeepEqual(replay, receipt) {
+				t.Fatal("partial curation receipt changed on retry")
+			}
+			curator, input = capacityCurator(f, "remaining-fresh-notes")
+			f.curate(curator, input, groups[1])
+			if final := f.state(); len(final.PendingCurationCandidateIDs()) != 0 || final.Curation.ThroughRevision != input.Revision {
+				t.Fatal("the final group did not drain the retained curation backlog")
+			}
+		})
+	}
+}
 
 func TestCurationRelationsCommitWithFindingsAndCursor(t *testing.T) {
 	for _, kind := range []string{"supersedes", "refutes", "narrows"} {

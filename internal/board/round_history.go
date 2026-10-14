@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"strconv"
 )
 
@@ -92,25 +93,13 @@ func (t *Tx) archiveRound(project string) error {
 	if err != nil {
 		return err
 	}
-	rows, err = t.Query("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? ORDER BY rowid", project)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		execution, err := scanExecution(rows)
-		if err != nil {
-			return err
-		}
+	return sqlstore.VisitExecutions(t, project, func(execution Execution) error {
 		raw, err := json.Marshal(execution)
 		if err != nil {
 			return err
 		}
-		if err = save("execution", execution.ID, raw); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
+		return save("execution", execution.ID, raw)
+	})
 }
 
 type RoundSummary struct {

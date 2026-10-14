@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 	"slices"
 	"strings"
@@ -48,7 +49,7 @@ func (t *Tx) batchExecution(project string, fence ExecutionFence) (Execution, er
 	if fence.Run == "" || fence.Lease != "reason" || fence.Intent != "" {
 		return Execution{}, Err(403, "decision batches require a registered Decide lease")
 	}
-	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", project, fence.Run))
+	e, err := sqlstore.ExecutionByLease(t, project, fence.Run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return Execution{}, Err(403, "decision batches require a registered Decide execution")
 	}
