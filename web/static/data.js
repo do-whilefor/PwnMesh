@@ -15,8 +15,8 @@
     prepared:'等待执行', retryable:'等待恢复', result_pending:'结果待写回', succeeded:'执行完成',
     retry_requested:'等待重试', needs_review:'需要复核'
   });
-  const PHASES = {bootstrap:'Bootstrap', reason:'Decide', explore:'Execute', intent:'Execute'};
-  const PHASE_NAMES = Object.freeze({bootstrap:'启动引导',reason:'决策',decide:'决策',explore:'执行',intent:'执行',execute:'执行',system:'系统',model:'模型结论'});
+  const PHASES = {reason:'Decide', curate:'Curate', explore:'Execute'};
+  const PHASE_NAMES = Object.freeze({decide:'决策',curate:'Curate',execute:'执行',system:'系统',model:'模型结论'});
   const array = value => Array.isArray(value) ? value : [];
   const string = value => typeof value === 'string' ? value : '';
   const object = value => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -307,13 +307,7 @@
       const intent = intents.get(step.id) || {};
       supplement(step,'step',intent.concluded_at || step.created_at,step.worker || intent.creator);
     }
-    if (!array(state.steps).length) for (const intent of array(graph.intents)) {
-      supplement({...intent,status:intent.to ? 'completed' : intent.worker ? 'running' : 'open'},'step',intent.concluded_at || intent.created_at,intent.worker || intent.creator);
-    }
-    const representedFacts = new Set();
-    for (const fact of [...array(state.fact_records),...array(graph.facts)]) {
-      if (representedFacts.has(fact.id)) continue;
-      representedFacts.add(fact.id);
+    for (const fact of array(state.fact_records)) {
       const intent = array(graph.intents).find(item => item.to === fact.id);
       const record = {...fact,status:fact.status || (fact.id === 'origin' || fact.id === 'goal' ? 'input' : 'valid')};
       const time = fact.observed_at || intent?.concluded_at || (record.status === 'input' ? project.created_at : '');
@@ -349,8 +343,7 @@
       const conclusions = [];
       if (data) {
         if (execution.kind === 'explore' && string(data.description).trim()) conclusions.push({text:data.description});
-        if (execution.kind === 'bootstrap' && string(object(data.fact).description).trim()) conclusions.push({text:data.fact.description});
-        if (['bootstrap','reason'].includes(execution.kind) && string(object(data.complete).description).trim()) {
+        if (execution.kind === 'reason' && string(object(data.complete).description).trim()) {
           conclusions.push({text:data.complete.description,evidence:refs(data.complete.from)});
         }
       }

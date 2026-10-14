@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -57,6 +59,25 @@ func TestConfigRejectsRetiredBootstrapAndMock(t *testing.T) {
 	decoder.KnownFields(true)
 	if err := decoder.Decode(&Tasks{}); err == nil {
 		t.Fatal("accepted retired bootstrap budget")
+	}
+}
+
+func TestConfigRejectsRetiredRuntimeSelectors(t *testing.T) {
+	raw, err := yaml.Marshal(coldStartConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"execution: container", "prompt_group: default"} {
+		t.Run(field, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "dispatch.yaml")
+			input := strings.Replace(string(raw), "runtime:\n", "runtime:\n    "+field+"\n", 1)
+			if err := os.WriteFile(path, []byte(input), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "field "+strings.Split(field, ":")[0]+" not found") {
+				t.Fatalf("accepted retired runtime selector %q: %v", field, err)
+			}
+		})
 	}
 }
 

@@ -147,6 +147,26 @@ test('activity logs identify real execution phases without inferring an upstream
   assert.equal(logs.some(log => log.phase === 'LLM'),false);
 });
 
+test('execution activity labels all current roles without reviving retired role adapters', () => {
+  const executions = ['reason','curate','explore','bootstrap','intent'].map(kind => ({id:kind,generation:1,
+    status:'succeeded',kind,result:{text:JSON.stringify({fact:{description:'Retired bootstrap observation'},complete:{description:'Retained completion'}})}}));
+  const logs = data.buildLogs(fixture(),[],executions).filter(log => log.source === 'execution');
+  const phases = Object.fromEntries(logs.filter(log => log.kind !== 'model').map(log => [log.runId,log.phase]));
+  assert.deepEqual(phases,{reason:'Decide',curate:'Curate',explore:'Execute',bootstrap:'System',intent:'System'});
+  assert.match(logs.find(log => log.runId === 'curate').title,/Curate/);
+  assert.equal(logs.some(log => log.runId === 'bootstrap' && log.kind === 'model'),false);
+  assert.match(logs.find(log => log.runId === 'bootstrap').body,/Retired bootstrap observation/,'retained output remains inspectable');
+});
+
+test('activity uses authoritative State records without synthesizing graph records', () => {
+  const state = fixture();
+  state.graph.facts = [{id:'graph-only',description:'Unprojected fact'},{id:'f',description:'Raw graph description'}];
+  const logs = data.buildLogs(state);
+  assert.equal(logs.some(log => log.node?.type === 'step'),false,'empty State steps must remain empty');
+  assert.deepEqual(logs.filter(log => log.node?.type === 'fact').map(log => log.node.id),['f']);
+  assert.equal(logs.some(log => /Unprojected fact|Raw graph description/.test(log.body)),false);
+});
+
 test('historical finding and goal events retain invalidated transitive evidence', () => {
   const state = fixture();
   state.fact_records[0].support_invalid = true;

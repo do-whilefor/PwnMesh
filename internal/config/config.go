@@ -21,8 +21,6 @@ type Runtime struct {
 	MaxProjectWorkers int    `yaml:"max_project_workers"`
 	HealthTimeout     int    `yaml:"healthcheck_timeout"`
 	HealthMode        string `yaml:"worker_healthcheck"`
-	Execution         string `yaml:"execution"`
-	PromptGroup       string `yaml:"prompt_group"`
 }
 type Task = model.TaskBudget
 type Tasks struct {
@@ -103,14 +101,8 @@ func (c *Config) Validate() error {
 	if modelSettingsErr != nil {
 		return modelSettingsErr
 	}
-	if c.Runtime.Execution == "" {
-		c.Runtime.Execution = "container"
-	}
 	if c.Runtime.HealthMode == "" {
 		c.Runtime.HealthMode = "startup_only"
-	}
-	if c.Runtime.PromptGroup == "" {
-		c.Runtime.PromptGroup = "default"
 	}
 	if c.Tasks.Reason.MaxIntents == 0 {
 		c.Tasks.Reason.MaxIntents = 3
@@ -124,12 +116,6 @@ func (c *Config) Validate() error {
 	u, err := url.Parse(c.Server)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return fmt.Errorf("server must be an HTTP URL")
-	}
-	if c.Runtime.Execution != "container" {
-		return fmt.Errorf("only container execution is supported")
-	}
-	if c.Runtime.PromptGroup != "default" {
-		return fmt.Errorf("only the default prompt group is supported")
 	}
 	if !slices.Contains([]string{"disabled", "startup_only", "startup_and_task"}, c.Runtime.HealthMode) {
 		return fmt.Errorf("unknown worker_healthcheck mode")
