@@ -15,15 +15,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 	save, emit := runtime.save, runtime.emit
 	finish := func(r Result) (Result, error) { return runtime.finish(ctx, r) }
 	var err error
-	if o.ContextBytes <= 0 {
-		o.ContextBytes = envInt("PWNMESH_CONTEXT_BYTES", DefaultContextBytes)
-	}
-	if o.ContextTokens <= 0 {
-		o.ContextTokens = envInt("PWNMESH_CONTEXT_TOKENS", DefaultContextTokens)
-	}
-	if o.ContextTargetTokens <= 0 {
-		o.ContextTargetTokens = envInt("PWNMESH_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
-	}
+	o = contextOptions(o)
 	l := &agent.Loop{Provider: o.Provider, Tools: o.Tools, History: state.History, Concluding: state.Concluding, Repairing: state.Repairing, RepairPrompt: state.RepairPrompt, Emit: emit, Checkpoint: state.ContextCheckpoint, SaveState: func(history []agent.Message, _ *agent.ContextCheckpoint) error {
 		return save(history)
 	}, ContextBytes: o.ContextBytes, ContextTokens: o.ContextTokens, ContextTargetTokens: o.ContextTargetTokens, ObserveRequests: true, TaskPrompt: state.TaskPrompt, ConclusionPrompt: state.ConclusionPrompt, ContextData: state.ExecuteUpdates.contextData()}
@@ -171,4 +163,18 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return n
+}
+
+// Resolve explicit options before environment defaults for every Agent session.
+func contextOptions(o Options) Options {
+	if o.ContextBytes <= 0 {
+		o.ContextBytes = envInt("PWNMESH_CONTEXT_BYTES", DefaultContextBytes)
+	}
+	if o.ContextTokens <= 0 {
+		o.ContextTokens = envInt("PWNMESH_CONTEXT_TOKENS", DefaultContextTokens)
+	}
+	if o.ContextTargetTokens <= 0 {
+		o.ContextTargetTokens = envInt("PWNMESH_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
+	}
+	return o
 }

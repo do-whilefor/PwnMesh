@@ -34,6 +34,9 @@ func TestScenarioSkillReadsBundledFilesOnly(t *testing.T) {
 	for _, bundle := range scenarioSkillBundles() {
 		t.Run(bundle.scenario, func(t *testing.T) {
 			tool := bundle.tool()
+			if !tool.Parallel {
+				t.Fatal("read-only bundled guidance lost parallel execution")
+			}
 			index, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 			if err != nil || !strings.Contains(index, bundle.title) {
 				t.Fatalf("missing default skill: %q, %v", index, err)
@@ -63,6 +66,23 @@ func TestScenarioSkillReadsBundledFilesOnly(t *testing.T) {
 				t.Fatalf("cancelled read: %v", err)
 			}
 		})
+	}
+}
+
+func TestPentestClueMethodologyLoadsOnDemand(t *testing.T) {
+	guide, err := pentestSkillTool().Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, detail := range []string{"CORS", "Sourcemap", "Self-XSS", "Rate Limit", "Scanner results"} {
+		if strings.Contains(pentestPolicy, detail) || !strings.Contains(guide, detail) {
+			t.Errorf("clue methodology %q must live in the on-demand guide", detail)
+		}
+	}
+	for _, boundary := range []string{"Before web/API testing, call read_pentest_skill", "reproducible security-boundary failure with actual impact", "all eight CVSS 3.1 Base metrics", "Not Scored", "Unverified does not mean non-existent"} {
+		if !strings.Contains(pentestPolicy, boundary) {
+			t.Errorf("fixed policy lost required evidence boundary %q", boundary)
+		}
 	}
 }
 

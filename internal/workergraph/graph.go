@@ -408,14 +408,14 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		var savedDefinitions []nodeDefinition
 		for i, state := range saved.Nodes {
 			node, exists := byID[state.ID]
-			if !exists || i > 0 && saved.Nodes[i-1].ID >= state.ID || state.Kind != node.Kind || state.Attempt < 0 || state.Attempt > 1 || !slices.Contains([]string{"pending", "running", "succeeded", "skipped", "failed", "blocked", "cancelled"}, state.Status) || validateOutput(state.Output) != nil {
+			if !exists || i > 0 && saved.Nodes[i-1].ID >= state.ID || !validSavedNode(state, node) {
 				return checkpoint, errors.New("invalid graph node checkpoint")
 			}
 			if state.DefinitionSHA256 != hash(describe(node)) {
 				return checkpoint, fmt.Errorf("node %s definition changed", node.ID)
 			}
 			savedDefinitions = append(savedDefinitions, describe(node))
-			if (state.Status == "running" || state.Status == "succeeded") && (state.Attempt != 1 || state.StartedAt.IsZero()) || state.Status == "succeeded" && state.FinishedAt.IsZero() || (state.Status == "pending" || state.Status == "skipped" || state.Status == "blocked") && state.Attempt != 0 {
+			if !validSavedAttempt(state) {
 				return checkpoint, errors.New("invalid graph node attempt or timing")
 			}
 		}

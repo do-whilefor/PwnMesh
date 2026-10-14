@@ -77,6 +77,60 @@ func TestValidateSnapshotIsReadOnlyAndChecksBindings(t *testing.T) {
 	}
 }
 
+func TestSavedNodeValidationRejectsBeforeCallbacks(t *testing.T) {
+	definition := Definition{Version: "saved-node-v1", Nodes: []Node{{ID: "source", Kind: "function", Run: successful, Verify: verified}}}
+	options := fixtureOptions(t, 1)
+	if _, err := Run(context.Background(), definition, options); err != nil {
+		t.Fatal(err)
+	}
+	original := checkpointBytes(t, options)
+	callbacks := 0
+	definition.Nodes[0].Run = func(context.Context, Input) (Output, error) { callbacks++; return Output{}, nil }
+	definition.Nodes[0].Verify = func(context.Context, Input, Output) error { callbacks++; return nil }
+	for _, tc := range []struct {
+		name string
+		edit func(*NodeState)
+	}{
+		{"kind", func(n *NodeState) { n.Kind = "other" }},
+		{"negative-attempt", func(n *NodeState) { n.Attempt = -1 }},
+		{"second-attempt", func(n *NodeState) { n.Attempt = 2 }},
+		{"unknown-status", func(n *NodeState) { n.Status = "unknown" }},
+		{"missing-start", func(n *NodeState) { n.StartedAt = time.Time{} }},
+		{"missing-finish", func(n *NodeState) { n.FinishedAt = time.Time{} }},
+		{"running-without-attempt", func(n *NodeState) { n.Status, n.Attempt = "running", 0 }},
+		{"pending-with-attempt", func(n *NodeState) { n.Status = "pending" }},
+		{"skipped-with-attempt", func(n *NodeState) { n.Status, n.Reason = "skipped", "condition" }},
+		{"blocked-with-attempt", func(n *NodeState) { n.Status = "blocked" }},
+		{"relative-artifact", func(n *NodeState) {
+			n.Output.Artifacts = []Artifact{{Path: "relative", SHA256: strings.Repeat("0", 64)}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var changed Checkpoint
+			if err := json.Unmarshal(original, &changed); err != nil {
+				t.Fatal(err)
+			}
+			tc.edit(&changed.Nodes[0])
+			raw, err := json.Marshal(changed)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(options.Dir, "graph.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateSnapshot(definition, options, changed); err == nil {
+				t.Fatal("snapshot accepted malformed node")
+			}
+			if _, err := Run(context.Background(), definition, options); err == nil {
+				t.Fatal("resume accepted malformed node")
+			}
+			if callbacks != 0 || !bytes.Equal(raw, checkpointBytes(t, options)) {
+				t.Fatal("rejected node invoked callbacks or rewrote its checkpoint")
+			}
+		})
+	}
+}
+
 func TestNodeDefinitionSHA256MatchesRunWithoutMutatingDependencies(t *testing.T) {
 	node := Node{ID: "join", Kind: "function", DependsOn: []Dependency{{ID: "a_1"}, {ID: "a.1"}, {ID: "a-1"}, {ID: "a"}, {ID: "A"}, {ID: "1"}}, Run: func(context.Context, Input) (Output, error) { return Output{}, nil }}
 	original := slices.Clone(node.DependsOn)

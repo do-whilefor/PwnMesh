@@ -38,6 +38,19 @@ Use assigned test accounts and data; keep state changes within the agreed scope.
    built-in `cvss31` tool only after evidence supports all eight Base metrics.
    Otherwise report `Not Scored` and identify the missing evidence.
 
+## Clues and verification
+
+Treat the following as clues by default:
+
+- CORS, security response headers, version, framework, general errors, SSL/TLS, and other configuration or fingerprint information.
+- Exposure information such as robots.txt, Sourcemap, JS, frontend routing, API endpoints, GraphQL/Swagger, comments, field names, or internal system names.
+- Hidden interfaces, status codes, or front-end restrictions are bypassed, but back-end authentication, object ownership, tenant isolation, and permission verification do not fail.
+- Self-XSS, issues affecting only the tester's own non-sensitive data, standalone open redirects, theoretical clickjacking, or low-impact CSRF.
+- Rate Limit is missing but no real damage has been proven; the upload is successful but it has not been proven to be executable, trigger dangerous parsing, bind high-value objects, or bypass permissions.
+- Public files, URLs, client-side keys, or configuration that reveal no sensitive content, grant no effective privileges, have no business use, and show no security-boundary failure.
+- Small amounts of test data, public data, the tester's own data, or low-sensitivity data, as well as tokens, JWTs, keys, or signature parameters whose validity has not been demonstrated.
+- Scanner results, banner matches, or CVE fingerprint matches.
+
 ## Read on demand
 
 Call `read_pentest_skill({"path":"references/testing.md"})` to load a reference.

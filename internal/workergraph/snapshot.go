@@ -14,6 +14,25 @@ func NodeDefinitionSHA256(node Node) string {
 	return hash(describe(canonicalNode(node)))
 }
 
+// Both snapshots and resumable checkpoints accept the same node fields and
+// attempt timing. Identity, definition coverage and dependency checks remain
+// with each caller because only Run can incrementally extend a saved graph.
+func validSavedNode(state NodeState, node Node) bool {
+	return state.Kind == node.Kind && state.Attempt >= 0 && state.Attempt <= 1 &&
+		slices.Contains([]string{"pending", "running", "succeeded", "skipped", "failed", "blocked", "cancelled"}, state.Status) &&
+		validateOutput(state.Output) == nil
+}
+
+func validSavedAttempt(state NodeState) bool {
+	if (state.Status == "running" || state.Status == "succeeded") && (state.Attempt != 1 || state.StartedAt.IsZero()) {
+		return false
+	}
+	if state.Status == "succeeded" && state.FinishedAt.IsZero() {
+		return false
+	}
+	return (state.Status != "pending" && state.Status != "skipped" && state.Status != "blocked") || state.Attempt == 0
+}
+
 // ValidateSnapshot checks a complete saved graph against its original definition
 // and initial input without writing a checkpoint or invoking any callback. The
 // caller must separately verify external artifacts before consuming outputs.
@@ -34,10 +53,10 @@ func ValidateSnapshot(definition Definition, options Options, saved Checkpoint) 
 	for i := range saved.Nodes {
 		state := &saved.Nodes[i]
 		node, ok := byID[state.ID]
-		if !ok || i > 0 && saved.Nodes[i-1].ID >= state.ID || state.Kind != node.Kind || state.DefinitionSHA256 != NodeDefinitionSHA256(node) || state.Attempt < 0 || state.Attempt > 1 || !slices.Contains([]string{"pending", "running", "succeeded", "skipped", "failed", "blocked", "cancelled"}, state.Status) || validateOutput(state.Output) != nil {
+		if !ok || i > 0 && saved.Nodes[i-1].ID >= state.ID || !validSavedNode(*state, node) || state.DefinitionSHA256 != NodeDefinitionSHA256(node) {
 			return errors.New("invalid graph snapshot node")
 		}
-		if (state.Status == "running" || state.Status == "succeeded") && (state.Attempt != 1 || state.StartedAt.IsZero()) || state.Status == "succeeded" && state.FinishedAt.IsZero() || (state.Status == "pending" || state.Status == "skipped" || state.Status == "blocked") && state.Attempt != 0 || state.Status == "skipped" && state.Reason == "" {
+		if !validSavedAttempt(*state) || state.Status == "skipped" && state.Reason == "" {
 			return errors.New("invalid graph snapshot attempt or timing")
 		}
 		states[state.ID] = state

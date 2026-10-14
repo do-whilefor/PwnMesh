@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -100,20 +99,8 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 		return atomicSessionFile(dir, raw)
 	}
 	set := tools.Set{Dir: dir, RunDir: dir, ProcessDir: o.RunDir, Env: graphNodeEnvironment(j.Workspace, dir)}
-	childTools := set.All()
-	if j.Graph.Project.Scenario == "pentest" {
-		childTools = append(childTools, cvssTool(), pentestSkillTool())
-	}
-	if j.Graph.Project.Scenario == "audit" {
-		childTools = append(childTools, auditSkillTool())
-	}
-	if j.Graph.Project.Scenario == "ctf" && tsecSubmissionAvailable(os.Getenv) {
-		for i := range childTools {
-			if childTools[i].Name == "bash" {
-				childTools[i].Description += "\n" + ctfExecution
-			}
-		}
-	}
+	childTools := scenarioTools(j, set.All())
+	o = contextOptions(o)
 	loop := &agent.Loop{
 		Provider: provider, Tools: childTools, SaveState: save, ObserveRequests: true,
 		ContextBytes:        o.ContextBytes,
@@ -124,15 +111,6 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 				logErr = journal.append(e)
 			}
 		},
-	}
-	if loop.ContextBytes <= 0 {
-		loop.ContextBytes = envInt("PWNMESH_CONTEXT_BYTES", DefaultContextBytes)
-	}
-	if loop.ContextTokens <= 0 {
-		loop.ContextTokens = envInt("PWNMESH_CONTEXT_TOKENS", DefaultContextTokens)
-	}
-	if loop.ContextTargetTokens <= 0 {
-		loop.ContextTargetTokens = envInt("PWNMESH_CONTEXT_TARGET_TOKENS", DefaultContextTargetTokens)
 	}
 	if err := save(nil, nil); err != nil {
 		return workergraph.Output{}, err

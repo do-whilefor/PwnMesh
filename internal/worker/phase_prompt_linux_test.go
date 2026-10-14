@@ -4,13 +4,69 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/provider"
 )
+
+// Measure instructions independently from graph bodies, assignments and run
+// identities. These are UTF-8 bytes, not estimated provider token counts.
+func TestFixedPromptOverhead(t *testing.T) {
+	t.Setenv("PWNMESH_WORKER_ENVIRONMENT", "")
+	t.Setenv("TSEC_SERVER_HOST", "")
+	t.Setenv("TSEC_AGENT_TOKEN", "")
+	for _, scenario := range []string{"", "audit", "pentest", "ctf"} {
+		for _, kind := range []string{"reason", "explore", "curate"} {
+			t.Run(scenario+"/"+kind, func(t *testing.T) {
+				j := scenarioJob(t, scenario, kind)
+				if kind == "curate" {
+					j = curationJob(t)
+					j.Graph.Project.Scenario = scenario
+					j.State.Graph.Project.Scenario = scenario
+				}
+				j.Workspace = "/workspace"
+				prompt, err := Prompt(j, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				view, err := jobContextView(j)
+				if err != nil {
+					t.Fatal(err)
+				}
+				dataBytes := len(view) + len(strconv.Quote(j.Workspace)) + len(j.RunID)
+				if j.Intent != nil {
+					dataBytes += len(j.Intent.ID)
+					if strings.Contains(intentContext(j, view), j.Intent.Description) {
+						dataBytes += len(j.Intent.Description)
+					}
+				}
+				o := Options{RunDir: t.TempDir()}
+				if err := ConfigureRuntimeTools(j, &o); err != nil {
+					t.Fatal(err)
+				}
+				definitions := make([]agent.Definition, len(o.Tools))
+				for i, tool := range o.Tools {
+					definitions[i] = tool.Definition
+				}
+				declarations, err := json.Marshal(definitions)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fixed := len(prompt) - dataBytes
+				if fixed <= 0 || fixed > 10000 || len(declarations) > 32000 {
+					t.Fatalf("unexpected fixed overhead: prompt=%d tools=%d", fixed, len(declarations))
+				}
+				t.Logf("system=%d fixed_prompt=%d tool_declarations=%d task_data=%d bytes", len(provider.System), fixed, len(declarations), dataBytes)
+			})
+		}
+	}
+}
 
 func phaseHistoryText(history []agent.Message) string {
 	var text strings.Builder
