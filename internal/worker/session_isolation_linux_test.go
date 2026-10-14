@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -14,7 +16,71 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/process"
 )
+
+func TestSessionReleasePreservesCancellationMeaning(t *testing.T) {
+	t.Setenv("PWNMESH_LAUNCH_TOKEN", "")
+	for _, tc := range []struct {
+		name   string
+		cause  error
+		marked bool
+	}{
+		{name: "completed"},
+		{name: "interrupted", cause: ErrInterrupted},
+		{name: "cancelled", cause: context.Canceled, marked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			parent, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			ctx, release, err := acquireSession(parent, dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tc.cause != nil {
+				cancel(tc.cause)
+			}
+			release()
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("private context survived release: %v", ctx.Err())
+			}
+			if process.Cancelled(dir) != tc.marked {
+				t.Fatalf("hard-stop marker changed cancellation meaning for %s", tc.name)
+			}
+			if _, err := os.Stat(filepath.Join(dir, "worker.pid")); !os.IsNotExist(err) {
+				t.Fatalf("worker marker survived release: %v", err)
+			}
+			unlock, err := process.Lock(dir)
+			if err != nil {
+				t.Fatalf("session retained its run lock: %v", err)
+			}
+			unlock()
+		})
+	}
+}
+
+func TestSessionRestoreFailureReleasesOwnership(t *testing.T) {
+	t.Setenv("PWNMESH_LAUNCH_TOKEN", "")
+	j, dir := outcomeJob(t, "explore"), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runSession(context.Background(), j, Options{RunDir: dir}); err == nil || !strings.Contains(err.Error(), "invalid saved session") {
+		t.Fatalf("expected malformed saved session: %v", err)
+	}
+	if process.Cancelled(dir) {
+		t.Fatal("restore failure became a hard cancellation")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "worker.pid")); !os.IsNotExist(err) {
+		t.Fatalf("worker marker survived restore failure: %v", err)
+	}
+	unlock, err := process.Lock(dir)
+	if err != nil {
+		t.Fatalf("restore failure retained its run lock: %v", err)
+	}
+	unlock()
+}
 
 func TestRuntimeToolClosuresOwnTheirRunWhenCallerReusesSpareCapacity(t *testing.T) {
 	base := make([]agent.Tool, 0, 16)
