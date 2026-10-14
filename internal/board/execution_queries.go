@@ -7,7 +7,6 @@ import (
 	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 	"slices"
-	"strings"
 )
 
 // ExecutionSummary is the scheduling identity and immutable input boundary.
@@ -22,19 +21,6 @@ type ExecutionCheckQuery struct {
 }
 
 type ExecutionCheck = model.ExecutionCheck
-
-const executionMetadataColumns = `generation,input_revision,decision_revision,state_version,has_state,fact_count,hint_count,open_count`
-const executionSummaryColumns = `project_id,id,namespace,backend,kind,intent,lease,retry_key,status,resumes,created_at,updated_at,` + executionMetadataColumns
-const pendingExecutionSQL = sqlstore.PendingExecutionSQL
-const executionFailureColumns = `COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.status') END,''),COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.failure_kind') END,''),COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.failure_cause') END,'')`
-
-func scanExecutionSummary(s scanner, prefix ...any) (ExecutionSummary, error) {
-	var e ExecutionSummary
-	args := append(prefix, &e.ProjectID, &e.ID, &e.Namespace, &e.Backend, &e.Kind, &e.Intent, &e.Lease, &e.RetryKey, &e.Status, &e.Resumes, &e.CreatedAt, &e.UpdatedAt,
-		&e.Generation, &e.InputRevision, &e.DecisionRevision, &e.StateVersion, &e.HasState, &e.FactCount, &e.HintCount, &e.OpenCount)
-	err := s.Scan(args...)
-	return e, err
-}
 
 func executionInputMetadata(raw json.RawMessage) (ExecutionSummary, error) {
 	var job struct {
@@ -67,34 +53,14 @@ func executionMetadataValues(e ExecutionSummary) []any {
 }
 
 func (t *Tx) PendingExecutions(namespace string, after int64, limit int) (ExecutionPage, error) {
-	page := ExecutionPage{Items: []ExecutionSummary{}}
 	if namespace == "" || after < 0 || limit < 1 || limit > 100 {
-		return page, Err(422, "namespace, nonnegative after and limit between 1 and 100 are required")
+		return ExecutionPage{Items: []ExecutionSummary{}}, Err(422, "namespace, nonnegative after and limit between 1 and 100 are required")
 	}
-	rows, err := t.Query("SELECT rowid,"+executionSummaryColumns+" FROM pwnmesh_executions WHERE namespace=? AND rowid>? AND "+pendingExecutionSQL+" ORDER BY rowid LIMIT ?", namespace, after, limit+1)
-	if err != nil {
-		return page, err
-	}
-	defer rows.Close()
-	var last int64
-	for rows.Next() {
-		var rowid int64
-		e, err := scanExecutionSummary(rows, &rowid)
-		if err != nil {
-			return page, err
-		}
-		if len(page.Items) == limit {
-			page.NextCursor = last
-			break
-		}
-		page.Items = append(page.Items, e)
-		last = rowid
-	}
-	return page, rows.Err()
+	return sqlstore.PendingExecutions(t, namespace, after, limit)
 }
 
 func (t *Tx) GetExecutionSummary(namespace, project, id string) (ExecutionSummary, error) {
-	e, err := scanExecutionSummary(t.QueryRow("SELECT "+executionSummaryColumns+" FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND id=?", namespace, project, id))
+	e, err := sqlstore.ExecutionSummary(t, namespace, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Execution not found")
 	}
@@ -105,27 +71,23 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 	var out ExecutionCheck
 	// Existing pending work and human grants remain visible across generations;
 	// recovery is responsible for cancelling stale pending work.
-	err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND (?='reason' OR intent=?) AND `+pendingExecutionSQL+`)`, q.Namespace, q.ProjectID, q.Kind, q.Kind, q.Intent).Scan(&out.Pending)
+	admission, err := sqlstore.ReadExecutionAdmission(t, sqlstore.ExecutionAdmissionFilter{
+		ProjectID: q.ProjectID, Namespace: q.Namespace, Generation: q.Generation,
+		ExecutionCandidate: sqlstore.ExecutionCandidate{Kind: q.Kind, Intent: q.Intent, RetryKey: q.RetryKey},
+		AnyPendingIntent:   q.Kind == "reason", GrantMatchesInput: q.Kind == "curate",
+	})
+	out.Pending, out.PreviousRunID = admission.Pending, admission.PreviousRunID
 	if err != nil {
 		return out, err
 	}
-	err = t.QueryRow(`SELECT id FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND intent=? AND status='retry_requested' AND (?!='curate' OR (retry_key=? AND generation=?)) ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Kind, q.Intent, q.Kind, q.RetryKey, q.Generation).Scan(&out.PreviousRunID)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return out, err
-	}
-	var tried bool
-	err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND retry_key=? AND status NOT IN ('retry_requested','retried'))`, q.Namespace, q.ProjectID, q.Kind, q.RetryKey).Scan(&tried)
-	if err != nil {
-		return out, err
-	}
-	out.Blocked = out.Pending || (tried && out.PreviousRunID == "")
+	out.Blocked = out.Pending || (admission.Tried && out.PreviousRunID == "")
 	if !out.Blocked && q.Kind == "explore" {
 		out.Blocked, err = t.stepWriteBlocked(q.ProjectID, q.Intent)
 		if err != nil {
 			return out, err
 		}
 	}
-	err = t.QueryRow(`SELECT COUNT(*) FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND generation=? AND retry_key=?`, q.Namespace, q.ProjectID, q.Kind, q.Generation, q.RetryKey).Scan(&out.Attempts)
+	out.Attempts, err = sqlstore.ExecutionAttempts(t, q.Namespace, q.ProjectID, q.Kind, q.RetryKey, q.Generation)
 	if err != nil {
 		return out, err
 	}
@@ -133,13 +95,13 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 		// The state hash already binds its own generation. Old jobs without a
 		// Decision marker could carry a State whose graph differs from Job.Graph;
 		// repeated-input detection historically followed that State, not the job.
-		err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind='reason' AND state_version=?)`, q.Namespace, q.ProjectID, q.StateVersion).Scan(&out.Repeated)
+		out.Repeated, err = sqlstore.ExecutionStateExists(t, q.Namespace, q.ProjectID, "reason", q.StateVersion)
 		if err != nil {
 			return out, err
 		}
 	}
 	if q.Kind == "reason" {
-		latest, err := scanExecutionSummary(t.QueryRow(`SELECT `+executionSummaryColumns+` FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND generation=? AND kind='reason' AND status='succeeded' ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Generation))
+		latest, err := sqlstore.LatestSucceededExecution(t, q.Namespace, q.ProjectID, "reason", q.Generation)
 		if err == nil {
 			out.LatestDecision = &latest
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -151,17 +113,15 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 	}
 	// Extract only the small failure classification. Never materialize Result
 	// or Job just to decide whether this one candidate merits a retry request.
-	var candidate Execution
-	var status, failureKind, failureCause string
-	err = t.QueryRow(`SELECT id,status,`+executionFailureColumns+` FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND generation=? AND kind=? AND retry_key=? LIMIT 1`, q.Namespace, q.ProjectID, q.Generation, q.Kind, q.RetryKey).Scan(&candidate.ID, &candidate.Status, &status, &failureKind, &failureCause)
+	id, status, failure, err := sqlstore.ExecutionInputFailure(t, q.Namespace, q.ProjectID, q.Kind, q.RetryKey, q.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, nil
 	}
 	if err != nil {
 		return out, err
 	}
-	if automaticDecisionRetryEligible(q.Kind, candidate.Status, status, failureKind, failureCause) {
-		out.AutomaticRetryID = candidate.ID
+	if automaticDecisionRetryEligible(q.Kind, status, failure.ResultStatus, failure.Kind, failure.Cause) {
+		out.AutomaticRetryID = id
 	}
 	return out, nil
 }
@@ -184,8 +144,7 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, steps []Schedule
 			return nil, err
 		}
 	}
-	values := make([]string, 0, len(steps))
-	args := make([]any, 0, 3*len(steps)+6)
+	candidates := make([]sqlstore.ExecutionCandidate, 0, len(steps))
 	for _, step := range steps {
 		if !step.Ready {
 			continue
@@ -194,32 +153,15 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, steps []Schedule
 			checks["explore:"+step.ID] = ExecutionCheck{Blocked: true}
 			continue
 		}
-		values = append(values, "(?,?,?)")
-		args = append(args, "explore", step.ID, "explore:"+step.ID)
+		candidates = append(candidates, sqlstore.ExecutionCandidate{Kind: "explore", Intent: step.ID, RetryKey: "explore:" + step.ID})
 	}
-	if len(values) == 0 {
-		return checks, nil
-	}
-	args = append(args, namespace, project, namespace, project, namespace, project)
-	rows, err := t.Query(`WITH candidates(kind,intent,retry_key) AS (VALUES `+strings.Join(values, ",")+`)
-	SELECT c.retry_key,
-	EXISTS(SELECT 1 FROM pwnmesh_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.intent=c.intent AND `+pendingExecutionSQL+`),
-	COALESCE((SELECT e.id FROM pwnmesh_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.intent=c.intent AND e.status='retry_requested' ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1),''),
-	EXISTS(SELECT 1 FROM pwnmesh_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.retry_key=c.retry_key AND e.status NOT IN ('retry_requested','retried'))
-	FROM candidates c`, args...)
-	if err != nil {
+	admissions, err := sqlstore.ReadExecutionAdmissions(t, project, namespace, candidates)
+	if admissions == nil {
 		return nil, err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var key string
-		var check ExecutionCheck
-		var tried bool
-		if err := rows.Scan(&key, &check.Pending, &check.PreviousRunID, &tried); err != nil {
-			return nil, err
-		}
-		check.Blocked = check.Pending || (tried && check.PreviousRunID == "")
-		checks[key] = check
+	for key, admission := range admissions {
+		checks[key] = ExecutionCheck{Pending: admission.Pending, PreviousRunID: admission.PreviousRunID,
+			Blocked: admission.Pending || (admission.Tried && admission.PreviousRunID == "")}
 	}
-	return checks, rows.Err()
+	return checks, err
 }

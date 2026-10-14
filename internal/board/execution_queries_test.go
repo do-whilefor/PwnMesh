@@ -5,10 +5,67 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestReadOperationsUseStorageBoundary(t *testing.T) {
+	for _, name := range []string{"execution_queries.go", "input_snapshot.go"} {
+		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			call, ok := node.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			method, ok := call.Fun.(*ast.SelectorExpr)
+			if ok && (method.Sel.Name == "Exec" || method.Sel.Name == "Query" || method.Sel.Name == "QueryRow") {
+				t.Errorf("%s bypasses storage through %s", name, method.Sel.Name)
+			}
+			return true
+		})
+	}
+}
+
+func TestExecutionReadValidationAndRoleScopesStayInBoard(t *testing.T) {
+	s := executionQueryStore(t)
+	executionQueryTx(t, s, func(tx *Tx) {
+		for _, invalid := range []struct {
+			namespace string
+			after     int64
+			limit     int
+		}{{"", 0, 1}, {"ns", -1, 1}, {"ns", 0, 0}, {"ns", 0, 101}} {
+			page, err := tx.PendingExecutions(invalid.namespace, invalid.after, invalid.limit)
+			var api *APIError
+			if !errors.As(err, &api) || api.Status != 422 || page.Items == nil || len(page.Items) != 0 {
+				t.Fatalf("invalid paging lost Board error or empty array: %+v, %v", page, err)
+			}
+		}
+		_, err := tx.GetExecutionSummary("ns", "p", "missing")
+		var api *APIError
+		if !errors.As(err, &api) || api.Status != 404 {
+			t.Fatalf("missing summary lost Board error: %v", err)
+		}
+		for _, kind := range []string{"reason", "curate", "explore"} {
+			putQueryExecution(t, tx, Execution{ID: kind + "-grant", Kind: kind, Intent: "step", RetryKey: "old", Status: "retry_requested"}, 1, "")
+			putQueryExecution(t, tx, Execution{ID: kind + "-pending", Kind: kind, Intent: "another", RetryKey: "other", Status: "running"}, 1, "")
+			check, err := tx.CheckExecutions(ExecutionCheckQuery{ProjectID: "p", Namespace: "ns", Kind: kind, Intent: "step", RetryKey: "current", Generation: 2})
+			wantGrant := kind + "-grant"
+			if kind == "curate" {
+				wantGrant = ""
+			}
+			if err != nil || check.Pending != (kind == "reason") || check.Blocked != (kind == "reason") || check.PreviousRunID != wantGrant || check.Attempts != 0 {
+				t.Fatalf("%s policy changed: %+v, %v", kind, check, err)
+			}
+		}
+	})
+}
 
 func executionQueryStore(t *testing.T) *Store {
 	t.Helper()

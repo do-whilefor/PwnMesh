@@ -3,6 +3,7 @@ package board
 import (
 	"database/sql"
 	"errors"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"slices"
 )
 
@@ -34,7 +35,7 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 	if !slices.ContainsFunc(s.Goals, func(goal Goal) bool { return goal.ID == step.GoalID && goal.Status == "open" }) {
 		return "", nil, false, Err(409, "retry requires an open task goal")
 	}
-	latest, err := scanExecutionSummary(t.QueryRow("SELECT "+executionSummaryColumns+" FROM pwnmesh_executions WHERE project_id=? AND intent=? ORDER BY rowid DESC LIMIT 1", s.Graph.Project.ID, id))
+	latest, err := sqlstore.LatestIntentExecution(t, s.Graph.Project.ID, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, false, Err(409, "Step has no execution to retry")
 	}

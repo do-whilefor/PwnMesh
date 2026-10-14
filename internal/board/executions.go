@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 	"slices"
 	"strings"
@@ -15,6 +16,8 @@ import (
 type Execution = model.Execution
 
 const executionColumns = `project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,result,resumes,created_at,updated_at`
+const executionMetadataColumns = sqlstore.ExecutionMetadataColumns
+const pendingExecutionSQL = sqlstore.PendingExecutionSQL
 
 type scanner interface{ Scan(...any) error }
 

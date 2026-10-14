@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 )
 
@@ -18,41 +19,16 @@ func (t *Tx) FreezeInput(state State) (out *InputSnapshot, err error) {
 	ref := &InputSnapshot{Version: 1, ID: hex.EncodeToString(sum[:]), ProjectID: state.Graph.Project.ID,
 		Generation: state.Graph.Project.Generation, Revision: state.Revision, DecisionRevision: state.DecisionRevision,
 		StateVersion: DecisionStateVersion(state), FactCount: len(state.Graph.Facts), HintCount: len(state.Graph.Hints), OpenCount: state.Graph.OpenCount(), StepCount: len(state.Steps)}
-	var exists bool
-	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?)", ref.ProjectID, ref.ID).Scan(&exists); err != nil {
-		return nil, err
-	}
-	if exists {
-		return ref, nil
-	}
 	metadata, err := json.Marshal(ref)
 	if err != nil {
 		return nil, err
 	}
-	// Chunks and their manifest have one lifetime even if a caller handles an
-	// insertion failure without rolling back its surrounding transaction.
-	if _, err = t.Exec("SAVEPOINT pwnmesh_input_snapshot"); err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_input_snapshot")
-			err = errors.Join(err, rollbackErr)
-		}
-		_, releaseErr := t.Exec("RELEASE pwnmesh_input_snapshot")
-		err = errors.Join(err, releaseErr)
-	}()
-	stored, err := t.encodeInputSnapshot(ref.ProjectID, raw)
-	if err != nil {
-		return nil, err
-	}
-	_, err = t.Exec("INSERT OR IGNORE INTO pwnmesh_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", ref.ProjectID, ref.ID, metadata, stored)
+	err = sqlstore.SaveInputSnapshot(t, ref.ProjectID, ref.ID, metadata, raw)
 	return ref, err
 }
 
 func (t *Tx) InputSnapshotMetadata(project, id string) (*InputSnapshot, error) {
-	var raw []byte
-	err := t.QueryRow("SELECT metadata FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
+	raw, err := sqlstore.ReadInputSnapshotMetadata(t, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Err(404, "Input snapshot not found")
 	}
@@ -75,22 +51,11 @@ func (t *Tx) ReadInputSnapshot(project, id string) (State, error) {
 }
 
 func (t *Tx) readInputSnapshotBytes(project, id string) ([]byte, error) {
-	var raw []byte
-	err := t.QueryRow("SELECT state FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
+	raw, err := sqlstore.ReadInputSnapshot(t, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Err(404, "Input snapshot not found")
 	}
-	if err != nil {
-		return nil, err
-	}
-	if raw, err = t.decodeInputSnapshot(project, raw); err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256(raw)
-	if hex.EncodeToString(sum[:]) != id {
-		return nil, errors.New("input snapshot digest mismatch")
-	}
-	return raw, nil
+	return raw, err
 }
 
 // DecisionRetryKey preserves existing retry identity while its computation

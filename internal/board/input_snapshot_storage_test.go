@@ -113,7 +113,12 @@ func TestChunkedInputSnapshotFailsClosedOnMissingOrCorruptStorage(t *testing.T) 
 				if err := tx.QueryRow("SELECT state FROM pwnmesh_input_snapshots WHERE project_id='p' AND id=?", ref.ID).Scan(&stored); err != nil {
 					return err
 				}
-				var manifest snapshotManifest
+				// Decode the persisted format independently of the storage implementation.
+				const snapshotChunkPrefix = "PwnMesh snapshot chunks v1\n"
+				var manifest struct {
+					Bytes  int      `json:"bytes"`
+					Chunks []string `json:"chunks"`
+				}
 				if !bytes.HasPrefix(stored, []byte(snapshotChunkPrefix)) || json.Unmarshal(stored[len(snapshotChunkPrefix):], &manifest) != nil || len(manifest.Chunks) == 0 {
 					t.Fatal("fixture was not chunked")
 				}

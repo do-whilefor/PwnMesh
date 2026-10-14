@@ -30,7 +30,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
 | `internal/board/` | Transactional business operations, admission, mutations and SQL-backed projections |
 | `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
-| `internal/board/internal/sqlstore/` | SQLite connections, transaction lifecycle, graph row persistence, schema and migrations |
+| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph rows, snapshot bytes, execution summary reads, schema and migrations |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
@@ -58,8 +58,15 @@ storage-free definitions directly; their production imports do not depend on
 aggregate Board or SQLite.
 Board retains business validation and transactional operation composition.
 Its private `sqlstore` package maps canonical graph values to rows using the
-caller's existing transaction. Specialized state/execution queries and projections
-remain in Board. There is one canonical model, not a duplicate transport model.
+caller's existing transaction. It also owns immutable snapshot storage, chunk
+verification and execution summary reads. Board constructs snapshot identities
+and decodes canonical State; storage retains the exact bytes and keeps chunks
+and manifests together with a savepoint. Execution admission queries return
+observed pending work, retry grants and prior attempts. Board chooses their
+scope and decides blocking, write conflicts and retry eligibility. Summary reads
+keep archived Job/Result bodies out of scheduling. State projections and execution
+mutations still contain SQL in Board. There is one canonical model, not a duplicate
+transport model.
 
 The embedded frontend keeps project form rules in `project-model.js`, provider
 settings in `model-settings.js`, and activity rendering in `activity-view.js`.

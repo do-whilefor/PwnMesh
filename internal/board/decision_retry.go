@@ -3,6 +3,7 @@ package board
 import (
 	"database/sql"
 	"errors"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"slices"
 )
 
@@ -32,8 +33,7 @@ func automaticDecisionRetryEligible(kind, status, resultStatus, failureKind, fai
 // this retry key exhausts it, even after dispatcher restart. Human retry remains
 // a separate operation and does not replenish the automatic allowance.
 func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
-	var resultStatus, failureKind, failureCause string
-	current, err := scanExecutionSummary(t.QueryRow("SELECT "+executionFailureColumns+","+executionSummaryColumns+" FROM pwnmesh_executions WHERE project_id=? AND id=?", e.ProjectID, e.ID), &resultStatus, &failureKind, &failureCause)
+	current, failure, err := sqlstore.ExecutionSummaryWithFailure(t, e.ProjectID, e.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Err(404, "Execution not found")
 	}
@@ -44,7 +44,7 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 	if status == "retry_requested" {
 		status = "failed" // A lost grant response may be retried.
 	}
-	if !automaticDecisionRetryEligible(current.Kind, status, resultStatus, failureKind, failureCause) {
+	if !automaticDecisionRetryEligible(current.Kind, status, failure.ResultStatus, failure.Kind, failure.Cause) {
 		return Err(409, "Decision failure does not allow automatic retry")
 	}
 	var projectStatus string
