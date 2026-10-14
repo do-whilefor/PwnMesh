@@ -12,7 +12,7 @@
   function bind({ getProject, onCreate, onHint, isHintRetry = () => false, toast = () => {} }) {
     if (![getProject, onCreate, onHint].every(callback => typeof callback === 'function')) throw new TypeError('Project form callbacks are required.');
     activeBinding?.destroy();
-    const { validateProject, validateHint, validateFiles, isProjectClosed, createFormDrafts, PROJECT_TYPES, fileSize } = window.PwnMeshModel;
+    const { validateProject, validateHint, validateFiles, isProjectClosed, createFormDrafts, PROJECT_TYPES, fileSize } = window.PwnMeshProjectModel;
     const hintUnavailable = project => project?.readOnly ? '历史项目只读，请新建项目继续。' : isProjectClosed(project) ? '项目已结束，无法补充信息。' : '';
     const drafts = createFormDrafts();
     const $ = selector => document.querySelector(selector);

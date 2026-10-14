@@ -103,7 +103,7 @@ func TestWorkbenchLoadsEmbeddedCanvasAssets(t *testing.T) {
 	}
 	for _, name := range []string{
 		"api.js", "data.js", "graph-data.js", "canvas.js", "layout.js", "routing.js",
-		"graph-view.js", "graph.js", "app.js", "style.css", "graph.css", "brand.png", "models.js", "llm.js", "llm.css", "shell.css", "blackboard.css", "forms.css", "inspector.css", "lucide.min.js",
+		"graph-view.js", "graph.js", "app.js", "style.css", "graph.css", "brand.png", "model-settings.js", "project-model.js", "activity-view.js", "llm.js", "llm.css", "shell.css", "blackboard.css", "forms.css", "inspector.css", "lucide.min.js",
 	} {
 		if !loaded["/static/"+name] {
 			t.Errorf("workspace does not load %s", name)

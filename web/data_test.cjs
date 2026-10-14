@@ -26,6 +26,34 @@ test('activity time is Shanghai calendar time, with no invented fallback timesta
   assert.equal(entries[0].timestamp,'2026-09-23T16:05:09Z');
 });
 
+test('activity rendering preserves full evidence, search highlights and expansion identity without interpreting markup', () => {
+  const view = require('./static/activity-view.js');
+  const id = 'fact:"quoted"', body = 'prefix '.repeat(50)+'<script>Evidence</script>\n\nretained tail';
+  const ui = {query:' evidence ',expanded:new Set([id])};
+  const entry = {id,phase:'FINDING',time:'00:05:09',timestamp:'2026-09-23T16:05:09Z',title:'Evidence <proof>',body,evidence:body};
+  const html = view.render([entry],ui,stamp => 'Shanghai '+stamp);
+  assert.match(html,/data-log-id="fact:&quot;quoted&quot;" open/);
+  assert.match(html,/<mark>Evidence<\/mark> &lt;proof&gt;/);
+  assert.match(html,/&lt;script&gt;<mark>Evidence<\/mark>&lt;\/script&gt;/);
+  assert.doesNotMatch(html,/<script>|<proof>/);
+  assert.match(html,/<p>retained tail<\/p>/);
+  const full = html.slice(html.indexOf('<div class="log-body">'));
+  assert.equal(full.match(/retained tail/g).length,1,'identical evidence is shown once in the full record');
+  assert.match(html,/title="Shanghai 2026-09-23T16:05:09Z"/);
+  assert.deepEqual([...ui.expanded],[id]);
+  assert.equal(ui.query,' evidence ');
+  assert.equal(entry.body,body);
+});
+
+test('activity rendering keeps empty records readable without inventing evidence or time', () => {
+  const view = require('./static/activity-view.js'), ui = {query:'',expanded:new Set()};
+  assert.equal(view.render([],ui), '');
+  const html = view.render([{id:'empty',phase:'SYSTEM',time:'—',title:'No details'}],ui,() => {throw new Error('missing timestamp must not be formatted');});
+  assert.match(html,/<time datetime="" title="—">—<\/time>/);
+  assert.match(html,/No details/);
+  assert.doesNotMatch(html,/log-long-content|log-body|is-finding/);
+});
+
 test('only persisted completion with valid root support becomes a project result', () => {
   const state = fixture();
   assert.equal(data.buildResult(state).status,'pending');

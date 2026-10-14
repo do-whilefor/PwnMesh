@@ -1,4 +1,4 @@
-(function(root,factory){const model=factory();if(typeof module==='object'&&module.exports)module.exports=model;else root.PwnMeshModel=model;})(typeof globalThis!=='undefined'?globalThis:this,function(){
+(function(root,factory){const model=factory();if(typeof module==='object'&&module.exports)module.exports=model;else root.PwnMeshProjectModel=model;})(typeof globalThis!=='undefined'?globalThis:this,function(){
   'use strict';
   const MiB=1048576;
   const PROJECT_TYPES=Object.freeze([

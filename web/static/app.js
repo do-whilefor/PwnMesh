@@ -5,7 +5,7 @@
   const icon = name => '<i data-lucide="'+name+'" aria-hidden="true"></i>';
   const modelEntry = () => '<a id="model-entry" class="top-model-entry" href="#llm" data-nav="llm" title="模型接入">'+icon('plug')+'<span>模型接入</span><small id="model-summary" class="visually-hidden">未配置</small></a>';
   const paintIcons = () => lucide.createIcons({attrs:{'stroke-width':1.6}});
-  const {fileSize, PROJECT_TYPES} = PwnMeshModel;
+  const {fileSize, PROJECT_TYPES} = PwnMeshProjectModel;
   const lifecycle = PwnMeshLifecycle;
   const service = new PwnMeshService.Service(), projects = [];
   let roundReadVersion = 0, materialReadVersion = 0;
@@ -142,44 +142,6 @@
     const footer=$('.inspector-reader[open] .inspector-reader-footer');
     if(footer){const download=document.createElement('a');download.className='button secondary';download.href=PwnMeshInputPreview.downloadURL(p.id,file.id);download.download=file.name;download.innerHTML=icon('download')+'下载原始文件';footer.append(download);paintIcons();}
   }
-  function marked(value,query) {
-    const text = String(value || '');
-    if (!query) return esc(text);
-    let result = '', start = 0, at;
-    const lower = text.toLowerCase(), needle = query.toLowerCase();
-    while ((at = lower.indexOf(needle,start)) !== -1) {
-      result += esc(text.slice(start,at))+'<mark>'+esc(text.slice(at,at+query.length))+'</mark>';
-      start = at+query.length;
-    }
-    return result+esc(text.slice(start));
-  }
-  function logText(value,id,ui) {
-    const text = String(value || ''), query = ui.query.trim();
-    const hit = query ? text.toLowerCase().indexOf(query.toLowerCase()) : -1;
-    const start = Math.max(0,hit-25), preview = (start ? '…' : '')+text.slice(start,start+260)+(start+260 < text.length ? '…' : '');
-    const paragraphs = text.split(/\r?\n\s*\r?\n/).map(paragraph => '<p>'+marked(paragraph,query)+'</p>').join('');
-    return '<details class="log-long-content" data-log-id="'+esc(id)+'" '+(ui.expanded.has(id) ? 'open' : '')+'><summary><span class="log-text-preview">'+marked(preview,query)+'</span><span class="log-expand"><span class="log-label-closed">展开全文</span><span class="log-label-open">收起全文</span>'+icon('chevron-down')+'<button class="log-read-sticky" data-log-read="'+esc(id)+'" title="在独立窗口中阅读日志全文">'+icon('maximize-2')+'放大阅读</button></span></summary><div class="log-body">'+paragraphs+'</div></details>';
-  }
-  function fitLogBodies(host,ui) {
-    // Short records remain complete. Only content taller than four actual lines folds.
-    host.querySelectorAll('.log-long-content').forEach(detail => {
-      const body = detail.querySelector(':scope > .log-body'), probe = body.cloneNode(true);
-      Object.assign(probe.style,{position:'absolute',visibility:'hidden',pointerEvents:'none',width:detail.getBoundingClientRect().width+'px',margin:'0'});
-      detail.parentElement.append(probe);
-      const height = probe.getBoundingClientRect().height, lineHeight = parseFloat(getComputedStyle(probe).lineHeight);
-      probe.remove();
-      if (height <= lineHeight*4+1) { ui.expanded.delete(detail.dataset.logId); detail.replaceWith(body); }
-    });
-  }
-  function timelineEntry({id,phase,time,timestamp,title,body,evidence},ui) {
-    const clock = '<time datetime="'+esc(timestamp || '')+'" title="'+esc(timestamp ? dateTime(timestamp) : time)+'">'+esc(time)+'</time>';
-    const heading = '<div class="entry-title"><h3><button class="log-title" data-log-read="'+esc(id)+'" aria-label="阅读全文：'+esc(title)+'" aria-haspopup="dialog" title="查看完整日志"><span class="log-entry-title">'+marked(title,ui.query.trim())+'</span>'+icon('chevron-right')+'</button></h3></div>';
-    const content = [body,evidence].filter(Boolean).filter((value,index,array) => array.indexOf(value) === index).join('\n\n');
-    return '<article class="timeline-entry '+(phase === 'FINDING' ? 'is-finding' : '')+'" data-record="'+esc(id)+'" data-phase="'+esc(phase)+'"><div class="entry-headline">'+heading+'<div class="entry-meta">'+clock+'</div></div>'+(content ? logText(content,id,ui) : '')+'</article>';
-  }
-  function activityMarkup(entries,ui) {
-    return entries.length ? '<div class="log-stream">'+entries.map(entry => timelineEntry(entry,ui)).join('')+'</div>' : '';
-  }
   function renderActivity() {
     if (!viewed()) return;
     const host = $('#activity-content'); if (!host) return;
@@ -204,8 +166,8 @@
     const filtered = entries.filter(e => !query || [e.title,e.body,e.evidence].filter(Boolean).join('\n').toLowerCase().includes(query));
     $('#activity-match-count').textContent = filtered.length+' 条'+(query ? '匹配' : '记录');
     toolbar.innerHTML = '<div class="activity-search"><label for="activity-search" class="visually-hidden">搜索黑板日志全文</label>'+icon('search')+'<input id="activity-search" type="search" placeholder="搜索日志全文" value="'+esc(ui.query)+'" autocomplete="off"><button id="activity-clear-search" class="icon-button" aria-label="清除日志搜索" '+(!ui.query ? 'hidden' : '')+'>'+icon('x')+'</button></div>';
-    host.innerHTML = activityMarkup(filtered,ui) || '<div class="empty-state log-empty">'+icon('search')+'没有匹配的记录<button class="text-button" id="activity-reset">清除筛选</button></div>';
-    fitLogBodies(host,ui);
+    host.innerHTML = PwnMeshActivityView.render(filtered,ui,dateTime) || '<div class="empty-state log-empty">'+icon('search')+'没有匹配的记录<button class="text-button" id="activity-reset">清除筛选</button></div>';
+    PwnMeshActivityView.fitBodies(host,ui);
     const sync = () => {
       ui.scrollTop = host.scrollTop;
       host.querySelectorAll('details[data-log-id]').forEach(el => { if (el.open) ui.expanded.add(el.dataset.logId); else ui.expanded.delete(el.dataset.logId); });

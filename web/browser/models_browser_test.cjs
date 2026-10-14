@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const {launch} = require('./visual_fixture.cjs');
+const {proxyProtocols} = require('../static/model-settings.js');
 
 test('real model settings persist, probe Anthropic tools, and report failures; materials survive reload', {
   timeout:120000,
@@ -110,4 +111,121 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
     for (const id of owned) await api('/projects/' + encodeURIComponent(id),'DELETE');
     await browser.close();await new Promise(resolve => proxy.close(resolve));await new Promise(resolve => upstream.close(resolve));
   }
+});
+
+test('model browser blocks cross-origin saved credentials and clears provider drafts', {
+  timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE to check model credential binding in a browser',
+}, async () => {
+  const browser = await launch();
+  try {
+    const page = await browser.newPage({viewport:{width:1440,height:1000}});
+    await page.setContent('<main id="main"></main>');
+    await page.evaluate(() => {
+      window.modelCalls = [];
+      window.PwnMeshAPI = {Client:class {async request(path,options={}) {
+        window.modelCalls.push({path,options});
+        if (path.endsWith('/test')) return {ok:true,latency_ms:5,message:'fixture verified'};
+        return {has_token:true,base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',connection_mode:'direct',reasoning_effort:'high'};
+      }}};
+    });
+    await page.addScriptTag({path:require('node:path').join(__dirname,'../static/model-settings.js')});
+    await page.addScriptTag({path:require('node:path').join(__dirname,'../static/llm.js')});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnMeshLLM.render();PwnMeshLLM.bind(host);});
+    await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
+    await page.locator('#llm-url').fill('https://api.deepseek.com/another-path');
+    await page.locator('#llm-model').fill('another-model'); await page.locator('.llm-test').click();
+    assert.equal(await page.evaluate(() => modelCalls.filter(item => item.path.endsWith('/test')).length),1);
+    assert.equal(await page.evaluate(() => modelCalls.at(-1).options.body.token),'');
+    await page.locator('#llm-key').fill('old-provider-draft'); await page.locator('[data-llm-provider="kimi"]').click();
+    assert.equal(await page.locator('#llm-key').inputValue(),'');
+    assert.match(await page.locator('#llm-key').getAttribute('placeholder'),/新的 API Key/);
+    await page.locator('.llm-test').click(); assert.match(await page.locator('.llm-status').textContent(),/新的 API Key/);
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    assert.equal(await page.evaluate(() => modelCalls.length),2,'cross-origin empty-key actions must not send requests');
+    await page.locator('#llm-key').fill('new-provider-draft'); await page.locator('.llm-test').click();
+    assert.equal(await page.evaluate(() => modelCalls.at(-1).options.body.token),'new-provider-draft');
+    assert.equal(await page.evaluate(() => modelCalls.at(-1).options.body.base_url),'https://api.kimi.com/coding');
+    await page.locator('#llm-url').fill('https://api.kimi.com/new-path'); assert.equal(await page.locator('#llm-key').inputValue(),'new-provider-draft');
+    await page.locator('#llm-url').fill('https://new.example.test/anthropic'); assert.equal(await page.locator('#llm-key').inputValue(),'');
+    await page.locator('.llm-test').click(); assert.equal(await page.evaluate(() => modelCalls.length),3);
+    await page.locator('#llm-url').fill('https://api.deepseek.com/anthropic');
+    assert.match(await page.locator('#llm-key').getAttribute('placeholder'),/留空保留/);
+  } finally { await browser.close(); }
+});
+
+test('model form only saves after a successful probe and discards unsaved drafts on return', {
+  timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE for model form integration',
+}, async () => {
+  const browser = await launch();
+  try {
+    const page = await browser.newPage();await page.setContent('<main id="main"></main>');
+    const errors = [];page.on('pageerror',error => errors.push(error.message));
+    await page.evaluate(() => {
+      window.calls = [];window.probeOK = false;window.returns = [];window.savedSummaries = [];
+      window.addEventListener('llm-updated',() => window.savedSummaries.push(PwnMeshLLM.summary()));
+      window.modelState = {has_token:true,base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',connection_mode:'direct',reasoning_effort:'max'};
+      window.PwnMeshAPI = {Client:class {async request(path,options={}) {
+        window.calls.push({path,body:options.body});
+        if (path.endsWith('/test')) return {ok:window.probeOK,message:window.probeOK ? 'tools verified' : 'upstream 401'};
+        if (options.method === 'PUT') {const {token,...settings} = options.body;window.modelState = {...settings,has_token:true};}
+        return window.modelState;
+      }}};
+    });
+    for (const name of ['model-settings.js','llm.js']) await page.addScriptTag({path:require('node:path').join(__dirname,'../static',name)});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnMeshLLM.render();PwnMeshLLM.bind(host,{onReturn:() => {window.returns.push(host.querySelector('#llm-key').value);host.replaceChildren();}});});
+    await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
+    assert.equal(await page.locator('#llm-effort').inputValue(),'max');
+    assert.equal(await page.locator('.llm-proxy-fields').isVisible(),false);
+    assert.deepEqual(await page.locator('#llm-effort option').evaluateAll(options => options.map(option => option.value)),['low','high','max']);
+    await page.locator('#llm-model').fill('saved-model');await page.locator('.llm-test').click();
+    assert.match(await page.locator('.llm-status').textContent(),/失败.*401/);
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.evaluate(() => {window.probeOK = true;});await page.locator('.llm-test').click();
+    assert.equal(await page.locator('.llm-save').isEnabled(),true);
+    await page.locator('#llm-key').fill('changed-after-verification');
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.locator('.llm-test').click();await page.locator('.llm-save').click();
+    assert.equal(await page.locator('#llm-key').inputValue(),'');
+    assert.equal(await page.locator('.llm-return').count(),0);
+    assert.equal(await page.locator('.llm-save').isVisible(),true);
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    assert.equal(await page.locator('.llm-summary-status').textContent(),'已保存');
+    assert.deepEqual(await page.evaluate(() => savedSummaries),['DeepSeek · saved-model']);
+    assert.equal(await page.evaluate(() => calls.at(-1).body.token),'changed-after-verification');
+    assert.equal(await page.evaluate(() => calls.at(-1).body.protocol),'anthropic');
+    assert.equal(await page.evaluate(() => calls.filter(call => call.path.endsWith('/test')).every(call => call.body.protocol === 'anthropic')),true);
+    await page.locator('#llm-connection-mode').selectOption('proxy');
+    assert.equal(await page.locator('.llm-proxy-fields').isVisible(),true);
+    await page.locator('#llm-effort').selectOption('high');
+    for (const [protocol,label] of Object.entries(proxyProtocols)) {
+      await page.locator('#llm-proxy-protocol').selectOption(protocol);
+      await page.locator('#llm-proxy-host').fill('proxy.test');
+      await page.locator('#llm-proxy-port').fill('8443');
+      assert.equal(await page.locator('.llm-summary-connection').textContent(),label+' 代理');
+      await page.locator('.llm-test').click();await page.locator('.llm-save').click();
+      assert.equal(await page.locator('#llm-proxy-protocol').inputValue(),protocol);
+      assert.equal(await page.evaluate(() => calls.at(-1).body.proxy_url),protocol+'://proxy.test:8443');
+    }
+    await page.locator('#llm-proxy-host').fill('draft-proxy.test');await page.locator('#llm-proxy-port').fill('1081');
+    await page.locator('#llm-url').fill('https://api.deepseek.com/draft');await page.locator('#llm-model').fill('draft-model');
+    await page.locator('#llm-effort').selectOption('low');
+    await page.locator('#llm-key').fill('leave-page-secret');await page.locator('.llm-back').click();
+    assert.deepEqual(await page.evaluate(() => returns),[''],'return callback runs once, after the key is cleared');
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnMeshLLM.render();PwnMeshLLM.bind(host);});
+    await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
+    assert.equal(await page.locator('#llm-key').inputValue(),'');
+    assert.equal(await page.locator('#llm-url').inputValue(),'https://api.deepseek.com/anthropic');
+    assert.equal(await page.locator('#llm-model').inputValue(),'saved-model');
+    assert.equal(await page.locator('#llm-connection-mode').inputValue(),'direct');
+    assert.equal(await page.locator('#llm-effort').inputValue(),'max');
+    assert.equal(await page.locator('.llm-proxy-fields').isVisible(),false);
+    await page.locator('#llm-connection-mode').selectOption('proxy');
+    assert.equal(await page.locator('#llm-proxy-protocol').inputValue(),'socks5h');
+    assert.equal(await page.locator('#llm-proxy-host').inputValue(),'proxy.test');
+    assert.equal(await page.locator('#llm-proxy-port').inputValue(),'8443');
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.evaluate(() => {document.getElementById('main').innerHTML = '<section>project</section>';});
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    assert.deepEqual(errors,[],'leaving via project navigation must release the detached form safely');
+  } finally {await browser.close();}
 });

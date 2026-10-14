@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {Service,projectView,snapshotView}=require('./static/service.js');
 const {APIError}=require('./static/api.js');
-const model=require('./static/model.js');
+const model=require('./static/project-model.js');
 const lifecycle=require('./static/lifecycle.js');
 const stamp='2026-10-10T02:00:00Z';
 const snapshot=(id='a',generation=0,revision=1)=>({graph:{project:{id,title:id,scenario:'pentest',status:'active',orchestration_version:1,generation,created_at:stamp},facts:[{id:'origin',description:'https://authorized.test',created_at:stamp},{id:'goal',description:'Find supported evidence',created_at:stamp}],intents:[],hints:[]},goals:[],steps:[],fact_records:[],findings:[],revision});
@@ -16,7 +16,7 @@ function workspaceHarness(project,run='current'){
  const service={scope:{},async refresh(){return {projects:[project]};}};
  const context={document:{hidden:false,activeElement:null,querySelector:selector=>nodes.get(selector)||null,querySelectorAll:()=>[],createElement:node},location:{hash:'#project/'+project.id},PwnMeshService:{Service:function(){return service;}},lucide:{createIcons(){}},setTimeout(){},clearTimeout(){},localStorage:{setItem(){}}};
  vm.createContext(context);
- for(const name of ['model.js','lifecycle.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'static',name),'utf8'),context,{filename:name});
+ for(const name of ['project-model.js','lifecycle.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'static',name),'utf8'),context,{filename:name});
  const source=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');
  vm.runInContext(source.slice(0,source.indexOf("  document.addEventListener('visibilitychange'"))+`
    renderSidebar=()=>{};renderActivity=()=>{};mountGraph=()=>{graph={setState(){},getStatusFilter(){},destroy(){}};};
@@ -35,7 +35,7 @@ test('embedded browser modules load in document order and supply the workbench g
  }
  const app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');
  for(const name of new Set(app.match(/\bPwn[A-Z]\w+\b/g)))if(name!=='PwnMesh')assert.ok(context[name],name+' is unavailable in the browser');
- assert.equal(context.PwnMeshModel.fileSize(1024),'1.0 KiB');
+ assert.equal(context.PwnMeshProjectModel.fileSize(1024),'1.0 KiB');
  assert.equal(context.PwnMeshLifecycle.canHint({status:'running'}),true);
  assert.equal(typeof context.PwnMeshForms.bind,'function');
  assert.equal(typeof context.PwnMeshInspector.openRecord,'function');

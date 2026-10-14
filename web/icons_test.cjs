@@ -67,7 +67,7 @@ test('all selected glyphs and aliases exactly preserve Lucide 1.8.0 metadata', (
 test('literal and dynamic application icon choices are included in the subset', () => {
   const required = new Set();
   const text = file => fs.readFileSync(path.join(__dirname, 'static', file), 'utf8');
-  for (const file of ['app.js', 'forms.js', 'llm.js', 'index.html']) {
+  for (const file of ['app.js', 'activity-view.js', 'forms.js', 'llm.js', 'index.html']) {
     const source = text(file);
     for (const match of source.matchAll(/data-lucide="([a-z0-9-]+)"/g)) required.add(match[1]);
     // Includes all branches of icon(condition ? 'name' : 'other-name').
@@ -86,7 +86,7 @@ test('literal and dynamic application icon choices are included in the subset', 
       }
     }
   }
-  for (const type of require('./static/model.js').PROJECT_TYPES) required.add(type.icon);
+  for (const type of require('./static/project-model.js').PROJECT_TYPES) required.add(type.icon);
   const app = text('app.js'), actions = app.match(/const actionIcons = \{([^}]+)\}/);
   assert.ok(actions, 'inspect dynamic action icons when their mapping changes');
   for (const match of actions[1].matchAll(/:'([^']+)'/g)) required.add(match[1]);
