@@ -3,5 +3,5 @@ PwnMesh module guide
 
 The maintained guide lives in docs/architecture.md.
 See docs/protocol.md for wire contracts, docs/recovery.md for lifecycle semantics,
-docs/compatibility.md for retained formats and schema migrations, and
+docs/formats.md for supported formats and schema migrations, and
 docs/development.md for Linux build and test entry points.

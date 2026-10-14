@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-func TestDecisionRetryKeyPreservesLegacyBytes(t *testing.T) {
-	g := Graph{Project: Project{ID: "fixture"}}
+func TestDecisionRetryKeyPreservesCurrentBytes(t *testing.T) {
+	g := Graph{Project: Project{ID: "fixture", OrchestrationVersion: 1}}
 	if got := DecisionRetryKey(g, 0); got != "reason:6131a7e2e21f30d058650b89faec6a12380760e4c8ef0d39b481400bb08c2ac0" {
 		t.Fatalf("nil collection identity changed: %s", got)
 	}

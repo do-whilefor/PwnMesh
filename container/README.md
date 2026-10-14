@@ -8,7 +8,7 @@ docker build -f container/Dockerfile -t pwnmesh-worker:dev .
 ```
 
 See [the development guide](../docs/development.md) for the shared build and
-validation entry points, and [compatibility](../docs/compatibility.md) before
+validation entry points, and [supported formats](../docs/formats.md) before
 migrating an existing installation.
 
 Worker containers are owned by a persistent installation ID stored in the server

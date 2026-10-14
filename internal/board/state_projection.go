@@ -146,12 +146,7 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 			} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 				return State{}, err
 			} else {
-				// Older runs predate failure events. Project only their bounded
-				// failure fields, not the saved input or complete model response.
-				step.Reason, err = t.legacyExecutionFailure(project, execution)
-				if err != nil {
-					return State{}, err
-				}
+				step.Reason = executionFailureDescription(execution.Status, nil)
 			}
 		}
 		if execution, ok := latest[i.ID]; ok && g.Project.OrchestrationVersion == 1 && slices.Contains([]string{"failed", "rejected", "cancelled", "retry_requested"}, execution.Status) {

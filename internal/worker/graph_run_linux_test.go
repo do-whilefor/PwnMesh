@@ -20,7 +20,6 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/artifactcheck"
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/workergraph"
 )
 
 func graphOutputResults(t *testing.T, raw []byte) []Result {
@@ -442,42 +441,15 @@ func TestGraphWrapperActualLoopRejectsPreviouslyRehashedInlineSnapshot(t *testin
 	if err := os.WriteFile(refs[0].Path, replaced, 0600); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "graph", "graph.json")
-	var receipt acceptanceReceipt
-	accepted, err := os.ReadFile(filepath.Join(dir, "graph", "acceptance.json"))
-	if err != nil || json.Unmarshal(accepted, &receipt) != nil {
-		t.Fatal("cannot read acceptance receipt")
-	}
-	writeLegacyAcceptanceFixture(t, j, dir, receipt.Output, "accepted")
-	if err := os.Remove(filepath.Join(dir, "graph", "acceptance.json")); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(path)
-	var checkpoint workergraph.Checkpoint
-	if err != nil || json.Unmarshal(raw, &checkpoint) != nil {
-		t.Fatal("cannot read accepted graph")
-	}
-	// Model a checkpoint written by the former path-only acceptance: the
-	// agent certified replacement bytes, then crashed before the accept node.
-	checkpoint.Status = "running"
-	for n := range checkpoint.Nodes {
-		node := &checkpoint.Nodes[n]
-		if node.ID == "accept" {
-			*node = workergraph.NodeState{ID: "accept", Kind: "function", Status: "pending"}
-		}
-		if node.ID == "agent" {
-			for i := range node.Output.Artifacts {
-				if node.Output.Artifacts[i].Path == refs[0].Path {
-					node.Output.Artifacts[i].SHA256 = fmt.Sprintf("%x", sha256.Sum256(replaced))
-				}
-			}
+	receipt := readAcceptanceReceipt(t, dir)
+	// A receipt with a replaced artifact digest must still fail the original
+	// evidence reference's content binding, without restarting the session.
+	for i := range receipt.Output.Artifacts {
+		if receipt.Output.Artifacts[i].Path == refs[0].Path {
+			receipt.Output.Artifacts[i].SHA256 = fmt.Sprintf("%x", sha256.Sum256(replaced))
 		}
 	}
-	raw, err = json.Marshal(checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, raw, 0600); err != nil {
+	if err := saveAcceptance(filepath.Join(dir, "graph"), receipt); err != nil {
 		t.Fatal(err)
 	}
 	output.Reset()

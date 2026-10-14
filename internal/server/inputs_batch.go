@@ -157,9 +157,9 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		// Multipart requests do not pass through wrap. Text-only batches also
-		// skip AddInput, so enforce the same historical read-only boundary here.
+		// skip AddInput, so enforce the current project protocol here.
 		if graph.Project.OrchestrationVersion != 1 {
-			return b.Err(409, "Historical projects are read-only; create a new project to continue")
+			return b.Err(409, "Unsupported project protocol; create a new project to continue")
 		}
 		if saved, found, err := t.InputBatchReceipt(project, key, requestSHA256); found || err != nil {
 			inputs = saved

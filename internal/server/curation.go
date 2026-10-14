@@ -26,7 +26,7 @@ func (s *Server) curate(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 		return 0, nil, b.Err(403, "Curator lease identity mismatch")
 	}
 	if op == "claim" || op == "heartbeat" {
-		if err := guardClaim(t, project, worker, fence); err != nil {
+		if err := guardClaim(t, project, worker); err != nil {
 			return 0, nil, err
 		}
 	}

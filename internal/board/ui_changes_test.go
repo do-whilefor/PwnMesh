@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestExecutionChangesMigrateExistingHistoryAndPersistCursors(t *testing.T) {
+func TestExecutionChangesRestoreProjectionAndPersistCursors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ui.db")
 	store, err := Open(path)
 	if err != nil {
@@ -18,9 +18,8 @@ func TestExecutionChangesMigrateExistingHistoryAndPersistCursors(t *testing.T) {
 	defer func() { _ = store.Close() }()
 	executionQueryTx(t, store, func(tx *Tx) {
 		putQueryExecution(t, tx, Execution{ID: "existing", Status: "running"}, 0, "")
-		// Reproduce a database predating the optional UI change projection.
-		_, err := tx.Exec(`DROP TRIGGER xloom_ui_execution_insert; DROP TRIGGER xloom_ui_execution_update; DROP TRIGGER xloom_ui_execution_delete;
-DROP TABLE xloom_ui_execution_changes; DROP TABLE xloom_ui_execution_revisions; DROP TABLE pwnmesh_schema_migrations;`)
+		// Rebuild missing derived rows while retaining the current schema.
+		_, err := tx.Exec(`DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions;`)
 		if err != nil {
 			t.Fatal(err)
 		}

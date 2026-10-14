@@ -12,9 +12,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"pwnmesh/internal/agent"
-	"pwnmesh/internal/workergraph"
 )
 
 func readAcceptanceReceipt(t *testing.T, dir string) acceptanceReceipt {
@@ -27,115 +24,123 @@ func readAcceptanceReceipt(t *testing.T, dir string) acceptanceReceipt {
 	return receipt
 }
 
-// Build the old on-disk protocol independently of the migration adapter. The
-// original scheduler binds the definition, inputs, attempts and dependencies.
-func writeLegacyAcceptanceFixture(t *testing.T, job Job, dir string, out acceptanceOutput, phase string) {
-	t.Helper()
-	identity, err := identityFor(job, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	input, _ := json.Marshal(identity)
-	noop := func(context.Context, workergraph.Input) (workergraph.Output, error) { return workergraph.Output{}, nil }
-	verify := func(context.Context, workergraph.Input, workergraph.Output) error { return nil }
-	definition := workergraph.Definition{Version: "execute-v1", Nodes: []workergraph.Node{
-		{ID: "prepare", Kind: "function", Run: noop, Verify: verify},
-		{ID: "agent", Kind: "agent", DependsOn: []workergraph.Dependency{{ID: "prepare"}}, Verify: verify, Run: func(context.Context, workergraph.Input) (workergraph.Output, error) {
-			if phase == "agent_interrupted" {
-				return workergraph.Output{}, workergraph.ErrInterrupted
+func TestAcceptanceRejectsRetiredCheckpointBeforeEffects(t *testing.T) {
+	for _, kind := range []string{"file", "directory", "symlink"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "graph.json")
+			switch kind {
+			case "file":
+				if err := os.WriteFile(path, []byte(`{"version":"execute-v1","status":"accepted"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "directory":
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Symlink("missing-checkpoint", path); err != nil {
+					t.Fatal(err)
+				}
 			}
-			if phase == "failed" {
-				return workergraph.Output{}, errors.New("original deterministic failure")
+			called, verified := 0, 0
+			call := func(context.Context) (acceptanceOutput, error) { called++; return acceptanceOutput{}, nil }
+			verify := func(context.Context, acceptanceOutput) error { verified++; return nil }
+			for attempt := 0; attempt < 2; attempt++ {
+				_, err := acceptWorkerSession(context.Background(), "retired-run", json.RawMessage(`{}`), dir, call, verify)
+				if err == nil || !strings.Contains(err.Error(), "unsupported execute-v1 acceptance checkpoint") || called != 0 || verified != 0 {
+					t.Fatalf("retired checkpoint reached a callback: %v calls=%d verifies=%d", err, called, verified)
+				}
 			}
-			converted := workergraph.Output{Value: out.Value}
-			for _, artifact := range out.Artifacts {
-				converted.Artifacts = append(converted.Artifacts, workergraph.Artifact{Path: artifact.Path, SHA256: artifact.SHA256})
+			entries, err := os.ReadDir(dir)
+			if err != nil || len(entries) != 1 || entries[0].Name() != "graph.json" {
+				t.Fatalf("retired checkpoint directory was changed: %v %v", entries, err)
 			}
-			return converted, nil
-		}},
-		{ID: "accept", Kind: "function", DependsOn: []workergraph.Dependency{{ID: "agent"}}, Verify: verify, Run: func(_ context.Context, in workergraph.Input) (workergraph.Output, error) {
-			if phase == "accept_interrupted" {
-				return workergraph.Output{}, workergraph.ErrInterrupted
-			}
-			return in.Dependencies[0].Output, nil
-		}},
-	}}
-	_, err = workergraph.Run(context.Background(), definition, workergraph.Options{RunID: job.RunID, Input: input, Dir: filepath.Join(dir, "graph"), Parallelism: 1})
-	if (phase == "accepted") != (err == nil) {
-		t.Fatalf("cannot build legacy %s checkpoint: %v", phase, err)
+		})
 	}
 }
 
-func TestAcceptanceMigratesLegacyCheckpointsWithoutRepeatingModelWork(t *testing.T) {
-	for _, phase := range []string{"accepted", "accept_interrupted", "agent_interrupted", "failed", "unbound_node_hashes", "changed_input", "changed_session", "changed_version"} {
-		t.Run(phase, func(t *testing.T) {
+func TestWorkerAcceptanceRejectsRetiredCheckpointBeforeWrites(t *testing.T) {
+	job, dir := graphWrapperJob(t), t.TempDir()
+	graphDir := filepath.Join(dir, "graph")
+	if err := os.Mkdir(graphDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(graphDir, "graph.json")
+	original := []byte(`{"version":"execute-v1","status":"running"}`)
+	if err := os.WriteFile(path, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	calls := 0
+	sessionRun := func(context.Context, Job, Options) (Result, error) { calls++; return Result{}, nil }
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err := runWorkerAcceptance(context.Background(), job, Options{RunDir: dir, Output: &output}, sessionRun)
+		if err == nil || !strings.Contains(err.Error(), "unsupported execute-v1 acceptance checkpoint") || calls != 0 || output.Len() != 0 {
+			t.Fatalf("retired checkpoint started or published a run: %v calls=%d output=%s", err, calls, &output)
+		}
+	}
+	for _, directory := range []string{dir, graphDir} {
+		entries, err := os.ReadDir(directory)
+		if err != nil || len(entries) != 1 {
+			t.Fatalf("retired run wrote new files: %v %v", entries, err)
+		}
+	}
+	if retained, err := os.ReadFile(path); err != nil || !bytes.Equal(retained, original) {
+		t.Fatalf("retired checkpoint was rewritten: %s %v", retained, err)
+	}
+}
+
+func TestAcceptanceCurrentReceiptTakesPrecedenceOverRetiredGraph(t *testing.T) {
+	for _, status := range []string{"accepted", "running", "failed"} {
+		t.Run(status, func(t *testing.T) {
 			job, dir := graphWrapperJob(t), t.TempDir()
 			var output bytes.Buffer
 			calls := 0
-			options := Options{RunDir: dir, Output: &output, Provider: scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+			sessionRun := func(ctx context.Context, job Job, opts Options) (Result, error) {
 				calls++
-				return agent.Text("assistant", completedOutput), nil
-			})}
-			first, err := runTestWorker(context.Background(), job, options)
-			if err != nil || first.Status != "success" {
-				t.Fatalf("initial session: %+v %v", first, err)
+				return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput})
+			}
+			opts := Options{RunDir: dir, Output: &output}
+			if result, err := runWorkerAcceptance(context.Background(), job, opts, sessionRun); err != nil || result.Status != "success" {
+				t.Fatalf("initial acceptance: %+v %v", result, err)
 			}
 			receipt := readAcceptanceReceipt(t, dir)
-			fixturePhase := phase
-			if strings.HasPrefix(phase, "changed_") || phase == "unbound_node_hashes" {
-				fixturePhase = "accepted"
+			receipt.Status = status
+			if status != "accepted" {
+				receipt.Output = acceptanceOutput{}
 			}
-			writeLegacyAcceptanceFixture(t, job, dir, receipt.Output, fixturePhase)
-			if err := os.Remove(filepath.Join(dir, "graph", "acceptance.json")); err != nil {
+			if status == "failed" {
+				receipt.Error = "original deterministic failure"
+			}
+			if err := saveAcceptance(filepath.Join(dir, "graph"), receipt); err != nil {
 				t.Fatal(err)
 			}
-			switch phase {
-			case "changed_input":
-				job.RunID += "-different"
-			case "changed_session":
-				if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(`{"changed":true}`), 0600); err != nil {
-					t.Fatal(err)
+			path := filepath.Join(dir, "graph", "graph.json")
+			original := []byte("obsolete execute-v1 checkpoint")
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			for attempt := 0; attempt < 2; attempt++ {
+				output.Reset()
+				result, err := runWorkerAcceptance(context.Background(), job, opts, sessionRun)
+				wantCalls := 1
+				if status == "running" {
+					wantCalls = 2
 				}
-			case "unbound_node_hashes", "changed_version":
-				path := filepath.Join(dir, "graph", "graph.json")
-				raw, err := os.ReadFile(path)
-				var saved workergraph.Checkpoint
-				if err != nil || json.Unmarshal(raw, &saved) != nil {
-					t.Fatal("cannot read legacy checkpoint")
-				}
-				if phase == "changed_version" {
-					saved.Version = "execute-v2"
-				} else {
-					for i := range saved.Nodes {
-						saved.Nodes[i].DefinitionSHA256 = ""
-					}
-				}
-				raw, _ = json.Marshal(saved)
-				if err := os.WriteFile(path, raw, 0600); err != nil {
-					t.Fatal(err)
+				if err != nil || (result.Status == "success") != (status != "failed") || calls != wantCalls || len(graphOutputResults(t, output.Bytes())) != 1 {
+					t.Fatalf("current %s receipt lost recovery: %+v %v calls=%d", status, result, err, calls)
 				}
 			}
-			output.Reset()
-			result, err := runTestWorker(context.Background(), job, options)
-			wantSuccess := phase != "failed" && !strings.HasPrefix(phase, "changed_")
-			if err != nil || (result.Status == "success") != wantSuccess || calls != 1 || len(graphOutputResults(t, output.Bytes())) != 1 {
-				t.Fatalf("legacy %s migration: %+v %v calls=%d output=%s", phase, result, err, calls, &output)
+			current := readAcceptanceReceipt(t, dir)
+			if current.SchemaVersion != 1 || current.InputSHA256 != receipt.InputSHA256 || current.RunID != receipt.RunID {
+				t.Fatalf("current receipt identity changed: %+v", current)
 			}
-			if wantSuccess {
-				migrated := readAcceptanceReceipt(t, dir)
-				if migrated.Status != "accepted" || !bytes.Equal(migrated.Output.Value, receipt.Output.Value) {
-					t.Fatalf("migration did not preserve the accepted result: %+v", migrated)
-				}
-				// Once migrated, even a damaged obsolete graph cannot redirect
-				// execution back into the previous scheduler.
-				if err := os.WriteFile(filepath.Join(dir, "graph", "graph.json"), []byte("obsolete"), 0600); err != nil {
-					t.Fatal(err)
-				}
+			if status == "accepted" && !bytes.Equal(current.Output.Value, receipt.Output.Value) {
+				t.Fatal("accepted result bytes changed")
 			}
-			output.Reset()
-			again, err := runTestWorker(context.Background(), job, options)
-			if err != nil || (again.Status == "success") != wantSuccess || calls != 1 || len(graphOutputResults(t, output.Bytes())) != 1 {
-				t.Fatalf("repeated migration changed outcome: %+v %v calls=%d", again, err, calls)
+			if retained, err := os.ReadFile(path); err != nil || !bytes.Equal(retained, original) {
+				t.Fatalf("obsolete graph was read or rewritten: %s %v", retained, err)
 			}
 		})
 	}
@@ -169,34 +174,6 @@ func TestAcceptanceSessionErrorsAndPanicsRetainRecoveryBoundary(t *testing.T) {
 				t.Fatalf("same session recovery failed: %+v %v calls=%d", result, err, calls)
 			}
 		})
-	}
-}
-
-func TestAcceptanceInterruptedMigrationRetainsTheLegacyBoundary(t *testing.T) {
-	job, dir := graphWrapperJob(t), t.TempDir()
-	writeLegacyAcceptanceFixture(t, job, dir, acceptanceOutput{}, "agent_interrupted")
-	var output bytes.Buffer
-	calls := 0
-	sessionRun := func(ctx context.Context, job Job, opts Options) (Result, error) {
-		calls++
-		if calls == 1 {
-			return Result{}, io.ErrUnexpectedEOF
-		}
-		return graphSessionFixture(ctx, job, opts, Result{Type: "result", Status: "success", Text: completedOutput})
-	}
-	opts := Options{RunDir: dir, Output: &output}
-	if _, err := runWorkerAcceptance(context.Background(), job, opts, sessionRun); !errors.Is(err, ErrInterrupted) {
-		t.Fatalf("migration lost uncertain callback: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "graph", "acceptance.json")); !os.IsNotExist(err) {
-		t.Fatal("interrupted migration replaced the original recovery boundary")
-	}
-	if len(graphOutputResults(t, output.Bytes())) != 0 {
-		t.Fatal("interrupted migration published a terminal result")
-	}
-	result, err := runWorkerAcceptance(context.Background(), job, opts, sessionRun)
-	if err != nil || result.Status != "success" || calls != 2 || readAcceptanceReceipt(t, dir).Status != "accepted" || len(graphOutputResults(t, output.Bytes())) != 1 {
-		t.Fatalf("legacy recovery did not migrate after acceptance: %+v %v calls=%d", result, err, calls)
 	}
 }
 

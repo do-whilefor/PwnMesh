@@ -3,7 +3,7 @@ package worker
 
 import "pwnmesh/internal/protocol"
 
-// Shared wire types keep the runtime source-compatible without owning the protocol.
+// Runtime signatures use the shared protocol's types and interruption identity.
 type Job = protocol.Job
 type Result = protocol.Result
 type RepairCheck = protocol.RepairCheck

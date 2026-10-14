@@ -133,8 +133,8 @@ type stateData struct {
 	Curation      CurationProgress `json:"curation,omitempty"`
 }
 
-// Keep the legacy status key for rollback readers, but persist only the one
-// status not projected from the authoritative Intent and execution records.
+// Persist only abandonment; other statuses are projected from the authoritative
+// Intent and execution records.
 type stepMetadata struct {
 	Repair     *artifactcheck.Spec `json:"repair,omitempty"`
 	ID         string              `json:"id"`

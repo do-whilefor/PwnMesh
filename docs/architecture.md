@@ -67,9 +67,9 @@ query-only WAL readers for consistent snapshots without reserving the writer.
 Keep these operations together even when their source files are split.
 
 The schema and migration sequence live in `schema.go` and `migrations.go`.
-Compatibility code is local to the boundary it protects; a generic global
-compatibility package would couple unrelated storage and execution protocols.
+Current-format validation stays beside storage and execution boundaries.
+Unsupported inputs fail before they can trigger fresh work or implicit upgrades.
 
 See [protocol](protocol.md) for wire identities, [recovery](recovery.md) for
-operation semantics, [compatibility](compatibility.md) for retained formats, and
+operation semantics, [supported formats](formats.md) for supported formats, and
 [development](development.md) for executable checks.

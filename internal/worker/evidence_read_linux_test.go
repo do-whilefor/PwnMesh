@@ -55,11 +55,11 @@ func retainedReadTool(t *testing.T, workspace string, state *board.State) agent.
 	return snapshotRuntimeTool(t, options, "read_evidence")
 }
 
-func TestReadEvidenceLegacyDirectory(t *testing.T) {
+func TestReadEvidenceRejectsRetiredDirectory(t *testing.T) {
 	for _, symlink := range []bool{false, true} {
 		t.Run(fmt.Sprintf("symlink=%t", symlink), func(t *testing.T) {
 			workspace := t.TempDir()
-			original := "selected\nlegacy full original evidence\n"
+			original := "selected\nretired full original evidence\n"
 			ref := retainedReadFixture(t, workspace, "producer", original)
 			current := filepath.Join(workspace, ".pwnmesh")
 			legacy := filepath.Join(workspace, ".xloom")
@@ -76,15 +76,11 @@ func TestReadEvidenceLegacyDirectory(t *testing.T) {
 			state := board.State{FactRecords: []board.FactRecord{{ID: "fact", Evidence: []board.EvidenceRef{ref}}}}
 			tool := retainedReadTool(t, workspace, &state)
 			raw, err := tool.Execute(context.Background(), json.RawMessage(`{"id":"fact","evidence_index":0}`))
-			if symlink {
-				if err == nil || raw != "" {
-					t.Fatalf("legacy directory symlink exposed evidence: %s %v", raw, err)
-				}
-				return
+			if err == nil || raw != "" || !strings.Contains(err.Error(), "reference is not a retained snapshot") {
+				t.Fatalf("retired directory exposed evidence: %s %v", raw, err)
 			}
-			var page evidenceContentPage
-			if err != nil || json.Unmarshal([]byte(raw), &page) != nil || page.Content != original || page.SHA256 != graphRecordVersion([]byte(original)) {
-				t.Fatalf("legacy evidence unreadable: %s %v", raw, err)
+			if retained, err := os.ReadFile(ref.Path); err != nil || string(retained) != original {
+				t.Fatalf("rejected evidence was changed: %s %v", retained, err)
 			}
 		})
 	}

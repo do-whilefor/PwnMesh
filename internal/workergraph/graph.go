@@ -411,10 +411,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 			if !exists || i > 0 && saved.Nodes[i-1].ID >= state.ID || state.Kind != node.Kind || state.Attempt < 0 || state.Attempt > 1 || !slices.Contains([]string{"pending", "running", "succeeded", "skipped", "failed", "blocked", "cancelled"}, state.Status) || validateOutput(state.Output) != nil {
 				return checkpoint, errors.New("invalid graph node checkpoint")
 			}
-			if state.DefinitionSHA256 == "" && extending {
-				return checkpoint, errors.New("legacy graph checkpoint requires original definition recovery before extension")
-			}
-			if state.DefinitionSHA256 != "" && state.DefinitionSHA256 != hash(describe(node)) {
+			if state.DefinitionSHA256 != hash(describe(node)) {
 				return checkpoint, fmt.Errorf("node %s definition changed", node.ID)
 			}
 			savedDefinitions = append(savedDefinitions, describe(node))
@@ -504,10 +501,6 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		// Keep recovery writes bound to the old definition. Only after all old
 		// results and uncertain operations are validated may the larger graph
 		// replace it atomically, before any new callback can start.
-		for i := range checkpoint.Nodes {
-			state := &checkpoint.Nodes[i]
-			state.DefinitionSHA256 = hash(describe(byID[state.ID]))
-		}
 		if len(checkpoint.Nodes) < len(nodes) && checkpoint.Status != "failed" {
 			checkpoint.Status = "running"
 		}

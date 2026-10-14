@@ -2,7 +2,6 @@ package board
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -426,116 +425,6 @@ func TestExecutionRegistrationValidatesMetadataBeforeConsumingRetry(t *testing.T
 		grant, err = tx.GetExecutionSummary("ns", "p", "original")
 		if err != nil || grant.Status != "retried" {
 			t.Fatalf("successful successor did not consume grant: %+v err=%v", grant, err)
-		}
-	})
-}
-
-func TestExecutionMetadataMigrationBackfillsOnceWithoutChangingJob(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "legacy.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec(schema + executionSchema); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = db.Exec("INSERT INTO projects(id,title,status,created_at) VALUES('p','fixture','active','now')"); err != nil {
-		t.Fatal(err)
-	}
-	state := State{Revision: 31, DecisionRevision: 19, Graph: Graph{Project: Project{ID: "p", Generation: 7}, Facts: []Fact{{ID: "origin"}}, Hints: []Hint{{ID: "h1"}}, Intents: []Intent{{ID: "open"}, {ID: "done", To: Ptr("f1")}}}}
-	job, _ := json.Marshal(map[string]any{"graph": state.Graph, "state": state, "decision_revision": 17})
-	_, err = db.Exec(`INSERT INTO xloom_executions(`+executionColumns+`) VALUES('p','old','ns','planner','reason','','planner@old',?,'reason:old','succeeded',NULL,0,'now','now')`, job)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = db.Close(); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	executionQueryTx(t, s, func(tx *Tx) {
-		e, err := tx.GetExecutionSummary("ns", "p", "old")
-		if err != nil || e.Generation != 7 || e.InputRevision != 31 || e.DecisionRevision != 17 || e.StateVersion != DecisionStateVersion(state) || !e.HasState || e.FactCount != 1 || e.HintCount != 1 || e.OpenCount != 1 {
-			t.Fatalf("backfill=%+v err=%v", e, err)
-		}
-		full, err := tx.Execution("p", "old")
-		if err != nil || string(full.Job) != string(job) {
-			t.Fatalf("migration rewrote immutable job: %v", err)
-		}
-		if _, err = tx.Exec("UPDATE xloom_executions SET job='unavailable' WHERE id='old'"); err != nil {
-			t.Fatal(err)
-		}
-	})
-	if err = s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	s, err = Open(path)
-	if err != nil {
-		t.Fatalf("reopen repeated the backfill: %v", err)
-	}
-	defer s.Close()
-	executionQueryTx(t, s, func(tx *Tx) {
-		check, err := tx.CheckExecutions(ExecutionCheckQuery{ProjectID: "p", Namespace: "ns", Generation: 7, Kind: "reason", StateVersion: DecisionStateVersion(state)})
-		if err != nil || !check.Repeated || check.LatestDecision == nil || check.LatestDecision.InputRevision != 31 {
-			t.Fatalf("reopened metadata=%+v err=%v", check, err)
-		}
-	})
-}
-
-func TestExecutionMetadataMigrationFailureRollsBack(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "invalid.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	legacySchema := strings.Replace(schema, "bootstrap_enabled INTEGER NOT NULL DEFAULT 1", "bootstrap_mode TEXT NOT NULL DEFAULT 'disabled'", 1)
-	if _, err = db.Exec(legacySchema + executionSchema + `INSERT INTO projects(id,title,created_at) VALUES('proj_017','test','now'); INSERT INTO xloom_executions(` + executionColumns + `) VALUES('proj_017','bad','ns','planner','reason','','planner@bad','invalid','reason:bad','failed',NULL,0,'now','now');`); err != nil {
-		t.Fatal(err)
-	}
-	if s, err := Open(path); err == nil {
-		s.Close()
-		t.Fatal("invalid legacy input silently received valid metadata")
-	}
-	var count int
-	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('xloom_executions') WHERE name='metadata_version'").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("failed migration left partial schema: count=%d err=%v", count, err)
-	}
-	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='bootstrap_enabled'").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("failed execution migration committed the project migration: count=%d err=%v", count, err)
-	}
-	if err := db.QueryRow("SELECT value FROM counters WHERE name='project'").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("failed migration committed a counter repair: value=%d err=%v", count, err)
-	}
-	// Creating the graph schema, UI triggers and installation identity is part
-	// of the same migration as the late execution metadata backfill.
-	for _, name := range []string{"xloom_state", "xloom_assets", "xloom_ui_execution_insert", "pwnmesh_installation", "xloom_execution_pending", "pwnmesh_schema_migrations"} {
-		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name=?", name).Scan(&count); err != nil || count != 0 {
-			t.Fatalf("failed migration retained schema object %s: count=%d err=%v", name, count, err)
-		}
-	}
-	// The failed Open must release its write reservation before returning so
-	// another connection can repair the input and retry the whole migration.
-	if _, err := db.Exec(`UPDATE xloom_executions SET job='{"graph":{}}' WHERE id='bad'`); err != nil {
-		t.Fatal(err)
-	}
-	store, err := Open(path)
-	if err != nil {
-		t.Fatalf("repaired database could not reopen: %v", err)
-	}
-	defer store.Close()
-	executionQueryTx(t, store, func(tx *Tx) {
-		g, err := tx.Load("proj_017")
-		if err != nil || g.Project.Bootstrap {
-			t.Fatalf("migration retry lost disabled bootstrap: %+v err=%v", g.Project, err)
-		}
-		if id, err := tx.Next("", "project"); err != nil || id != "proj_018" {
-			t.Fatalf("migration retry omitted counter repair: id=%q err=%v", id, err)
-		}
-		if _, err := tx.GetExecutionSummary("ns", "proj_017", "bad"); err != nil {
-			t.Fatalf("migration retry omitted execution metadata: %v", err)
 		}
 	})
 }

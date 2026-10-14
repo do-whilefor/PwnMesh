@@ -38,10 +38,13 @@ type acceptanceReceipt struct {
 
 var acceptanceRunID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$`)
 
-// The caller owns the original graph-directory lock, including during migration.
+// The caller owns the graph-directory lock.
 func acceptWorkerSession(ctx context.Context, runID string, input json.RawMessage, dir string, call func(context.Context) (acceptanceOutput, error), verify func(context.Context, acceptanceOutput) error) (acceptanceOutput, error) {
 	if !acceptanceRunID.MatchString(runID) || len(input) > 1<<20 || !json.Valid(input) {
 		return acceptanceOutput{}, errors.New("acceptance requires a run identity and bounded JSON input")
+	}
+	if err := rejectRetiredAcceptance(dir); err != nil {
+		return acceptanceOutput{}, err
 	}
 	digest := sha256.Sum256(input)
 	receipt := acceptanceReceipt{SchemaVersion: 1, RunID: runID, InputSHA256: hex.EncodeToString(digest[:]), Status: "running"}
@@ -75,20 +78,6 @@ func acceptWorkerSession(ctx context.Context, runID string, input json.RawMessag
 		}
 	} else if !os.IsNotExist(err) {
 		return acceptanceOutput{}, err
-	} else if _, legacyErr := os.Lstat(filepath.Join(dir, "graph.json")); legacyErr == nil {
-		// Do not write a running receipt before migration: a crash must return to
-		// the legacy checkpoint, whose agent may already have been accepted.
-		out, err := resumeExecuteV1Acceptance(ctx, runID, input, dir, call, verify)
-		if err != nil {
-			return acceptanceOutput{}, err
-		}
-		if err := verifyAcceptance(ctx, dir, out, verify); err != nil {
-			return acceptanceOutput{}, err
-		}
-		receipt.Status, receipt.Output = "accepted", out
-		return out, saveAcceptance(dir, receipt)
-	} else if !os.IsNotExist(legacyErr) {
-		return acceptanceOutput{}, legacyErr
 	}
 	if err := ctx.Err(); err != nil {
 		return acceptanceOutput{}, err
@@ -109,6 +98,23 @@ func acceptWorkerSession(ctx context.Context, runID string, input json.RawMessag
 	}
 	receipt.Status, receipt.Output = "accepted", out
 	return out, saveAcceptance(dir, receipt)
+}
+
+// Check before creating a lock or receipt, and again under the acceptance lock.
+// Retired checkpoints must never be mistaken for fresh runs. A current receipt
+// remains authoritative when an obsolete graph is also present.
+func rejectRetiredAcceptance(dir string) error {
+	if _, err := os.Lstat(filepath.Join(dir, "acceptance.json")); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "graph.json")); err == nil {
+		return errors.New("unsupported execute-v1 acceptance checkpoint: acceptance.json is required")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func verifyAcceptance(ctx context.Context, dir string, out acceptanceOutput, verify func(context.Context, acceptanceOutput) error) error {

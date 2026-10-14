@@ -1,8 +1,8 @@
 package board
 
 // Schema definitions stay together so storage changes can be reviewed with the
-// migration order. These define the unversioned baseline; append future upgrades
-// in migrations.go. Existing xloom_* names are persisted compatibility identities.
+// migration order. These initialize the current schema on an empty database;
+// append future upgrades in migrations.go. xloom_* names are active SQL identities.
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings(intent_timeout INTEGER NOT NULL DEFAULT 15,reason_timeout INTEGER NOT NULL DEFAULT 15);
@@ -34,11 +34,23 @@ const executionSchema = `CREATE TABLE IF NOT EXISTS xloom_executions(
  id TEXT NOT NULL,namespace TEXT NOT NULL,backend TEXT NOT NULL,kind TEXT NOT NULL,intent TEXT NOT NULL,
  lease TEXT NOT NULL,job BLOB NOT NULL,retry_key TEXT NOT NULL,status TEXT NOT NULL,result BLOB,
  resumes INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,
+ generation INTEGER NOT NULL DEFAULT 0,input_revision INTEGER NOT NULL DEFAULT 0,
+ decision_revision INTEGER NOT NULL DEFAULT 0,state_version TEXT NOT NULL DEFAULT '',
+ has_state INTEGER NOT NULL DEFAULT 0,fact_count INTEGER NOT NULL DEFAULT 0,
+ hint_count INTEGER NOT NULL DEFAULT 0,open_count INTEGER NOT NULL DEFAULT 0,
+ metadata_version INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(project_id,id));
 CREATE TABLE IF NOT EXISTS xloom_paused_executions(
  project_id TEXT NOT NULL,execution_id TEXT NOT NULL,
  PRIMARY KEY(project_id,execution_id),
- FOREIGN KEY(project_id,execution_id) REFERENCES xloom_executions(project_id,id) ON DELETE CASCADE);` + inputSnapshotSchema + decisionReadSchema
+ FOREIGN KEY(project_id,execution_id) REFERENCES xloom_executions(project_id,id) ON DELETE CASCADE);` + executionIndexSchema + inputSnapshotSchema + decisionReadSchema
+
+const executionIndexSchema = `CREATE INDEX IF NOT EXISTS xloom_execution_pending ON xloom_executions(namespace) WHERE ` + pendingExecutionSQL + `;
+CREATE INDEX IF NOT EXISTS xloom_execution_task ON xloom_executions(namespace,project_id,kind,intent,status,created_at);
+CREATE INDEX IF NOT EXISTS xloom_execution_retry ON xloom_executions(namespace,project_id,retry_key,generation);
+CREATE INDEX IF NOT EXISTS xloom_execution_decision ON xloom_executions(namespace,project_id,generation,kind,status,created_at);
+CREATE INDEX IF NOT EXISTS xloom_execution_version ON xloom_executions(namespace,project_id,kind,state_version);
+CREATE INDEX IF NOT EXISTS xloom_execution_step ON xloom_executions(project_id,intent) WHERE kind!='reason';`
 
 const inputSnapshotSchema = `CREATE TABLE IF NOT EXISTS xloom_input_snapshots(
  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -68,8 +80,7 @@ const pruneDecisionReadViews = `DELETE FROM xloom_decision_read_views
   AND (e.status NOT IN ('prepared','running','retryable','result_pending')
    OR EXISTS(SELECT 1 FROM xloom_revoked_runs r WHERE r.project_id=e.project_id AND r.worker=e.lease)));`
 
-// Keep optional scenario metadata outside Cairn's projects table so both
-// legacy schemas and clients continue to work without inventing a scenario.
+// Scenario metadata is optional; missing rows do not invent a project scenario.
 const projectMetadataSchema = `CREATE TABLE IF NOT EXISTS xloom_project_metadata(
  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
  scenario TEXT NOT NULL CHECK(scenario IN ('ctf','pentest','audit')));` + executionChangeSchema

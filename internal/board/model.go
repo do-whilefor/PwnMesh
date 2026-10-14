@@ -3,7 +3,7 @@ package board
 
 import "pwnmesh/internal/board/model"
 
-// Keep existing callers source-compatible while pure consumers can use model.
+// Board operations use the same domain types as storage-free model consumers.
 type Settings = model.Settings
 type Fact = model.Fact
 type Intent = model.Intent

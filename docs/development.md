@@ -81,7 +81,7 @@ credentials, build outputs and temporary test artifacts are not source inputs.
 
 Keep regression tests beside the owning Go package or in the existing integration
 package. Preserve transaction, wire/hash and recovery boundaries described in
-[architecture](architecture.md) and [compatibility](compatibility.md). Before a
-schema change, test an unversioned upgrade, a versioned reopen, rejection and
-rollback; before a protocol move, retain exact wire fixtures. Commit reviewable
+[architecture](architecture.md) and [supported formats](formats.md). Before a
+schema change, test empty initialization, a current versioned reopen, unsupported
+input rejection and rollback; before a protocol move, retain exact wire fixtures. Commit reviewable
 changes with their focused regressions, without generated evidence or local plans.

@@ -368,7 +368,7 @@ func TestInputBatchTextOnlyRetryDoesNotDuplicateInstructions(t *testing.T) {
 	}
 }
 
-func TestInputBatchTextOnlyCannotModifyHistoricalProject(t *testing.T) {
+func TestInputBatchTextOnlyCannotModifyUnsupportedProject(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
 		_, err := tx.Exec("DELETE FROM xloom_project_orchestration WHERE project_id=?", f.project)
@@ -376,16 +376,35 @@ func TestInputBatchTextOnlyCannotModifyHistoricalProject(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	before, events := f.state(), storedEvents(f)
-	if before.Graph.Project.OrchestrationVersion != 0 {
-		t.Fatal("fixture is not historical")
+	snapshot := func() (board.State, []board.StateEvent) {
+		t.Helper()
+		var state board.State
+		var events []board.StateEvent
+		if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+			var err error
+			state, err = tx.State(f.project)
+			if err == nil {
+				events, err = tx.StateEvents(f.project, 0)
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return state, events
 	}
+	before, events := snapshot()
+	if before.Graph.Project.OrchestrationVersion != 0 {
+		t.Fatal("fixture has a supported protocol")
+	}
+	f.request("GET", f.base()+"/state", nil, false, http.StatusConflict, nil)
+	f.request("GET", f.base()+"/state/events", nil, false, http.StatusConflict, nil)
 	body, contentType := inputBatchBody(t, nil, "Do not change retained historical evidence.", "historical-text")
 	inputBatchRequest(t, f, body, contentType, http.StatusConflict)
-	if !reflect.DeepEqual(before, f.state()) || !reflect.DeepEqual(events, storedEvents(f)) {
-		t.Fatal("text-only upload changed a historical project")
+	after, afterEvents := snapshot()
+	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(events, afterEvents) {
+		t.Fatal("text-only upload changed an unsupported project")
 	}
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
 		var count int
 		if err := tx.QueryRow("SELECT COUNT(*) FROM xloom_input_batches WHERE project_id=?", f.project).Scan(&count); err != nil {
 			return err

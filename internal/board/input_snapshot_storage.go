@@ -51,7 +51,7 @@ func snapshotChunks(raw []byte) [][]byte {
 
 func (t *Tx) encodeInputSnapshot(project string, raw []byte) ([]byte, error) {
 	// Small inputs cost less than a manifest and its chunk lookups. Preserve
-	// their original inline representation, including pre-upgrade snapshots.
+	// their exact inline representation.
 	if len(raw) <= snapshotChunkMax {
 		return raw, nil
 	}
@@ -70,7 +70,7 @@ func (t *Tx) encodeInputSnapshot(project string, raw []byte) ([]byte, error) {
 
 func (t *Tx) decodeInputSnapshot(project string, stored []byte) ([]byte, error) {
 	if !bytes.HasPrefix(stored, []byte(snapshotChunkPrefix)) {
-		return stored, nil // Legacy snapshots contain the exact original JSON.
+		return stored, nil // Current small snapshots store their exact JSON inline.
 	}
 	var manifest snapshotManifest
 	if err := json.Unmarshal(stored[len(snapshotChunkPrefix):], &manifest); err != nil {

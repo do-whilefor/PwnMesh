@@ -293,9 +293,15 @@ func TestExtensionRequiresExplicitOptionAndStableRunIdentity(t *testing.T) {
 	}
 }
 
-func TestLegacyCheckpointNeedsStrictRecoveryBeforeExtension(t *testing.T) {
+func TestCheckpointWithoutNodeDefinitionCannotResumeOrExtend(t *testing.T) {
 	options := fixtureOptions(t, 1)
-	definition := Definition{Version: "1", Nodes: []Node{{ID: "old", Kind: "agent", Run: successful, Verify: verified}}}
+	callbacks := 0
+	call := func(context.Context, Input) (Output, error) {
+		callbacks++
+		return Output{}, nil
+	}
+	verify := func(context.Context, Input, Output) error { callbacks++; return nil }
+	definition := Definition{Version: "1", Nodes: []Node{{ID: "saved", Kind: "agent", Run: call, Verify: verify}}}
 	first, err := Run(context.Background(), definition, options)
 	if err != nil {
 		t.Fatal(err)
@@ -305,19 +311,20 @@ func TestLegacyCheckpointNeedsStrictRecoveryBeforeExtension(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := string(checkpointBytes(t, options))
-	extended := Definition{Version: definition.Version, Nodes: append(append([]Node(nil), definition.Nodes...), Node{ID: "new", Kind: "agent", Run: successful, Verify: verified})}
-	options.Extend = true
-	if _, err := Run(context.Background(), extended, options); err == nil || !strings.Contains(err.Error(), "legacy") || string(checkpointBytes(t, options)) != before {
-		t.Fatalf("legacy extension bypassed original definition validation: %v", err)
-	}
-	options.Extend = false
-	restored, err := Run(context.Background(), definition, options)
-	if err != nil || len(restored.Nodes[0].DefinitionSHA256) != 64 {
-		t.Fatalf("strict legacy recovery failed: %+v %v", restored, err)
-	}
-	options.Extend = true
-	if _, err := Run(context.Background(), extended, options); err != nil {
-		t.Fatalf("verified legacy checkpoint could not extend: %v", err)
+	extended := Definition{Version: definition.Version, Nodes: append(append([]Node(nil), definition.Nodes...), Node{ID: "new", Kind: "agent", Run: call, Verify: verify})}
+	beforeCallbacks := callbacks
+	for _, extend := range []bool{false, true} {
+		options.Extend = extend
+		requested := definition
+		if extend {
+			requested = extended
+		}
+		if _, err := Run(context.Background(), requested, options); err == nil || !strings.Contains(err.Error(), "definition") {
+			t.Fatalf("extend=%t accepted an unbound checkpoint: %v", extend, err)
+		}
+		if callbacks != beforeCallbacks || string(checkpointBytes(t, options)) != before {
+			t.Fatalf("extend=%t executed callbacks or rewrote unsupported checkpoint", extend)
+		}
 	}
 }
 

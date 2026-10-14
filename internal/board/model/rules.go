@@ -30,8 +30,8 @@ func (g Graph) ValidateSources(from []string) error {
 	return nil
 }
 
-// ExecutionFence adds conditional writes for the dispatcher. An empty Run
-// retains the public Cairn semantics for existing clients.
+// ExecutionFence binds dispatcher writes to a run. An empty Run carries no
+// execution identity; management operations rely on their endpoint authorization.
 type ExecutionFence struct {
 	Run, Lease, Intent string
 }

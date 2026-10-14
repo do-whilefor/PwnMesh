@@ -100,7 +100,7 @@ func TestAssetNodesReceiptsAndSnapshotSurviveStoreReopen(t *testing.T) {
 	}
 }
 
-func TestAssetSchemaMigrationPreservesOldSnapshotAndPersistsNewAnchors(t *testing.T) {
+func TestAssetReopenPreservesSnapshotAndPersistsNewAnchors(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	worker := f.worker("migration-worker", "")
 	oldFact := f.fact(worker, "before-assets")
@@ -111,13 +111,7 @@ func TestAssetSchemaMigrationPreservesOldSnapshotAndPersistsNewAnchors(t *testin
 		if err != nil {
 			return err
 		}
-		// This is a pre-asset schema fixture, not a run of an older binary.
-		// All retained business records and snapshot bytes remain untouched.
-		if _, err = tx.Exec("DROP TABLE xloom_asset_anchors"); err != nil {
-			return err
-		}
-		_, err = tx.Exec("DROP TABLE xloom_assets; DROP TABLE pwnmesh_schema_migrations")
-		return err
+		return nil
 	})
 
 	reopenAssetFixture(t, f)

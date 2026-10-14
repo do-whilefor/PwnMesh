@@ -10,7 +10,7 @@ import (
 )
 
 // FromEnvironment keeps execution and readiness checks on the same model
-// settings. getenv must resolve any legacy environment aliases first.
+// settings. getenv selects the process or isolated worker environment.
 func FromEnvironment(getenv func(string) string, effort string) (*Anthropic, error) {
 	if effort == "" {
 		effort = getenv("PWNMESH_REASONING_EFFORT")

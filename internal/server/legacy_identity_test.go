@@ -1,10 +1,46 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"reflect"
 	"testing"
+	"time"
+
+	"pwnmesh/internal/board"
 )
+
+func TestUnregisteredClaimsCannotReuseRevokedIdentity(t *testing.T) {
+	for _, kind := range []string{"reason", "curate", "explore"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newExecutionProtocolFixture(t)
+			leasePath, claim := f.base()+"/"+kind, "/claim"
+			if kind == "explore" {
+				leasePath = f.base() + "/intents/" + f.newIntent().ID
+				claim = "/heartbeat"
+			}
+			body := map[string]string{"worker": "unregistered-run", "trigger": "initial"}
+			f.request("POST", leasePath+claim, body, false, http.StatusOK, nil)
+			if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+				return tx.RevokeRuns(f.project)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before := f.state()
+			later := f.store.Now().Add(time.Second)
+			f.store.Now = func() time.Time { return later }
+			for _, op := range []string{claim, "/heartbeat"} {
+				f.request("POST", leasePath+op, body, false, http.StatusConflict, nil)
+				if !reflect.DeepEqual(before, f.state()) {
+					t.Fatal("revoked unregistered identity changed its lease")
+				}
+			}
+			f.request("POST", leasePath+"/release", body, false, http.StatusOK, nil)
+			body["worker"] = "fresh-run"
+			f.request("POST", leasePath+claim, body, false, http.StatusOK, nil)
+		})
+	}
+}
 
 func TestRegisteredStepOperationsBindRequestIdentity(t *testing.T) {
 	for _, kind := range []string{"reason", "explore"} {

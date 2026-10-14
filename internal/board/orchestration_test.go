@@ -620,24 +620,26 @@ func TestOrchestrationRejectsLegacyRegistrationAndOversizedCuration(t *testing.T
 	requireAPIStatus(t, err, 422)
 }
 
-func TestLegacyStateJSONPreservesVersionShape(t *testing.T) {
-	s := State{Graph: Graph{Project: Project{ID: "legacy"}}}
+func TestCurrentStateJSONPreservesCanonicalVersion(t *testing.T) {
+	s := State{Graph: Graph{Project: Project{ID: "fixture", OrchestrationVersion: 1}}}
 	raw, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"curation", "curator", "orchestration_version", "candidates", "disputes"} {
-		if strings.Contains(string(raw), `"`+key+`"`) {
-			t.Fatalf("new field %s changed a legacy decision hash: %s", key, raw)
-		}
+	// Captured with the existing v1 serializer before removing pre-v1 omission.
+	if got := DecisionStateVersion(s); got != "d19724257f8940ef2ca70e269bd006777b9941939eef8a3dc8c3a0ab9bd0debb" {
+		t.Fatalf("current decision hash changed: %s", got)
 	}
-	s.Graph.Project.OrchestrationVersion = 1
+	if !strings.HasSuffix(string(raw), `,"curation":{"generation":0,"through_revision":0}}`) {
+		t.Fatalf("current canonical curation field moved: %s", raw)
+	}
+	s.Graph.Project.OrchestrationVersion = 0
 	raw, err = json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(raw), `"curation"`) {
-		t.Fatal("new protocol lost its curation boundary")
+		t.Fatal("pre-v1 field omission remains active")
 	}
 }
 

@@ -49,7 +49,7 @@ func TestDeprecatedBootstrapParameterStillRejectsInvalidInput(t *testing.T) {
 	}
 }
 
-func TestHistoricalProjectRemainsReadOnlyAfterDatabaseReopen(t *testing.T) {
+func TestUnsupportedProjectRemainsRejectedAfterDatabaseReopen(t *testing.T) {
 	for _, bootstrap := range []bool{false, true} {
 		t.Run(map[bool]string{false: "decide", true: "bootstrap"}[bootstrap], func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "historical.db")
@@ -75,10 +75,17 @@ func TestHistoricalProjectRemainsReadOnlyAfterDatabaseReopen(t *testing.T) {
 			defer store.Close()
 			f := &executionProtocolFixture{t: t, handler: New(store), store: store, project: "historical"}
 			assertStrategy := func() {
+				f.request("GET", f.base(), nil, false, http.StatusConflict, nil)
 				var graph board.Graph
-				f.request("GET", f.base(), nil, false, http.StatusOK, &graph)
-				if graph.Project.Bootstrap != bootstrap {
-					t.Fatal("historical bootstrap strategy was rewritten")
+				if err := store.View(context.Background(), func(tx *board.Tx) error {
+					var err error
+					graph, err = tx.Load(f.project)
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if graph.Project.Bootstrap != bootstrap || graph.Project.OrchestrationVersion != 0 || graph.Project.Status != "active" {
+					t.Fatal("rejected access rewrote unsupported project metadata")
 				}
 			}
 			assertStrategy()

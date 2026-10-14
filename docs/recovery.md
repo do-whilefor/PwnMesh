@@ -27,11 +27,11 @@ For Decide and Curate, the server commit receipt is authoritative. Recovery chec
 it before planning again. A private draft may be discarded after a conflict;
 that does not erase a committed mutation or grant extra execution budget.
 
-The historical `execute-v1` graph adapter is restricted to existing `graph.json`
-checkpoints. It preserves the original DAG definition and hash checks, verifies
-evidence, then seals successful recovery with `acceptance.json`. New runs use
-acceptance receipts directly. This adapter does not make unsupported historical
-server execution protocols writable.
+The `execute-v1` acceptance adapter has been removed. A `graph.json` without a
+current `acceptance.json` is rejected before session callbacks, bookkeeping or
+result output. Current receipts remain recoverable even if an old graph file is
+left beside them. General Worker graphs require per-node definition digests and
+never reconstruct missing bindings to resume or extend an old checkpoint.
 
 ## Operational checks
 
@@ -46,5 +46,5 @@ executions before admitting new work. Investigate identity, evidence hash or
 unsupported-version errors using the original artifacts. Removing checkpoints,
 lease tombstones or acceptance receipts can invalidate recovery guarantees.
 
-See [compatibility](compatibility.md) for supported representations and
+See [supported formats](formats.md) for supported representations and
 [development](development.md) for focused regression commands.

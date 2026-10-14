@@ -77,7 +77,7 @@ func TestGrowingInputSnapshotsShareRetainedEvidence(t *testing.T) {
 	})
 }
 
-func TestLegacyInputSnapshotRemainsReadable(t *testing.T) {
+func TestCurrentInlineInputSnapshotRemainsReadable(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	state := f.state()
 	raw, _ := json.Marshal(state)
@@ -89,7 +89,7 @@ func TestLegacyInputSnapshotRemainsReadable(t *testing.T) {
 		}
 		got, err := tx.ReadInputSnapshot("p", id)
 		if err == nil && !reflect.DeepEqual(got, state) {
-			t.Fatal("legacy raw snapshot changed")
+			t.Fatal("inline snapshot changed")
 		}
 		return err
 	})

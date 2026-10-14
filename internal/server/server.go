@@ -109,7 +109,7 @@ func NewWithModelSettings(store *b.Store, modelSettingsPath string) http.Handler
 		}
 		_, pattern := m.Handler(r)
 		if pattern == "" {
-			// Match Cairn's trailing-slash redirects and JSON routing errors.
+			// Normalize trailing slashes and return JSON routing errors.
 			if len(r.URL.Path) > 1 && strings.HasSuffix(r.URL.Path, "/") {
 				probe := r.Clone(r.Context())
 				probe.URL.Path = strings.TrimRight(r.URL.Path, "/")
@@ -195,19 +195,10 @@ func (s *Server) wrapAction(fn action, readOnly bool) http.HandlerFunc {
 		err := transaction(r.Context(), func(t *b.Tx) error {
 			project := r.PathValue("pid")
 			if project != "" {
-				var version int
-				err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN xloom_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, project).Scan(&version)
-				if errors.Is(err, sql.ErrNoRows) {
-					return b.Err(404, "Project not found")
-				}
-				if err != nil {
+				if err := requireCurrentProject(t, project); err != nil {
 					return err
 				}
-				if version != 1 {
-					if r.Method != http.MethodGet && r.Method != http.MethodHead {
-						return b.Err(409, "Historical projects are read-only; create a new project to continue")
-					}
-				} else if !readOnly {
+				if !readOnly {
 					if err := t.ExpireProject(project); err != nil {
 						return err
 					}
@@ -245,6 +236,22 @@ func (s *Server) wrapAction(fn action, readOnly bool) http.HandlerFunc {
 		}
 	}
 }
+
+func requireCurrentProject(t *b.Tx, project string) error {
+	var version int
+	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN xloom_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, project).Scan(&version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return b.Err(404, "Project not found")
+	}
+	if err != nil {
+		return err
+	}
+	if version != 1 {
+		return b.Err(409, "Unsupported project protocol; create a new project to continue")
+	}
+	return nil
+}
+
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	var ae *b.APIError
 	if !errors.As(err, &ae) {
@@ -325,23 +332,9 @@ func guard(t *b.Tx, g b.Graph, r *http.Request) error {
 	return t.CheckExecution(g, decisionFence(r))
 }
 
-// Unregistered clients without execution headers retain Cairn's ability to
-// reuse a worker name after stopping and reactivating a project. Registered
-// runs and explicitly fenced requests must never revive a revoked identity.
-func guardClaim(t *b.Tx, project, worker string, fence b.ExecutionFence) error {
-	if fence.Run == "" {
-		var registered bool
-		if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE project_id=? AND lease=?)", project, worker).Scan(&registered); err != nil {
-			return err
-		}
-		var restarted bool
-		if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_project_rounds WHERE project_id=?)", project).Scan(&restarted); err != nil {
-			return err
-		}
-		if !registered && !restarted {
-			return nil
-		}
-	}
+// A revoked identity cannot claim or renew a lease, including before execution
+// registration and when the request has no execution headers.
+func guardClaim(t *b.Tx, project, worker string) error {
 	revoked, err := t.RunRevoked(project, worker)
 	if err != nil {
 		return err
@@ -501,7 +494,7 @@ func (s *Server) reason(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 		return 0, nil, err
 	}
 	if op == "claim" || op == "heartbeat" {
-		if err := guardClaim(t, g.Project.ID, worker, fence); err != nil {
+		if err := guardClaim(t, g.Project.ID, worker); err != nil {
 			return 0, nil, err
 		}
 	}
@@ -596,7 +589,7 @@ func (s *Server) intentAction(t *b.Tx, q *request, r *http.Request) (int, any, e
 		return 0, nil, err
 	}
 	if op == "heartbeat" {
-		if err := guardClaim(t, g.Project.ID, worker, fence); err != nil {
+		if err := guardClaim(t, g.Project.ID, worker); err != nil {
 			return 0, nil, err
 		}
 	}

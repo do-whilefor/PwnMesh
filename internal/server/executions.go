@@ -71,7 +71,7 @@ func requireCurrentExecution(e b.Execution) error {
 		} `json:"decision"`
 	}
 	if json.Unmarshal(e.Job, &job) != nil || job.Graph.Project.OrchestrationVersion != 1 || !job.GraphRPC || job.ResultContractVersion != 2 || job.Kind != e.Kind || (e.Kind != "reason" && e.Kind != "curate" && e.Kind != "explore") || (e.Kind == "reason" && (job.Decision == nil || job.Decision.Version != 2)) {
-		return b.Err(409, "Historical execution protocols are read-only; create a new project to continue")
+		return b.Err(409, "Unsupported execution protocol; create a new project to continue")
 	}
 	return nil
 }

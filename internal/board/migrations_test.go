@@ -1,8 +1,10 @@
 package board
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -36,11 +38,7 @@ func TestStoreMigrationBaselineAndReopenMaintenance(t *testing.T) {
 		}); err != nil {
 			return err
 		}
-		// An older writer can restore a row without its derived metadata after
-		// version 1 was recorded. Schema versioning must not disable that repair.
-		if _, err := tx.Exec(`INSERT INTO xloom_executions(` + executionColumns + `) VALUES('proj_041','restored','ns','planner','reason','','planner@restored','{"graph":{"project":{"generation":7}}}','reason:restored','succeeded',NULL,0,'now','now')`); err != nil {
-			return err
-		}
+		putQueryExecution(t, tx, Execution{ProjectID: "proj_041", ID: "restored", Status: "succeeded"}, 7, "")
 		_, err := tx.Exec(`DELETE FROM counters WHERE name='project'; DELETE FROM scoped_counters;
 DELETE FROM settings; DELETE FROM pwnmesh_installation;
 DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions;`)
@@ -72,7 +70,7 @@ DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions
 		}
 		var generation, metadataVersion int
 		if err := tx.QueryRow("SELECT generation,metadata_version FROM xloom_executions WHERE id='restored'").Scan(&generation, &metadataVersion); err != nil || generation != 7 || metadataVersion != 1 {
-			t.Fatalf("versioned reopen did not backfill restored execution metadata: generation=%d version=%d err=%v", generation, metadataVersion, err)
+			t.Fatalf("versioned reopen changed execution metadata: generation=%d version=%d err=%v", generation, metadataVersion, err)
 		}
 		settings, err := tx.Settings()
 		if err != nil || settings.IntentTimeout != 15 || settings.ReasonTimeout != 15 {
@@ -157,5 +155,72 @@ func TestStoreMigrationRejectsUnsupportedHistoryBeforeApplicationSchema(t *testi
 				t.Fatalf("rejected history changed ledger: before=%s after=%s err=%v", before, after, err)
 			}
 		})
+	}
+}
+
+func assertStoreRejectedUnchanged(t *testing.T, path, message string) {
+	t.Helper()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if store != nil {
+		store.Close()
+	}
+	if err == nil || !strings.Contains(err.Error(), message) {
+		t.Fatalf("unsupported store was not rejected: %v", err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected store changed database bytes: %v", err)
+	}
+}
+
+func TestStoreRejectsUnversionedDataWithoutMutation(t *testing.T) {
+	for _, seed := range []string{
+		`CREATE TABLE projects(id TEXT PRIMARY KEY,bootstrap_mode TEXT NOT NULL); INSERT INTO projects VALUES('retained','disabled');`,
+		`CREATE TABLE sqlitearchive(id INTEGER); INSERT INTO sqlitearchive VALUES(1);`,
+		migrationLedgerSchema,
+	} {
+		t.Run(seed[:12], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "unsupported.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(seed); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			message := "unversioned databases are unsupported"
+			if seed == migrationLedgerSchema {
+				message = "missing baseline"
+			}
+			assertStoreRejectedUnchanged(t, path, message)
+		})
+	}
+}
+
+func TestStoreRejectsUnsupportedExecutionMetadataWithoutBackfill(t *testing.T) {
+	for _, version := range []int{0, 2} {
+		path := filepath.Join(t.TempDir(), "metadata.db")
+		store, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		executionQueryTx(t, store, func(tx *Tx) {
+			putQueryExecution(t, tx, Execution{ID: "retained", Status: "succeeded"}, 7, "")
+			if _, err := tx.Exec("UPDATE xloom_executions SET metadata_version=?; DELETE FROM settings", version); err != nil {
+				t.Fatal(err)
+			}
+		})
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		assertStoreRejectedUnchanged(t, path, "unsupported execution metadata version")
 	}
 }

@@ -87,6 +87,9 @@ func (s *Server) downloadInput(w http.ResponseWriter, r *http.Request) {
 	var file b.InputFile
 	var data []byte
 	err := s.Store.View(r.Context(), func(t *b.Tx) error {
+		if err := requireCurrentProject(t, r.PathValue("pid")); err != nil {
+			return err
+		}
 		var e error
 		file, data, e = t.InputData(r.PathValue("pid"), r.PathValue("fid"))
 		return e

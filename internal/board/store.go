@@ -42,15 +42,16 @@ func Open(path string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, Now: time.Now}
+	// Reject unsupported existing stores before WAL changes their file header.
+	if err = migrateStore(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA busy_timeout=5000"} {
 		if _, err = db.Exec(q); err != nil {
 			db.Close()
 			return nil, err
 		}
-	}
-	if err = migrateStore(db); err != nil {
-		db.Close()
-		return nil, err
 	}
 	if path != ":memory:" {
 		// WAL readers keep a consistent view without reserving the only writer.
@@ -118,9 +119,9 @@ func (t *Tx) Settings() (Settings, error) {
 	return s, err
 }
 
-// RevokeRuns invalidates execution identities without changing Cairn's retained
-// worker and heartbeat metadata on concluded intents. In particular, a stopped
-// and then resumed project must reject a delayed bootstrap completion.
+// RevokeRuns invalidates execution identities while retaining worker and
+// heartbeat metadata on concluded intents. A resumed project must reject
+// delayed writes from revoked workers.
 func (t *Tx) RevokeRuns(project string) error {
 	_, err := t.Exec(`INSERT OR IGNORE INTO xloom_revoked_runs(project_id,worker)
 SELECT project_id,worker FROM intents WHERE project_id=? AND worker IS NOT NULL
