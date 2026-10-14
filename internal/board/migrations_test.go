@@ -3,7 +3,6 @@ package board
 import (
 	"bytes"
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,26 +127,25 @@ func TestStoreRejectsUnsupportedExecutionMetadataWithoutBackfill(t *testing.T) {
 	}
 }
 
-func TestDomainReadsMigratedNamespace(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "migrated.db")
-	raw, err := os.ReadFile("internal/sqlstore/testdata/schema_v1.sql")
+func TestDomainReadsCurrentStoreAfterReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "current.db")
+	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = db.Exec(string(raw) + `
+	err = store.Do(context.Background(), func(tx *Tx) error {
+		_, err := tx.Exec(`
 INSERT INTO projects(id,title,status,created_at) VALUES('proj_041','Retained','active','then');
 INSERT INTO facts VALUES('f012','proj_041','Retained observation');
-INSERT INTO xloom_project_metadata VALUES('proj_041','ctf');
-INSERT INTO xloom_project_orchestration VALUES('proj_041',1,'curator@retained','input','then','then');`)
-	closeErr := db.Close()
+INSERT INTO pwnmesh_project_metadata VALUES('proj_041','ctf');
+INSERT INTO pwnmesh_project_orchestration VALUES('proj_041',1,'curator@retained','input','then','then');`)
+		return err
+	})
+	closeErr := store.Close()
 	if err != nil || closeErr != nil {
-		t.Fatalf("create v1 fixture: exec=%v close=%v", err, closeErr)
+		t.Fatalf("create current fixture: exec=%v close=%v", err, closeErr)
 	}
-	store, err := Open(path)
+	store, err = Open(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,10 +156,10 @@ INSERT INTO xloom_project_orchestration VALUES('proj_041',1,'curator@retained','
 			return err
 		}
 		if g.Project.Title != "Retained" || g.Project.Scenario != "ctf" || g.Project.OrchestrationVersion != 1 || g.Project.Curator == nil || g.Project.Curator.Worker != "curator@retained" || len(g.Facts) != 1 || g.Facts[0].ID != "f012" {
-			t.Fatalf("domain graph lost migrated values: %+v", g)
+			t.Fatalf("domain graph lost retained values: %+v", g)
 		}
 		if id, err := tx.Next("proj_041", "fact"); err != nil || id != "f013" {
-			t.Fatalf("migrated counter = %q, %v", id, err)
+			t.Fatalf("reopened counter = %q, %v", id, err)
 		}
 		return nil
 	}); err != nil {

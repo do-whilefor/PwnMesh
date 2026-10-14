@@ -1,8 +1,8 @@
 package sqlstore
 
-// Schema definitions stay together so storage changes can be reviewed with the
-// migration order. These initialize the current schema on an empty database;
-// append future upgrades in migrations.go. pwnmesh_* names are active SQL identities.
+// These definitions initialize the current schema on an empty database.
+// Future schema changes require explicit version handling in migrations.go;
+// editing this DDL alone does not upgrade existing databases.
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings(intent_timeout INTEGER NOT NULL DEFAULT 15,reason_timeout INTEGER NOT NULL DEFAULT 15);

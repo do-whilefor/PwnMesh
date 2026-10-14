@@ -1,4 +1,4 @@
-// Package sqlstore owns SQLite connections, schema upgrades and transaction
+// Package sqlstore owns SQLite connections, schema validation and transaction
 // finalization. Domain operations use its query surface within a callback.
 package sqlstore
 
