@@ -78,7 +78,7 @@ func acceptWorkerSession(ctx context.Context, runID string, input json.RawMessag
 	} else if _, legacyErr := os.Lstat(filepath.Join(dir, "graph.json")); legacyErr == nil {
 		// Do not write a running receipt before migration: a crash must return to
 		// the legacy checkpoint, whose agent may already have been accepted.
-		out, err := resumeLegacyAcceptance(ctx, runID, input, dir, call, verify)
+		out, err := resumeExecuteV1Acceptance(ctx, runID, input, dir, call, verify)
 		if err != nil {
 			return acceptanceOutput{}, err
 		}

@@ -5,7 +5,13 @@
 # ---- 第三方参考源码（不纳入版本控制）----
 # pi-main / 参考资料，仅作本地重写参考
 /refer/
-/docs/
+# Track maintained guides only; local evidence and historical notes stay local.
+/docs/*
+!/docs/architecture.md
+!/docs/protocol.md
+!/docs/recovery.md
+!/docs/development.md
+!/docs/compatibility.md
 /design/
 /tpm/
 

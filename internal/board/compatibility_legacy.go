@@ -2,8 +2,26 @@ package board
 
 import "encoding/json"
 
-// Older executions may have no failure event. Read only bounded diagnostic
-// fields without rewriting retained results or their immutable job inputs.
+// Compatibility readers for unversioned state snapshots and pre-failure-event
+// execution results. These formats have no release marker; do not assign them
+// invented versions. Retention and removal requirements: docs/compatibility.md.
+
+// Omit curation from pre-orchestration-v1 wire snapshots. The exact field order
+// and omission rules preserve decision hashes from the unversioned protocol.
+func (s State) MarshalJSON() ([]byte, error) {
+	type stateAlias State
+	view := struct {
+		*stateAlias
+		Curation *CurationProgress `json:"curation,omitempty"`
+	}{stateAlias: (*stateAlias)(&s)}
+	if s.Graph.Project.OrchestrationVersion == 1 {
+		view.Curation = &s.Curation
+	}
+	return json.Marshal(view)
+}
+
+// Read bounded diagnostics when an execution predates failure events, without
+// rewriting retained Result bytes or immutable Job inputs.
 func (t *Tx) legacyExecutionFailure(project string, execution Execution) (string, error) {
 	var raw []byte
 	err := t.QueryRow(`WITH failure AS (

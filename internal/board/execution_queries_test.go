@@ -511,7 +511,7 @@ func TestExecutionMetadataMigrationFailureRollsBack(t *testing.T) {
 	}
 	// Creating the graph schema, UI triggers and installation identity is part
 	// of the same migration as the late execution metadata backfill.
-	for _, name := range []string{"xloom_state", "xloom_assets", "xloom_ui_execution_insert", "pwnmesh_installation", "xloom_execution_pending"} {
+	for _, name := range []string{"xloom_state", "xloom_assets", "xloom_ui_execution_insert", "pwnmesh_installation", "xloom_execution_pending", "pwnmesh_schema_migrations"} {
 		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name=?", name).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("failed migration retained schema object %s: count=%d err=%v", name, count, err)
 		}

@@ -1,11 +1,12 @@
 package board
 
 // Schema definitions stay together so storage changes can be reviewed with the
-// migration order. Existing table names and wire-facing data remain compatible.
+// migration order. These define the unversioned baseline; append future upgrades
+// in migrations.go. Existing xloom_* names are persisted compatibility identities.
 
 const schema = `
 CREATE TABLE IF NOT EXISTS settings(intent_timeout INTEGER NOT NULL DEFAULT 15,reason_timeout INTEGER NOT NULL DEFAULT 15);
-INSERT OR IGNORE INTO settings(rowid,intent_timeout,reason_timeout) VALUES(1,15,15);
+` + settingsSeed + `
 CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,title TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',bootstrap_enabled INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,reason_worker TEXT,reason_trigger TEXT,reason_started_at TEXT,reason_last_heartbeat_at TEXT);
 CREATE TABLE IF NOT EXISTS facts(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,description TEXT NOT NULL,PRIMARY KEY(id,project_id));
 CREATE TABLE IF NOT EXISTS intents(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,to_fact_id TEXT,description TEXT NOT NULL,creator TEXT NOT NULL,worker TEXT,last_heartbeat_at TEXT,created_at TEXT NOT NULL,concluded_at TEXT,PRIMARY KEY(id,project_id));
@@ -20,6 +21,8 @@ CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER NOT NULL
 INSERT OR IGNORE INTO counters(name,value) VALUES('project',0);
 CREATE TABLE IF NOT EXISTS scoped_counters(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,kind TEXT NOT NULL,value INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,kind));
 CREATE TABLE IF NOT EXISTS xloom_revoked_runs(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,worker TEXT NOT NULL,PRIMARY KEY(project_id,worker));`
+
+const settingsSeed = `INSERT OR IGNORE INTO settings(rowid,intent_timeout,reason_timeout) VALUES(1,15,15);`
 
 const stateSchema = `
 CREATE TABLE IF NOT EXISTS xloom_state(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,data TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,decision_revision INTEGER NOT NULL DEFAULT 0);
@@ -49,12 +52,7 @@ CREATE TABLE IF NOT EXISTS xloom_snapshot_chunks(
 const decisionReadSchema = `CREATE TABLE IF NOT EXISTS xloom_decision_read_views(
  project_id TEXT NOT NULL,execution_id TEXT NOT NULL,state_version TEXT NOT NULL,state BLOB NOT NULL,
  PRIMARY KEY(project_id,execution_id),
- FOREIGN KEY(project_id,execution_id) REFERENCES xloom_executions(project_id,id) ON DELETE CASCADE);
-DELETE FROM xloom_decision_read_views
- WHERE EXISTS(SELECT 1 FROM xloom_executions e
-  WHERE e.project_id=xloom_decision_read_views.project_id AND e.id=xloom_decision_read_views.execution_id
-  AND (e.status NOT IN ('prepared','running','retryable','result_pending')
-   OR EXISTS(SELECT 1 FROM xloom_revoked_runs r WHERE r.project_id=e.project_id AND r.worker=e.lease)));
+ FOREIGN KEY(project_id,execution_id) REFERENCES xloom_executions(project_id,id) ON DELETE CASCADE);` + pruneDecisionReadViews + `
 CREATE TRIGGER IF NOT EXISTS xloom_decision_read_terminal AFTER UPDATE OF status ON xloom_executions
  WHEN NEW.status NOT IN ('prepared','running','retryable','result_pending') BEGIN
  DELETE FROM xloom_decision_read_views WHERE project_id=NEW.project_id AND execution_id=NEW.id;
@@ -63,6 +61,12 @@ CREATE TRIGGER IF NOT EXISTS xloom_decision_read_revoked AFTER INSERT ON xloom_r
  DELETE FROM xloom_decision_read_views WHERE project_id=NEW.project_id AND execution_id IN
   (SELECT id FROM xloom_executions WHERE project_id=NEW.project_id AND lease=NEW.worker);
 END;`
+
+const pruneDecisionReadViews = `DELETE FROM xloom_decision_read_views
+ WHERE EXISTS(SELECT 1 FROM xloom_executions e
+  WHERE e.project_id=xloom_decision_read_views.project_id AND e.id=xloom_decision_read_views.execution_id
+  AND (e.status NOT IN ('prepared','running','retryable','result_pending')
+   OR EXISTS(SELECT 1 FROM xloom_revoked_runs r WHERE r.project_id=e.project_id AND r.worker=e.lease)));`
 
 // Keep optional scenario metadata outside Cairn's projects table so both
 // legacy schemas and clients continue to work without inventing a scenario.
@@ -81,10 +85,7 @@ CREATE TABLE IF NOT EXISTS xloom_ui_execution_changes(
  execution_id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(project_id,execution_id));
 CREATE INDEX IF NOT EXISTS xloom_ui_execution_changes_revision ON xloom_ui_execution_changes(project_id,revision);
-INSERT OR IGNORE INTO xloom_ui_execution_revisions(project_id,revision)
- SELECT project_id,MAX(rowid) FROM xloom_executions GROUP BY project_id;
-INSERT OR IGNORE INTO xloom_ui_execution_changes(project_id,execution_id,revision)
- SELECT project_id,id,rowid FROM xloom_executions;
+` + executionChangeBackfill + `
 CREATE TRIGGER IF NOT EXISTS xloom_ui_execution_insert AFTER INSERT ON xloom_executions BEGIN
  INSERT INTO xloom_ui_execution_revisions VALUES(NEW.project_id,1)
  ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
@@ -104,6 +105,11 @@ WHEN EXISTS(SELECT 1 FROM projects WHERE id=OLD.project_id) BEGIN
  INSERT INTO xloom_ui_execution_changes VALUES(OLD.project_id,OLD.id,(SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=OLD.project_id),1)
  ON CONFLICT(project_id,execution_id) DO UPDATE SET revision=excluded.revision,deleted=1;
 END;`
+
+const executionChangeBackfill = `INSERT OR IGNORE INTO xloom_ui_execution_revisions(project_id,revision)
+ SELECT project_id,MAX(rowid) FROM xloom_executions GROUP BY project_id;
+INSERT OR IGNORE INTO xloom_ui_execution_changes(project_id,execution_id,revision)
+ SELECT project_id,id,rowid FROM xloom_executions;`
 
 const restartSchema = `CREATE TABLE IF NOT EXISTS xloom_project_rounds(
  project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
@@ -152,5 +158,7 @@ CREATE INDEX IF NOT EXISTS xloom_asset_anchors_asset ON xloom_asset_anchors(proj
 
 const deploymentSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_installation(
  singleton INTEGER PRIMARY KEY CHECK(singleton=1),identity TEXT NOT NULL);
-INSERT OR IGNORE INTO pwnmesh_installation(singleton,identity) VALUES(1,lower(hex(randomblob(16))));
+` + installationSeed + `
 CREATE TABLE IF NOT EXISTS pwnmesh_dispatchers(namespace TEXT PRIMARY KEY,holder TEXT NOT NULL,expires_at TEXT NOT NULL);`
+
+const installationSeed = `INSERT OR IGNORE INTO pwnmesh_installation(singleton,identity) VALUES(1,lower(hex(randomblob(16))));`

@@ -13,8 +13,10 @@ import (
 // Only existing execute-v1 checkpoints use the old scheduler. Keeping its
 // original definition preserves hashes and uncertain-callback recovery without
 // reconstructing or weakening the legacy checkpoint protocol. A successful
-// migration is sealed by acceptance.json; new runs never create this DAG.
-func resumeLegacyAcceptance(ctx context.Context, runID string, input json.RawMessage, dir string, call func(context.Context) (acceptanceOutput, error), verify func(context.Context, acceptanceOutput) error) (acceptanceOutput, error) {
+// migration is sealed by acceptance.json schema 1; new runs never create this
+// DAG. The execute-v1 literal and node definitions are compatibility identities.
+// See docs/compatibility.md before changing or removing this adapter.
+func resumeExecuteV1Acceptance(ctx context.Context, runID string, input json.RawMessage, dir string, call func(context.Context) (acceptanceOutput, error), verify func(context.Context, acceptanceOutput) error) (acceptanceOutput, error) {
 	prepare := func(ctx context.Context, _ workergraph.Input) (workergraph.Output, error) {
 		return workergraph.Output{}, verify(ctx, acceptanceOutput{})
 	}
@@ -23,10 +25,10 @@ func resumeLegacyAcceptance(ctx context.Context, runID string, input json.RawMes
 		if errors.Is(err, ErrInterrupted) {
 			err = errors.Join(workergraph.ErrInterrupted, err)
 		}
-		return legacyAcceptanceOutput(out), err
+		return executeV1AcceptanceOutput(out), err
 	}
 	check := func(ctx context.Context, _ workergraph.Input, out workergraph.Output) error {
-		return verify(ctx, fromLegacyAcceptance(out))
+		return verify(ctx, fromExecuteV1Acceptance(out))
 	}
 	accept := func(_ context.Context, in workergraph.Input) (workergraph.Output, error) {
 		return in.Dependencies[0].Output, nil
@@ -51,13 +53,13 @@ func resumeLegacyAcceptance(ctx context.Context, runID string, input json.RawMes
 	}
 	for _, node := range checkpoint.Nodes {
 		if node.ID == "accept" && node.Status == "succeeded" && checkpoint.Status == "succeeded" {
-			return fromLegacyAcceptance(node.Output), nil
+			return fromExecuteV1Acceptance(node.Output), nil
 		}
 	}
 	return acceptanceOutput{}, errors.New("legacy graph has no durable accepted result")
 }
 
-func legacyAcceptanceOutput(out acceptanceOutput) workergraph.Output {
+func executeV1AcceptanceOutput(out acceptanceOutput) workergraph.Output {
 	converted := workergraph.Output{Value: out.Value}
 	for _, artifact := range out.Artifacts {
 		converted.Artifacts = append(converted.Artifacts, workergraph.Artifact(artifact))
@@ -65,7 +67,7 @@ func legacyAcceptanceOutput(out acceptanceOutput) workergraph.Output {
 	return converted
 }
 
-func fromLegacyAcceptance(out workergraph.Output) acceptanceOutput {
+func fromExecuteV1Acceptance(out workergraph.Output) acceptanceOutput {
 	converted := acceptanceOutput{Value: out.Value}
 	for _, artifact := range out.Artifacts {
 		converted.Artifacts = append(converted.Artifacts, acceptanceArtifact(artifact))

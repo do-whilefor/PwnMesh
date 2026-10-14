@@ -20,7 +20,7 @@ func TestExecutionChangesMigrateExistingHistoryAndPersistCursors(t *testing.T) {
 		putQueryExecution(t, tx, Execution{ID: "existing", Status: "running"}, 0, "")
 		// Reproduce a database predating the optional UI change projection.
 		_, err := tx.Exec(`DROP TRIGGER xloom_ui_execution_insert; DROP TRIGGER xloom_ui_execution_update; DROP TRIGGER xloom_ui_execution_delete;
-DROP TABLE xloom_ui_execution_changes; DROP TABLE xloom_ui_execution_revisions;`)
+DROP TABLE xloom_ui_execution_changes; DROP TABLE xloom_ui_execution_revisions; DROP TABLE pwnmesh_schema_migrations;`)
 		if err != nil {
 			t.Fatal(err)
 		}

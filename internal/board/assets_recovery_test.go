@@ -116,7 +116,7 @@ func TestAssetSchemaMigrationPreservesOldSnapshotAndPersistsNewAnchors(t *testin
 		if _, err = tx.Exec("DROP TABLE xloom_asset_anchors"); err != nil {
 			return err
 		}
-		_, err = tx.Exec("DROP TABLE xloom_assets")
+		_, err = tx.Exec("DROP TABLE xloom_assets; DROP TABLE pwnmesh_schema_migrations")
 		return err
 	})
 

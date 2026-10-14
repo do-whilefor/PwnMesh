@@ -67,7 +67,7 @@ func writeLegacyAcceptanceFixture(t *testing.T, job Job, dir string, out accepta
 }
 
 func TestAcceptanceMigratesLegacyCheckpointsWithoutRepeatingModelWork(t *testing.T) {
-	for _, phase := range []string{"accepted", "accept_interrupted", "agent_interrupted", "failed", "unbound_node_hashes", "changed_input", "changed_session"} {
+	for _, phase := range []string{"accepted", "accept_interrupted", "agent_interrupted", "failed", "unbound_node_hashes", "changed_input", "changed_session", "changed_version"} {
 		t.Run(phase, func(t *testing.T) {
 			job, dir := graphWrapperJob(t), t.TempDir()
 			var output bytes.Buffer
@@ -96,15 +96,19 @@ func TestAcceptanceMigratesLegacyCheckpointsWithoutRepeatingModelWork(t *testing
 				if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(`{"changed":true}`), 0600); err != nil {
 					t.Fatal(err)
 				}
-			case "unbound_node_hashes":
+			case "unbound_node_hashes", "changed_version":
 				path := filepath.Join(dir, "graph", "graph.json")
 				raw, err := os.ReadFile(path)
 				var saved workergraph.Checkpoint
 				if err != nil || json.Unmarshal(raw, &saved) != nil {
 					t.Fatal("cannot read legacy checkpoint")
 				}
-				for i := range saved.Nodes {
-					saved.Nodes[i].DefinitionSHA256 = ""
+				if phase == "changed_version" {
+					saved.Version = "execute-v2"
+				} else {
+					for i := range saved.Nodes {
+						saved.Nodes[i].DefinitionSHA256 = ""
+					}
 				}
 				raw, _ = json.Marshal(saved)
 				if err := os.WriteFile(path, raw, 0600); err != nil {

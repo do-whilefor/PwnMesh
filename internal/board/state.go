@@ -6,7 +6,7 @@ import (
 	"pwnmesh/internal/artifactcheck"
 )
 
-// State extends the Cairn graph without changing the legacy JSON representation.
+// State extends PwnMesh's graph while retaining its historical JSON contract.
 type State struct {
 	Graph            Graph            `json:"graph"`
 	Goals            []Goal           `json:"goals"`
@@ -21,20 +21,6 @@ type State struct {
 	Curation         CurationProgress `json:"curation,omitempty"`
 	Assets           []Asset          `json:"assets,omitempty"`
 	AssetAnchors     []AssetAnchor    `json:"asset_anchors,omitempty"`
-}
-
-// Omit the new zero-value curation view from legacy wire snapshots, preserving
-// persisted decision hashes across an upgrade from the previous protocol.
-func (s State) MarshalJSON() ([]byte, error) {
-	type stateAlias State
-	view := struct {
-		*stateAlias
-		Curation *CurationProgress `json:"curation,omitempty"`
-	}{stateAlias: (*stateAlias)(&s)}
-	if s.Graph.Project.OrchestrationVersion == 1 {
-		view.Curation = &s.Curation
-	}
-	return json.Marshal(view)
 }
 
 type EvidenceRef struct {

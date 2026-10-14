@@ -6,16 +6,88 @@ import (
 	"fmt"
 )
 
-// migrateStore owns the migration transaction; Open owns the connections.
-// A crash cannot add bootstrap_enabled without mapping a legacy disabled
-// bootstrap_mode, or leave only some counters repaired.
+// Append migrations; never reuse a version or change an applied migration's name.
+// Version 1 adopts the previously unversioned schema, not a historical release.
+var storeMigrations = []struct {
+	name  string
+	apply func(*sql.Tx) error
+}{
+	{"unversioned-baseline", migrateUnversionedStore},
+}
+
+const migrationLedgerSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_schema_migrations(
+ version INTEGER PRIMARY KEY CHECK(version > 0),name TEXT NOT NULL,
+ applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));`
+
+// Schema upgrades, their ledger entries and startup maintenance commit together.
+// Open owns the connections; a failed migration releases its write reservation.
 func migrateStore(db *sql.DB) error {
 	migration, err := db.Begin()
 	if err != nil {
 		return err
 	}
 	defer migration.Rollback()
-	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema); err != nil {
+	if _, err = migration.Exec(migrationLedgerSchema); err != nil {
+		return err
+	}
+	applied, err := appliedStoreMigrations(migration)
+	if err != nil {
+		return err
+	}
+	for n := applied; n < len(storeMigrations); n++ {
+		step := storeMigrations[n]
+		if err = step.apply(migration); err != nil {
+			return fmt.Errorf("schema migration %d (%s): %w", n+1, step.name, err)
+		}
+		if _, err = migration.Exec("INSERT INTO pwnmesh_schema_migrations(version,name) VALUES(?,?)", n+1, step.name); err != nil {
+			return err
+		}
+	}
+	// Restores and older writers can leave derived metadata, counters or pinned
+	// read views stale after the schema upgrade. Repairs remain every-open work.
+	if err = repairStoreRows(migration); err != nil {
+		return err
+	}
+	if err = backfillExecutionMetadata(migration); err != nil {
+		return err
+	}
+	if err = repairStoreCounters(migration); err != nil {
+		return err
+	}
+	if _, err = migration.Exec(pruneDecisionReadViews); err != nil {
+		return err
+	}
+	return migration.Commit()
+}
+
+func appliedStoreMigrations(tx *sql.Tx) (int, error) {
+	rows, err := tx.Query("SELECT version,name FROM pwnmesh_schema_migrations ORDER BY version")
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	applied := 0
+	for rows.Next() {
+		var version int
+		var name string
+		if err := rows.Scan(&version, &name); err != nil {
+			return 0, err
+		}
+		if version > len(storeMigrations) {
+			return 0, fmt.Errorf("unsupported PwnMesh schema version %d (latest supported: %d)", version, len(storeMigrations))
+		}
+		if version != applied+1 || name != storeMigrations[applied].name {
+			return 0, fmt.Errorf("inconsistent PwnMesh migration history at version %d", version)
+		}
+		applied++
+	}
+	return applied, rows.Err()
+}
+
+// Adopt unversioned PwnMesh/Cairn databases without renaming their xloom_*
+// objects or rewriting retained Job, Result or state JSON. See docs/compatibility.md.
+func migrateUnversionedStore(migration *sql.Tx) error {
+	if _, err := migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema); err != nil {
 		return err
 	}
 	rows, err := migration.Query("PRAGMA table_info(projects)")
@@ -47,26 +119,36 @@ func migrateStore(db *sql.DB) error {
 			return err
 		}
 	}
-	// Older or partially restored Cairn databases may omit their counters. Never
+	return migrateExecutionMetadata(migration)
+}
+
+// Preserve the former idempotent schema's data repair behavior without running
+// DDL again. An existing installation identity is never rotated; a missing one
+// is generated as before, so restoring the database must retain that row when
+// existing containers need to keep their installation ownership.
+func repairStoreRows(tx *sql.Tx) error {
+	_, err := tx.Exec(settingsSeed + installationSeed + executionChangeBackfill)
+	return err
+}
+
+func repairStoreCounters(migration *sql.Tx) error {
+	// Older or partially restored databases may omit their counters. Never
 	// let a newly allocated ID overwrite a project or reference an old Fact.
-	if _, err = migration.Exec(`UPDATE counters SET value=MAX(value,COALESCE((SELECT MAX(CAST(SUBSTR(id,6) AS INTEGER)) FROM projects WHERE id GLOB 'proj_[0-9]*'),0)) WHERE name='project'`); err != nil {
+	if _, err := migration.Exec(`INSERT OR IGNORE INTO counters(name,value) VALUES('project',0);
+UPDATE counters SET value=MAX(value,COALESCE((SELECT MAX(CAST(SUBSTR(id,6) AS INTEGER)) FROM projects WHERE id GLOB 'proj_[0-9]*'),0)) WHERE name='project'`); err != nil {
 		return err
 	}
 	for _, item := range []struct{ table, kind, prefix string }{{"facts", "fact", "f"}, {"intents", "intent", "i"}, {"hints", "hint", "h"}} {
 		query := fmt.Sprintf(`INSERT INTO scoped_counters(project_id,kind,value) SELECT project_id,?,MAX(CAST(SUBSTR(id,2) AS INTEGER)) FROM %s WHERE id GLOB ? GROUP BY project_id ON CONFLICT(project_id,kind) DO UPDATE SET value=MAX(value,excluded.value)`, item.table)
-		if _, err = migration.Exec(query, item.kind, item.prefix+"[0-9]*"); err != nil {
+		if _, err := migration.Exec(query, item.kind, item.prefix+"[0-9]*"); err != nil {
 			return err
 		}
 	}
-	if err = migrateExecutionMetadata(migration); err != nil {
-		return err
-	}
-	return migration.Commit()
+	return nil
 }
 
-// Backfill once in Open's migration transaction. Read only one historical Job
-// at a time and never change its bytes. Later opens and scheduling queries use
-// the indexed metadata even if a completed Job is no longer decodable.
+// Add the baseline metadata columns and indexes; backfill only rows whose
+// metadata_version still marks them as unprocessed during startup maintenance.
 func migrateExecutionMetadata(tx *sql.Tx) error {
 	rows, err := tx.Query("PRAGMA table_info(xloom_executions)")
 	if err != nil {
@@ -104,11 +186,24 @@ func migrateExecutionMetadata(tx *sql.Tx) error {
 	if _, err = tx.Exec(`CREATE INDEX IF NOT EXISTS xloom_execution_metadata_backfill ON xloom_executions(metadata_version) WHERE metadata_version=0`); err != nil {
 		return err
 	}
+	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS xloom_execution_pending ON xloom_executions(namespace) WHERE ` + pendingExecutionSQL + `;
+CREATE INDEX IF NOT EXISTS xloom_execution_task ON xloom_executions(namespace,project_id,kind,intent,status,created_at);
+CREATE INDEX IF NOT EXISTS xloom_execution_retry ON xloom_executions(namespace,project_id,retry_key,generation);
+CREATE INDEX IF NOT EXISTS xloom_execution_decision ON xloom_executions(namespace,project_id,generation,kind,status,created_at);
+CREATE INDEX IF NOT EXISTS xloom_execution_version ON xloom_executions(namespace,project_id,kind,state_version);
+CREATE INDEX IF NOT EXISTS xloom_execution_step ON xloom_executions(project_id,intent) WHERE kind!='reason';`)
+	return err
+}
+
+// Each row is backfilled once, including rows restored after the schema upgrade.
+// Read one historical Job at a time and never change its bytes. Completed rows
+// use indexed metadata even if their retained Job is no longer decodable.
+func backfillExecutionMetadata(tx *sql.Tx) error {
 	var after int64
 	for {
 		var id int64
 		var raw []byte
-		err = tx.QueryRow("SELECT rowid,job FROM xloom_executions WHERE metadata_version=0 AND rowid>? ORDER BY rowid LIMIT 1", after).Scan(&id, &raw)
+		err := tx.QueryRow("SELECT rowid,job FROM xloom_executions WHERE metadata_version=0 AND rowid>? ORDER BY rowid LIMIT 1", after).Scan(&id, &raw)
 		if errors.Is(err, sql.ErrNoRows) {
 			break
 		}
@@ -125,11 +220,5 @@ func migrateExecutionMetadata(tx *sql.Tx) error {
 		}
 		after = id
 	}
-	_, err = tx.Exec(`CREATE INDEX IF NOT EXISTS xloom_execution_pending ON xloom_executions(namespace) WHERE ` + pendingExecutionSQL + `;
-CREATE INDEX IF NOT EXISTS xloom_execution_task ON xloom_executions(namespace,project_id,kind,intent,status,created_at);
-CREATE INDEX IF NOT EXISTS xloom_execution_retry ON xloom_executions(namespace,project_id,retry_key,generation);
-CREATE INDEX IF NOT EXISTS xloom_execution_decision ON xloom_executions(namespace,project_id,generation,kind,status,created_at);
-CREATE INDEX IF NOT EXISTS xloom_execution_version ON xloom_executions(namespace,project_id,kind,state_version);
-CREATE INDEX IF NOT EXISTS xloom_execution_step ON xloom_executions(project_id,intent) WHERE kind!='reason';`)
-	return err
+	return nil
 }
