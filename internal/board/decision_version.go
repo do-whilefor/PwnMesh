@@ -13,8 +13,8 @@ import (
 // heartbeats or event counters. Copy slices before removing runtime metadata.
 func DecisionStateVersion(state State) string { return model.DecisionStateVersion(state) }
 
-// DecisionJobVersion returns the initial version for the new decision protocol.
-// A malformed non-null marker must never silently opt a job into legacy writes.
+// DecisionJobVersion validates the immutable input for a version 2 decision.
+// A malformed or retired marker must never authorize decision reads or writes.
 func DecisionJobVersion(raw json.RawMessage) (string, error) {
 	var job struct {
 		Kind          string         `json:"kind"`
@@ -36,14 +36,17 @@ func DecisionJobVersion(raw json.RawMessage) (string, error) {
 	if job.Decision.ClosureProtocol != 0 && (job.Decision.ClosureProtocol != 1 || job.Decision.Version != 2) {
 		return "", Err(422, "unsupported closure protocol")
 	}
+	if job.Decision.Version != 2 {
+		return "", Err(422, "decision requires protocol version 2")
+	}
 	if ref := job.InputSnapshot; ref != nil {
-		if job.State != nil || job.Kind != "reason" || (job.Decision.Version != 1 && job.Decision.Version != 2) || len(ref.ID) != 64 || len(ref.StateVersion) != 64 || ref.ProjectID != job.Graph.Project.ID || ref.Generation != job.Graph.Project.Generation || job.Decision.StateVersion != ref.StateVersion {
+		if job.State != nil || job.Kind != "reason" || len(ref.ID) != 64 || len(ref.StateVersion) != 64 || ref.ProjectID != job.Graph.Project.ID || ref.Generation != job.Graph.Project.Generation || job.Decision.StateVersion != ref.StateVersion {
 			return "", Err(422, "invalid decision snapshot binding")
 		}
 		return ref.StateVersion, nil
 	}
-	if job.Kind != "reason" || (job.Decision.Version != 1 && job.Decision.Version != 2) || job.Decision.StateVersion == "" || job.State == nil {
-		return "", Err(422, "decision requires version 1 or 2 and a bound state snapshot")
+	if job.Kind != "reason" || job.Decision.StateVersion == "" || job.State == nil {
+		return "", Err(422, "decision requires a bound state snapshot")
 	}
 	version := DecisionStateVersion(*job.State)
 	if job.Decision.StateVersion != version {
@@ -58,8 +61,8 @@ func DecisionJobVersion(raw json.RawMessage) (string, error) {
 }
 
 // CheckDecisionStateVersion runs inside the same transaction as the write.
-// Old clients may supply a version voluntarily; new registered Decide jobs
-// must supply one. Existing lease and source checks remain independent.
+// Unregistered domain operations may supply a version; registered Decide jobs
+// must supply one. Lease and source checks remain independent.
 func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expected string) error {
 	if fence.Lease == "curate" {
 		_, raw, err := sqlstore.ExecutionInputByLease(t, state.Graph.Project.ID, fence.Run, "curate")

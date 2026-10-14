@@ -548,8 +548,7 @@ func TestMainAgentCanRetireUnsupportedSuccessWithoutRewritingItsHistory(t *testi
 	f.curate(curator, input)
 	f.finish(curator, "")
 	f.do(func(tx *Tx) error {
-		_, err := tx.CompleteProject("p", f.planner, []string{fresh}, "Fresh independent verification replaces the retired unsupported result")
-		return err
+		return f.complete(tx, []string{fresh}, "Fresh independent verification replaces the retired unsupported result")
 	})
 	if f.state().Graph.Project.Status != "completed" {
 		t.Fatal("invalid historical support permanently prevented completion")

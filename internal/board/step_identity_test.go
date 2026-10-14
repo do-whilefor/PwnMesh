@@ -80,22 +80,43 @@ func stepInput(description string, from []string, goal string, priority int) map
 
 func TestRepeatedPlanDoesNotCreateOrReprioritizeStep(t *testing.T) {
 	f := newPlanFixture(t)
-	f.tx(func(tx *Tx) error {
-		return tx.RegisterExecution(Execution{ProjectID: "proj_001", ID: "first", Namespace: "test", Backend: "planner", Kind: "reason", Lease: f.fence.Run, RetryKey: "reason:first", Job: json.RawMessage(`{"budget":{"max_intents":1}}`)})
-	})
-	input := stepInput("Inspect the two observations", []string{"f001", "f002"}, "", 7)
-	first := f.action("step", "first-key", input)
+	register := func(run string) {
+		t.Helper()
+		state := f.state()
+		job, _ := json.Marshal(map[string]any{"kind": "reason", "graph": state.Graph, "state": state,
+			"decision": map[string]any{"version": 2, "state_version": DecisionStateVersion(state)}, "budget": map[string]int{"max_intents": 1}})
+		f.tx(func(tx *Tx) error {
+			return tx.RegisterExecution(Execution{ProjectID: "proj_001", ID: run, Namespace: "test", Backend: "planner", Kind: "reason", Lease: f.fence.Run, RetryKey: "reason:" + run, Job: job})
+		})
+	}
+	commit := func(batch DecisionBatch) DecisionReceipt {
+		t.Helper()
+		var receipt DecisionReceipt
+		f.tx(func(tx *Tx) (err error) {
+			receipt, err = tx.CommitDecision("proj_001", f.fence, batch)
+			return err
+		})
+		return receipt
+	}
+	register("first")
+	input, _ := json.Marshal(stepInput("Inspect the two observations", []string{"f001", "f002"}, "", 7))
+	duplicate, _ := json.Marshal(stepInput("  Inspect the two observations\n", []string{"f002", "f001"}, "goal", 99))
+	batch := DecisionBatch{ExpectedVersion: DecisionStateVersion(f.state()), Actions: []DecisionAction{{Op: "step", Payload: input}, {Op: "step", Payload: duplicate}}}
+	receipt := commit(batch)
+	first := receipt.Results[0]
 	before := f.state()
-	// The exact request can be retried after its own mutation changed the view.
-	replay := f.action("step", "first-key", input)
+	// The same batch can be retried after its own mutation changed the view.
+	replay := commit(batch).Results[0]
 	if replay.ID != first.ID || replay.Revision != first.Revision {
 		t.Fatalf("same-key replay changed its receipt: %+v", replay)
 	}
 	for _, anotherRun := range []bool{false, true} {
+		repeated := receipt.Results[1]
 		if anotherRun {
 			f.planner("second")
+			register("second")
+			repeated = commit(DecisionBatch{ExpectedVersion: DecisionStateVersion(f.state()), Actions: []DecisionAction{{Op: "step", Payload: duplicate}}}).Results[0]
 		}
-		repeated := f.action("step", f.fence.Run+":repeat", stepInput("  Inspect the two observations\n", []string{"f002", "f001"}, "goal", 99))
 		if repeated.ID != first.ID || !repeated.Unchanged || repeated.Revision != first.Revision || repeated.StateVersion != first.StateVersion {
 			t.Fatalf("duplicate plan changed the graph: %+v", repeated)
 		}

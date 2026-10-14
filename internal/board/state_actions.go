@@ -165,7 +165,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		}
 		if err = decodeAction(action.Payload, &input); err == nil {
 			var completed Intent
-			completed, err = t.completeProject(project, fence, input.From, input.Description, scope)
+			completed, err = t.completeProjectInDecision(project, fence, input.From, input.Description)
 			id, result = completed.ID, completed
 		}
 	}

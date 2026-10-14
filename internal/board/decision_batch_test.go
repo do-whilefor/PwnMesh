@@ -9,7 +9,7 @@ import (
 )
 
 func TestDecisionBatchReusesPersistedTransitionsThroughCompletion(t *testing.T) {
-	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, 2)
+	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, true)
 	batch := DecisionBatch{ExpectedVersion: f.version, Actions: []DecisionAction{
 		{Op: "step", Payload: json.RawMessage(`{"action":"abandon","id":"active","reason":"finish this round"}`)},
 		{Op: "goal", Ref: "child", Payload: json.RawMessage(`{"action":"add","condition":"Review alternate path"}`)},
@@ -58,7 +58,7 @@ func TestDecisionBatchReusesPersistedTransitionsThroughCompletion(t *testing.T) 
 }
 
 func TestDecisionBatchLaterActionsObserveInvalidatedSources(t *testing.T) {
-	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, 2)
+	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, true)
 	batch := DecisionBatch{ExpectedVersion: f.version, Actions: []DecisionAction{
 		{Op: "fact_relation", Payload: json.RawMessage(`{"kind":"refutes","source":"source001","target":"source000","reason":"corrected observation"}`)},
 		{Op: "step", Payload: json.RawMessage(`{"action":"add","from":["source000"],"description":"Must reject invalidated input"}`)},
@@ -83,7 +83,7 @@ func TestDecisionBatchLaterActionsObserveInvalidatedSources(t *testing.T) {
 }
 
 func TestDecisionBatchSQLFailureDiscardsReusableStateAndCounters(t *testing.T) {
-	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, 2)
+	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, true)
 	batch := f.batch(2)
 	if err := f.store.Do(context.Background(), func(tx *Tx) error {
 		if _, err := tx.Exec(`CREATE TRIGGER reject_second_batch_event BEFORE INSERT ON pwnmesh_state_events WHEN NEW.revision=2 BEGIN SELECT RAISE(ABORT,'event unavailable'); END`); err != nil {
@@ -195,17 +195,17 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 func assertDirectDecisionWritesRejected(t *testing.T, tx *Tx, project string, fence ExecutionFence) {
 	t.Helper()
 	_, actionErr := tx.StateAction(project, fence, StateAction{Op: "goal", IdempotencyKey: "outside-batch", Payload: json.RawMessage(`{"action":"add","condition":"Must remain inside a batch"}`)})
-	_, completeErr := tx.CompleteProject(project, fence, []string{"origin"}, "Must remain inside a batch")
+	_, completeErr := tx.StateAction(project, fence, StateAction{Op: "complete", IdempotencyKey: "outside-completion", Payload: json.RawMessage(`{"from":["origin"],"description":"Must remain inside a batch"}`)})
 	for _, err := range []error{actionErr, completeErr} {
 		var api *APIError
-		if !errors.As(err, &api) || api.Status != 403 || api.Detail != "Decide version 2 must submit its plan through a decision batch" {
+		if !errors.As(err, &api) || api.Status != 403 || api.Detail != "Registered Decide must submit its plan through a decision batch" {
 			t.Fatalf("direct write escaped the batch boundary: %v", err)
 		}
 	}
 }
 
 func TestStandaloneStateActionRetainsVersionAndCompletionChecks(t *testing.T) {
-	f := newStateBenchmarkFixture(t, stateBenchmarkSize{1, 128, 1}, 1)
+	f := newStateBenchmarkFixture(t, stateBenchmarkSize{1, 128, 1}, false)
 	if err := f.store.Do(context.Background(), func(tx *Tx) error {
 		action := f.action("step", 0)
 		for _, tc := range []struct {
@@ -213,7 +213,6 @@ func TestStandaloneStateActionRetainsVersionAndCompletionChecks(t *testing.T) {
 			status      int
 		}{
 			{"complete", f.version, 422},
-			{"step", "", 422},
 			{"step", "stale", 409},
 		} {
 			action.Op, action.ExpectedVersion = tc.op, tc.version
@@ -240,5 +239,67 @@ func TestStandaloneStateActionRetainsVersionAndCompletionChecks(t *testing.T) {
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRetiredDecisionCannotRegisterReadOrWrite(t *testing.T) {
+	for _, input := range []string{"inline", "snapshot"} {
+		t.Run(input, func(t *testing.T) {
+			f := newStateBenchmarkFixture(t, stateBenchmarkSize{1, 128, 1}, true)
+			if err := f.store.Do(context.Background(), func(tx *Tx) error {
+				execution, err := tx.Execution(stateBenchmarkProject, "benchmark")
+				if err != nil {
+					return err
+				}
+				state, err := tx.State(stateBenchmarkProject)
+				if err != nil {
+					return err
+				}
+				var job map[string]any
+				if err := json.Unmarshal(execution.Job, &job); err != nil {
+					return err
+				}
+				if input == "snapshot" {
+					ref, err := tx.FreezeInput(state)
+					if err != nil {
+						return err
+					}
+					delete(job, "state")
+					job["input_snapshot"] = ref
+				}
+				// Both current input forms retain their immutable version binding.
+				current, _ := json.Marshal(job)
+				if version, err := DecisionJobVersion(current); err != nil || version != f.version {
+					t.Fatalf("current %s decision rejected: version=%s err=%v", input, version, err)
+				}
+				for version, status := range map[string]int{"": 422, "stale": 409} {
+					batch := f.batch(1)
+					batch.ExpectedVersion = version
+					_, err := tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, batch)
+					requireAPIStatus(t, err, status)
+				}
+				job["decision"].(map[string]any)["version"] = 1
+				execution.Job, _ = json.Marshal(job)
+				requireAPIStatus(t, tx.RegisterExecution(execution), 422)
+				// Seed a retained record without passing through live registration.
+				if _, err := tx.Exec("UPDATE pwnmesh_executions SET job=? WHERE project_id=? AND id=?", string(execution.Job), execution.ProjectID, execution.ID); err != nil {
+					return err
+				}
+				assertDirectDecisionWritesRejected(t, tx, stateBenchmarkProject, stateBenchmarkPlanner)
+				for _, refresh := range []bool{false, true} {
+					_, err := tx.DecisionReadState(state, stateBenchmarkPlanner, refresh)
+					requireAPIStatus(t, err, 422)
+				}
+				_, err = tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, f.batch(1))
+				requireAPIStatus(t, err, 403)
+				retained, err := tx.Execution(stateBenchmarkProject, execution.ID)
+				if err == nil && string(retained.Job) != string(execution.Job) {
+					t.Fatal("rejecting the retired protocol changed its retained job")
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

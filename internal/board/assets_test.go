@@ -174,7 +174,7 @@ func TestAssetFailureRollsBackOriginalActionAndIndexes(t *testing.T) {
 }
 
 func TestAssetDecisionPreviewAndFailedBatchDoNotLeakIndexes(t *testing.T) {
-	f := newStateBenchmarkFixture(t, stateBenchmarkSize{0, 128, 1}, 2)
+	f := newStateBenchmarkFixture(t, stateBenchmarkSize{0, 128, 1}, true)
 	batch := DecisionBatch{ExpectedVersion: f.version, Actions: []DecisionAction{{Op: "step", Ref: "assetstep", Payload: json.RawMessage(`{"action":"add","from":["origin"],"description":"Inspect target","assets":[{"kind":"host","value":"example.com"}]}`)}}}
 	if err := f.store.Do(context.Background(), func(tx *Tx) error {
 		preview, err := tx.PreviewDecision(stateBenchmarkProject, stateBenchmarkPlanner, batch)

@@ -28,9 +28,9 @@ var (
 	stateBenchmarkWorker  = ExecutionFence{Run: "worker@benchmark", Lease: "explore", Intent: "active"}
 )
 
-// Share the same persisted graph and registered executions between regression
-// tests and benchmarks so both exercise the production persistence paths.
-func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, decisionVersion int) *stateBenchmarkFixture {
+// Share persisted graph fixtures between regressions and benchmarks. Direct
+// domain mutations remain unregistered; decision batches register protocol 2.
+func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registeredDecision bool) *stateBenchmarkFixture {
 	tb.Helper()
 	store, err := Open(filepath.Join(tb.TempDir(), "state.db"))
 	if err != nil {
@@ -85,8 +85,11 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, decisionVe
 			return err
 		}
 		f.version = DecisionStateVersion(state)
+		if !registeredDecision {
+			return nil
+		}
 		job, err := json.Marshal(map[string]any{"kind": "reason", "run_id": "benchmark", "graph": state.Graph, "state": state,
-			"decision": map[string]any{"version": decisionVersion, "state_version": f.version}, "budget": map[string]int{"max_intents": 64}})
+			"decision": map[string]any{"version": 2, "state_version": f.version}, "budget": map[string]int{"max_intents": 64}})
 		if err != nil {
 			return err
 		}

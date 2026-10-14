@@ -33,8 +33,7 @@ func TestDifferentlyWordedConflictBlocksDependentAcceptance(t *testing.T) {
 	requested := f.state()
 	for _, fact := range []string{fa, fb} {
 		err := f.store.Do(context.Background(), func(tx *Tx) error {
-			_, err := tx.CompleteProject("p", f.planner, []string{fact}, "One successful subtask proves completion")
-			return err
+			return f.complete(tx, []string{fact}, "One successful subtask proves completion")
 		})
 		requireAPIStatus(t, err, 409)
 	}

@@ -48,6 +48,32 @@ func (f *orchestrationFixture) state() State {
 	f.do(func(tx *Tx) error { var err error; s, err = tx.State("p"); return err })
 	return s
 }
+
+func (f *orchestrationFixture) complete(tx *Tx, from []string, description string) error {
+	state, err := tx.State("p")
+	if err != nil {
+		return err
+	}
+	version := DecisionStateVersion(state)
+	job, err := json.Marshal(map[string]any{
+		"kind": "reason", "run_id": "plan", "graph": state.Graph, "state": state,
+		"graph_rpc": true, "result_contract_version": 2,
+		"decision": map[string]any{"version": 2, "state_version": version}, "budget": map[string]int{"max_intents": 1},
+	})
+	if err != nil {
+		return err
+	}
+	if err := tx.RegisterExecution(Execution{ProjectID: "p", ID: "plan", Namespace: "test", Backend: "planner", Kind: "reason", Lease: f.planner.Run, Job: job, RetryKey: DecisionRetryKey(state.Graph, state.DecisionRevision)}); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"from": from, "description": description})
+	if err != nil {
+		return err
+	}
+	_, err = tx.CommitDecision("p", f.planner, DecisionBatch{ExpectedVersion: version, Actions: []DecisionAction{{Op: "complete", Payload: payload}}})
+	return err
+}
+
 func (f *orchestrationFixture) action(fence ExecutionFence, op, key string, payload any, version string) StateActionResult {
 	f.t.Helper()
 	raw, _ := json.Marshal(payload)
@@ -224,8 +250,7 @@ func TestOrchestrationConflictOrderAndIndependentReview(t *testing.T) {
 				t.Fatal("independent review must succeed in the original project generation")
 			}
 			f.do(func(tx *Tx) error {
-				_, err := tx.CompleteProject("p", f.planner, []string{rf}, "Controlled conflict was independently resolved")
-				return err
+				return f.complete(tx, []string{rf}, "Controlled conflict was independently resolved")
 			})
 			if f.state().Graph.Project.Status != "completed" {
 				t.Fatal("reviewed project did not complete")
@@ -703,8 +728,7 @@ func TestReopenedDisputeRequiresReviewCoveringNewCandidate(t *testing.T) {
 				t.Fatalf("fresh review failed to resolve reopened dispute: %+v", final.Disputes)
 			}
 			f.do(func(tx *Tx) error {
-				_, err := tx.CompleteProject("p", f.planner, []string{secondFact}, "Reopened conflict independently rechecked")
-				return err
+				return f.complete(tx, []string{secondFact}, "Reopened conflict independently rechecked")
 			})
 		})
 	}

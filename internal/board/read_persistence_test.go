@@ -150,7 +150,7 @@ func BenchmarkEmptyEventRead(b *testing.B) {
 	for _, size := range stateBenchmarkSizes {
 		for _, op := range []string{"events", "changes"} {
 			b.Run(op+"/"+size.name(), func(b *testing.B) {
-				f := newStateBenchmarkFixture(b, size, 1)
+				f := newStateBenchmarkFixture(b, size, false)
 				b.ReportAllocs()
 				b.ResetTimer()
 				for n := 0; n < b.N; n++ {

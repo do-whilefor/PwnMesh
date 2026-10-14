@@ -44,7 +44,7 @@ func BenchmarkStateAction(b *testing.B) {
 	for _, op := range []string{"fact", "step"} {
 		for _, size := range stateBenchmarkSizes {
 			b.Run(op+"/"+size.name(), func(b *testing.B) {
-				f := newStateBenchmarkFixture(b, size, 1)
+				f := newStateBenchmarkFixture(b, size, false)
 				action, fence := f.action(op, 0), stateBenchmarkPlanner
 				if op == "fact" {
 					fence = stateBenchmarkWorker
@@ -71,7 +71,7 @@ func BenchmarkDecisionBatch(b *testing.B) {
 	for _, size := range stateBenchmarkSizes {
 		for _, count := range []int{1, 8} {
 			b.Run(fmt.Sprintf("%s/actions=%d", size.name(), count), func(b *testing.B) {
-				f := newStateBenchmarkFixture(b, size, 2)
+				f := newStateBenchmarkFixture(b, size, true)
 				batch := f.batch(count)
 				b.ReportAllocs()
 				b.ResetTimer()
@@ -94,11 +94,7 @@ func BenchmarkDecisionBatch(b *testing.B) {
 func TestStateMutationBenchmarkFixture(t *testing.T) {
 	for _, op := range []string{"fact", "step", "batch"} {
 		t.Run(op, func(t *testing.T) {
-			version := 1
-			if op == "batch" {
-				version = 2
-			}
-			f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 4}, version)
+			f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 4}, op == "batch")
 			for iteration := 0; iteration < 2; iteration++ {
 				err := f.run(func(tx *Tx) error {
 					addedFacts, addedIntents, changed := 0, 1, 1

@@ -60,7 +60,7 @@ func TestStateFactIDCollisionRollsBackWithoutSplittingObservation(t *testing.T) 
 func TestStateNodeAddsWriteOnlyNewNode(t *testing.T) {
 	for _, op := range []string{"fact", "step"} {
 		t.Run(op, func(t *testing.T) {
-			f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 4}, 1)
+			f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 4}, false)
 			err := f.store.Do(context.Background(), func(tx *Tx) error {
 				for _, statement := range []string{
 					`CREATE TRIGGER guard_project BEFORE UPDATE ON projects BEGIN SELECT RAISE(ABORT,'unrelated project write'); END`,
@@ -105,7 +105,7 @@ func TestStateNodeAddsWriteOnlyNewNode(t *testing.T) {
 func TestStateNodeFailureRollsBackAllPersistence(t *testing.T) {
 	for _, op := range []string{"fact", "step"} {
 		t.Run(op, func(t *testing.T) {
-			f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 4}, 1)
+			f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 4}, false)
 			snapshot := func() string {
 				t.Helper()
 				var raw string

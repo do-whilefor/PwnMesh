@@ -161,8 +161,9 @@ without access to the session, Agent, prompts, filesystem or provider.
 The private `journal` package owns its file handle, digest, append position and
 crash-tail archive. It returns a synced checkpoint and recovery values; Session
 owns the identity, transcript and atomic session replacement. Decision metrics
-belong to the per-run runtime, with historical shadow-event adaptation applied
-only during replay. Neither Session nor nested Agents access the journal handle.
+belong to the per-run runtime and consume the same current events during live
+execution and replay. Retired shadow events remain stored without adaptation.
+Neither Session nor nested Agents access the journal handle.
 `graph_run_linux.go` and `acceptance_linux.go` enforce the outer
 evidence receipt boundary. Journals/checkpoints precede side effects; durable
 receipts are checked before issuing more model or tool calls.
@@ -201,9 +202,9 @@ savepoints. The query wrapper does not interpret or restrict SQL statement text.
 Multiwrite management operations, including restart and termination, use a local
 savepoint, so callers may handle a rejection and continue the outer transaction
 without retaining partial archive rows, revocations, events or projection resets.
-Decision batches pass their validated scope only to private action and completion
-calls. The transaction carries no mutable batch authorization. Public state actions
-and direct completion always enforce the registered planner's protocol boundary;
+Decision batches pass their validated scope only to private action calls and own
+the only project completion path. The transaction carries no mutable batch
+authorization. Public state actions reject direct registered planner writes;
 each batched action still checks its lease, role, idempotency and capacity. The
 batch owns its local snapshot and savepoint through preview, rollback or commit.
 Board chooses lease authority, eligibility, expiry scope, supported orchestration
@@ -220,10 +221,10 @@ handlers or storage dependencies from returning to execution clients.
 
 The schema and migration sequence live in `sqlstore/schema.go` and
 `sqlstore/migrations.go`; Board does not own connection pools or migration state.
-Schema version `2` uses `pwnmesh_*` names for branded SQL objects. A supported
-version `1` database receives a transactional namespace migration on open; new
-databases create the current names directly. Runtime queries use only the current
-names. This migration preserves stored records and execution identities.
+Schema version `2` uses `pwnmesh_*` names for branded SQL objects. Empty databases
+create the current schema directly; version `1` and nonempty unversioned databases
+are rejected without modification. Runtime queries use only the current names.
+Current database validation preserves stored records and execution identities.
 Current-format validation stays beside storage and execution boundaries.
 Unsupported inputs fail before they can trigger fresh work or implicit upgrades.
 

@@ -31,17 +31,9 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 		Graph         Graph          `json:"graph"`
 		State         *State         `json:"state"`
 		InputSnapshot *InputSnapshot `json:"input_snapshot"`
-		Decision      *struct {
-			Version int `json:"version"`
-		} `json:"decision"`
 	}
 	if err = json.Unmarshal(raw, &job); err != nil {
 		return State{}, err
-	}
-	// Version 1 publishes individual actions and advances its read version
-	// after each write. Preserve that live protocol for existing workers.
-	if job.Decision == nil || job.Decision.Version != 2 {
-		return current, nil
 	}
 	if job.Graph.Project.Generation != current.Graph.Project.Generation {
 		return State{}, Err(409, "decision belongs to a previous project round")
@@ -59,7 +51,7 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 		if job.InputSnapshot != nil {
 			return t.ReadInputSnapshot(project, job.InputSnapshot.ID)
 		}
-		return *job.State, nil // DecisionJobVersion validated the legacy input.
+		return *job.State, nil // DecisionJobVersion validated the retained inline input.
 	}
 	if err != nil {
 		return State{}, err

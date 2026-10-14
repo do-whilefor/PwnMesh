@@ -16,8 +16,7 @@ func TestCompletionDoesNotNeedCurationForPlainEvidenceOrTentativeNotes(t *testin
 			}
 			f.finish(producer, fact)
 			f.do(func(tx *Tx) error {
-				_, err := tx.CompleteProject("p", f.planner, []string{fact}, "Original goal verified by retained observation")
-				return err
+				return f.complete(tx, []string{fact}, "Original goal verified by retained observation")
 			})
 			state := f.state()
 			if state.Graph.Project.Status != "completed" || state.Curation.ThroughRevision != 0 || len(state.Findings) != 0 {
@@ -56,8 +55,7 @@ func TestCompletionKeepsUnrelatedConflictsWithoutBlockingIndependentProof(t *tes
 				return tx.ValidateStateCompletion("p", []string{proof})
 			})
 			f.do(func(tx *Tx) error {
-				_, err := tx.CompleteProject("p", f.planner, []string{proof}, "The independent health response fulfills the user requirement; incidental uncertainty is retained")
-				return err
+				return f.complete(tx, []string{proof}, "The independent health response fulfills the user requirement; incidental uncertainty is retained")
 			})
 			after := f.state()
 			if after.Graph.Project.Status != "completed" || !reflect.DeepEqual(before.Candidates, after.Candidates) || !reflect.DeepEqual(before.Disputes, after.Disputes) {

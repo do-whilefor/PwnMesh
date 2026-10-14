@@ -17,31 +17,20 @@ type DecisionAction = model.DecisionAction
 type DecisionBatch = model.DecisionBatch
 type DecisionReceipt = model.DecisionReceipt
 
-// CheckDirectDecisionWrite keeps old jobs' protocol while fencing all writes
-// by a registered version 2 planner into its one transactional commit.
+// Registered planners publish only through their transactional decision batch.
+// Unregistered domain operations do not represent Worker protocol authority.
 func (t *Tx) CheckDirectDecisionWrite(project string, fence ExecutionFence) error {
 	if fence.Run == "" || fence.Lease != "reason" {
 		return nil
 	}
-	_, raw, err := sqlstore.ExecutionInputByLease(t, project, fence.Run, "reason")
+	_, _, _, err := sqlstore.ExecutionIdentityByLease(t, project, fence.Run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	var job struct {
-		Decision *struct {
-			Version int `json:"version"`
-		} `json:"decision"`
-	}
-	if err = json.Unmarshal(raw, &job); err != nil {
-		return err
-	}
-	if job.Decision != nil && job.Decision.Version >= 2 {
-		return Err(403, "Decide version 2 must submit its plan through a decision batch")
-	}
-	return nil
+	return Err(403, "Registered Decide must submit its plan through a decision batch")
 }
 
 func (t *Tx) batchExecution(project string, fence ExecutionFence) (Execution, error) {
@@ -396,18 +385,9 @@ func (t *Tx) decisionCanProgress(state State, namespace string) (bool, error) {
 	return check.Pending || !check.Blocked || check.AutomaticRetryID != "", err
 }
 
-func (t *Tx) CompleteProject(project string, fence ExecutionFence, from []string, description string) (Intent, error) {
-	return t.completeProject(project, fence, from, description, directStateAction)
-}
-
-func (t *Tx) completeProject(project string, fence ExecutionFence, from []string, description string, scope actionScope) (Intent, error) {
+func (t *Tx) completeProjectInDecision(project string, fence ExecutionFence, from []string, description string) (Intent, error) {
 	if fence.Lease != "reason" {
 		return Intent{}, Err(403, "only Decide can complete the project")
-	}
-	if scope != batchedDecisionAction {
-		if err := t.CheckDirectDecisionWrite(project, fence); err != nil {
-			return Intent{}, err
-		}
 	}
 	if !required(description, 16384) {
 		return Intent{}, Err(422, "completion description is required")
