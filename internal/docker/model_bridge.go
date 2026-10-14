@@ -35,15 +35,7 @@ type modelBridge struct {
 }
 
 func configuredModel(w config.Worker, j protocol.Job) (*provider.Anthropic, error) {
-	return provider.FromEnvironment(func(key string) string {
-		if value, ok := w.Env[key]; ok {
-			return value
-		}
-		if suffix, ok := strings.CutPrefix(key, "PWNMESH_"); ok {
-			return w.Env["XLOOM_"+suffix]
-		}
-		return ""
-	}, j.Budget.ReasoningEffort)
+	return provider.FromEnvironment(w.Getenv, j.Budget.ReasoningEffort)
 }
 
 func publicModelSettings(p *provider.Anthropic) modelrpc.Settings {

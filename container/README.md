@@ -1,6 +1,15 @@
+# PwnMesh containers
+
+Build both images from the repository root:
+
+```sh
+docker build -t pwnmesh:dev .
+docker build -f container/Dockerfile -t pwnmesh-worker:dev .
 ```
-docker build . -t cairn-worker-container
-```
+
+See [the development guide](../docs/development.md) for the shared build and
+validation entry points, and [compatibility](../docs/compatibility.md) before
+migrating an existing installation.
 
 Worker containers are owned by a persistent installation ID stored in the server
 database, plus the configured dispatcher namespace and project ID. Restarting

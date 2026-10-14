@@ -2,7 +2,7 @@
   'use strict';
   const api = factory();
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.PwnDemoLifecycle = api;
+  else root.PwnMeshLifecycle = api;
 })(typeof window === 'object' ? window : globalThis, function () {
   'use strict';
   const AVAILABLE = Object.freeze({

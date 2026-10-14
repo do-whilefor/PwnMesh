@@ -5,8 +5,8 @@
   const icon = name => '<i data-lucide="'+name+'" aria-hidden="true"></i>';
   const modelEntry = () => '<a id="model-entry" class="top-model-entry" href="#llm" data-nav="llm" title="模型接入">'+icon('plug')+'<span>模型接入</span><small id="model-summary" class="visually-hidden">未配置</small></a>';
   const paintIcons = () => lucide.createIcons({attrs:{'stroke-width':1.6}});
-  const {fileSize, PROJECT_TYPES} = PwnDemoModel;
-  const lifecycle = PwnDemoLifecycle;
+  const {fileSize, PROJECT_TYPES} = PwnMeshModel;
+  const lifecycle = PwnMeshLifecycle;
   const service = new PwnMeshService.Service(), projects = [];
   let roundReadVersion = 0, materialReadVersion = 0;
   let refreshTimer, refreshing = false, connected = false, lastSnapshot = '', lastSnapshotInputs = null, pendingRefresh = false;
@@ -47,8 +47,8 @@
     $('#project-count').textContent = search ? list.length+'/'+projects.length : String(projects.length);
     $('#project-list').innerHTML = list.map(p => '<div class="project-row"><a class="project-item '+(route() === 'project/'+p.id ? 'selected' : '')+'" data-project-type="'+esc(p.type)+'" data-project-status="'+esc(p.status)+'" href="#project/'+p.id+'" '+(route() === 'project/'+p.id ? 'aria-current="page"' : '')+'><span class="project-copy"><strong title="'+esc(p.name)+'">'+esc(p.name)+'</strong><small class="project-meta"><span class="project-type">'+types[p.type]+'</span><span class="project-state"><i class="status-dot '+p.status+'"></i>'+(p.readOnly ? '历史只读' : statusLabels[p.status])+'</span></small></span></a><button class="icon-button project-more" data-project-menu="'+p.id+'" data-mutates data-unavailable="'+!lifecycle.actions(p).length+'" aria-label="'+esc(p.name)+'的项目操作" aria-haspopup="menu" aria-expanded="false" title="项目操作">'+icon('ellipsis')+'</button></div>').join('') || '<div class="empty-state sidebar-empty">'+(projects.length ? '没有找到匹配的项目<button class="text-button" id="clear-search">清除搜索</button>' : '暂无项目')+'</div>';
     $$('[data-nav]').forEach(a => { const active = route() === a.dataset.nav; a.classList.toggle('active',active); if (active) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
-    if ($('#model-summary')) $('#model-summary').textContent = PwnLLMDemo.summary();
-    if ($('#model-entry')) $('#model-entry').title = '模型接入 · '+PwnLLMDemo.summary();
+    if ($('#model-summary')) $('#model-summary').textContent = PwnMeshLLM.summary();
+    if ($('#model-entry')) $('#model-entry').title = '模型接入 · '+PwnMeshLLM.summary();
     const home = projects[0] ? '#project/'+projects[0].id : '#projects';
     $('.brand').href = home;
     updateBusy(); paintIcons();
@@ -193,10 +193,10 @@
     $('#activity-collapse-all').hidden = true;
     if (selectedNode || selectedEdge) {
       const nodeKey = selectedNode?.key;
-      host.innerHTML = PwnDemoInspector.render({node:selectedNode,edge:selectedEdge,canLocate:Boolean(nodeKey)});
-      paintIcons(); disposeInspector = PwnDemoInspector.bind(host,{toast,onLocate:nodeKey ? () => focusGraph(nodeKey) : undefined}); return;
+      host.innerHTML = PwnMeshInspector.render({node:selectedNode,edge:selectedEdge,canLocate:Boolean(nodeKey)});
+      paintIcons(); disposeInspector = PwnMeshInspector.bind(host,{toast,onLocate:nodeKey ? () => focusGraph(nodeKey) : undefined}); return;
     }
-    const entries = PwnDemoActivity.buildEntries(p);
+    const entries = PwnMeshActivity.buildEntries(p);
     const ui = activityState(), query = ui.query.trim().toLowerCase();
     const revision = JSON.stringify(entries.map(({id,timestamp,title,body,evidence}) => [id,timestamp,title,body,evidence]));
     if (ui.revision !== revision) { ui.revision = revision; ui.scrollTop = 0; }
@@ -250,7 +250,7 @@
     disposeRecord?.();
     const source = document.activeElement?.closest('[data-log-read]');
     source?.classList.add('is-reading'); source?.setAttribute('aria-expanded','true');
-    disposeRecord = PwnDemoInspector.openRecord(record,{...options,toast,onClose:() => {
+    disposeRecord = PwnMeshInspector.openRecord(record,{...options,toast,onClose:() => {
       source?.classList.remove('is-reading'); source?.setAttribute('aria-expanded','false');
       disposeRecord = null;
     }});
@@ -282,8 +282,8 @@
     const page = route(), p = viewed();
     if (page === 'llm') {
       const origin = projects.find(project => project.id === llmReturn?.id) || projects[0];
-      $('#main').innerHTML = PwnLLMDemo.render({returnLabel:origin ? '返回项目' : '返回工作台',projectName:origin?.name || ''});
-      disposeLLM = PwnLLMDemo.bind($('#main'),{onReturn:() => {
+      $('#main').innerHTML = PwnMeshLLM.render({returnLabel:origin ? '返回项目' : '返回工作台',projectName:origin?.name || ''});
+      disposeLLM = PwnMeshLLM.bind($('#main'),{onReturn:() => {
         if (!origin) { location.hash = 'projects'; return; }
         if (!llmReturn || llmReturn.id !== origin.id) llmReturn = {id:origin.id,view:'graph',run:'current',scrollTop:0};
         returningFromLLM = true; location.hash = 'project/'+origin.id;
@@ -378,7 +378,7 @@
   document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshWorkspace(true);});
   window.addEventListener('pagehide',()=>{clearTimeout(refreshTimer);service.cancel();graph?.destroy();});
   window.addEventListener('pageshow',event=>{if(event.persisted){render();refreshWorkspace(true);}});
-  const forms = PwnDemoForms.bind({
+  const forms = PwnMeshForms.bind({
     getProject:id => projects.find(p => p.id === id), toast,
     isHintRetry:(id,values) => service.isHintRetry(id,values),
     onCreate:values => mutation(async () => {

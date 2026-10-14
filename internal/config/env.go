@@ -7,14 +7,33 @@ import (
 	"strings"
 )
 
+const (
+	envPrefix       = "PWNMESH_"
+	legacyEnvPrefix = "XLOOM_"
+)
+
 // Getenv prefers PwnMesh settings and accepts their legacy environment names.
 // An explicitly empty setting disables the legacy fallback.
 func Getenv(key string) string {
-	if value, ok := os.LookupEnv(key); ok {
+	return lookupEnv(key, os.LookupEnv)
+}
+
+// Getenv reads only this worker's environment, using the same pre-PwnMesh
+// aliases as process settings. It never inherits dispatcher process settings.
+func (w Worker) Getenv(key string) string {
+	return lookupEnv(key, func(name string) (string, bool) {
+		value, ok := w.Env[name]
+		return value, ok
+	})
+}
+
+func lookupEnv(key string, lookup func(string) (string, bool)) string {
+	if value, ok := lookup(key); ok {
 		return value
 	}
-	if suffix, ok := strings.CutPrefix(key, "PWNMESH_"); ok {
-		return os.Getenv("XLOOM_" + suffix)
+	if suffix, ok := strings.CutPrefix(key, envPrefix); ok {
+		value, _ := lookup(legacyEnvPrefix + suffix)
+		return value
 	}
 	return ""
 }
@@ -40,8 +59,8 @@ func (w Worker) resolveEnv(common map[string]string) (map[string]string, error) 
 		}
 	}
 	for key, value := range env {
-		if suffix, legacy := strings.CutPrefix(key, "XLOOM_"); legacy {
-			canonical := "PWNMESH_" + suffix
+		if suffix, legacy := strings.CutPrefix(key, legacyEnvPrefix); legacy {
+			canonical := envPrefix + suffix
 			if _, exists := env[canonical]; !exists {
 				env[canonical] = value
 			}

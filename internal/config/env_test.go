@@ -21,6 +21,7 @@ func TestGetenvLegacyFallback(t *testing.T) {
 		{name: "unrelated missing", key: "CONFIG_TEST_SETTING", legacyKey: "XLOOM_CONFIG_TEST_SETTING", setLegacy: true, legacyValue: "old"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			env := map[string]string{}
 			for _, key := range []string{tc.key, tc.legacyKey} {
 				t.Setenv(key, "") // Restore the original process environment on cleanup.
 				if err := os.Unsetenv(key); err != nil {
@@ -29,14 +30,36 @@ func TestGetenvLegacyFallback(t *testing.T) {
 			}
 			if tc.setValue {
 				t.Setenv(tc.key, tc.value)
+				env[tc.key] = tc.value
 			}
 			if tc.setLegacy {
 				t.Setenv(tc.legacyKey, tc.legacyValue)
+				env[tc.legacyKey] = tc.legacyValue
 			}
 			if got := Getenv(tc.key); got != tc.want {
 				t.Errorf("Getenv returned %q, want %q", got, tc.want)
 			}
+			before := maps.Clone(env)
+			if got := (Worker{Env: env}).Getenv(tc.key); got != tc.want {
+				t.Errorf("worker Getenv returned %q, want %q", got, tc.want)
+			}
+			if !maps.Equal(env, before) {
+				t.Fatal("worker lookup changed its configured environment")
+			}
 		})
+	}
+}
+
+func TestWorkerGetenvDoesNotInheritProcessSettings(t *testing.T) {
+	for _, key := range []string{"PWNMESH_CONTEXT_BYTES", "XLOOM_CONTEXT_BYTES", "ANTHROPIC_AUTH_TOKEN"} {
+		t.Setenv(key, "process-only")
+		if got := (Worker{}).Getenv(key); got != "" {
+			t.Fatalf("worker inherited process setting %s", key)
+		}
+	}
+	worker := Worker{Env: map[string]string{"XLOOM_CONTEXT_BYTES": "worker-only"}}
+	if got := worker.Getenv("PWNMESH_CONTEXT_BYTES"); got != "worker-only" {
+		t.Fatalf("worker legacy setting = %q, want its own value", got)
 	}
 }
 

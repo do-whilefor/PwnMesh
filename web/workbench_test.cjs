@@ -14,9 +14,11 @@ function workspaceHarness(project,run='current'){
  const badge=nodes.get('#view-tab-materials small'),main=nodes.get('#main');
  Object.defineProperty(main,'innerHTML',{set(value){this.markup=value;const count=value.match(/id="view-tab-materials"[^]*?<small>([^<]*)<\/small>/);if(count)badge.textContent=count[1];},get(){return this.markup;}});
  const service={scope:{},async refresh(){return {projects:[project]};}};
- const context={document:{hidden:false,activeElement:null,querySelector:selector=>nodes.get(selector)||null,querySelectorAll:()=>[],createElement:node},location:{hash:'#project/'+project.id},PwnDemoModel:model,PwnDemoLifecycle:lifecycle,PwnMeshService:{Service:function(){return service;}},lucide:{createIcons(){}},setTimeout(){},clearTimeout(){},localStorage:{setItem(){}}};
+ const context={document:{hidden:false,activeElement:null,querySelector:selector=>nodes.get(selector)||null,querySelectorAll:()=>[],createElement:node},location:{hash:'#project/'+project.id},PwnMeshService:{Service:function(){return service;}},lucide:{createIcons(){}},setTimeout(){},clearTimeout(){},localStorage:{setItem(){}}};
+ vm.createContext(context);
+ for(const name of ['model.js','lifecycle.js'])vm.runInContext(fs.readFileSync(path.join(__dirname,'static',name),'utf8'),context,{filename:name});
  const source=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');
- vm.runInNewContext(source.slice(0,source.indexOf("  document.addEventListener('visibilitychange'"))+`
+ vm.runInContext(source.slice(0,source.indexOf("  document.addEventListener('visibilitychange'"))+`
    renderSidebar=()=>{};renderActivity=()=>{};mountGraph=()=>{graph={setState(){},getStatusFilter(){},destroy(){}};};
    globalThis.app={projects,activityStates,activityRecords,activityState,render,refreshWorkspace,setRun(value){selectedRun=value;}};
  })();`,context);
@@ -24,6 +26,22 @@ function workspaceHarness(project,run='current'){
  return {app:context.app,service,badge};
 }
 function fixture(states={a:snapshot()}){const calls=[];return {calls,async request(url,options={}){calls.push({url,options});if(url==='/projects')return Object.values(states).map(s=>s.graph.project);const [,id,suffix]=url.match(/^\/projects\/([^/]+)(.*)$/)||[];const state=states[id];if(suffix==='/state')return state;if(suffix==='/identity')return {id,generation:state.graph.project.generation};if(suffix==='/inputs')return [];if(suffix?.startsWith('/rounds'))return {items:[]};if(suffix?.startsWith('/state/events'))return [];throw new Error(url);},async executionChanges(){return {items:[],deleted:[],through:0}}};}
+test('embedded browser modules load in document order and supply the workbench globals',()=>{
+ const vm=require('node:vm'),context={};context.window=context;vm.createContext(context);
+ const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8');
+ for(const [,name] of html.matchAll(/<script defer src="\/static\/([^"]+)"/g)){
+  if(name==='app.js'||name==='lucide.min.js')continue;
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'static',name),'utf8'),context,{filename:name});
+ }
+ const app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');
+ for(const name of new Set(app.match(/\bPwn[A-Z]\w+\b/g)))if(name!=='PwnMesh')assert.ok(context[name],name+' is unavailable in the browser');
+ assert.equal(context.PwnMeshModel.fileSize(1024),'1.0 KiB');
+ assert.equal(context.PwnMeshLifecycle.canHint({status:'running'}),true);
+ assert.equal(typeof context.PwnMeshForms.bind,'function');
+ assert.equal(typeof context.PwnMeshInspector.openRecord,'function');
+ assert.equal(context.PwnMeshActivity.buildEntries({}).length,0);
+ assert.match(context.PwnMeshLLM.render(),/id="llm-protocol"/);
+});
 test('workspace refresh updates the material badge when the file list changes',async()=>{
  const project=snapshotView(snapshot()),h=workspaceHarness(project);
  assert.equal(h.badge.textContent,'0');
@@ -49,7 +67,7 @@ test('workspace refresh releases deleted project activity while preserving live 
  await h.app.refreshWorkspace();
  assert.equal(h.app.activityStates.size,0);assert.equal(h.app.activityRecords.size,0);
 });
-test('production shell is the demo document structure with real network access and no fixture routes',()=>{const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8'),app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(html,/<main id="main"><\/main>/);assert.match(html,/data-create/);assert.match(html,/project-menu-popover/);assert.match(html,/connect-src 'self'/);assert.doesNotMatch(html,/simulate-failure|workbench\.css|models\.css|#project\/atlas/);assert.doesNotMatch(app,/atlas\.example|local-.*randomUUID|模拟本次操作|lifecycle\.apply/);assert.match(app,/PwnLLMDemo\.render/);assert.match(app,/class="workspace-actions"/);});
+test('production shell is the demo document structure with real network access and no fixture routes',()=>{const html=fs.readFileSync(path.join(__dirname,'static/index.html'),'utf8'),app=fs.readFileSync(path.join(__dirname,'static/app.js'),'utf8');assert.match(html,/<main id="main"><\/main>/);assert.match(html,/data-create/);assert.match(html,/project-menu-popover/);assert.match(html,/connect-src 'self'/);assert.doesNotMatch(html,/simulate-failure|workbench\.css|models\.css|#project\/atlas/);assert.doesNotMatch(app,/atlas\.example|local-.*randomUUID|模拟本次操作|lifecycle\.apply/);assert.match(app,/PwnMeshLLM\.render/);assert.match(app,/class="workspace-actions"/);});
 test('project adapter maps server lifecycle without fabricating findings or times',()=>{const state=snapshot(),p=snapshotView(state,[],[],[]);assert.equal(p.name,'a');assert.equal(p.target,'https://authorized.test');assert.equal(p.goal,'Find supported evidence');assert.equal(p.status,'running');assert.equal(p.endedAt,null);assert.deepEqual(p.state.findings,[]);for(const [status,expected] of [['stopped','paused'],['completed','done'],['terminated','terminated']])assert.equal(projectView({...state.graph.project,status}).status,expected);});
 
 test('project and archived snapshot adapters preserve unspecified and explicit scenarios',()=>{

@@ -62,7 +62,7 @@ test('model browser blocks cross-origin saved credentials and clears provider dr
     });
     await page.addScriptTag({path:require('node:path').join(__dirname,'static/models.js')});
     await page.addScriptTag({path:require('node:path').join(__dirname,'static/llm.js')});
-    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host);});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnMeshLLM.render();PwnMeshLLM.bind(host);});
     await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     await page.locator('#llm-url').fill('https://api.deepseek.com/another-path');
     await page.locator('#llm-model').fill('another-model'); await page.locator('.llm-test').click();
@@ -94,7 +94,7 @@ test('model form only saves after a successful probe and discards unsaved drafts
     const errors = [];page.on('pageerror',error => errors.push(error.message));
     await page.evaluate(() => {
       window.calls = [];window.probeOK = false;window.returns = [];window.savedSummaries = [];
-      window.addEventListener('llm-updated',() => window.savedSummaries.push(PwnLLMDemo.summary()));
+      window.addEventListener('llm-updated',() => window.savedSummaries.push(PwnMeshLLM.summary()));
       window.modelState = {has_token:true,base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',connection_mode:'direct',reasoning_effort:'max'};
       window.PwnMeshAPI = {Client:class {async request(path,options={}) {
         window.calls.push({path,body:options.body});
@@ -104,7 +104,7 @@ test('model form only saves after a successful probe and discards unsaved drafts
       }}};
     });
     for (const name of ['models.js','llm.js']) await page.addScriptTag({path:require('node:path').join(__dirname,'static',name)});
-    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host,{onReturn:() => {window.returns.push(host.querySelector('#llm-key').value);host.replaceChildren();}});});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnMeshLLM.render();PwnMeshLLM.bind(host,{onReturn:() => {window.returns.push(host.querySelector('#llm-key').value);host.replaceChildren();}});});
     await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     assert.equal(await page.locator('#llm-effort').inputValue(),'max');
     assert.equal(await page.locator('.llm-proxy-fields').isVisible(),false);
@@ -143,7 +143,7 @@ test('model form only saves after a successful probe and discards unsaved drafts
     await page.locator('#llm-effort').selectOption('low');
     await page.locator('#llm-key').fill('leave-page-secret');await page.locator('.llm-back').click();
     assert.deepEqual(await page.evaluate(() => returns),[''],'return callback runs once, after the key is cleared');
-    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnLLMDemo.render();PwnLLMDemo.bind(host);});
+    await page.evaluate(() => {const host = document.getElementById('main');host.innerHTML = PwnMeshLLM.render();PwnMeshLLM.bind(host);});
     await page.waitForFunction(() => !document.querySelector('.llm-test').disabled);
     assert.equal(await page.locator('#llm-key').inputValue(),'');
     assert.equal(await page.locator('#llm-url').inputValue(),'https://api.deepseek.com/anthropic');

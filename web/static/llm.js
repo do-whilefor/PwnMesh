@@ -193,5 +193,5 @@
     }).catch(error => {if (!disposed) {busy = false;status('error','配置读取失败：'+error.message+'。返回项目后可重新打开重试。');sync();}});
     return cleanup;
   }
-  window.PwnLLMDemo = {render,bind,summary:() => saved ? `${providers[saved.provider].name} · ${saved.model}` : '尚未配置模型'};
+  window.PwnMeshLLM = {render,bind,summary:() => saved ? `${providers[saved.provider].name} · ${saved.model}` : '尚未配置模型'};
 }());

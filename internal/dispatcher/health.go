@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"pwnmesh/internal/agent"
@@ -84,18 +83,9 @@ func (s *Scheduler) health(ctx context.Context, w config.Worker, budgets ...conf
 			budgets = []config.Task{{}}
 		}
 	}
-	getenv := func(key string) string {
-		if value, ok := w.Env[key]; ok {
-			return value
-		}
-		if suffix, ok := strings.CutPrefix(key, "PWNMESH_"); ok {
-			return w.Env["XLOOM_"+suffix]
-		}
-		return ""
-	}
 	seen := map[string]bool{}
 	for _, budget := range budgets {
-		p, err := provider.FromEnvironment(getenv, budget.ReasoningEffort)
+		p, err := provider.FromEnvironment(w.Getenv, budget.ReasoningEffort)
 		if err != nil {
 			return &healthFailure{Kind: "configuration", Err: err}
 		}

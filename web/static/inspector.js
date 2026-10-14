@@ -2,7 +2,7 @@
   'use strict';
   const api = factory(root);
   if (typeof module === 'object' && module.exports) module.exports = api;
-  else root.PwnDemoInspector = api;
+  else root.PwnMeshInspector = api;
 })(typeof window === 'object' ? window : globalThis, function (root) {
   'use strict';
   const bindings = new WeakMap();
