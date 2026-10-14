@@ -14,7 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	"pwnmesh/internal/artifactcheck"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
+	"pwnmesh/internal/config"
 	"pwnmesh/internal/protocol"
 )
 
@@ -42,6 +45,43 @@ func TestWireEncodingPreservesExistingExecutions(t *testing.T) {
 			replay, err := json.Marshal(restored.Elem().Interface())
 			if err != nil || !bytes.Equal(replay, expected) {
 				t.Fatalf("retained wire data changed on replay: %s, %v", replay, err)
+			}
+		})
+	}
+}
+
+func TestSharedValuesPreserveWireEncoding(t *testing.T) {
+	// These values remain assignable through the old package names. Their exact
+	// bytes bind frozen inputs and session identity, including nil collections.
+	var fact board.FactRecord = model.FactRecord{ID: "fact", Description: "observed", Evidence: []model.EvidenceRef{{RunID: "run", Path: "proof", Excerpt: "line", StartLine: 2, EndLine: 3}}, Status: "valid", RunID: "run", SourceStepID: "step", SupportInvalid: true}
+	var step board.Step = model.Step{ID: "step", From: []string{}, GoalID: "goal", Description: "inspect", Status: "open", Priority: 7, DependsOn: []string{"upstream"}, WritePaths: []string{"proof"}, BlockedBy: []string{"upstream"}, SupportValid: true, LatestRunID: "retry"}
+	var budget config.Task = model.TaskBudget{Timeout: 10, ConcludeTimeout: 20, MaxIntents: 3, ReasoningEffort: "high"}
+	for _, test := range []struct {
+		name  string
+		value any
+		want  string
+	}{
+		{"fact", fact, `{"id":"fact","description":"observed","scope":"","observed_at":"","evidence":[{"run_id":"run","path":"proof","excerpt":"line","start_line":2,"end_line":3}],"status":"valid","run_id":"run","source_step_id":"step","legacy":false,"support_invalid":true}`},
+		{"step", step, `{"id":"step","from":[],"goal_id":"goal","description":"inspect","status":"open","priority":7,"result":null,"worker":null,"created_at":"","depends_on":["upstream"],"write_paths":["proof"],"blocked_by":["upstream"],"support_valid":true,"latest_run_id":"retry"}`},
+		{"goal", model.Goal{ID: "goal", ParentID: "root", Sources: []string{}, SupportValid: true}, `{"id":"goal","parent_id":"root","condition":"","status":"","sources":[],"created_at":"","support_valid":true}`},
+		{"finding", model.Finding{ID: "finding", Sources: []string{}, CandidateIDs: []string{"candidate"}, DisputeID: "dispute", CuratedRevision: 2}, `{"id":"finding","claim":"","scope":"","status":"","sources":[],"evidence":null,"created_at":"","updated_at":"","support_valid":false,"candidate_ids":["candidate"],"dispute_id":"dispute","curated_revision":2}`},
+		{"relation", model.FactRelation{Kind: "supersedes", Source: "new", Target: "old", Reason: "verified", RunID: "run", CreatedAt: "now"}, `{"kind":"supersedes","source":"new","target":"old","reason":"verified","run_id":"run","created_at":"now"}`},
+		{"action", model.StateAction{Op: "fact", IdempotencyKey: "key", Payload: json.RawMessage(`{"id":"fact"}`), ExpectedVersion: "version"}, `{"op":"fact","idempotency_key":"key","payload":{"id":"fact"},"expected_version":"version"}`},
+		{"receipt", model.StateActionResult{Op: "fact", ID: "fact", Revision: 1, Result: json.RawMessage(`{}`), StateVersion: "version", Unchanged: true, Committed: true, AssetIDs: []string{"asset"}}, `{"op":"fact","id":"fact","revision":1,"result":{},"state_version":"version","unchanged":true,"committed":true,"asset_ids":["asset"]}`},
+		{"budget", budget, `{"timeout":10,"conclude_timeout":20,"max_intents":3,"reasoning_effort":"high"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			actual, err := json.Marshal(test.value)
+			if err != nil || string(actual) != test.want {
+				t.Fatalf("shared value encoding changed: %s, %v; want %s", actual, err, test.want)
+			}
+			restored := reflect.New(reflect.TypeOf(test.value))
+			if err := json.Unmarshal([]byte(test.want), restored.Interface()); err != nil {
+				t.Fatal(err)
+			}
+			replay, err := json.Marshal(restored.Elem().Interface())
+			if err != nil || string(replay) != test.want {
+				t.Fatalf("shared value replay changed: %s, %v", replay, err)
 			}
 		})
 	}
@@ -80,8 +120,8 @@ func TestTraceBindingUsesTypedJobIdentity(t *testing.T) {
 	}
 }
 
-func TestTransportConsumersDoNotImportWorker(t *testing.T) {
-	for _, name := range []string{"protocol", "dispatcher", "docker", "server"} {
+func TestSharedDependencyBoundaries(t *testing.T) {
+	for _, name := range []string{"protocol", "dispatcher", "docker", "server", "board/model"} {
 		directory := filepath.Join("..", name)
 		entries, err := os.ReadDir(directory)
 		if err != nil {
@@ -104,7 +144,29 @@ func TestTransportConsumersDoNotImportWorker(t *testing.T) {
 				if imported == "pwnmesh/internal/worker" {
 					t.Errorf("%s imports Worker instead of the shared protocol", path)
 				}
+				if name == "protocol" && imported == "pwnmesh/internal/config" {
+					t.Errorf("%s imports configuration loading instead of shared execution values", path)
+				}
+				if name == "board/model" && (imported == "pwnmesh/internal/board" || imported == "database/sql" || strings.HasPrefix(imported, "modernc.org/")) {
+					t.Errorf("%s imports storage into the shared model", path)
+				}
 			}
 		}
+	}
+}
+
+func wireFixtures() map[string]any {
+	graph := board.Graph{Project: board.Project{ID: "project", Generation: 2, OrchestrationVersion: 1}}
+	return map[string]any{
+		"job": protocol.Job{
+			InputFiles: []board.InputFile{{}}, Repair: &artifactcheck.Spec{}, RunID: "run", PreviousRunID: "previous", GraphRPC: true, ResultContractVersion: 2,
+			EnvironmentID: "environment", DecisionRevision: 3, Decision: &board.DecisionContext{Version: 2}, DecisionTrigger: "changed", DecisionTriggers: []string{"changed", "ready"}, DecisionRepeated: true,
+			Kind: "explore", WorkerType: "go", Graph: graph,
+			State: &board.State{Graph: graph}, InputSnapshot: &board.InputSnapshot{Version: 1}, InputView: json.RawMessage(`{"view":true}`), PreparationKey: "preparation", Intent: &board.Intent{ID: "step"}, DependencyResults: []board.DependencyResult{{}},
+			Budget: config.Task{}, Workspace: "/workspace",
+		},
+		"result":   protocol.Result{RepairCheck: &protocol.RepairCheck{BlankContent: true, Path: "/workspace/proof", ExpectedSHA256: "expected", Outcome: "repaired"}, Type: "result", Text: "done", Conclude: true, Status: "failed", Error: "interrupted", Retryable: true, FailureKind: "transport", FailureCause: "unavailable", StateVersion: "version", Metrics: &protocol.DecisionMetrics{Version: 1}},
+		"request":  protocol.GraphRequest{RequestID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Op: "read_graph", Section: "facts", Offset: 2, ByteOffset: new(int), RecordVersion: "record", Limit: 3, ExpectedVersion: "state", IDs: []string{"fact"}, AssetIDs: []string{"asset"}, Action: board.StateAction{Op: "fact"}, Batch: &board.DecisionBatch{}, Updates: &board.ExecuteUpdateCursor{}},
+		"response": protocol.GraphResponse{RequestID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Result: json.RawMessage(`{"committed":true}`), Error: "error"},
 	}
 }

@@ -16,6 +16,8 @@ type Conclusion = model.Conclusion
 type Reopened = model.Reopened
 type ExecutionFence = model.ExecutionFence
 type APIError = model.APIError
+type DependencyResult = model.DependencyResult
+type InputSnapshot = model.InputSnapshot
 
 func Ptr(s string) *string                { return model.Ptr(s) }
 func Value(s *string) string              { return model.Value(s) }

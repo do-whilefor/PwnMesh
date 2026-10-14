@@ -8,22 +8,6 @@ import (
 	"errors"
 )
 
-// InputSnapshot identifies an immutable input, not a promise to reconstruct a
-// historical revision from the current graph. Its state remains server-side.
-type InputSnapshot struct {
-	Version          int    `json:"version"`
-	ID               string `json:"id"`
-	ProjectID        string `json:"project_id"`
-	Generation       int64  `json:"generation"`
-	Revision         int64  `json:"revision"`
-	DecisionRevision int64  `json:"decision_revision"`
-	StateVersion     string `json:"state_version"`
-	FactCount        int    `json:"fact_count"`
-	HintCount        int    `json:"hint_count"`
-	OpenCount        int    `json:"open_count"`
-	StepCount        int    `json:"step_count"`
-}
-
 func (t *Tx) FreezeInput(state State) (out *InputSnapshot, err error) {
 	raw, err := json.Marshal(state)
 	if err != nil {

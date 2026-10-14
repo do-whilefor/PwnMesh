@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	"pwnmesh/internal/board/model"
 	"pwnmesh/internal/modelconfig"
 )
 
@@ -23,14 +24,7 @@ type Runtime struct {
 	Execution         string `yaml:"execution"`
 	PromptGroup       string `yaml:"prompt_group"`
 }
-type Task struct {
-	Timeout         int `yaml:"timeout" json:"timeout"`
-	ConcludeTimeout int `yaml:"conclude_timeout" json:"conclude_timeout"`
-	MaxIntents      int `yaml:"max_intents" json:"max_intents"`
-	// Empty inherits the backend's PWNMESH_REASONING_EFFORT. An explicit role
-	// policy is persisted in the Job, so same-run recovery keeps that choice.
-	ReasoningEffort string `yaml:"reasoning_effort,omitempty" json:"reasoning_effort,omitempty"`
-}
+type Task = model.TaskBudget
 type Tasks struct {
 	Reason  Task `yaml:"reason"`
 	Curate  Task `yaml:"curate"`

@@ -6,6 +6,11 @@ kind, project graph and generation, immutable input, task budget and workspace.
 checks. Browser labels are not wire names: Decide uses `reason`, Execute uses
 `explore`, and Curate uses `curate`.
 
+Storage-free state values and task budgets live in `internal/board/model`, with
+aliases in Board and Config. Type relocation must preserve their exact JSON
+representation. Aggregate `board.State` still owns its existing projection logic;
+the protocol package does not load dispatcher configuration.
+
 ## Independent versions
 
 | Domain | Current contract |
@@ -57,8 +62,7 @@ order, tags, omitted fields and null/empty distinctions when moving types. Raw
 stored jobs/results must not be normalized during database upgrades. Current
 State serialization keeps its canonical field order for those same hashes.
 
-`internal/protocol/fixtures_test.go` locks wire fixtures, and
-`internal/protocol/compatibility_test.go` checks byte/hash and dependency
-boundaries. Board fixtures and Worker protocol/acceptance regressions protect the
+`internal/protocol/compatibility_test.go` locks wire fixtures and checks byte/hash
+and dependency boundaries. Board fixtures and Worker protocol/acceptance regressions protect the
 corresponding persisted identities. Add a versioned migration and identity
 test before changing a persisted representation.

@@ -6,14 +6,6 @@ import (
 	"slices"
 )
 
-// DependencyResult freezes the accepted upstream result used by one run.
-// RunID is the registered execution ID, not a model-supplied evidence identity.
-type DependencyResult struct {
-	StepID string `json:"step_id"`
-	FactID string `json:"fact_id"`
-	RunID  string `json:"run_id"`
-}
-
 func validateStepDependencies(s State, ids []string) error {
 	if len(ids) == 0 {
 		return nil

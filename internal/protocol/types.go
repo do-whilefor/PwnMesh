@@ -6,7 +6,7 @@ import (
 	"errors"
 	"pwnmesh/internal/artifactcheck"
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/config"
+	"pwnmesh/internal/board/model"
 )
 
 // ErrInterrupted marks a dispatcher shutdown/infrastructure interruption that
@@ -28,14 +28,14 @@ type Job struct {
 	DecisionRepeated      bool                     `json:"decision_repeated,omitempty"`
 	Kind                  string                   `json:"kind"`
 	WorkerType            string                   `json:"worker_type"`
-	Graph                 board.Graph              `json:"graph"`
+	Graph                 model.Graph              `json:"graph"`
 	State                 *board.State             `json:"state,omitempty"`
-	InputSnapshot         *board.InputSnapshot     `json:"input_snapshot,omitempty"`
+	InputSnapshot         *model.InputSnapshot     `json:"input_snapshot,omitempty"`
 	InputView             json.RawMessage          `json:"input_view,omitempty"`
 	PreparationKey        string                   `json:"preparation_key,omitempty"`
-	Intent                *board.Intent            `json:"intent,omitempty"`
-	DependencyResults     []board.DependencyResult `json:"dependency_results,omitempty"`
-	Budget                config.Task              `json:"budget"`
+	Intent                *model.Intent            `json:"intent,omitempty"`
+	DependencyResults     []model.DependencyResult `json:"dependency_results,omitempty"`
+	Budget                model.TaskBudget         `json:"budget"`
 	Workspace             string                   `json:"workspace"`
 }
 

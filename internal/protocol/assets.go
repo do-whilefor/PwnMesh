@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
 )
 
 func validateGraphAssetFilter(r GraphRequest) error {
@@ -78,25 +79,25 @@ type graphRecordIdentity struct {
 
 func graphIdentity(record any) graphRecordIdentity {
 	switch v := record.(type) {
-	case board.FactRecord:
+	case model.FactRecord:
 		return graphRecordIdentity{id: v.ID}
-	case board.Goal:
+	case model.Goal:
 		return graphRecordIdentity{id: v.ID}
-	case board.Step:
+	case model.Step:
 		return graphRecordIdentity{id: v.ID}
-	case board.Finding:
+	case model.Finding:
 		return graphRecordIdentity{id: v.ID}
 	case board.Candidate:
 		return graphRecordIdentity{id: v.ID}
 	case board.Dispute:
 		return graphRecordIdentity{id: v.ID}
-	case board.FactRelation:
+	case model.FactRelation:
 		return graphRecordIdentity{source: v.Source, target: v.Target}
-	case board.Hint:
+	case model.Hint:
 		return graphRecordIdentity{id: v.ID}
-	case board.Asset:
+	case model.Asset:
 		return graphRecordIdentity{id: v.ID}
-	case board.AssetAnchor:
+	case model.AssetAnchor:
 		return graphRecordIdentity{id: v.NodeID, assetID: v.AssetID}
 	case board.HistoryEntry:
 		return graphRecordIdentity{id: v.ID, assetIDs: v.AssetIDs}

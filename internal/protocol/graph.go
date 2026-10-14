@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
 )
 
 const MaxGraphRPCBytes = 128 << 10
@@ -29,7 +30,7 @@ type GraphRequest struct {
 	ExpectedVersion string                     `json:"expected_version,omitempty"`
 	IDs             []string                   `json:"ids,omitempty"`
 	AssetIDs        []string                   `json:"asset_ids,omitempty"`
-	Action          board.StateAction          `json:"action,omitempty"`
+	Action          model.StateAction          `json:"action,omitempty"`
 	Batch           *board.DecisionBatch       `json:"batch,omitempty"`
 	Updates         *board.ExecuteUpdateCursor `json:"updates,omitempty"`
 }
@@ -162,8 +163,8 @@ func GraphPage(s board.State, r GraphRequest) (any, error) {
 	if r.Section == "overview" {
 		inputs, _ := s.UserInputFacts()
 		data = struct {
-			Project          board.Project  `json:"project"`
-			Inputs           []board.Fact   `json:"user_inputs"`
+			Project          model.Project  `json:"project"`
+			Inputs           []model.Fact   `json:"user_inputs"`
 			Revision         int64          `json:"revision"`
 			DecisionRevision int64          `json:"decision_revision"`
 			StateVersion     string         `json:"state_version"`
@@ -470,7 +471,7 @@ func compactGraphRecord(section string, raw json.RawMessage) (json.RawMessage, e
 // CompactGraphActionResult keeps the successful write acknowledgement within
 // the bridge frame. The saved entity remains available through graph pages.
 type CompactFactPublication struct {
-	board.FactRecord
+	model.FactRecord
 	EvidenceExcerptsOmitted bool     `json:"evidence_excerpts_omitted,omitempty"`
 	EvidenceExcerptSHA256   []string `json:"evidence_excerpt_sha256,omitempty"`
 }
@@ -479,7 +480,7 @@ func CompactGraphActionResult(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) <= MaxGraphPageBytes {
 		return raw, nil
 	}
-	var result board.StateActionResult
+	var result model.StateActionResult
 	if err := json.Unmarshal(raw, &result); err != nil {
 		return nil, err
 	}
@@ -487,7 +488,7 @@ func CompactGraphActionResult(raw json.RawMessage) (json.RawMessage, error) {
 		// Keep the publication's identity and exact evidence selection usable by
 		// finish_step. Excerpts already exist in retained files and the original
 		// tool call; their hashes bind reconstruction without another graph read.
-		var fact board.FactRecord
+		var fact model.FactRecord
 		if err := json.Unmarshal(result.Result, &fact); err != nil {
 			return nil, err
 		}
