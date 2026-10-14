@@ -497,16 +497,26 @@ func TestDecisionDraftConflictRequiresFreshEvidenceRead(t *testing.T) {
 	if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"overview"}`)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := draftToolAction(t, action, "reset", "reset", `{}`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := draftToolAction(t, action, "step", "old", oldPlan); err == nil {
 		t.Fatal("refreshing only the version/counts allowed restaging without affected evidence")
 	}
 	if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["corrected"]}`)); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := draftToolAction(t, action, "reset", "reset", `{}`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := draftToolAction(t, action, "step", "old", oldPlan); err == nil {
 		t.Fatal("unseen tool results allowed a preplanned action to reuse the refreshed version")
 	}
-	opts.decision.beforeRequest(&agent.Loop{})
+	loop := &agent.Loop{}
+	opts.decision.beforeRequest(loop)
+	if len(loop.ContextData) != 2 || !strings.Contains(loop.ContextData[0], `"section":"overview"`) || !strings.Contains(loop.ContextData[1], `"section":"facts"`) {
+		t.Fatalf("reset discarded unread refreshed evidence: %v", loop.ContextData)
+	}
 	if _, err := draftToolAction(t, action, "step", "new", `{"action":"add","from":["corrected"],"description":"Inspect the corrected boundary"}`); err != nil {
 		t.Fatal(err)
 	}

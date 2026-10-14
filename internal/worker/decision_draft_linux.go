@@ -39,13 +39,19 @@ type decisionDraft struct {
 	request            func(context.Context, GraphRequest) (string, error)
 }
 
-func (d *decisionDraft) invalidate() {
+// Discard the private plan and its review authority together. An explicit reset
+// preserves any evidence refresh already in progress; it cannot lift that gate.
+func (d *decisionDraft) reset() {
 	d.clearRootAssessment()
 	d.keys, d.actions, d.version = nil, nil, ""
 	d.reviewData, d.reviewReady = "", false
+	d.assessmentReady, d.assessmentDisabled = false, true
+}
+
+func (d *decisionDraft) invalidate() {
+	d.reset()
 	d.reread, d.overviewRead, d.detailRead = true, false, false
 	d.refreshData = nil
-	d.assessmentReady, d.assessmentDisabled = false, true
 }
 
 // A tool result is not yet a model observation. Keep the authoritative review
@@ -149,10 +155,7 @@ func (d *decisionDraft) action(ctx context.Context, a board.StateAction, current
 	}
 	switch a.Op {
 	case "reset":
-		d.clearRootAssessment()
-		d.keys, d.actions, d.version = nil, nil, ""
-		d.reviewData, d.reviewReady = "", false
-		d.assessmentReady, d.assessmentDisabled = false, true
+		d.reset()
 		return `{"draft":true,"reset":true}`, nil
 	case "preview", "commit":
 		if d.closureProtocol {
