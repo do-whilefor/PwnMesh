@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -265,15 +264,11 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 	// new record only when its immutable SQL Fact was inserted from this same
 	// value; a stale allocation counter must not create two observations for
 	// one ID. Limit conflict handling to the primary key, not other failures.
-	inserted, err := t.Exec("INSERT INTO facts(id,project_id,description) VALUES(?,?,?) ON CONFLICT(id,project_id) DO NOTHING", id, s.Graph.Project.ID, f.Description)
+	inserted, err := sqlstore.InsertFact(t, s.Graph.Project.ID, Fact{ID: id, Description: f.Description})
 	if err != nil {
 		return "", nil, err
 	}
-	count, err := inserted.RowsAffected()
-	if err != nil {
-		return "", nil, err
-	}
-	if count != 1 {
+	if !inserted {
 		return "", nil, Err(409, "Fact ID "+id+" already exists; its allocation counter is inconsistent")
 	}
 	d.Facts = append(d.Facts, f)
@@ -428,12 +423,7 @@ func (t *Tx) upsertFinding(s State, d *stateData, fence ExecutionFence, raw json
 }
 
 func (t *Tx) stateID(project, kind, prefix string) (string, error) {
-	if _, err := t.Exec("INSERT OR IGNORE INTO scoped_counters(project_id,kind,value) VALUES(?,?,0)", project, kind); err != nil {
-		return "", err
-	}
-	var n int
-	err := t.QueryRow("UPDATE scoped_counters SET value=value+1 WHERE project_id=? AND kind=? RETURNING value", project, kind).Scan(&n)
-	return fmt.Sprintf("%s%03d", prefix, n), err
+	return sqlstore.NextScopedID(t, project, kind, prefix)
 }
 
 func (t *Tx) changeGoal(s State, d *stateData, raw json.RawMessage) (string, any, bool, error) {
@@ -661,12 +651,12 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 					continue
 				}
 				if i.Worker != nil {
-					if _, err := t.Exec("INSERT OR IGNORE INTO pwnmesh_revoked_runs(project_id,worker) VALUES(?,?)", s.Graph.Project.ID, *i.Worker); err != nil {
+					if err := sqlstore.RevokeRun(t, s.Graph.Project.ID, *i.Worker); err != nil {
 						return "", nil, false, err
 					}
 				}
 				i.Worker, current.Worker, i.ConcludedAt = nil, nil, Ptr(t.Now)
-				if _, err := t.Exec("UPDATE intents SET worker=NULL,concluded_at=? WHERE project_id=? AND id=?", t.Now, s.Graph.Project.ID, i.ID); err != nil {
+				if err := sqlstore.AbandonIntent(t, s.Graph.Project.ID, i.ID, t.Now); err != nil {
 					return "", nil, false, err
 				}
 			}

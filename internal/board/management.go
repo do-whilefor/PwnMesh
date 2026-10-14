@@ -185,7 +185,7 @@ func (t *Tx) ReopenProject(project, description, creator, run string) (out Reope
 	if err != nil {
 		return Reopened{}, err
 	}
-	if _, err = t.Exec("DELETE FROM intents WHERE project_id=? AND id=?", project, old.ID); err != nil {
+	if err = sqlstore.DeleteIntent(t, project, old.ID); err != nil {
 		return Reopened{}, err
 	}
 	fact := Fact{ID: fid, Description: description}

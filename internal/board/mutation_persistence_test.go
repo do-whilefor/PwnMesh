@@ -182,3 +182,59 @@ func TestAbandonWritesOnlyTargetIntentAndRevokesOwner(t *testing.T) {
 		return err
 	})
 }
+
+func TestEvidenceConclusionHandledEventFailureRollsBackAllWrites(t *testing.T) {
+	for _, createFact := range []bool{false, true} {
+		t.Run(fmt.Sprintf("create_fact=%t", createFact), func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			e := f.worker("conclusion", "")
+			factID := ""
+			var payload json.RawMessage
+			if createFact {
+				payload, _ = json.Marshal(map[string]any{"description": "Final observation", "scope": "fixture", "observed_at": "2026-09-28T08:00:00Z", "evidence": []EvidenceRef{{RunID: e.Lease, Path: "/workspace/evidence.txt", Excerpt: "observed result"}}})
+			} else {
+				factID = f.fact(e, "existing")
+			}
+			snapshot := func() string {
+				t.Helper()
+				state, _ := json.Marshal(f.state())
+				var receipts, events, counter int
+				f.do(func(tx *Tx) error {
+					return tx.QueryRow(`SELECT (SELECT COUNT(*) FROM pwnmesh_state_actions WHERE project_id='p'),(SELECT COUNT(*) FROM pwnmesh_state_events WHERE project_id='p'),COALESCE((SELECT value FROM scoped_counters WHERE project_id='p' AND kind='fact'),0)`).Scan(&receipts, &events, &counter)
+				})
+				return fmt.Sprintf("%s|%d,%d,%d", state, receipts, events, counter)
+			}
+			before := snapshot()
+			f.do(func(tx *Tx) error {
+				_, err := tx.Exec(`CREATE TRIGGER fail_conclusion_event BEFORE INSERT ON pwnmesh_state_events WHEN json_extract(NEW.event,'$.op')='step_completed' BEGIN SELECT RAISE(ABORT,'conclusion event failed'); END`)
+				return err
+			})
+			f.do(func(tx *Tx) error {
+				if _, err := tx.ConcludeEvidenceStep("p", e.Fence(), factID, payload); err == nil || !strings.Contains(err.Error(), "conclusion event failed") {
+					t.Fatalf("conclusion did not reach injected event failure: %v", err)
+				}
+				return tx.UpdateSettings(Settings{IntentTimeout: 30, ReasonTimeout: 30})
+			})
+			if after := snapshot(); after != before {
+				t.Fatal("handled conclusion failure retained a fact, completed step, revision, receipt, event or counter")
+			}
+			f.do(func(tx *Tx) error {
+				var timeout int
+				if err := tx.QueryRow("SELECT intent_timeout FROM settings WHERE rowid=1").Scan(&timeout); err != nil {
+					return err
+				}
+				if timeout != 30 {
+					t.Fatal("handled conclusion failure rolled back unrelated work")
+				}
+				if _, err := tx.Exec("DROP TRIGGER fail_conclusion_event"); err != nil {
+					return err
+				}
+				result, err := tx.ConcludeEvidenceStep("p", e.Fence(), factID, payload)
+				if err == nil && (result.Intent.To == nil || result.Intent.ConcludedAt == nil) {
+					t.Fatal("retry did not conclude the step")
+				}
+				return err
+			})
+		})
+	}
+}

@@ -76,24 +76,18 @@ func (t *Tx) activeStepWriteOwners(project string, metadata []stepMetadata) ([]S
 	for _, step := range metadata {
 		byID[step.ID] = step
 	}
-	rows, err := t.Query(`SELECT id,worker FROM intents WHERE project_id=? AND worker IS NOT NULL AND to_fact_id IS NULL AND concluded_at IS NULL
-UNION SELECT intent,lease FROM pwnmesh_executions WHERE project_id=? AND kind='explore' AND `+sqlstore.PendingExecutionSQL+` ORDER BY id,worker`, project, project)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	var owners []Step
-	for rows.Next() {
-		var id, worker string
-		if err := rows.Scan(&id, &worker); err != nil {
-			return nil, err
-		}
+	err := sqlstore.VisitStepWriteOwners(t, project, func(id, worker string) error {
 		step := byID[id]
 		// An abandoned or already concluded Step can still have a pending Run.
 		// Do not project its business status into the reservation's lifetime.
 		owners = append(owners, Step{ID: id, Worker: Ptr(worker), Status: "running", WritePaths: step.WritePaths, Repair: step.Repair})
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return owners, rows.Err()
+	return owners, nil
 }
 
 func (t *Tx) stepWriteBlocked(project, id string) (bool, error) {

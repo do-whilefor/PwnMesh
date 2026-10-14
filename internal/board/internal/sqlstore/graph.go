@@ -27,12 +27,7 @@ func NextID(q Queries, project, kind string) (string, error) {
 		err = q.QueryRow("UPDATE counters SET value=value+1 WHERE name='project' RETURNING value").Scan(&n)
 		return fmt.Sprintf("proj_%03d", n), err
 	}
-	_, err = q.Exec("INSERT OR IGNORE INTO scoped_counters(project_id,kind,value) VALUES(?,?,0)", project, kind)
-	if err != nil {
-		return "", err
-	}
-	err = q.QueryRow("UPDATE scoped_counters SET value=value+1 WHERE project_id=? AND kind=? RETURNING value", project, kind).Scan(&n)
-	return fmt.Sprintf("%s%03d", kind[:1], n), err
+	return NextScopedID(q, project, kind, kind[:1])
 }
 
 func ProjectIDs(q Queries) ([]string, error) {

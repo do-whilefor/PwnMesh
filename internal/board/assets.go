@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 )
 
@@ -40,13 +41,5 @@ func assetIDs(assets []Asset) []string {
 }
 
 func (t *Tx) addAssetAnchors(project string, generation int64, kind, id string, assets []Asset) error {
-	for _, a := range assets {
-		if _, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_assets(project_id,id,kind,value,method) VALUES(?,?,?,?,?)`, project, a.ID, a.Kind, a.Value, a.Method); err != nil {
-			return err
-		}
-		if _, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_asset_anchors(project_id,generation,node_kind,node_id,asset_id) VALUES(?,?,?,?,?)`, project, generation, kind, id, a.ID); err != nil {
-			return err
-		}
-	}
-	return nil
+	return sqlstore.InsertAssetAnchors(t, project, generation, kind, id, assets)
 }

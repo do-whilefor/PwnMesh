@@ -9,7 +9,7 @@ import (
 // ConcludeEvidenceStep shares the process-fact command and validations. Its
 // caller commits this mutation and the execution receipt in one transaction.
 // An existing observation remains immutable when reused as the result anchor.
-func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID string, factPayload json.RawMessage) (Conclusion, error) {
+func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID string, factPayload json.RawMessage) (out Conclusion, err error) {
 	if (factID == "") == (len(factPayload) == 0) {
 		return Conclusion{}, Err(422, "conclusion requires exactly one fact_id or fact")
 	}
@@ -35,6 +35,12 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 			return Conclusion{}, err
 		}
 	}
+	// A final Fact, its receipt and the Step completion event must roll back
+	// together even when the enclosing caller handles a rejected conclusion.
+	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+		return Conclusion{}, err
+	}
+	defer t.finishManagement(&err)
 	if len(factPayload) != 0 {
 		created, err := t.StateAction(project, fence, StateAction{Op: "fact", IdempotencyKey: fence.Run + ":final-fact", Payload: factPayload})
 		if err != nil {
@@ -71,7 +77,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 			return Conclusion{}, Err(409, "Step already concluded")
 		}
 		i.To, i.Worker, i.Heartbeat, i.ConcludedAt = Ptr(factID), Ptr(fence.Run), Ptr(t.Now), Ptr(t.Now)
-		if _, err = t.Exec("UPDATE intents SET to_fact_id=?,worker=?,last_heartbeat_at=?,concluded_at=? WHERE project_id=? AND id=?", i.To, i.Worker, i.Heartbeat, i.ConcludedAt, project, i.ID); err != nil {
+		if err = sqlstore.SaveIntentConclusion(t, project, *i); err != nil {
 			return Conclusion{}, err
 		}
 		result := Conclusion{Fact: Fact{ID: fact.ID, Description: fact.Description}, Intent: *i}
