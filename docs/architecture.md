@@ -139,6 +139,11 @@ The private store owns normal commit and rollback; query methods still permit ra
 SQL inside Board. It does not interpret or restrict SQL statement text.
 Multiwrite management operations use a local savepoint, so callers may handle a
 rejection and continue the outer transaction without retaining partial writes.
+Decision batches pass their validated scope only to private action and completion
+calls. The transaction carries no mutable batch authorization. Public state actions
+and direct completion always enforce the registered planner's protocol boundary;
+each batched action still checks its lease, role, idempotency and capacity. The
+batch owns its local snapshot and savepoint through preview, rollback or commit.
 Lease operations update lease columns without rewriting
 unrelated graph content. Source-boundary tests prevent SQL from returning to HTTP
 handlers or storage dependencies from returning to execution clients.

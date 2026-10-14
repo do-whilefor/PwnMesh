@@ -92,6 +92,7 @@ func TestDecisionBatchSQLFailureDiscardsReusableStateAndCounters(t *testing.T) {
 		if _, err := tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, batch); err == nil {
 			t.Fatal("injected SQL failure accepted")
 		}
+		assertDirectDecisionWritesRejected(t, tx, stateBenchmarkProject, stateBenchmarkPlanner)
 		state, err := tx.State(stateBenchmarkProject)
 		if err != nil {
 			return err
@@ -143,9 +144,7 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 		if _, err = tx.CommitDecision(g.Project.ID, fence, batch); err == nil {
 			t.Fatal("invalid batch succeeded")
 		}
-		if tx.inDecisionBatch {
-			t.Fatal("batch authorization escaped its call")
-		}
+		assertDirectDecisionWritesRejected(t, tx, g.Project.ID, fence)
 		current, err := tx.State(g.Project.ID)
 		if err != nil {
 			return err
@@ -163,6 +162,7 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 		if preview.Committed || preview.ChangedActions != 2 || len(preview.Results) != 3 || !preview.Results[1].Unchanged {
 			t.Fatalf("preview changed-action count includes a duplicate: %+v", preview)
 		}
+		assertDirectDecisionWritesRejected(t, tx, g.Project.ID, fence)
 		current, err = tx.State(g.Project.ID)
 		if err != nil {
 			return err
@@ -177,6 +177,7 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 		if !result.Committed || result.IDs["temporary"] != "g001" || result.ChangedActions != 2 {
 			t.Fatalf("rollback consumed alias ID allocation: %+v", result)
 		}
+		assertDirectDecisionWritesRejected(t, tx, g.Project.ID, fence)
 		saved, err := tx.DecisionReceipt(g.Project.ID, fence)
 		if err != nil {
 			return err
@@ -187,6 +188,57 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 		return nil
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertDirectDecisionWritesRejected(t *testing.T, tx *Tx, project string, fence ExecutionFence) {
+	t.Helper()
+	_, actionErr := tx.StateAction(project, fence, StateAction{Op: "goal", IdempotencyKey: "outside-batch", Payload: json.RawMessage(`{"action":"add","condition":"Must remain inside a batch"}`)})
+	_, completeErr := tx.CompleteProject(project, fence, []string{"origin"}, "Must remain inside a batch")
+	for _, err := range []error{actionErr, completeErr} {
+		var api *APIError
+		if !errors.As(err, &api) || api.Status != 403 || api.Detail != "Decide version 2 must submit its plan through a decision batch" {
+			t.Fatalf("direct write escaped the batch boundary: %v", err)
+		}
+	}
+}
+
+func TestStandaloneStateActionRetainsVersionAndCompletionChecks(t *testing.T) {
+	f := newStateBenchmarkFixture(t, stateBenchmarkSize{1, 128, 1}, 1)
+	if err := f.store.Do(context.Background(), func(tx *Tx) error {
+		action := f.action("step", 0)
+		for _, tc := range []struct {
+			op, version string
+			status      int
+		}{
+			{"complete", f.version, 422},
+			{"step", "", 422},
+			{"step", "stale", 409},
+		} {
+			action.Op, action.ExpectedVersion = tc.op, tc.version
+			_, err := tx.StateAction(stateBenchmarkProject, stateBenchmarkPlanner, action)
+			var api *APIError
+			if !errors.As(err, &api) || api.Status != tc.status {
+				t.Fatalf("standalone %s with version %q: %v", tc.op, tc.version, err)
+			}
+		}
+		action.Op, action.ExpectedVersion = "step", f.version
+		if _, err := tx.StateAction(stateBenchmarkProject, stateBenchmarkPlanner, action); err != nil {
+			return err
+		}
+		// A successful direct action must not authorize a later stale action.
+		_, err := tx.StateAction(stateBenchmarkProject, stateBenchmarkPlanner, f.action("step", 1))
+		var api *APIError
+		if !errors.As(err, &api) || api.Status != 409 {
+			t.Fatalf("standalone action skipped the current version check: %v", err)
+		}
+		state, err := tx.State(stateBenchmarkProject)
+		if err == nil && state.Revision != 1 {
+			t.Fatalf("rejected direct actions retained changes: revision=%d", state.Revision)
+		}
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 }

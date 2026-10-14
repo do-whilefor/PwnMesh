@@ -17,8 +17,7 @@ type transactionQueries = sqlstore.Queries
 
 type Tx struct {
 	transactionQueries
-	Now             string
-	inDecisionBatch bool
+	Now string
 }
 
 func Open(path string) (*Store, error) {

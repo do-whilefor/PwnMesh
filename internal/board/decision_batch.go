@@ -20,7 +20,7 @@ type DecisionReceipt = model.DecisionReceipt
 // CheckDirectDecisionWrite keeps old jobs' protocol while fencing all writes
 // by a registered version 2 planner into its one transactional commit.
 func (t *Tx) CheckDirectDecisionWrite(project string, fence ExecutionFence) error {
-	if t.inDecisionBatch || fence.Run == "" || fence.Lease != "reason" {
+	if fence.Run == "" || fence.Lease != "reason" {
 		return nil
 	}
 	var raw []byte
@@ -281,16 +281,11 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 			}
 		}
 	}
-	if t.inDecisionBatch {
-		return out, Err(409, "nested decision batch is not allowed")
-	}
 	if _, err = t.Exec("SAVEPOINT pwnmesh_decision_batch"); err != nil {
 		return out, err
 	}
 	keep := false
-	t.inDecisionBatch = true
 	defer func() {
-		t.inDecisionBatch = false
 		if !keep {
 			_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_decision_batch")
 			err = errors.Join(err, rollbackErr)
@@ -304,7 +299,7 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 			return out, resolveErr
 		}
 		before := state
-		result, actionErr := t.stateAction(&state, fence, StateAction{Op: action.Op, Payload: payload, IdempotencyKey: fmt.Sprintf("decision:%s:%d", fence.Run, n)})
+		result, actionErr := t.stateAction(&state, fence, StateAction{Op: action.Op, Payload: payload, IdempotencyKey: fmt.Sprintf("decision:%s:%d", fence.Run, n)}, batchedDecisionAction)
 		if actionErr != nil {
 			var api *APIError
 			if errors.As(actionErr, &api) {
@@ -404,11 +399,17 @@ func (t *Tx) decisionCanProgress(state State, namespace string) (bool, error) {
 }
 
 func (t *Tx) CompleteProject(project string, fence ExecutionFence, from []string, description string) (Intent, error) {
+	return t.completeProject(project, fence, from, description, directStateAction)
+}
+
+func (t *Tx) completeProject(project string, fence ExecutionFence, from []string, description string, scope actionScope) (Intent, error) {
 	if fence.Lease != "reason" && fence.Lease != "bootstrap" {
 		return Intent{}, Err(403, "only Decide or a legacy bootstrap can complete the project")
 	}
-	if err := t.CheckDirectDecisionWrite(project, fence); err != nil {
-		return Intent{}, err
+	if scope != batchedDecisionAction {
+		if err := t.CheckDirectDecisionWrite(project, fence); err != nil {
+			return Intent{}, err
+		}
 	}
 	if !required(description, 16384) {
 		return Intent{}, Err(422, "completion description is required")

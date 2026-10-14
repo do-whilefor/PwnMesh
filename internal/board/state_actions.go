@@ -14,11 +14,18 @@ import (
 	"pwnmesh/internal/board/model"
 )
 
+// Only the private decision batch path may reuse its initial version check.
+// Scope stays local to the call; it cannot change another operation on Tx.
+type actionScope uint8
+
+const (
+	directStateAction actionScope = iota
+	batchedDecisionAction
+)
+
 func (t *Tx) StateAction(project string, fence ExecutionFence, action StateAction) (out StateActionResult, err error) {
-	if !t.inDecisionBatch {
-		if err := t.CheckDirectDecisionWrite(project, fence); err != nil {
-			return StateActionResult{}, err
-		}
+	if err := t.CheckDirectDecisionWrite(project, fence); err != nil {
+		return StateActionResult{}, err
 	}
 	// The record, its asset anchors and the receipt form one write. Preserve
 	// this boundary even when an outer caller handles a failed action itself.
@@ -42,7 +49,7 @@ func (t *Tx) StateAction(project string, fence ExecutionFence, action StateActio
 	if err != nil {
 		return StateActionResult{}, err
 	}
-	out, err = t.stateAction(&s, fence, action)
+	out, err = t.stateAction(&s, fence, action, directStateAction)
 	if err == nil && action.Op == "curate" {
 		err = t.CompleteCurationExecution(project, fence.Run)
 	}
@@ -51,7 +58,7 @@ func (t *Tx) StateAction(project string, fence ExecutionFence, action StateActio
 
 // A batch owns this snapshot for one transaction and replaces it only after a
 // successful action. Each next action sees the persisted result of its parent.
-func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateAction) (StateActionResult, error) {
+func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateAction, scope actionScope) (StateActionResult, error) {
 	s := *snapshot
 	project := s.Graph.Project.ID
 	var err error
@@ -67,7 +74,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if !required(action.IdempotencyKey, 256) {
 		return StateActionResult{}, Err(422, "idempotency_key is required and must be at most 256 bytes")
 	}
-	if !slices.Contains([]string{"fact", "fact_relation", "finding", "goal", "step", "candidate", "curate", "curation_request"}, action.Op) && !(t.inDecisionBatch && action.Op == "complete") {
+	if !slices.Contains([]string{"fact", "fact_relation", "finding", "goal", "step", "candidate", "curate", "curation_request"}, action.Op) && !(scope == batchedDecisionAction && action.Op == "complete") {
 		return StateActionResult{}, Err(422, "unknown state action")
 	}
 	if s.Graph.Project.OrchestrationVersion == 1 {
@@ -123,7 +130,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	}
 	// The batch already checked its caller's version under this transaction's
 	// write reservation. Its own successive versions need no Job revalidation.
-	if !t.inDecisionBatch {
+	if scope != batchedDecisionAction {
 		if err = t.CheckDecisionStateVersion(s, fence, action.ExpectedVersion); err != nil {
 			return StateActionResult{}, err
 		}
@@ -159,7 +166,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		}
 		if err = decodeAction(action.Payload, &input); err == nil {
 			var completed Intent
-			completed, err = t.CompleteProject(project, fence, input.From, input.Description)
+			completed, err = t.completeProject(project, fence, input.From, input.Description, scope)
 			id, result = completed.ID, completed
 		}
 	}
