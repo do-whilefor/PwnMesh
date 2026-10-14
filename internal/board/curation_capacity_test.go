@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+
+	"pwnmesh/internal/board/model"
 )
 
 // Seed individually valid notes together so capacity tests do not spend their
@@ -100,7 +102,7 @@ func TestCurationReceiptsRetainOnlyTheSubmittedGroups(t *testing.T) {
 	seedCurationGroups(f, 8, 2, source)
 	for group := range 8 {
 		e, input := capacityCurator(f, fmt.Sprintf("batch-%d", group))
-		key := findingIdentity(fmt.Sprintf("Capacity claim %d", group), "fixture")
+		key := model.FindingIdentity(fmt.Sprintf("Capacity claim %d", group), "fixture")
 		payload := CurateGroup{GroupKey: key, Status: "candidate", Reason: "Retain this complete group", Question: "Which producer observation is supported?"}
 		receipt := f.curate(e, input, payload)
 		var result CurateResult
@@ -175,7 +177,7 @@ func TestPartialCurationRetainsRequestAndRejectsNonprogressingBatch(t *testing.T
 	seedCurationGroups(f, 2, 2, "")
 	f.action(f.planner, "curation_request", "request", map[string]any{"sources": []string{fact}, "reason": "Review both pending groups before accepting the observations"}, "")
 	e, input := capacityCurator(f, "partial-request")
-	group := CurateGroup{GroupKey: findingIdentity("Capacity claim 0", "fixture"), Status: "candidate", Reason: "Retain the complete first group"}
+	group := CurateGroup{GroupKey: model.FindingIdentity("Capacity claim 0", "fixture"), Status: "candidate", Reason: "Retain the complete first group"}
 	f.curate(e, input, group)
 	partial := f.state()
 	if partial.PendingCurationRequest() == nil || partial.Curation.ThroughRevision != input.Curation.ThroughRevision {
@@ -192,7 +194,7 @@ func TestPartialCurationRetainsRequestAndRejectsNonprogressingBatch(t *testing.T
 			t.Fatal("accepted an ambiguous or nonprogressing partial batch")
 		}
 	}
-	f.curate(e, input, CurateGroup{GroupKey: findingIdentity("Capacity claim 1", "fixture"), Status: "candidate", Reason: "Finish the remaining group"})
+	f.curate(e, input, CurateGroup{GroupKey: model.FindingIdentity("Capacity claim 1", "fixture"), Status: "candidate", Reason: "Finish the remaining group"})
 	if final := f.state(); final.PendingCurationRequest() != nil || len(final.PendingCurationCandidateIDs()) != 0 {
 		t.Fatal("the final batch did not acknowledge the complete request")
 	}

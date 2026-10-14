@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board/model"
 )
 
 func (t *Tx) StateAction(project string, fence ExecutionFence, action StateAction) (out StateActionResult, err error) {
@@ -377,7 +378,7 @@ func (t *Tx) upsertFinding(s State, d *stateData, fence ExecutionFence, raw json
 		return "", nil, false, Err(422, "verified or refuted findings require retained evidence excerpts")
 	}
 	claim, scope := strings.Join(strings.Fields(input.Claim), " "), strings.TrimSpace(input.Scope)
-	id := findingIdentity(claim, scope)
+	id := model.FindingIdentity(claim, scope)
 	finding := Finding{ID: id, Claim: claim, Scope: scope, Status: input.Status, Sources: []string{}, Evidence: []EvidenceRef{}, CreatedAt: t.Now, UpdatedAt: t.Now, Reason: input.Reason}
 	index := -1
 	for n, old := range d.Findings {
@@ -571,7 +572,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 				return "", nil, false, err
 			}
 		}
-		if existing, ok := s.matchingRepairStep(input.GoalID, input.From, input.Description, input.DependsOn, input.Repair, writePaths, assetIDs(assets)); ok {
+		if existing, ok := matchingRepairStep(*s, input.GoalID, input.From, input.Description, input.DependsOn, input.Repair, writePaths, assetIDs(assets)); ok {
 			if existing.DisputeID != input.DisputeID {
 				return "", nil, false, Err(409, "matching task has a different dispute binding")
 			}
@@ -625,7 +626,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		if current.ID != input.ID {
 			continue
 		}
-		canRetireUnsupported := s.Graph.Project.OrchestrationVersion == 1 && input.Action == "abandon" && current.Status == "completed" && !current.SupportValid && !s.externalFeedbackStep(current)
+		canRetireUnsupported := s.Graph.Project.OrchestrationVersion == 1 && input.Action == "abandon" && current.Status == "completed" && !current.SupportValid && !s.ExternalFeedbackStep(current)
 		if current.Status == "abandoned" || (current.Status == "completed" && !canRetireUnsupported) {
 			return "", nil, false, Err(409, "step is already terminal")
 		}

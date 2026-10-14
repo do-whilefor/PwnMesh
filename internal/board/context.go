@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"slices"
 	"sort"
-	"unicode/utf8"
+
+	"pwnmesh/internal/board/model"
 )
 
 const DefaultContextViewBytes = 32 << 10
@@ -14,25 +15,6 @@ const DefaultContextViewBytes = 32 << 10
 type contextFact struct {
 	FactRecord
 	DetailsOmitted bool `json:"details_omitted,omitempty"`
-}
-
-// UserInputFacts returns original requirements and their IDs, including reopen
-// feedback stored as legacy Facts. These are mandatory input, not history.
-func (s State) UserInputFacts() ([]Fact, map[string]bool) {
-	s = contextState(s)
-	ids := map[string]bool{"origin": true, "goal": true}
-	for _, step := range s.Steps {
-		if s.externalFeedbackStep(step) {
-			ids[*step.Result] = true
-		}
-	}
-	inputs := []Fact{}
-	for _, fact := range s.Graph.Facts {
-		if ids[fact.ID] {
-			inputs = append(inputs, fact)
-		}
-	}
-	return inputs, ids
 }
 
 // ContextView creates a bounded model projection. It never changes the
@@ -54,7 +36,7 @@ func contextView(state State, stepID string, maxBytes int, curate bool) (json.Ra
 	if maxBytes <= 0 {
 		maxBytes = DefaultContextViewBytes
 	}
-	state = contextState(state)
+	state = state.WithLegacyDefaults()
 	activeCandidates := state.ActiveCandidates()
 	sort.SliceStable(activeCandidates, func(i, j int) bool { return activeCandidates[i].Revision > activeCandidates[j].Revision })
 	view := struct {
@@ -467,7 +449,7 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 	history := state.History()
 	historySection := -1
 	assetSection := -1
-	cold := map[historyNodeKey]bool{}
+	cold := map[model.NodeKey]bool{}
 	// New discovery aids use the same allowance. If even their empty indexes
 	// cannot fit, retain the existing graph index instead of displacing inputs.
 	addSections := func(sections []contextOverviewSection, hint string) bool {
@@ -489,7 +471,7 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 				if member.Kind == "step" && member.ID == stepID || member.Kind == "fact" && relevant[member.ID] {
 					continue
 				}
-				cold[historyNodeKey{Kind: member.Kind, ID: member.ID}] = true
+				cold[model.NodeKey{Kind: member.Kind, ID: member.ID}] = true
 			}
 		}
 		for member := range cold {
@@ -503,7 +485,7 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		if addSections([]contextOverviewSection{{Section: "history", Total: len(history), Omitted: len(history), Limit: 20, Items: []contextOverviewNode{}}}, " History folds terminal work only for reading; expand members by kind/ID through steps or facts. Original records and evidence remain unchanged.") {
 			historySection = index
 		} else {
-			cold = map[historyNodeKey]bool{}
+			cold = map[model.NodeKey]bool{}
 			view.Sections[1].Folded, view.Sections[2].Folded = 0, 0
 		}
 	}
@@ -528,17 +510,17 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		node                       contextOverviewNode
 	}
 	items := []candidate{}
-	assets := state.historyAssetIndex()
+	assets := state.AssetIndex()
 	assetKinds := map[int]string{1: "step", 2: "fact", 3: "finding"}
 	if state.Graph.Project.OrchestrationVersion == 1 {
 		assetKinds[5] = "candidate"
 	}
 	add := func(section, priority, ordinal int, node contextOverviewNode, description string, sources []string) {
-		node.Excerpt, node.TextTruncated = contextExcerpt(description, 240)
+		node.Excerpt, node.TextTruncated = model.ContextExcerpt(description, 240)
 		node.Sources = append([]string(nil), sources[:min(len(sources), 16)]...)
 		node.SourcesOmitted = len(sources) - len(node.Sources)
 		if kind := assetKinds[section]; kind != "" {
-			ids := assets[historyNodeKey{Kind: kind, ID: node.ID}]
+			ids := assets[model.NodeKey{Kind: kind, ID: node.ID}]
 			node.AssetIDs = append([]string(nil), ids[:min(len(ids), 8)]...)
 			node.AssetIDsOmitted = len(ids) - len(node.AssetIDs)
 		}
@@ -558,7 +540,7 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		add(0, priority, i, contextOverviewNode{ID: goal.ID, Status: goal.Status, ParentID: goal.ParentID, SupportValid: &supportValid}, goal.Condition, goal.Sources)
 	}
 	for i, step := range state.Steps {
-		if cold[historyNodeKey{Kind: "step", ID: step.ID}] {
+		if cold[model.NodeKey{Kind: "step", ID: step.ID}] {
 			continue
 		}
 		priority := 5
@@ -575,7 +557,7 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		add(1, priority, i, contextOverviewNode{ID: step.ID, Status: step.Status, GoalID: step.GoalID, InvalidSources: invalid, InvalidSourcesOmitted: len(step.InvalidSources) - len(invalid), BlockedBy: blocked, BlockedByOmitted: len(step.BlockedBy) - len(blocked), SupportValid: support, LatestRunID: step.LatestRunID}, step.Description, step.From)
 	}
 	for i, fact := range state.FactRecords {
-		if cold[historyNodeKey{Kind: "fact", ID: fact.ID}] {
+		if cold[model.NodeKey{Kind: "fact", ID: fact.ID}] {
 			continue
 		}
 		priority := 3
@@ -623,7 +605,7 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 	if assetSection >= 0 {
 		relatedAssets := map[string]bool{}
 		selectAssets := func(kind, id string) {
-			for _, assetID := range assets[historyNodeKey{Kind: kind, ID: id}] {
+			for _, assetID := range assets[model.NodeKey{Kind: kind, ID: id}] {
 				relatedAssets[assetID] = true
 			}
 		}
@@ -694,56 +676,6 @@ func buildContextOverview(state State, maxBytes int, curationCandidates map[stri
 	return view, nil
 }
 
-func contextExcerpt(text string, maxBytes int) (string, bool) {
-	if len(text) <= maxBytes {
-		return text, false
-	}
-	end := maxBytes
-	for end > 0 && !utf8.RuneStart(text[end]) {
-		end--
-	}
-	return text[:end], true
-}
-
 func contextActiveStep(status string) bool {
 	return status == "open" || status == "running" || status == "needs_review" || status == "blocked"
-}
-
-// Legacy jobs contain Graph only. Project the same meaning without guessing
-// new provenance or changing those jobs' immutable registration snapshots.
-func contextState(s State) State {
-	if len(s.Goals) == 0 {
-		root := Goal{ID: "goal", Status: "open", Sources: []string{}}
-		for _, f := range s.Graph.Facts {
-			if f.ID == "goal" {
-				root.Condition = f.Description
-			}
-		}
-		if s.Graph.Project.Status == "completed" {
-			root.Status = "achieved"
-		}
-		s.Goals = []Goal{root}
-	}
-	if len(s.Steps) == 0 {
-		for _, i := range s.Graph.Intents {
-			step := Step{ID: i.ID, From: i.From, GoalID: "goal", Description: i.Description, Status: "open", Result: i.To, Worker: i.Worker, CreatedAt: i.CreatedAt}
-			if i.Worker != nil {
-				step.Status = "running"
-			}
-			if i.To != nil {
-				step.Status = "completed"
-			}
-			s.Steps = append(s.Steps, step)
-		}
-	}
-	if len(s.FactRecords) == 0 {
-		for _, f := range s.Graph.Facts {
-			status := "valid"
-			if f.ID == "origin" || f.ID == "goal" {
-				status = "input"
-			}
-			s.FactRecords = append(s.FactRecords, FactRecord{ID: f.ID, Description: f.Description, Status: status, Legacy: true, Evidence: []EvidenceRef{}})
-		}
-	}
-	return s
 }

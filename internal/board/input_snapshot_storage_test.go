@@ -6,9 +6,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/board/model"
 )
 
 func TestGrowingInputSnapshotsShareRetainedEvidence(t *testing.T) {
@@ -167,5 +170,51 @@ func TestFailedSnapshotManifestDoesNotLeaveOrphanChunks(t *testing.T) {
 			t.Fatal("handled manifest failure retained orphaned chunk payloads")
 		}
 		return nil
+	})
+}
+
+// A model-owned State remains the exact input/output type at the SQL boundary.
+func TestModelStateSnapshotKeepsOriginalBytesAcrossReopen(t *testing.T) {
+	raw, err := os.ReadFile("model/testdata/state.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = bytes.TrimSpace(raw)
+	var state model.State
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(raw)
+	f := newOrchestrationFixture(t)
+	var ref *InputSnapshot
+	f.do(func(tx *Tx) error {
+		if err := tx.Save(state.Graph); err != nil {
+			return err
+		}
+		ref, err = tx.FreezeInput(state)
+		return err
+	})
+	if ref.ID != hex.EncodeToString(digest[:]) || ref.StateVersion != model.DecisionStateVersion(state) {
+		t.Fatal("model snapshot changed the original stored identity")
+	}
+	reopenAssetFixture(t, f)
+	f.do(func(tx *Tx) error {
+		var restored model.State
+		restored, err = tx.ReadInputSnapshot(state.Graph.Project.ID, ref.ID)
+		if err != nil {
+			return err
+		}
+		got, err := json.Marshal(restored)
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, raw) || DecisionStateVersion(restored) != ref.StateVersion {
+			t.Fatal("reopening changed the model-owned state or its canonical version")
+		}
+		metadata, err := tx.InputSnapshotMetadata(state.Graph.Project.ID, ref.ID)
+		if err == nil && !reflect.DeepEqual(metadata, ref) {
+			t.Fatal("reopening changed immutable input metadata")
+		}
+		return err
 	})
 }

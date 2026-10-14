@@ -122,7 +122,7 @@ func TestReopenRequirementsCannotBeTruncatedToFitCompletion(t *testing.T) {
 		if err := ValidateContextCapacity(state); err == nil {
 			t.Fatal("oversized reopened input passed admission")
 		}
-		state = contextState(state)
+		state = state.WithLegacyDefaults()
 		state.FactRecords = append(state.FactRecords, FactRecord{ID: "evidence", Status: "valid", Evidence: []EvidenceRef{{Excerpt: "Original result"}}})
 		payload := json.RawMessage(`{"from":["evidence"],"description":"Proposed proof"}`)
 		review, err := buildCompletionReview(state, "v", payload, MaxCompletionReviewBytes)

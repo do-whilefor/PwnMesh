@@ -29,7 +29,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `cmd/` | CLI configuration and process wiring |
 | `internal/server/` | HTTP admission, authorization, read/write transaction choice |
 | `internal/board/` | Transactional mutations, projections, SQLite and migrations |
-| `internal/board/model/` | Storage-free graph types, identity and domain rules |
+| `internal/board/model/` | Storage-free canonical state, identity, evidence rules and reading views |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
@@ -47,11 +47,13 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `scripts/` | Linux build, checks and explicit acceptance commands |
 | `docs/` | Maintained architecture, protocol, recovery, format and development guides |
 
-`board/model` owns storage-free graph/state values, input identities and task
-budgets. Board and Config retain aliases for their existing callers. `protocol`
-uses these values directly and no longer imports the configuration loader; it
-still uses `board.State` and aggregate Board views, so SQLite remains a transitive
-dependency. Do not introduce a second model merely to hide that coupling.
+`board/model` owns the canonical State, its JSON encoding and decision hash,
+curation values, evidence-support rules, history views, input identities and task
+budgets. Board and Config retain aliases for their existing callers. SQL-backed
+projections and mutations remain in Board, within the existing transaction.
+`protocol` uses shared model values but still imports aggregate Board views, so
+SQLite remains a transitive dependency. Do not introduce a second model merely
+to hide that coupling.
 
 The embedded frontend keeps project form rules in `project-model.js`, provider
 settings in `model-settings.js`, and activity rendering in `activity-view.js`.

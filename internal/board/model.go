@@ -22,3 +22,6 @@ type InputSnapshot = model.InputSnapshot
 func Ptr(s string) *string                { return model.Ptr(s) }
 func Value(s *string) string              { return model.Value(s) }
 func Err(status int, detail string) error { return model.Err(status, detail) }
+
+type HistoryMember = model.HistoryMember
+type HistoryEntry = model.HistoryEntry

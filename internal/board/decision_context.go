@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+
+	"pwnmesh/internal/board/model"
 )
 
 // DecisionContext is bound to one immutable State. A successful decision may
@@ -50,7 +52,7 @@ type decisionView struct {
 
 // Build the view from the current FGS and the cursor's event index.
 func buildDecisionChanges(current State, baseline json.RawMessage, result *DecisionContext, changed decisionChanges, ordered []StateEvent, maxBytes int) (*DecisionContext, error) {
-	current = contextState(current)
+	current = current.WithLegacyDefaults()
 	project := current.Graph.Project
 	project.Reason = nil
 	project.Curator = nil
@@ -176,7 +178,7 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	for id := range selectedSteps {
 		resultSteps[id] = true
 	}
-	producers := decisionFactProducers(facts, steps)
+	producers := model.FactProducers(facts, steps)
 	for _, goal := range current.Goals {
 		if goal.Status == "open" {
 			selectedGoals[goal.ID] = true
@@ -321,34 +323,6 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	}
 	result.View, result.Mode = raw, "changes"
 	return result, nil
-}
-
-// Derive provenance from this version of the graph without rewriting records.
-// Explicit sources take precedence even when they cannot be resolved. Only a
-// unique legacy Result may fill an absent source; inputs are never outputs.
-func decisionFactProducers(facts map[string]FactRecord, steps map[string]Step) map[string]string {
-	producers := make(map[string]string)
-	for _, step := range steps {
-		id := Value(step.Result)
-		fact, exists := facts[id]
-		if !exists || id == "origin" || id == "goal" || fact.SourceStepID != "" {
-			continue
-		}
-		if _, seen := producers[id]; seen {
-			producers[id] = "" // Multiple legacy candidates are not provenance.
-		} else {
-			producers[id] = step.ID
-		}
-	}
-	for id, fact := range facts {
-		if id == "origin" || id == "goal" || fact.SourceStepID == "" {
-			continue
-		}
-		if _, exists := steps[fact.SourceStepID]; exists {
-			producers[id] = fact.SourceStepID
-		}
-	}
-	return producers
 }
 
 func decisionIndex[T any](items []T, key func(T) string) map[string]T {

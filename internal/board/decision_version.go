@@ -1,38 +1,16 @@
 package board
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
+
+	"pwnmesh/internal/board/model"
 )
 
 // DecisionStateVersion binds a plan to shared content rather than lease
 // heartbeats or event counters. Copy slices before removing runtime metadata.
-func DecisionStateVersion(state State) string {
-	state.Revision, state.DecisionRevision = 0, 0
-	state.Graph.Project.Reason = nil
-	state.Graph.Project.Curator = nil
-	state.Graph.Intents = append([]Intent{}, state.Graph.Intents...)
-	for n := range state.Graph.Intents {
-		state.Graph.Intents[n].Heartbeat = nil
-		state.Graph.Intents[n].Worker = nil
-	}
-	state.Steps = append([]Step{}, state.Steps...)
-	for n := range state.Steps {
-		state.Steps[n].Worker = nil
-		// Claiming work changes neither its plan nor its evidence. Keep actual
-		// running status for operation checks, but do not stale a decision when
-		// the dispatcher starts a step that decision just proposed.
-		if state.Steps[n].Status == "running" {
-			state.Steps[n].Status = "open"
-		}
-	}
-	raw, _ := json.Marshal(state)
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:])
-}
+func DecisionStateVersion(state State) string { return model.DecisionStateVersion(state) }
 
 // DecisionJobVersion returns the initial version for the new decision protocol.
 // A malformed non-null marker must never silently opt a job into legacy writes.

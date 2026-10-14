@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -156,4 +157,16 @@ func validAssetMethod(method string) bool {
 		}
 	}
 	return true
+}
+
+// AssetIDs reads immutable projected anchors without accessing live storage.
+func (s State) AssetIDs(nodeKind, nodeID string) []string {
+	var ids []string
+	for _, anchor := range s.AssetAnchors {
+		if anchor.NodeKind == nodeKind && anchor.NodeID == nodeID {
+			ids = append(ids, anchor.AssetID)
+		}
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids)
 }

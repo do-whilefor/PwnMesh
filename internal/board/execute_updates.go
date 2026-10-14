@@ -45,7 +45,7 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 		maxBytes = MaxExecuteUpdateBytes
 	}
 	version := DecisionStateVersion(current)
-	current = contextState(current)
+	current = current.WithLegacyDefaults()
 	out := &ExecuteUpdates{Version: 1, ExecuteUpdateCursor: cursor, FromRevision: cursor.Revision, ToRevision: current.Revision,
 		StateVersion: version, Complete: true, InvalidSources: []string{}, Facts: []FactRecord{}, Relations: []FactRelation{}, Omitted: map[string]int{}}
 	// Even a silent acknowledgement has a bound envelope. Check it before the

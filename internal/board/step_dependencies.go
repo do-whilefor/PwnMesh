@@ -2,8 +2,9 @@ package board
 
 import (
 	"encoding/json"
-	"pwnmesh/internal/artifactcheck"
 	"slices"
+
+	"pwnmesh/internal/artifactcheck"
 )
 
 func validateStepDependencies(s State, ids []string) error {
@@ -23,7 +24,7 @@ func validateStepDependencies(s State, ids []string) error {
 		}
 		seen[id] = true
 		if !slices.ContainsFunc(s.Steps, func(step Step) bool {
-			return step.ID == id && Value(step.Result) != "goal" && !s.externalFeedbackStep(step)
+			return step.ID == id && Value(step.Result) != "goal" && !s.ExternalFeedbackStep(step)
 		}) {
 			return Err(422, "Step dependency "+id+" must identify an existing Step in this project generation")
 		}
@@ -34,29 +35,18 @@ func validateStepDependencies(s State, ids []string) error {
 	return nil
 }
 
-// The compatible reopen endpoint records human feedback as a synthetic
-// concluded Intent. It is original input, not a successful Worker execution.
-func (s State) externalFeedbackStep(step Step) bool {
-	if step.Description != "external_feedback" || step.Result == nil {
-		return false
-	}
-	return slices.ContainsFunc(s.FactRecords, func(fact FactRecord) bool {
-		return fact.ID == *step.Result && fact.Legacy && fact.SourceStepID == ""
-	})
-}
-
 // projectStepSupport derives current support while retaining historical Step
 // success and every original observation. Only a Step's accepted result Fact
 // carries its task prerequisites; other independently retained observations
 // keep their original meaning and can be assessed on their own evidence.
-func (s *State) projectStepSupport(latest map[string]Execution, currentRuns map[string]bool) {
+func projectStepSupport(s *State, latest map[string]Execution, currentRuns map[string]bool) {
 	steps := map[string]*Step{}
 	facts := map[string]*FactRecord{}
 	owners := map[string]string{}
 	for n := range s.Steps {
 		step := &s.Steps[n]
 		steps[step.ID] = step
-		if step.Result != nil && *step.Result != "goal" && !s.externalFeedbackStep(*step) {
+		if step.Result != nil && *step.Result != "goal" && !s.ExternalFeedbackStep(*step) {
 			owners[*step.Result] = step.ID
 		}
 	}

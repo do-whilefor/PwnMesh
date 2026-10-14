@@ -6,6 +6,23 @@ import (
 	"pwnmesh/internal/artifactcheck"
 )
 
+// State extends PwnMesh's graph while retaining its historical JSON contract.
+type State struct {
+	Graph            Graph            `json:"graph"`
+	Goals            []Goal           `json:"goals"`
+	Steps            []Step           `json:"steps"`
+	FactRecords      []FactRecord     `json:"fact_records"`
+	Findings         []Finding        `json:"findings"`
+	FactRelations    []FactRelation   `json:"fact_relations"`
+	Revision         int64            `json:"revision"`
+	DecisionRevision int64            `json:"decision_revision"`
+	Candidates       []Candidate      `json:"candidates,omitempty"`
+	Disputes         []Dispute        `json:"disputes,omitempty"`
+	Curation         CurationProgress `json:"curation,omitempty"`
+	Assets           []Asset          `json:"assets,omitempty"`
+	AssetAnchors     []AssetAnchor    `json:"asset_anchors,omitempty"`
+}
+
 type EvidenceRef struct {
 	RunID     string `json:"run_id"`
 	Path      string `json:"path"`
@@ -95,4 +112,48 @@ type StateActionResult struct {
 	Unchanged    bool            `json:"unchanged,omitempty"`
 	Committed    bool            `json:"committed,omitempty"`
 	AssetIDs     []string        `json:"asset_ids,omitempty"`
+}
+
+// Curation is the final field in the current canonical encoding. Keep that
+// order: frozen inputs and decision state versions hash these exact JSON bytes.
+func (s State) MarshalJSON() ([]byte, error) {
+	type stateAlias State
+	view := struct {
+		*stateAlias
+		Curation *CurationProgress `json:"curation"`
+	}{stateAlias: (*stateAlias)(&s), Curation: &s.Curation}
+	return json.Marshal(view)
+}
+
+func (s State) ValidateFactSources(ids []string, requireObservation bool) error {
+	if len(ids) == 0 {
+		return Err(422, "at least one source fact is required")
+	}
+	seen := map[string]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			return Err(422, "duplicate source fact")
+		}
+		seen[id] = true
+		found := false
+		for _, f := range s.FactRecords {
+			if f.ID != id {
+				continue
+			}
+			found = true
+			// Orchestrated conclusions require an actual observation. Reopen
+			// feedback is a valid legacy Fact for planning, never evidence that
+			// the newly requested work has already been performed.
+			if requireObservation && s.Graph.Project.OrchestrationVersion == 1 && (f.Legacy || len(f.Evidence) == 0) {
+				return Err(409, "Source fact "+id+" is not an evidence-backed observation")
+			}
+			if f.SupportInvalid || (f.Status != "valid" && !(id == "origin" && !requireObservation)) {
+				return Err(409, "Source fact "+id+" is not effective evidence")
+			}
+		}
+		if !found {
+			return Err(404, "Fact "+id+" not found")
+		}
+	}
+	return nil
 }

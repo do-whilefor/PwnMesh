@@ -165,7 +165,7 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 		s.Steps = append(s.Steps, step)
 	}
 	if g.Project.OrchestrationVersion == 1 {
-		s.projectStepSupport(latest, currentRuns)
+		projectStepSupport(&s, latest, currentRuns)
 	}
 	// Assess conclusions once, after Step dependencies have established which
 	// accepted result Facts still have valid support.
@@ -230,11 +230,11 @@ func (t *Tx) ValidateStateCompletion(project string, from []string) error {
 	}
 	if current.Graph.Project.OrchestrationVersion == 1 {
 		for _, step := range current.Steps {
-			if step.Status == "blocked" || (step.Status == "completed" && !step.SupportValid && Value(step.Result) != "goal" && !current.externalFeedbackStep(step)) {
+			if step.Status == "blocked" || (step.Status == "completed" && !step.SupportValid && Value(step.Result) != "goal" && !current.ExternalFeedbackStep(step)) {
 				return Err(409, "Project has a blocked or unsupported Step "+step.ID)
 			}
 		}
-		if err := current.validateCompletionDisputes(from); err != nil {
+		if err := current.ValidateCompletionDisputes(from); err != nil {
 			return err
 		}
 		if current.Graph.Project.Curator != nil {

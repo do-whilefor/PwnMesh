@@ -1,4 +1,4 @@
-package board
+package model
 
 import "slices"
 
@@ -15,7 +15,8 @@ type HistoryMember struct {
 	ObservedAt     string `json:"observed_at,omitempty"`
 }
 
-type historyNodeKey struct{ Kind, ID string }
+// NodeKey identifies a projected graph record without conflating node kinds.
+type NodeKey struct{ Kind, ID string }
 
 // HistoryEntry is a deterministic reading view, not a new observation or
 // completion judgment. Summary is a literal prefix of the Step description.
@@ -32,10 +33,16 @@ type HistoryEntry struct {
 // the snapshot. Anything still needed by a goal, judgment, dispute, correction
 // or live execution stays individually discoverable, including its ancestry.
 func (s State) History() []HistoryEntry {
-	s = contextState(s)
-	facts := decisionIndex(s.FactRecords, func(f FactRecord) string { return f.ID })
-	steps := decisionIndex(s.Steps, func(step Step) string { return step.ID })
-	producers := decisionFactProducers(facts, steps)
+	s = s.WithLegacyDefaults()
+	facts := make(map[string]FactRecord, len(s.FactRecords))
+	for _, fact := range s.FactRecords {
+		facts[fact.ID] = fact
+	}
+	steps := make(map[string]Step, len(s.Steps))
+	for _, step := range s.Steps {
+		steps[step.ID] = step
+	}
+	producers := FactProducers(facts, steps)
 	outputs := map[string][]string{}
 	resultOwners := map[string][]string{}
 	for _, step := range s.Steps {
@@ -48,10 +55,10 @@ func (s State) History() []HistoryEntry {
 			outputs[producer] = append(outputs[producer], fact.ID)
 		}
 	}
-	protected := map[historyNodeKey]bool{}
-	var pending []historyNodeKey
+	protected := map[NodeKey]bool{}
+	var pending []NodeKey
 	keep := func(kind, id string) {
-		member := historyNodeKey{Kind: kind, ID: id}
+		member := NodeKey{Kind: kind, ID: id}
 		if id != "" && !protected[member] {
 			protected[member] = true
 			pending = append(pending, member)
@@ -70,7 +77,7 @@ func (s State) History() []HistoryEntry {
 	}
 	for _, step := range s.Steps {
 		terminal := step.Status == "completed" || step.Status == "abandoned"
-		if !terminal || Value(step.Result) == "goal" || s.externalFeedbackStep(step) ||
+		if !terminal || Value(step.Result) == "goal" || s.ExternalFeedbackStep(step) ||
 			len(step.InvalidSources) > 0 || len(step.BlockedBy) > 0 ||
 			(s.Graph.Project.OrchestrationVersion == 1 && step.Status == "completed" && !step.SupportValid) {
 			keep("step", step.ID)
@@ -134,23 +141,23 @@ func (s State) History() []HistoryEntry {
 			keep("step", id)
 		}
 	}
-	assets := s.historyAssetIndex()
+	assets := s.AssetIndex()
 	history := []HistoryEntry{}
 	for _, step := range s.Steps {
-		if protected[historyNodeKey{Kind: "step", ID: step.ID}] {
+		if protected[NodeKey{Kind: "step", ID: step.ID}] {
 			continue
 		}
 		entry := HistoryEntry{ID: step.ID, Status: step.Status, Members: []HistoryMember{{Kind: "step", ID: step.ID, Status: step.Status}}}
-		entry.Summary, entry.TextTruncated = contextExcerpt(step.Description, 240)
+		entry.Summary, entry.TextTruncated = ContextExcerpt(step.Description, 240)
 		for _, id := range outputs[step.ID] {
 			fact := facts[id]
 			member := HistoryMember{Kind: "fact", ID: id, Status: fact.Status, ObservedAt: fact.ObservedAt}
-			member.Excerpt, member.TextTruncated = contextExcerpt(fact.Description, 160)
-			member.Scope, member.ScopeTruncated = contextExcerpt(fact.Scope, 120)
+			member.Excerpt, member.TextTruncated = ContextExcerpt(fact.Description, 160)
+			member.Scope, member.ScopeTruncated = ContextExcerpt(fact.Scope, 120)
 			entry.Members = append(entry.Members, member)
 		}
 		for _, member := range entry.Members {
-			entry.AssetIDs = append(entry.AssetIDs, assets[historyNodeKey{Kind: member.Kind, ID: member.ID}]...)
+			entry.AssetIDs = append(entry.AssetIDs, assets[NodeKey{Kind: member.Kind, ID: member.ID}]...)
 		}
 		slices.Sort(entry.AssetIDs)
 		entry.AssetIDs = slices.Compact(entry.AssetIDs)
@@ -159,12 +166,12 @@ func (s State) History() []HistoryEntry {
 	return history
 }
 
-// Build once per reading view; scanning all anchors per node would make large
+// AssetIndex builds once per reading view; scanning all anchors per node would make large
 // histories quadratic. The index owns its slices and cannot mutate State.
-func (s State) historyAssetIndex() map[historyNodeKey][]string {
-	index := map[historyNodeKey][]string{}
+func (s State) AssetIndex() map[NodeKey][]string {
+	index := map[NodeKey][]string{}
 	for _, anchor := range s.AssetAnchors {
-		member := historyNodeKey{Kind: anchor.NodeKind, ID: anchor.NodeID}
+		member := NodeKey{Kind: anchor.NodeKind, ID: anchor.NodeID}
 		index[member] = append(index[member], anchor.AssetID)
 	}
 	for member, ids := range index {

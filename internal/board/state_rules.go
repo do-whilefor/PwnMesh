@@ -9,39 +9,6 @@ import (
 	"strings"
 )
 
-func (s State) ValidateFactSources(ids []string, requireObservation bool) error {
-	if len(ids) == 0 {
-		return Err(422, "at least one source fact is required")
-	}
-	seen := map[string]bool{}
-	for _, id := range ids {
-		if seen[id] {
-			return Err(422, "duplicate source fact")
-		}
-		seen[id] = true
-		found := false
-		for _, f := range s.FactRecords {
-			if f.ID != id {
-				continue
-			}
-			found = true
-			// Orchestrated conclusions require an actual observation. Reopen
-			// feedback is a valid legacy Fact for planning, never evidence that
-			// the newly requested work has already been performed.
-			if requireObservation && s.Graph.Project.OrchestrationVersion == 1 && (f.Legacy || len(f.Evidence) == 0) {
-				return Err(409, "Source fact "+id+" is not an evidence-backed observation")
-			}
-			if f.SupportInvalid || (f.Status != "valid" && !(id == "origin" && !requireObservation)) {
-				return Err(409, "Source fact "+id+" is not effective evidence")
-			}
-		}
-		if !found {
-			return Err(404, "Fact "+id+" not found")
-		}
-	}
-	return nil
-}
-
 func decodeAction(raw json.RawMessage, target any) error {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.DisallowUnknownFields()

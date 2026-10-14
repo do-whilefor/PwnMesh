@@ -1,51 +1,16 @@
 package board
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"slices"
 	"strings"
+
+	"pwnmesh/internal/board/model"
 )
 
-// Candidate is an immutable producer judgment, never the shared conclusion.
-type Candidate struct {
-	ID           string        `json:"id"`
-	Claim        string        `json:"claim"`
-	Scope        string        `json:"scope"`
-	Status       string        `json:"status"`
-	Supersedes   string        `json:"supersedes,omitempty"`
-	Sources      []string      `json:"sources"`
-	Evidence     []EvidenceRef `json:"evidence"`
-	Reason       string        `json:"reason"`
-	RunID        string        `json:"run_id"`
-	SourceStepID string        `json:"source_step_id"`
-	Generation   int64         `json:"generation"`
-	Revision     int64         `json:"revision"`
-	CreatedAt    string        `json:"created_at"`
-}
-
-type CurationProgress struct {
-	Generation      int64            `json:"generation"`
-	ThroughRevision int64            `json:"through_revision"`
-	RunID           string           `json:"run_id,omitempty"`
-	UpdatedAt       string           `json:"updated_at,omitempty"`
-	Request         *CurationRequest `json:"request,omitempty"`
-}
-
-type Dispute struct {
-	ID             string   `json:"id"`
-	FindingID      string   `json:"finding_id"`
-	CandidateIDs   []string `json:"candidate_ids"`
-	Status         string   `json:"status"`
-	Question       string   `json:"question"`
-	Reason         string   `json:"reason"`
-	ReviewStepIDs  []string `json:"review_step_ids"`
-	ReviewFactIDs  []string `json:"review_fact_ids"`
-	ProducerRunIDs []string `json:"producer_run_ids"`
-	CreatedAt      string   `json:"created_at"`
-	UpdatedAt      string   `json:"updated_at"`
-}
+type Candidate = model.Candidate
+type CurationProgress = model.CurationProgress
+type Dispute = model.Dispute
 
 type CurateGroup struct {
 	CandidateIDs  []string `json:"candidate_ids,omitempty"`
@@ -86,70 +51,6 @@ type CurateResult struct {
 	FactRelations []FactRelation   `json:"fact_relations,omitempty"`
 }
 
-func findingIdentity(claim, scope string) string {
-	raw, _ := json.Marshal([]string{strings.Join(strings.Fields(claim), " "), strings.TrimSpace(scope)})
-	digest := sha256.Sum256(raw)
-	return "finding_" + hex.EncodeToString(digest[:12])
-}
-
-// ActiveCandidates projects the current producer notes without rewriting their
-// history. A revision can retire only its own producer's earlier interpretation.
-func (s State) ActiveCandidates() []Candidate {
-	retired := map[string]bool{}
-	for _, c := range s.Candidates {
-		if c.Generation == s.Graph.Project.Generation && c.Revision <= s.Revision && c.Supersedes != "" {
-			retired[c.Supersedes] = true
-		}
-	}
-	active := []Candidate{}
-	for _, c := range s.Candidates {
-		if c.Generation == s.Graph.Project.Generation && c.Revision <= s.Revision && !retired[c.ID] {
-			active = append(active, c)
-		}
-	}
-	return active
-}
-
-// PendingCurationCandidateIDs selects whole active identity groups that need
-// reconciliation. Ordinary observations and one producer's tentative notes do
-// not need to become shared findings before exploration can continue.
-func (s State) PendingCurationCandidateIDs() map[string]bool {
-	groups := map[string][]Candidate{}
-	shared := map[string]Finding{}
-	for _, finding := range s.Findings {
-		shared[findingIdentity(finding.Claim, finding.Scope)] = finding
-	}
-	for _, candidate := range s.ActiveCandidates() {
-		key := findingIdentity(candidate.Claim, candidate.Scope)
-		groups[key] = append(groups[key], candidate)
-	}
-	selected := map[string]bool{}
-	for key, candidates := range groups {
-		finding, hasFinding := shared[key]
-		// A bounded batch can finish one identity group before the global
-		// scan finishes. Its own boundary prevents repeatedly scheduling it
-		// while other groups are still waiting at the old global cursor.
-		acknowledged := map[string]bool{}
-		for _, id := range finding.CandidateIDs {
-			acknowledged[id] = true
-		}
-		fresh, verified, refuted := false, false, false
-		producers := map[string]bool{}
-		for _, candidate := range candidates {
-			fresh = fresh || candidate.Revision > s.Curation.ThroughRevision && (candidate.Revision > finding.CuratedRevision || !acknowledged[candidate.ID])
-			verified = verified || candidate.Status == "verified"
-			refuted = refuted || candidate.Status == "refuted"
-			producers[candidate.RunID] = true
-		}
-		if fresh && (len(producers) > 1 || verified && refuted || hasFinding) {
-			for _, candidate := range candidates {
-				selected[candidate.ID] = true
-			}
-		}
-	}
-	return selected
-}
-
 func (t *Tx) addCandidate(s State, d *stateData, fence ExecutionFence, raw json.RawMessage) (string, any, error) {
 	var input struct {
 		Claim      string        `json:"claim"`
@@ -174,7 +75,7 @@ func (t *Tx) addCandidate(s State, d *stateData, fence ExecutionFence, raw json.
 		found := false
 		for _, old := range s.ActiveCandidates() {
 			if old.ID == input.Supersedes {
-				found = old.RunID == fence.Run && findingIdentity(old.Claim, old.Scope) == findingIdentity(input.Claim, input.Scope)
+				found = old.RunID == fence.Run && model.FindingIdentity(old.Claim, old.Scope) == model.FindingIdentity(input.Claim, input.Scope)
 				break
 			}
 		}
@@ -299,7 +200,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			// in this checked snapshot. Never let a transport ID limit hide a
 			// conflicting producer or omit it from independent review.
 			for _, candidate := range activeCandidates {
-				if findingIdentity(candidate.Claim, candidate.Scope) == group.GroupKey {
+				if model.FindingIdentity(candidate.Claim, candidate.Scope) == group.GroupKey {
 					group.CandidateIDs = append(group.CandidateIDs, candidate.ID)
 				}
 			}
@@ -314,7 +215,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			if !ok || !active[cid] || c.Revision > input.ThroughRevision {
 				return "", nil, Err(422, "candidate outside curation input")
 			}
-			key := findingIdentity(c.Claim, c.Scope)
+			key := model.FindingIdentity(c.Claim, c.Scope)
 			if covered[cid] || id != "" && id != key {
 				return "", nil, Err(422, "curation group must contain distinct candidates with identical claim and scope")
 			}
@@ -342,7 +243,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			}
 		}
 		for _, candidate := range activeCandidates {
-			if findingIdentity(candidate.Claim, candidate.Scope) != id {
+			if model.FindingIdentity(candidate.Claim, candidate.Scope) != id {
 				continue
 			}
 			if !slices.Contains(finding.CandidateIDs, candidate.ID) {

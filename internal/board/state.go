@@ -7,22 +7,7 @@ import (
 	"pwnmesh/internal/board/model"
 )
 
-// State extends PwnMesh's graph while retaining its historical JSON contract.
-type State struct {
-	Graph            Graph            `json:"graph"`
-	Goals            []Goal           `json:"goals"`
-	Steps            []Step           `json:"steps"`
-	FactRecords      []FactRecord     `json:"fact_records"`
-	Findings         []Finding        `json:"findings"`
-	FactRelations    []FactRelation   `json:"fact_relations"`
-	Revision         int64            `json:"revision"`
-	DecisionRevision int64            `json:"decision_revision"`
-	Candidates       []Candidate      `json:"candidates,omitempty"`
-	Disputes         []Dispute        `json:"disputes,omitempty"`
-	Curation         CurationProgress `json:"curation,omitempty"`
-	Assets           []Asset          `json:"assets,omitempty"`
-	AssetAnchors     []AssetAnchor    `json:"asset_anchors,omitempty"`
-}
+type State = model.State
 
 type EvidenceRef = model.EvidenceRef
 type FactRecord = model.FactRecord

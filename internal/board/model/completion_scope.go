@@ -1,4 +1,4 @@
-package board
+package model
 
 // Completion depends on the proposed evidence and its recorded prerequisites,
 // not every interpretation explored along the way. This is a mechanical scope
@@ -52,7 +52,8 @@ func (s State) completionSources(from []string) map[string]bool {
 	}
 }
 
-func (s State) validateCompletionDisputes(from []string) error {
+// ValidateCompletionDisputes checks unresolved judgments affecting the proposed proof.
+func (s State) ValidateCompletionDisputes(from []string) error {
 	sources := s.completionSources(from)
 	relevant := func(ids []string) bool {
 		for _, id := range ids {
@@ -98,7 +99,7 @@ func (s State) validateCompletionDisputes(from []string) error {
 		if !pending[candidate.ID] {
 			continue
 		}
-		key := findingIdentity(candidate.Claim, candidate.Scope)
+		key := FindingIdentity(candidate.Claim, candidate.Scope)
 		group := groups[key]
 		group.verified = group.verified || candidate.Status == "verified"
 		group.refuted = group.refuted || candidate.Status == "refuted"

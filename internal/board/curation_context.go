@@ -1,5 +1,7 @@
 package board
 
+import "pwnmesh/internal/board/model"
+
 type contextCandidate struct {
 	CandidateView
 	EvidenceOmitted bool `json:"evidence_omitted,omitempty"`
@@ -16,18 +18,7 @@ type curationInputCoverage struct {
 	ReadMore           string `json:"read_more"`
 }
 
-// CandidateView adds read-only grouping and source validity to a projection.
-// The stored Candidate and its immutable snapshot/version remain unchanged.
-type CandidateView struct {
-	Candidate
-	GroupKey     string `json:"group_key,omitempty"`
-	SupportValid *bool  `json:"support_valid,omitempty"`
-}
-
-func (s State) CandidateView(candidate Candidate) CandidateView {
-	support := s.ValidateFactSources(candidate.Sources, true) == nil
-	return CandidateView{Candidate: candidate, GroupKey: findingIdentity(candidate.Claim, candidate.Scope), SupportValid: &support}
-}
+type CandidateView = model.CandidateView
 
 // Keep active groups needing reconciliation, including unsupported shared
 // conclusions and unresolved disputes.
@@ -37,7 +28,7 @@ func curationContextCandidates(state State) map[string]bool {
 	selected, groups := state.PendingCurationCandidateIDs(), map[string]bool{}
 	for _, finding := range state.Findings {
 		if finding.Status != "candidate" && !finding.SupportValid {
-			groups[findingIdentity(finding.Claim, finding.Scope)] = true
+			groups[model.FindingIdentity(finding.Claim, finding.Scope)] = true
 		}
 	}
 	for _, dispute := range state.Disputes {
@@ -50,12 +41,12 @@ func curationContextCandidates(state State) map[string]bool {
 	active := state.ActiveCandidates()
 	for _, candidate := range active {
 		if selected[candidate.ID] {
-			groups[findingIdentity(candidate.Claim, candidate.Scope)] = true
+			groups[model.FindingIdentity(candidate.Claim, candidate.Scope)] = true
 		}
 	}
 	selected = map[string]bool{}
 	for _, candidate := range active {
-		if groups[findingIdentity(candidate.Claim, candidate.Scope)] {
+		if groups[model.FindingIdentity(candidate.Claim, candidate.Scope)] {
 			selected[candidate.ID] = true
 		}
 	}

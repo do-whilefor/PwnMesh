@@ -1,22 +1,12 @@
 package board
 
-import "encoding/json"
+import (
+	"encoding/json"
 
-// CurationRequest lets the planner ask for evidence reconciliation without
-// manufacturing matching producer claims or classifying ordinary exploration.
-type CurationRequest struct {
-	Sources  []string `json:"sources"`
-	Reason   string   `json:"reason"`
-	Revision int64    `json:"revision"`
-}
+	"pwnmesh/internal/board/model"
+)
 
-func (s State) PendingCurationRequest() *CurationRequest {
-	request := s.Curation.Request
-	if request == nil || s.Curation.Generation != s.Graph.Project.Generation || request.Revision <= s.Curation.ThroughRevision || request.Revision > s.Revision {
-		return nil
-	}
-	return request
-}
+type CurationRequest = model.CurationRequest
 
 func (t *Tx) requestCuration(s State, d *stateData, raw json.RawMessage) (string, any, bool, error) {
 	var input struct {

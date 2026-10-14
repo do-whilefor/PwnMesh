@@ -39,18 +39,6 @@ func assetIDs(assets []Asset) []string {
 	return out
 }
 
-// AssetIDs reads the immutable snapshot's projected anchors, never live SQL.
-func (s State) AssetIDs(nodeKind, nodeID string) []string {
-	var ids []string
-	for _, anchor := range s.AssetAnchors {
-		if anchor.NodeKind == nodeKind && anchor.NodeID == nodeID {
-			ids = append(ids, anchor.AssetID)
-		}
-	}
-	slices.Sort(ids)
-	return slices.Compact(ids)
-}
-
 func (t *Tx) addAssetAnchors(project string, generation int64, kind, id string, assets []Asset) error {
 	for _, a := range assets {
 		if _, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_assets(project_id,id,kind,value,method) VALUES(?,?,?,?,?)`, project, a.ID, a.Kind, a.Value, a.Method); err != nil {
