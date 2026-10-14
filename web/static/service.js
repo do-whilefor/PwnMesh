@@ -14,10 +14,39 @@
     const timing=Data.projectTiming(state,runs);
     return {...project,state,logs:Data.buildLogs(state,events,runs),runs,events,files,target:facts.find(f=>f.id==='origin')?.description || '',goal:facts.find(f=>f.id==='goal')?.description || state.goals?.find(g=>g.id==='goal')?.condition || '',startedAt:timing.startedAt,endedAt:timing.endedAt || null};
   }
+  async function readArchiveEntry(api, base, entry) {
+    if (entry.bytes > 32 * 1024 * 1024) throw new Error('单条历史记录超过 32 MiB，无法在页面完整读取。');
+    const bytes = new Uint8Array(entry.bytes);
+    let offset = 0;
+    for (;;) {
+      const chunk = await api.request(base + '/entries/' + entry.cursor + '?offset=' + offset + '&limit=32768');
+      if (chunk.encoding !== 'base64' || chunk.offset !== offset || chunk.total_bytes !== entry.bytes) throw new Error('历史记录分块不一致');
+      const raw = atob(chunk.data), end = offset + raw.length;
+      const complete = chunk.next_offset == null;
+      const invalidBoundary = complete ? end !== bytes.length :
+        !raw.length || chunk.next_offset !== end || end >= bytes.length;
+      if (invalidBoundary) throw new Error('历史记录分块边界无效');
+      for (let i = 0; i < raw.length; i++) bytes[offset + i] = raw.charCodeAt(i);
+      if (complete) break;
+      offset = end;
+    }
+    // Decode after joining bytes: a chunk can split a UTF-8 character.
+    return JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(bytes));
+  }
   class Service {
     constructor(api=new API.Client()){this.api=api;this.scope=new API.RequestScope();this.projects=[];this.events=new Map();this.views=new Map();this.pendingCreate=null;this.uncertainCreate=false;this.pendingHints=new Map();}
     cancel(){this.scope.cancel();}
-    async pages(path,options={},cursor=-1){const items=[];for(;;){const page=await this.api.request(path+'?limit=100&cursor='+cursor,options);if(!Array.isArray(page.items))throw new Error('历史记录分页格式无效');items.push(...page.items);if(page.next_cursor==null)return items;if(!Number.isSafeInteger(page.next_cursor)||page.next_cursor<=cursor)throw new Error('历史记录分页边界无效');cursor=page.next_cursor;}}
+    async pages(path, options = {}, cursor = -1) {
+      const items = [];
+      for (;;) {
+        const page = await this.api.request(path + '?limit=100&cursor=' + cursor, options);
+        if (!Array.isArray(page.items)) throw new Error('历史记录分页格式无效');
+        items.push(...page.items);
+        if (page.next_cursor == null) return items;
+        if (!Number.isSafeInteger(page.next_cursor) || page.next_cursor <= cursor) throw new Error('历史记录分页边界无效');
+        cursor = page.next_cursor;
+      }
+    }
     async refresh(preferred='') {
       const request=this.scope.begin(), options={signal:request.signal};
       const list=await this.api.request('/projects',options); if(!this.scope.current(request.version))return null;
@@ -97,28 +126,26 @@
       if(this.pendingHints.get(id)===pending)this.pendingHints.delete(id);
       return result;
     }
-    async archive(project,generation){
-      const base=pathFor(project.id)+'/rounds/'+generation, summary=project.history.find(p=>p.generation===generation);
-      if(!summary)throw new Error('此历史轮次不存在。');if(summary.state)return summary;
-      const entries=await this.pages(base+'/entries',{},0), records={state:[],event:[],execution:[],inputs:[]};
-      for(const entry of entries){if(!Object.hasOwn(records,entry.kind))continue;if(entry.bytes>32*1024*1024)throw new Error('单条历史记录超过 32 MiB，无法在页面完整读取。');
-        const bytes=new Uint8Array(entry.bytes);let offset=0;
-        for(;;){
-          const chunk=await this.api.request(base+'/entries/'+entry.cursor+'?offset='+offset+'&limit=32768');
-          if(chunk.encoding!=='base64'||chunk.offset!==offset||chunk.total_bytes!==entry.bytes)throw new Error('历史记录分块不一致');
-          const raw=atob(chunk.data),end=offset+raw.length;
-          if(end>bytes.length||(chunk.next_offset==null?end!==bytes.length:!raw.length||chunk.next_offset!==end||end>=bytes.length))throw new Error('历史记录分块边界无效');
-          for(let i=0;i<raw.length;i++)bytes[offset+i]=raw.charCodeAt(i);
-          if(chunk.next_offset==null)break;
-          offset=end;
-        }
-        records[entry.kind].push(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
+    async archive(project, generation) {
+      const base = pathFor(project.id) + '/rounds/' + generation;
+      const summary = project.history.find(p => p.generation === generation);
+      if (!summary) throw new Error('此历史轮次不存在。');
+      if (summary.state) return summary;
+      const entries = await this.pages(base + '/entries', {}, 0);
+      const records = {state:[],event:[],execution:[],inputs:[]};
+      for (const entry of entries) {
+        if (!Object.hasOwn(records, entry.kind)) continue;
+        records[entry.kind].push(await readArchiveEntry(this.api, base, entry));
       }
-      if(!records.state.length)throw new Error('历史轮次缺少状态快照。');
-      if(records.inputs.length>1||(records.inputs.length===1&&!Array.isArray(records.inputs[0])))throw new Error('历史材料清单格式无效。');
-      const filesKnown=records.inputs.length===1;
-      const snapshot=snapshotView(records.state[0],records.event,records.execution,filesKnown?records.inputs[0]:[],summary);
-      const value={...snapshot,archived:true,filesKnown,endedAt:snapshot.endedAt || summary.archivedAt,history:[]};Object.assign(summary,value);const latest=this.projects.find(p=>p.id===project.id)?.history.find(p=>p.generation===generation);if(latest&&latest!==summary)Object.assign(latest,value);return latest||summary;
+      if (!records.state.length) throw new Error('历史轮次缺少状态快照。');
+      if (records.inputs.length > 1 || (records.inputs.length === 1 && !Array.isArray(records.inputs[0]))) throw new Error('历史材料清单格式无效。');
+      const filesKnown = records.inputs.length === 1;
+      const snapshot = snapshotView(records.state[0], records.event, records.execution, filesKnown ? records.inputs[0] : [], summary);
+      const value = {...snapshot,archived:true,filesKnown,endedAt:snapshot.endedAt || summary.archivedAt,history:[]};
+      Object.assign(summary, value);
+      const latest = this.projects.find(p => p.id === project.id)?.history.find(p => p.generation === generation);
+      if (latest && latest !== summary) Object.assign(latest, value);
+      return latest || summary;
     }
   }
   return {Service,projectView,snapshotView};

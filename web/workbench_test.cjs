@@ -258,15 +258,52 @@ test('archived UTF-8 state chunks join without corrupting a split multibyte char
  const service=new Service({async request(url){if(url.endsWith('/entries?limit=100&cursor=0'))return {items:[{cursor:1,kind:'state',bytes:bytes.length}]};const offset=Number(new URL(url,'http://local').searchParams.get('offset'));return {encoding:'base64',offset,total_bytes:bytes.length,data:bytes.subarray(offset,offset?bytes.length:split).toString('base64'),...(offset?{}:{next_offset:split})};}});service.projects=[project];const archived=await service.archive(project,0);assert.equal(archived.name,'中文项目');
 });
 
-test('archive hydration rejects oversized chunks and overlapping continuations',async t=>{
+test('archive hydration reads all entry pages, skips unknown kinds and reuses the hydrated round',async()=>{
+ const bytes=Buffer.from(JSON.stringify(snapshot())),calls=[];
+ const summary={id:'a',generation:0,archivedAt:stamp,files:[]},project={id:'a',history:[summary]};
+ const base='/projects/a/rounds/0/entries';
+ const service=new Service({async request(url){
+  calls.push(url);
+  if(url===base+'?limit=100&cursor=0')return {items:[{cursor:1,kind:'future',bytes:64*1024*1024}],next_cursor:1};
+  if(url===base+'?limit=100&cursor=1')return {items:[{cursor:2,kind:'state',bytes:bytes.length}]};
+  assert.equal(url,base+'/2?offset=0&limit=32768','unknown entry kinds must not be downloaded');
+  return {encoding:'base64',offset:0,total_bytes:bytes.length,data:bytes.toString('base64')};
+ }});
+ service.projects=[project];
+ const archived=await service.archive(project,0);
+ assert.equal(archived,summary);
+ assert.equal(archived.state.graph.project.generation,0);
+ assert.equal(archived.filesKnown,false);
+ assert.equal(await service.archive(project,0),archived);
+ assert.deepEqual(calls,[base+'?limit=100&cursor=0',base+'?limit=100&cursor=1',base+'/2?offset=0&limit=32768']);
+});
+
+test('archive hydration rejects oversized records before downloading their contents',async()=>{
+ const summary={id:'a',generation:0,archivedAt:stamp,files:[]},project={id:'a',history:[summary]},calls=[];
+ const service=new Service({async request(url){
+  calls.push(url);
+  return {items:[{cursor:1,kind:'state',bytes:32*1024*1024+1}]};
+ }});
+ await assert.rejects(service.archive(project,0),/32 MiB/);
+ assert.deepEqual(calls,['/projects/a/rounds/0/entries?limit=100&cursor=0']);
+ assert.equal(summary.state,undefined);
+});
+
+test('archive hydration rejects invalid chunk boundaries',async t=>{
  const bytes=Buffer.from(JSON.stringify(snapshot()));
- for(const kind of ['oversized','overlapping'])await t.test(kind,async()=>{
+ const cases=[
+  {name:'oversized',body:Buffer.concat([bytes,Buffer.from('extra')])},
+  {name:'overlapping',body:bytes.subarray(0,bytes.length-1),nextOffset:1},
+  {name:'truncated',body:bytes.subarray(0,bytes.length-1)},
+  {name:'empty continuation',body:Buffer.alloc(0),nextOffset:1},
+  {name:'continuation at end',body:bytes,nextOffset:bytes.length},
+ ];
+ for(const {name,body,nextOffset} of cases)await t.test(name,async()=>{
   const summary={id:'a',generation:0,archivedAt:stamp,files:[]},project={id:'a',history:[summary]};
   const service=new Service({async request(url){
    if(url.endsWith('/entries?limit=100&cursor=0'))return {items:[{cursor:1,kind:'state',bytes:bytes.length}]};
    const offset=Number(new URL(url,'http://local').searchParams.get('offset'));
-   const body=kind==='oversized'?Buffer.concat([bytes,Buffer.from('extra')]):bytes.subarray(offset,offset?bytes.length:bytes.length-1);
-   return {encoding:'base64',offset,total_bytes:bytes.length,data:body.toString('base64'),...(kind==='overlapping'&&offset===0?{next_offset:1}:{})};
+   return {encoding:'base64',offset,total_bytes:bytes.length,data:body.toString('base64'),...(nextOffset===undefined?{}:{next_offset:nextOffset})};
   }});
   await assert.rejects(service.archive(project,0),/历史记录分块边界无效/);
   assert.equal(summary.state,undefined,'rejected bytes must not populate the archive cache');
