@@ -1,5 +1,6 @@
 # Local references and maintained guides
 /refer/
+/.local/
 # Track maintained guides only; local evidence and historical notes stay local.
 /docs/*
 !/docs/architecture.md

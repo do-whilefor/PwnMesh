@@ -1,7 +1,13 @@
 .git
 refer
+.local
 design
-docs
+docs/*
+!docs/architecture.md
+!docs/development.md
+!docs/formats.md
+!docs/protocol.md
+!docs/recovery.md
 DEVELOPMENT*.md
 VALIDATION*.md
 AGENTS.md

@@ -24,6 +24,11 @@ browser JavaScript syntax/Node tests, Python HTTP replay and command regressions
 Select `go`, `web`, or `python` to run one check group. CI uses these same entries
 and separately builds/smoke-tests `serve`, `dispatch`, and `worker`.
 
+The default Docker build keeps the Go release checks. For faster local image
+iteration, `docker build --target development -t pwnmesh:dev .` compiles without
+running that test stage; it does not replace the default build before release.
+See [container builds](../container/README.md) for the pinned Worker dependencies.
+
 For a focused change, run its package and test names first. For example:
 
 ```sh
@@ -65,7 +70,8 @@ Docker socket constraints, retained-artifact replay and runtime knobs. External
 entrypoints live in `docker_acceptance_test.go`, `live_acceptance_test.go` and
 `replay_acceptance_test.go`. Shared helpers and offline oracle tests stay in the
 same Go package; no export-only fixture framework or duplicated fixtures is needed.
-Browser acceptance in `web/browser/` is independently opt-in.
+Browser acceptance in `web/browser/` is independently opt-in; the default
+`web/*_test.cjs` entry contains only Node regressions.
 
 Use `container/README.md` for image/runtime ownership. Delete only containers and
 images created for an acceptance run once they are no longer needed; do not prune
@@ -76,7 +82,10 @@ unrelated Docker resources or remove persistent project evidence volumes.
 The tracked top-level source layout is `cmd/`, `internal/`, `web/`, `tests/`,
 `container/`, `docs/`, and `scripts/`. Root build/configuration files remain at the
 root. Only the five maintained guides are allowed into `docs/`; historical local
-notes and acceptance output remain ignored. `refer/`, local development plans,
+notes and acceptance output remain ignored. `.local/` groups historical plans,
+local acceptance tools and retained evidence outside the source directories.
+Keep related local tools together when archiving them; generated Python bytecode
+can be deleted. `refer/`, local development plans,
 credentials, build outputs and temporary test artifacts are not source inputs.
 
 Use `PwnMesh` in product text, `pwnmesh` in executable/module/storage names and
@@ -92,4 +101,10 @@ input rejection and rollback. Namespace changes also need a populated schema `1`
 upgrade fixture that checks canonical object names, stored bytes, foreign keys,
 triggers and query behavior. Before a protocol move, retain exact wire fixtures.
 Commit reviewable changes with their focused regressions, without generated
-evidence or local plans.
+evidence or local plans. The Docker context includes the five maintained guides
+because the release checks validate them, while excluding local archives.
+
+Inspect fixed prompt costs without model calls using
+`go test ./internal/worker -run '^TestFixedPromptOverhead$' -count=1 -v`.
+This reports UTF-8 bytes separately for system instructions, fixed role/scenario
+guidance, tool declarations and task data; it does not estimate provider tokens.

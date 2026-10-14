@@ -1,5 +1,6 @@
 """Exercise command routing without starting Docker or contacting a model."""
 
+import fnmatch
 import json
 import os
 import pathlib
@@ -161,6 +162,68 @@ class CommandTests(unittest.TestCase):
                 self.assertEqual(records[-1]["args"][-3:], ["-run", "^" + name + "$", "./tests/integration"])
                 enabled = {key for key, value in records[-1]["controls"].items() if key.endswith("_TEST") and value == "1"}
                 self.assertEqual(enabled, {gate})
+
+
+class ContainerBuildTests(unittest.TestCase):
+    def test_build_context_keeps_repository_check_inputs(self):
+        rules = (ROOT / ".dockerignore").read_text().splitlines()
+        checks = (ROOT / "internal/config/repository_test.go").read_text()
+        inputs = re.findall(r'"((?:docs|container)/[^"\n]+\.md)"', checks)
+        inputs += ["scripts/build.sh", "scripts/check.sh", "scripts/common.sh"]
+        for name in inputs:
+            excluded = False
+            ancestors = [name, *(str(parent) for parent in pathlib.PurePosixPath(name).parents)]
+            for rule in rules:
+                if not rule or rule.startswith("#"):
+                    continue
+                include = rule.startswith("!")
+                pattern = rule.lstrip("!").strip("/")
+                if any(fnmatch.fnmatchcase(path, pattern) for path in ancestors):
+                    excluded = not include
+            self.assertFalse(excluded, f"release checks require {name} in the build context")
+
+    def test_only_explicit_development_target_can_bypass_release_checks(self):
+        source = (ROOT / "Dockerfile").read_text()
+        stages, bodies = {}, {}
+        current = None
+        for line in source.splitlines():
+            stage = re.match(r"FROM (\S+) AS (\S+)", line, re.I)
+            if stage:
+                parent, current = stage.groups()
+                stages[current] = {parent}
+                bodies[current] = []
+            elif current:
+                bodies[current].append(line)
+                copied = re.match(r"COPY --from=(\S+)", line, re.I)
+                if copied:
+                    stages[current].add(copied.group(1))
+
+        def dependencies(name):
+            found, pending = set(), [name]
+            while pending:
+                item = pending.pop()
+                if item not in found:
+                    found.add(item)
+                    pending.extend(stages.get(item, ()))
+            return found
+
+        self.assertEqual(current, "runtime", "plain docker build must select the release image")
+        self.assertIn("test", dependencies(current))
+        self.assertIn("build", dependencies(current))
+        self.assertNotIn("test", dependencies("development"))
+        self.assertIn("build", dependencies("development"))
+        self.assertIn("scripts/check.sh go", "\n".join(bodies["test"]))
+        self.assertIn("scripts/build.sh /out/pwnmesh", "\n".join(bodies["build"]))
+
+    def test_worker_browser_dependency_is_versioned(self):
+        source = (ROOT / "container/Dockerfile").read_text()
+        self.assertRegex(source, r"(?m)^ARG PLAYWRIGHT_CLI_VERSION=\d+\.\d+\.\d+$")
+        self.assertIn("@playwright/cli@${PLAYWRIGHT_CLI_VERSION}", source)
+        self.assertNotIn("@latest", source)
+
+    def test_local_archive_is_excluded_from_source_and_build_context(self):
+        self.assertIn("/.local/", (ROOT / ".gitignore").read_text().splitlines())
+        self.assertIn(".local", (ROOT / ".dockerignore").read_text().splitlines())
 
 
 if __name__ == "__main__":

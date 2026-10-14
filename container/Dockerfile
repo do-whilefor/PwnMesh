@@ -78,7 +78,8 @@ RUN curl --fail --show-error --location --retry 3 \
     && rm -rf /tmp/aliyun.tgz /tmp/aliyun-install
 
 # Initialize outside /workspace to avoid injecting project configuration or skills.
-RUN npm install --global --no-audit --no-fund @playwright/cli@latest \
+ARG PLAYWRIGHT_CLI_VERSION=0.1.22
+RUN npm install --global --no-audit --no-fund "@playwright/cli@${PLAYWRIGHT_CLI_VERSION}" \
     && mkdir /tmp/playwright-setup \
     && cd /tmp/playwright-setup \
     && playwright-cli install \

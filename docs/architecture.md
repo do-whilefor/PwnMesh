@@ -47,9 +47,15 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `scripts/` | Linux build, checks and explicit acceptance commands |
 | `docs/` | Maintained architecture, protocol, recovery, format and development guides |
 
-`protocol` no longer imports Worker, but it still uses `board.State` and other
-Board types. It is not fully independent of SQLite's package dependency graph.
-Do not introduce a second model merely to hide that remaining coupling.
+`board/model` owns storage-free graph/state values, input identities and task
+budgets. Board and Config retain aliases for their existing callers. `protocol`
+uses these values directly and no longer imports the configuration loader; it
+still uses `board.State` and aggregate Board views, so SQLite remains a transitive
+dependency. Do not introduce a second model merely to hide that coupling.
+
+The embedded frontend keeps project form rules in `project-model.js`, provider
+settings in `model-settings.js`, and activity rendering in `activity-view.js`.
+`app.js` owns UI state and lifecycle; `service.js` owns fenced refreshes and caches.
 
 ## Lifecycle and boundaries
 
@@ -68,7 +74,9 @@ receipts are checked before issuing more model or tool calls.
 Board's `Store.Do` keeps lease/generation validation, idempotency lookup, mutation,
 revisions and receipts in one `BEGIN IMMEDIATE` transaction. `Store.View` uses
 query-only WAL readers for consistent snapshots without reserving the writer.
-Keep these operations together even when their source files are split.
+Keep these operations together even when their source files are split. Health
+and settings GET requests use observational reads and do not expire leases;
+scheduling and settings mutations retain their write transaction maintenance.
 
 The schema and migration sequence live in `schema.go` and `migrations.go`.
 Schema version `2` uses `pwnmesh_*` names for branded SQL objects. A supported

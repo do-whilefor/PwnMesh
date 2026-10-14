@@ -7,6 +7,16 @@ docker build -t pwnmesh:dev .
 docker build -f container/Dockerfile -t pwnmesh-worker:dev .
 ```
 
+The default application image runs the offline Go race suite and vet before
+shipping the compiled binary. For local iteration after focused checks, opt into
+`docker build --target development -t pwnmesh:dev .`; this target compiles the
+same application but skips the release test stage. Rebuild the default target
+before publishing. Both targets use the repository build script.
+
+The Worker image pins Playwright CLI through `PLAYWRIGHT_CLI_VERSION`. Override
+it deliberately with `--build-arg` only after checking the CLI and browser setup;
+routine rebuilds do not follow the mutable npm `latest` tag.
+
 See [the development guide](../docs/development.md) for the shared build and
 validation entry points, and [supported formats](../docs/formats.md) before
 migrating an existing installation.
