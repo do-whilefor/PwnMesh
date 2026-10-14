@@ -29,7 +29,7 @@ run into a new model/tool execution.
 
 ## Database initialization and upgrades
 
-`internal/board/migrations.go` validates the schema ledger and execution metadata
+`internal/board/internal/sqlstore/migrations.go` validates the schema ledger and execution metadata
 before committing changes. Empty databases create schema `2` directly with
 `pwnmesh_*` names for branded SQL objects. Runtime queries use those names only;
 there are no views or aliases for the old namespace.

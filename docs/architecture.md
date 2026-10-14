@@ -7,7 +7,7 @@ model requests. Server owns the authoritative SQLite state. Workers retain local
 session journals, tool artifacts and acceptance receipts in their workspace.
 
 ```text
-Browser -> Server -> Board transactions -> SQLite
+Browser -> Server -> Board transactions -> private sqlstore -> SQLite
               ^
 Dispatcher ---+  prepare, register, heartbeat, settle
     |
@@ -28,12 +28,14 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | --- | --- |
 | `cmd/` | CLI configuration and process wiring |
 | `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
-| `internal/board/` | Transactional project/lease operations, mutations, SQL-backed projections and migrations |
+| `internal/board/` | Transactional business operations, admission, mutations and SQL-backed projections |
 | `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
+| `internal/board/internal/sqlstore/` | SQLite connections, transaction lifecycle, graph row persistence, schema and migrations |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
 | `internal/worker/` | Session lifecycle, recovery, runtime tools, evidence acceptance |
+| `internal/worker/internal/phase/` | Pure deadline, allowance, recovery and phase transition policy |
 | `internal/worker/dag/` | Mixed-node execution, artifact inputs, snapshots and verified reuse |
 | `internal/agent/` | Provider-independent model/tool loop and context checkpoints |
 | `internal/provider/`, `internal/modelrpc/` | Anthropic-compatible model client and bridge wire contract |
@@ -54,8 +56,10 @@ completion views, history views and task budgets. Board and Config retain aliase
 for their existing callers. Protocol, Worker, Dispatcher and Docker use the
 storage-free definitions directly; their production imports do not depend on
 aggregate Board or SQLite.
-SQL-backed projections and mutations remain in Board, within the existing
-transaction. There is one canonical model, not a duplicate transport model.
+Board retains business validation and transactional operation composition.
+Its private `sqlstore` package maps canonical graph values to rows using the
+caller's existing transaction. Specialized state/execution queries and projections
+remain in Board. There is one canonical model, not a duplicate transport model.
 
 The embedded frontend keeps project form rules in `project-model.js`, provider
 settings in `model-settings.js`, and activity rendering in `activity-view.js`.
@@ -71,7 +75,9 @@ admission, and workers join before dispatcher ownership is released.
 
 Worker's `worker.go` coordinates its session. The `session_*_linux.go` files own
 locking and cancellation, persisted state, recovery, Agent setup and phase
-transitions. `graph_run_linux.go` and `acceptance_linux.go` enforce the outer
+effects. The private `phase` package receives values and decides transitions,
+without access to the session, Agent, prompts, filesystem or provider.
+`graph_run_linux.go` and `acceptance_linux.go` enforce the outer
 evidence receipt boundary. Journals/checkpoints precede side effects; durable
 receipts are checked before issuing more model or tool calls.
 
@@ -83,7 +89,10 @@ The child package never imports Worker or a model provider.
 
 Worker Options contains caller configuration. A per-invocation role runtime owns
 tools, private drafts, commit receipts and graph version/conflict values; it never
-holds pointers into the durable session. Session owns phase transitions and
+holds pointers into the durable session. Session publishes proposed phase states
+through its persistence boundary, then performs prompt/evidence effects. Failed
+transition saves restore the prior Session and Loop phase values. Explicit state
+conversion preserves the existing session JSON fields and order. Session also
 captures graph values and the explicit Agent checkpoint when saving. Graph update
 reading returns a proposed cursor and notice; Session publishes them with the
 transcript and restores the prior cursor on a rejected save. Acceptance reads an
@@ -98,15 +107,18 @@ and settings GET requests use observational reads and do not expire leases;
 scheduling and settings mutations retain their write transaction maintenance.
 Server calls semantic Board operations for project management and all three
 role leases; it does not execute SQL. Board callbacks expose query operations,
-but no underlying `sql.Tx` field or transaction lifecycle methods. Store owns
-commit and rollback; the query methods still permit raw SQL inside Board.
+but no underlying `sql.Tx` field or transaction lifecycle methods. A private query
+wrapper also prevents recovering the raw transaction through a type assertion.
+The private store owns normal commit and rollback; query methods still permit raw
+SQL inside Board. It does not interpret or restrict SQL statement text.
 Multiwrite management operations use a local savepoint, so callers may handle a
 rejection and continue the outer transaction without retaining partial writes.
 Lease operations update lease columns without rewriting
 unrelated graph content. Source-boundary tests prevent SQL from returning to HTTP
 handlers or storage dependencies from returning to execution clients.
 
-The schema and migration sequence live in `schema.go` and `migrations.go`.
+The schema and migration sequence live in `sqlstore/schema.go` and
+`sqlstore/migrations.go`; Board does not own connection pools or migration state.
 Schema version `2` uses `pwnmesh_*` names for branded SQL objects. A supported
 version `1` database receives a transactional namespace migration on open; new
 databases create the current names directly. Runtime queries use only the current

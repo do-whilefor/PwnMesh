@@ -19,24 +19,23 @@ import (
 
 	"pwnmesh/internal/agent"
 	board "pwnmesh/internal/board/model"
-	"pwnmesh/internal/config"
 )
 
 const sessionSchemaVersion = 1
 const maxRunRecoveries = 2
 
 type executionIdentity struct {
-	ProjectID       string      `json:"project_id"`
-	StepID          string      `json:"step_id,omitempty"`
-	RunID           string      `json:"run_id"`
-	PreviousRunID   string      `json:"previous_run_id,omitempty"`
-	Kind            string      `json:"kind"`
-	Workspace       string      `json:"workspace"`
-	RunDir          string      `json:"run_dir"`
-	WorkspaceTarget string      `json:"workspace_target"`
-	RunDirTarget    string      `json:"run_dir_target"`
-	JobDigest       string      `json:"job_digest"`
-	OriginalBudget  config.Task `json:"original_budget"`
+	ProjectID       string           `json:"project_id"`
+	StepID          string           `json:"step_id,omitempty"`
+	RunID           string           `json:"run_id"`
+	PreviousRunID   string           `json:"previous_run_id,omitempty"`
+	Kind            string           `json:"kind"`
+	Workspace       string           `json:"workspace"`
+	RunDir          string           `json:"run_dir"`
+	WorkspaceTarget string           `json:"workspace_target"`
+	RunDirTarget    string           `json:"run_dir_target"`
+	JobDigest       string           `json:"job_digest"`
+	OriginalBudget  board.TaskBudget `json:"original_budget"`
 }
 
 // Paths are bound both as supplied (after Abs/Clean) and as resolved targets:
@@ -112,11 +111,8 @@ func (s *session) validate(i executionIdentity) error {
 	if !bytes.Equal(a, b) || s.RunID != i.RunID || s.Kind != i.Kind || s.StartedAt.IsZero() {
 		return errors.New("session task identity or immutable input mismatch")
 	}
-	if s.RepairCount < 0 || s.RepairCount > maxOutputRepairs || (s.Repairing && (s.RepairCount == 0 || s.RepairPrompt == "")) || (!s.Repairing && (s.RepairPending || s.RepairPrompt != "")) {
-		return errors.New("invalid saved result-repair state")
-	}
-	if s.ContinuationCount < 0 || s.ContinuationCount > maxContinuations {
-		return errors.New("invalid saved continuation count")
+	if err := s.phaseState().ValidateAllowances(s.RepairPrompt != ""); err != nil {
+		return err
 	}
 	var lastSequence uint64
 	if s.ContextCheckpoint != nil {
@@ -131,22 +127,7 @@ func (s *session) validate(i executionIdentity) error {
 	if s.RecoveryCount < 0 || s.RecoveryCount > maxRunRecoveries {
 		return errors.New("invalid saved recovery count")
 	}
-	if s.ExecutionDeadline.IsZero() != (i.OriginalBudget.Timeout == 0) {
-		return errors.New("missing original execution deadline")
-	}
-	if i.OriginalBudget.Timeout > 0 && !s.ExecutionDeadline.Equal(s.StartedAt.Add(time.Duration(i.OriginalBudget.Timeout)*time.Second)) {
-		return errors.New("execution deadline differs from original budget")
-	}
-	if s.Concluding && (s.ConcludeStartedAt.IsZero() || s.ConcludeDeadline.IsZero()) {
-		return errors.New("conclusion lacks its original deadline")
-	}
-	if !s.ReasonDeadline.IsZero() && (s.ExecutionDeadline.IsZero() || s.ReasonDeadline.After(s.ExecutionDeadline)) {
-		return errors.New("reason deadline exceeds the original execution budget")
-	}
-	if s.Concluding && !s.ConcludeDeadline.Equal(s.ConcludeStartedAt.Add(time.Duration(i.OriginalBudget.ConcludeTimeout)*time.Second)) {
-		return errors.New("conclusion deadline differs from original budget")
-	}
-	return nil
+	return s.phaseState().ValidateDeadlines(phaseBudget(i.OriginalBudget))
 }
 
 func (s *session) save(runDir string, journal *eventJournal) error {

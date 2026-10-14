@@ -63,11 +63,13 @@ func TestTransitiveDependencyBoundaries(t *testing.T) {
 		storage   bool
 	}{
 		{"protocol", []string{"board", "worker", "config"}, true},
-		{"worker", []string{"board"}, true},
+		{"worker", []string{"board", "config"}, true},
 		{"dispatcher", []string{"board", "worker"}, true},
 		{"docker", []string{"board", "worker"}, true},
 		{"board/model", []string{"board", "worker", "protocol", "provider", "agent", "server", "dispatcher", "docker", "config", "process", "tools"}, true},
 		{"worker/dag", []string{"board", "board/model", "worker", "protocol", "provider", "agent"}, true},
+		{"worker/internal/phase", []string{"board", "board/model", "worker", "protocol", "provider", "agent", "config", "process", "tools"}, true},
+		{"board/internal/sqlstore", []string{"board", "worker", "protocol", "provider", "agent", "server", "dispatcher", "docker", "config"}, false},
 		{"server", []string{"worker"}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

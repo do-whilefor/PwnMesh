@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/process"
+	"pwnmesh/internal/worker/internal/phase"
 	"time"
 )
 
@@ -47,9 +48,7 @@ func restoreSession(j Job, o Options) (*sessionRuntime, error) {
 	if j.Kind == "curate" {
 		state.GraphVersion = j.CurationVersion()
 	}
-	if j.Budget.Timeout > 0 {
-		state.ExecutionDeadline = state.StartedAt.Add(time.Duration(j.Budget.Timeout) * time.Second)
-	}
+	state.setPhaseState(phase.New(state.StartedAt, phaseBudget(j.Budget)))
 	statePath := filepath.Join(o.RunDir, "session.json")
 	resuming := false
 	if previous, readErr := os.ReadFile(statePath); readErr == nil {
@@ -82,7 +81,7 @@ func restoreSession(j Job, o Options) (*sessionRuntime, error) {
 func (r *sessionRuntime) emit(e agent.Event) {
 	state, journal, enc := &r.state, r.journal, r.encoder
 	if state.Repairing && e.Type == "message_end" && e.Message != nil && e.Message.Role == "assistant" {
-		state.RepairPending = false
+		state.setPhaseState(state.phaseState().RepairResponded())
 	}
 	if r.logErr == nil {
 		r.logErr = journal.append(e)
@@ -118,7 +117,7 @@ func (r *sessionRuntime) saveAgentState(history []agent.Message, checkpoint *age
 		return err
 	}
 	if progress {
-		state.ContinuationCount = 0
+		state.setPhaseState(state.phaseState().SuccessfulProgress())
 	}
 	if l != nil {
 		state.TaskPrompt = l.TaskPrompt

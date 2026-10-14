@@ -23,8 +23,12 @@ Each successful save captures their values and the supplied Agent checkpoint;
 runtime-triggered saves detach the live checkpoint first. If a save fails, the
 callback restores its own in-memory changes to their values at entry and reports
 the failure. The session file is replaced atomically; a directory-sync error after
-replacement leaves durability uncertain. Phase policy belongs to Session, with an
-explicit mirror in the Agent loop. Acceptance reads
+replacement leaves durability uncertain. The private `worker/internal/phase`
+package decides deadlines, repair/continuation consumption and recovery actions
+from values. Session persists each proposed transition before its effects and
+restores both Session and Loop phase values if that save fails. The session JSON
+layout remains unchanged; policy state is converted explicitly, never embedded as
+a second live owner. Acceptance reads
 only the identity-bound saved transcript or its verified committed journal prefix,
 never an uncommitted crash tail.
 

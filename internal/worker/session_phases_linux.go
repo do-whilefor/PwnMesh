@@ -7,11 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"pwnmesh/internal/agent"
-	"time"
+	"pwnmesh/internal/worker/internal/phase"
 )
 
-// sessionPhases changes phase only at settled Agent boundaries. Deadlines and
-// repair/continuation allowances are always owned by the durable session.
+// sessionPhases adapts pure phase decisions to settled Agent boundaries. It
+// owns effects (contexts, prompt/evidence assembly and persistence); policy
+// receives only values and cannot access the session, Loop or their hooks.
 type sessionPhases struct {
 	runtime   *sessionRuntime
 	ctx       context.Context
@@ -45,43 +46,38 @@ func (p *sessionPhases) startConclusion() (context.Context, error) {
 		}
 	}
 	wasConcluding := state.Concluding
-	p.runtime.setConcluding()
-	if state.ConcludeStartedAt.IsZero() {
-		if wasConcluding {
-			return nil, errors.New("saved conclusion has no start time; cannot refresh its deadline")
-		}
-		state.ConcludeStartedAt = o.Now()
+	transition, err := state.phaseState().BeginConclusion(o.Now(), phaseBudget(j.Budget))
+	if err != nil {
+		return nil, err
 	}
-	if state.ConcludeDeadline.IsZero() {
-		// Only a newly entered conclusion can establish its deadline.
-		state.ConcludeDeadline = state.ConcludeStartedAt.Add(time.Duration(j.Budget.ConcludeTimeout) * time.Second)
-	}
-	remaining := state.ConcludeDeadline.Sub(o.Now())
+	remaining := transition.ConcludeDeadline.Sub(o.Now())
 	if remaining <= 0 {
 		return nil, context.DeadlineExceeded
 	}
 	next, cancel := context.WithTimeout(ctx, remaining)
-	p.endCancel = cancel
-	p.phaseCtx = next
 	if !wasConcluding {
 		// Freeze the boundary before reading any artifact. A crash during
 		// preparation resumes conservatively without reading new outputs.
-		if err := save(l.History); err != nil {
+		if err := p.runtime.savePhase(transition, state.RepairPrompt); err != nil {
+			cancel()
 			return nil, err
 		}
 	}
+	p.endCancel = cancel
+	p.phaseCtx = next
 	if state.ConclusionInputVersion != conclusionInputVersion || l.ConclusionPrompt == "" {
 		input, refs, err := conclusionInputWithEvidence(next, j, o.RunDir, !wasConcluding)
 		if err != nil {
 			return nil, err
 		}
-		state.ConclusionPrompt = input
-		p.runtime.applyPhase()
+		before, beforePrompt := *state, l.ConclusionPrompt
+		state.ConclusionPrompt, l.ConclusionPrompt = input, input
 		state.ConclusionEvidence = refs
 		state.ConclusionInputVersion = conclusionInputVersion
 		// Persist the frozen input before another model request. Recovery
 		// reuses it even if files have changed or disappeared since then.
 		if err = save(l.History); err != nil {
+			*state, l.ConclusionPrompt = before, beforePrompt
 			return nil, err
 		}
 	}
@@ -89,17 +85,17 @@ func (p *sessionPhases) startConclusion() (context.Context, error) {
 }
 
 func (p *sessionPhases) shouldConclude() bool {
-	j, o, state, l := p.runtime.job, p.runtime.options, &p.runtime.state, p.runtime.loop
-
-	if controlJob(j) || l.Concluding {
+	j, o, state := p.runtime.job, p.runtime.options, &p.runtime.state
+	if !state.phaseState().CanConclude(controlJob(j)) {
 		return false
 	}
+	softStop := false
 	select {
 	case <-o.SoftStop:
-		return true
+		softStop = true
 	default:
 	}
-	return !state.ExecutionDeadline.IsZero() && !o.Now().Before(state.ExecutionDeadline)
+	return state.phaseState().ShouldConclude(o.Now(), controlJob(j), softStop)
 }
 
 func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop) (context.Context, error) {
@@ -159,22 +155,22 @@ func (p *sessionPhases) prepareRepairHistory() error {
 
 func (p *sessionPhases) startRepair(turnCtx context.Context, problem *outputFailure) (string, error) {
 	j, state, l := p.runtime.job, &p.runtime.state, p.runtime.loop
-	save := p.runtime.save
-
 	if err := turnCtx.Err(); err != nil {
 		return "", err
 	}
-	if state.RepairCount >= maxOutputRepairs {
+	next, err := state.phaseState().BeginRepair()
+	if errors.Is(err, phase.ErrRepairExhausted) {
 		return "", fmt.Errorf("result-format repair exhausted after %d attempts: %w", maxOutputRepairs, problem)
 	}
-	state.RepairCount++
-	instruction, err := repairInstruction(j, l.Concluding, state.RepairCount, problem)
 	if err != nil {
 		return "", err
 	}
-	p.runtime.setRepair(true, instruction, true)
+	instruction, err := repairInstruction(j, l.Concluding, next.RepairCount, problem)
+	if err != nil {
+		return "", err
+	}
 	// Consume the attempt before adding its prompt or making a request.
-	if err = save(l.History); err != nil {
+	if err = p.runtime.savePhase(next, instruction); err != nil {
 		return "", err
 	}
 	if err = p.prepareRepairHistory(); err != nil {
@@ -185,23 +181,21 @@ func (p *sessionPhases) startRepair(turnCtx context.Context, problem *outputFail
 
 func (p *sessionPhases) continueExecution() (string, error) {
 	state, l := &p.runtime.state, p.runtime.loop
-	save := p.runtime.save
 
 	last, ok := lastAssistant(l.History)
 	if !ok || last.Sequence == 0 {
 		return "", errors.New("continuation requires a durable assistant message")
 	}
-	if state.ContinuationSequence != last.Sequence {
-		if state.ContinuationCount >= maxContinuations {
-			return "", &outputFailure{Reason: "continuation_exhausted", Detail: "repeated continue responses made no successful tool progress"}
-		}
-		state.ContinuationCount++
-		state.ContinuationSequence = last.Sequence
+	next, err := state.phaseState().Continue(last.Sequence)
+	if errors.Is(err, phase.ErrContinuationExhausted) {
+		return "", &outputFailure{Reason: "continuation_exhausted", Detail: "repeated continue responses made no successful tool progress"}
 	}
-	p.runtime.setRepair(false, "", false)
+	if err != nil {
+		return "", err
+	}
 	// Persist consumption before the follow-up instruction. Recovery can
 	// then reissue that instruction without replaying tools or buying turns.
-	if err := save(l.History); err != nil {
+	if err := p.runtime.savePhase(next, ""); err != nil {
 		return "", err
 	}
 	if p.runtime.roles.decision != nil {
@@ -236,44 +230,46 @@ func (p *sessionPhases) onTurnEnd(turnCtx context.Context, l *agent.Loop, m agen
 			return turnCtx, "Recent tools have repeated unchanged observations or kept failing. Reassess the blocker and change the approach; do not repeat the same unsuccessful call or unchanged read without a reason to expect new information. If unable to proceed, Reason and Curate return accepted:false with a reason; execution tasks report incomplete with the blocker. The original task and budgets still apply.", nil
 		}
 	}
-	if p.runtime.roles.decision != nil || p.runtime.roles.curation != nil {
-		if !truncated(m) {
-			if hasCalls {
-				return turnCtx, "", nil
-			}
-			if parsed, err := parseOutput(j, false, m.Text()); err == nil && parsed.Kind == "rejected" {
-				return turnCtx, "", nil
-			}
-		}
-		instruction, err := p.continueExecution()
-		return turnCtx, instruction, err
+	turn := phase.Turn{
+		Control: controlJob(j), NativeControl: p.runtime.roles.decision != nil || p.runtime.roles.curation != nil,
+		HasCalls: hasCalls, Truncated: truncated(m),
 	}
-	problem := outputProblem(j, l.Concluding, m)
-	needsResult := !hasCalls || truncated(m) || l.Concluding || l.Repairing
-	if !l.Concluding && !controlJob(j) && p.shouldConclude() {
+	var problem *outputFailure
+	if turn.NativeControl {
+		if !turn.Truncated && !hasCalls {
+			parsed, err := parseOutput(j, false, m.Text())
+			turn.Rejected = err == nil && parsed.Kind == "rejected"
+		}
+	} else {
+		problem = outputProblem(j, l.Concluding, m)
+		turn.InvalidResult = problem != nil
+		if problem == nil {
+			parsed, err := parseOutput(j, l.Concluding, m.Text())
+			if err != nil {
+				return nil, "", err
+			}
+			turn.Continue = parsed.Outcome == "continue"
+		}
+		turn.ConcludeDue = p.shouldConclude()
+	}
+	action := state.phaseState().AfterTurn(turn)
+	switch action {
+	case phase.Conclude, phase.ConcludeAndRepair:
 		next, err := p.startConclusion()
 		if err != nil {
 			return nil, "", err
 		}
-		if needsResult && problem != nil {
+		if action == phase.ConcludeAndRepair {
 			instruction, err := p.startRepair(next, problem)
 			return next, instruction, err
 		}
 		return next, l.ConclusionPrompt, nil
-	}
-	if needsResult && problem != nil {
+	case phase.Repair:
 		instruction, err := p.startRepair(turnCtx, problem)
 		return turnCtx, instruction, err
-	}
-	if needsResult {
-		parsed, err := parseOutput(j, l.Concluding, m.Text())
-		if err != nil {
-			return nil, "", err
-		}
-		if parsed.Outcome == "continue" {
-			instruction, err := p.continueExecution()
-			return turnCtx, instruction, err
-		}
+	case phase.Continue:
+		instruction, err := p.continueExecution()
+		return turnCtx, instruction, err
 	}
 	return turnCtx, "", nil
 }

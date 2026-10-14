@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/worker/internal/phase"
 	"strconv"
 )
 
@@ -38,25 +39,25 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 		}
 	}
 	if controlJob(j) && (j.Budget.Timeout > 0 || !state.ReasonDeadline.IsZero()) {
-		if state.ReasonDeadline.IsZero() {
-			state.ReasonDeadline = state.ExecutionDeadline
-		}
+		state.setPhaseState(state.phaseState().BoundControl())
 		remaining := state.ReasonDeadline.Sub(o.Now())
 		reasonCtx, reasonCancel := context.WithTimeout(ctx, remaining)
 		defer reasonCancel()
 		runCtx = reasonCtx
 		phases.phaseCtx = reasonCtx
 	}
-	if state.Repairing && state.RepairPending {
-		if containsInstruction(l.History, l.RepairPrompt) && runtime.infrastructureResume {
+	repairRecovery := state.phaseState().ResumeRepair(containsInstruction(l.History, l.RepairPrompt), runtime.infrastructureResume)
+	if repairRecovery != phase.NoRepairRecovery {
+		switch repairRecovery {
+		case phase.ReuseRepairRequest:
 			// Transport recovery continues the unanswered request without buying
 			// or consuming another JSON-format repair attempt.
 			prompt = ""
-		} else if containsInstruction(l.History, l.RepairPrompt) {
+		case phase.RetryRepairRequest:
 			// The request may have been sent before a crash. Do not reset or
 			// replay that attempt for free; use only a remaining repair slot.
 			prompt, err = phases.startRepair(runCtx, &outputFailure{Reason: "interrupted_repair", Detail: "the previous repair request has no durable response"})
-		} else {
+		case phase.PrepareRepairRequest:
 			err = phases.prepareRepairHistory()
 			prompt = l.RepairPrompt
 		}

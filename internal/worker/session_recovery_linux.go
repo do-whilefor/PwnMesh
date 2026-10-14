@@ -104,7 +104,7 @@ func (runtime *sessionRuntime) recover(ctx context.Context) (Result, bool, error
 		return finish(Result{Type: "result", Status: "success", Text: text})
 	}
 	if roles.decision != nil || roles.curation != nil {
-		runtime.setRepair(false, "", false)
+		runtime.endRepair()
 	}
 	return Result{}, false, nil
 }

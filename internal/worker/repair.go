@@ -7,10 +7,11 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/contract"
+	"pwnmesh/internal/worker/internal/phase"
 )
 
-const maxOutputRepairs = 2
-const maxContinuations = 3
+const maxOutputRepairs = phase.MaxOutputRepairs
+const maxContinuations = phase.MaxContinuations
 
 type outputFailure struct {
 	Reason string
