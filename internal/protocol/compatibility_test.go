@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
+	"strings"
 	"testing"
 
 	"pwnmesh/internal/artifactcheck"
@@ -16,6 +18,21 @@ import (
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/protocol"
 )
+
+func TestDecisionSnapshotRequiresCurrentProtocol(t *testing.T) {
+	for _, version := range []int{0, 1, 2, 3} {
+		t.Run(strconv.Itoa(version), func(t *testing.T) {
+			job := protocol.Job{
+				Kind: "reason", Graph: model.Graph{Project: model.Project{ID: "project", Generation: 2}},
+				InputSnapshot: &model.InputSnapshot{Version: 1, ID: strings.Repeat("a", 64), ProjectID: "project", Generation: 2, Revision: 3, StateVersion: strings.Repeat("b", 64)},
+				Decision:      &model.DecisionContext{Version: version, Generation: 2, ToRevision: 3, StateVersion: strings.Repeat("b", 64), View: json.RawMessage(`{}`)},
+			}
+			if err := protocol.ValidateSnapshotInput(job); (err == nil) != (version == 2) {
+				t.Fatalf("decision version %d validation: %v", version, err)
+			}
+		})
+	}
+}
 
 // These bytes were captured from Worker before moving its wire definitions.
 // Exact field order matters: persisted session identity hashes typed Job JSON.

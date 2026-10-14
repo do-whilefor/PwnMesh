@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"pwnmesh/internal/protocol"
 	"reflect"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ func modelReadFixture(t *testing.T, state board.State, inspect func(context.Cont
 		if inspect != nil {
 			inspect(ctx, r)
 		}
-		page, err := GraphPage(state, r)
+		page, err := protocol.GraphPage(state, r)
 		if err != nil {
 			return "", err
 		}

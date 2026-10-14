@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"testing"
 	"time"
@@ -199,7 +200,7 @@ func TestOrchestrationRuntimePermissionsAndCandidateEvidence(t *testing.T) {
 				payload = json.RawMessage(`{"sources":["left","right"],"reason":"The retained observations conflict"}`)
 			}
 			r := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: tc.op, IdempotencyKey: "key", Payload: payload, ExpectedVersion: board.DecisionStateVersion(*j.State)}}
-			if err := ValidateGraphRequest(j, r); (err == nil) != tc.allowed {
+			if err := protocol.ValidateGraphRequest(j, r); (err == nil) != tc.allowed {
 				t.Fatalf("bridge permission differs: allowed=%v err=%v", tc.allowed, err)
 			}
 			options := Options{Tools: []agent.Tool{}}
@@ -343,7 +344,7 @@ func TestCuratorUncertainReceiptRecoversBeforeAnotherMutation(t *testing.T) {
 
 func TestCuratorReceiptCompactionAndCandidateSourcePages(t *testing.T) {
 	raw, _ := json.Marshal(board.StateActionResult{Op: "curate", Committed: true, StateVersion: strings.Repeat("a", 64), Result: json.RawMessage(`{"large":"` + strings.Repeat("x", MaxGraphRPCBytes) + `"}`)})
-	compact, err := CompactGraphActionResult(raw)
+	compact, err := protocol.CompactGraphActionResult(raw)
 	var receipt board.StateActionResult
 	if err != nil || json.Unmarshal(compact, &receipt) != nil || !receipt.Committed {
 		t.Fatalf("compaction lost the commit receipt: %s %v", compact, err)

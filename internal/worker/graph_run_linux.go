@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"sync"
 
@@ -304,7 +305,7 @@ func graphPublishedFactEvidence(ctx context.Context, j Job, runDir string, ident
 						return err
 					}
 					excerpt, err := selectedEvidence(original, input.Evidence[i])
-					if err != nil || graphRecordVersion([]byte(excerpt)) != publication.EvidenceExcerptSHA256[i] {
+					if err != nil || protocol.GraphRecordVersion([]byte(excerpt)) != publication.EvidenceExcerptSHA256[i] {
 						return errors.New("compact publication evidence excerpt SHA-256 mismatch")
 					}
 					ref.Excerpt = excerpt

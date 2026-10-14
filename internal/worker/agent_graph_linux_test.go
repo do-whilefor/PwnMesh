@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -491,7 +492,7 @@ func TestInitialWorkerRequestScopesExecutionDiscipline(t *testing.T) {
 				job = curationJob(t)
 			}
 			options := Options{RunDir: dir}
-			if controlJob(job) {
+			if protocol.ControlJob(job) {
 				options.Output = &draftTestBridge{dir: dir, handle: func(request GraphRequest) (any, error) {
 					switch request.Op {
 					case "decision_receipt":
@@ -508,7 +509,7 @@ func TestInitialWorkerRequestScopesExecutionDiscipline(t *testing.T) {
 			options.Provider = scenarioProvider(func(_ context.Context, history []agent.Message, _ []agent.Definition, _ agent.Emit) (agent.Message, error) {
 				calls++
 				want := 1
-				if controlJob(job) {
+				if protocol.ControlJob(job) {
 					want = 0
 				}
 				if len(history) == 0 || strings.Count(history[0].Text(), executionDiscipline) != want {

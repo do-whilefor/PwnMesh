@@ -401,8 +401,8 @@ func (t *Tx) CompleteProject(project string, fence ExecutionFence, from []string
 }
 
 func (t *Tx) completeProject(project string, fence ExecutionFence, from []string, description string, scope actionScope) (Intent, error) {
-	if fence.Lease != "reason" && fence.Lease != "bootstrap" {
-		return Intent{}, Err(403, "only Decide or a legacy bootstrap can complete the project")
+	if fence.Lease != "reason" {
+		return Intent{}, Err(403, "only Decide can complete the project")
 	}
 	if scope != batchedDecisionAction {
 		if err := t.CheckDirectDecisionWrite(project, fence); err != nil {
@@ -415,9 +415,6 @@ func (t *Tx) completeProject(project string, fence ExecutionFence, from []string
 	s, err := t.State(project)
 	if err != nil {
 		return Intent{}, err
-	}
-	if s.Graph.Project.OrchestrationVersion == 1 && fence.Lease != "reason" {
-		return Intent{}, Err(403, "only the main agent may complete an orchestrated project")
 	}
 	if err = s.Graph.RequireActive(); err != nil {
 		return Intent{}, err

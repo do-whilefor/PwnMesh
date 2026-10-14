@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/worker/internal/phase"
 	"strconv"
 )
@@ -38,7 +39,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 			prompt = l.ConclusionPrompt
 		}
 	}
-	if controlJob(j) && (j.Budget.Timeout > 0 || !state.ReasonDeadline.IsZero()) {
+	if protocol.ControlJob(j) && (j.Budget.Timeout > 0 || !state.ReasonDeadline.IsZero()) {
 		state.setPhaseState(state.phaseState().BoundControl())
 		remaining := state.ReasonDeadline.Sub(o.Now())
 		reasonCtx, reasonCancel := context.WithTimeout(ctx, remaining)

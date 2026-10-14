@@ -5,6 +5,7 @@ package worker
 import (
 	"context"
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/protocol"
 )
 
 // roleRuntime owns the mutable capabilities of one invocation. Graph state is
@@ -63,7 +64,7 @@ func (r *roleRuntime) recover(ctx context.Context, j Job, resuming bool) (string
 		}
 	}
 	if r.decision != nil {
-		if orchestrationJob(j) && j.Decision != nil {
+		if protocol.OrchestrationJob(j) && j.Decision != nil {
 			r.decision.assessment = j.Decision.CompletionAssessment
 		}
 		if _, err := r.decision.recover(ctx); err != nil {

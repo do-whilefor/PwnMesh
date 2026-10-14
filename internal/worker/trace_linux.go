@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"regexp"
 	"strconv"
 	"strings"
@@ -401,7 +402,7 @@ func readTraceJournal(ctx context.Context, workspace string, run board.TraceRun,
 	if _, err := io.ReadFull(f, raw); err != nil {
 		return nil, bound, errors.New("trace unavailable: journal prefix could not be read")
 	}
-	if graphRecordVersion(raw) != bound.SHA256 || len(raw) > 0 && raw[len(raw)-1] != '\n' || !utf8.Valid(raw) {
+	if protocol.GraphRecordVersion(raw) != bound.SHA256 || len(raw) > 0 && raw[len(raw)-1] != '\n' || !utf8.Valid(raw) {
 		return nil, bound, errors.New("trace_changed: committed journal hash or complete-record boundary mismatch")
 	}
 	return raw, bound, ctx.Err()

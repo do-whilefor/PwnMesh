@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"unicode/utf8"
 
@@ -93,7 +94,7 @@ func rawEvidenceTool(j Job, runtime *roleRuntime, request func(context.Context, 
 			Index int               `json:"index"`
 			Ref   board.EvidenceRef `json:"ref"`
 		}{r.ID, *r.EvidenceIndex, ref})
-		version := graphRecordVersion(binding)
+		version := protocol.GraphRecordVersion(binding)
 		if r.EvidenceVersion != "" && r.EvidenceVersion != version {
 			return "", errors.New("evidence_changed: reference changed; read again from byte_offset 0")
 		}
@@ -182,7 +183,7 @@ func readRetainedEvidence(ctx context.Context, workspace string, ref board.Evide
 		return nil, err
 	}
 	excerpt, err := selectedEvidence(raw, ref)
-	if err != nil || ref.Excerpt == "" || !utf8.Valid(raw) || graphRecordVersion(raw) != digest || excerpt != ref.Excerpt {
+	if err != nil || ref.Excerpt == "" || !utf8.Valid(raw) || protocol.GraphRecordVersion(raw) != digest || excerpt != ref.Excerpt {
 		return nil, errors.New("retained evidence failed its content hash or excerpt check")
 	}
 	return raw, nil

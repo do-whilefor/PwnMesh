@@ -21,7 +21,7 @@ func BuildDecisionContextFromCursor(current State, cursor *DecisionCursor, event
 	if err != nil {
 		return nil, err
 	}
-	result := &DecisionContext{Version: 1, StateVersion: DecisionStateVersion(current), View: baseline, Mode: "full", ToRevision: current.Revision, Generation: current.Graph.Project.Generation, BaselineBytes: len(baseline)}
+	result := &DecisionContext{Version: 2, StateVersion: DecisionStateVersion(current), View: baseline, Mode: "full", ToRevision: current.Revision, Generation: current.Graph.Project.Generation, BaselineBytes: len(baseline)}
 	changed := DecisionChanges{}
 	fallback := func(reason string) (*DecisionContext, error) {
 		view, err := decisionFallbackView(current, baseline, changed, maxBytes)

@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"time"
 
@@ -68,14 +69,14 @@ func configureGraphRequest(j Job, o Options, runtime *roleRuntime) func(context.
 			return "", err
 		}
 		r.RequestID = hex.EncodeToString(id)
-		if err := ValidateGraphRequest(j, r); err != nil {
+		if err := protocol.ValidateGraphRequest(j, r); err != nil {
 			return "", err
 		}
 		if j.Kind == "curate" && r.Op == "read_graph" {
 			// The complete immutable input is already registered with this job.
 			// Reading it locally avoids RPCs and cannot silently replace the
 			// boundary used by the server's eventual compare-and-swap commit.
-			page, err := GraphPage(*j.State, r)
+			page, err := protocol.GraphPage(*j.State, r)
 			if err != nil {
 				return "", err
 			}

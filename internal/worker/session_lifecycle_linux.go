@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"pwnmesh/internal/artifactcheck"
 	"pwnmesh/internal/process"
+	"pwnmesh/internal/protocol"
 	"time"
 )
 
@@ -35,17 +36,17 @@ func prepareSession(parent context.Context, j *Job, o *Options) error {
 		}
 	}
 	if j.Kind == "curate" {
-		if err := validateCuratorInput(*j); err != nil {
+		if err := protocol.ValidateCuratorInput(*j); err != nil {
 			return err
 		}
 	}
-	if !controlJob(*j) && j.Intent == nil {
+	if !protocol.ControlJob(*j) && j.Intent == nil {
 		return errors.New("job requires an intent")
 	}
 	if j.Budget.Timeout < 0 || j.Budget.ConcludeTimeout < 0 {
 		return errors.New("task budgets must not be negative")
 	}
-	if !controlJob(*j) && j.Budget.ConcludeTimeout <= 0 {
+	if !protocol.ControlJob(*j) && j.Budget.ConcludeTimeout <= 0 {
 		return errors.New("conclude timeout must be positive")
 	}
 	if o.RunDir == "" || j.Workspace == "" {

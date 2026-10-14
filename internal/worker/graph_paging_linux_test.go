@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"reflect"
 	"strings"
 	"testing"
@@ -60,10 +61,10 @@ func TestReadGraphRuntimeContinuesOversizedOverview(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			job := Job{Kind: kind, GraphRPC: true}
 			if kind == "reason" {
-				job.Decision = &board.DecisionContext{Version: 1, StateVersion: board.DecisionStateVersion(state)}
+				job.Decision = &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}
 			}
 			runDir := t.TempDir()
-			options := Options{RunDir: runDir, Output: &draftTestBridge{dir: runDir, handle: func(request GraphRequest) (any, error) { return GraphPage(state, request) }}}
+			options := Options{RunDir: runDir, Output: &draftTestBridge{dir: runDir, handle: func(request GraphRequest) (any, error) { return protocol.GraphPage(state, request) }}}
 			if err := ConfigureRuntimeTools(job, &options); err != nil {
 				t.Fatal(err)
 			}

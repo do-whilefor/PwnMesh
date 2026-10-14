@@ -31,6 +31,25 @@ func TestBuiltInPromptTemplatesContainNoChinese(t *testing.T) {
 	}
 }
 
+func TestDecisionPromptRequiresCurrentProtocol(t *testing.T) {
+	state := board.State{Graph: board.Graph{Project: board.Project{ID: "project", Generation: 2, OrchestrationVersion: 1}}, Revision: 3}
+	for _, form := range []string{"inline", "snapshot"} {
+		for _, version := range []int{0, 1, 2, 3} {
+			t.Run(fmt.Sprintf("%s/v%d", form, version), func(t *testing.T) {
+				job := Job{Kind: "reason", GraphRPC: true, ResultContractVersion: 2, Graph: state.Graph, State: &state,
+					Decision: &board.DecisionContext{Version: version, Generation: 2, ToRevision: 3, StateVersion: board.DecisionStateVersion(state), View: json.RawMessage(`{}`)}}
+				if form == "snapshot" {
+					job.State = nil
+					job.InputSnapshot = &board.InputSnapshot{Version: 1, ID: strings.Repeat("a", 64), ProjectID: "project", Generation: 2, Revision: 3, StateVersion: job.Decision.StateVersion}
+				}
+				if _, err := Prompt(job, false); (err == nil) != (version == 2) {
+					t.Fatalf("decision version %d prompt: %v", version, err)
+				}
+			})
+		}
+	}
+}
+
 // Exercise the examples actually sent to the model against the same contract
 // as the Worker. Phase deltas retain this contract without copying its examples.
 func TestPromptExamplesMatchRegisteredResultProtocol(t *testing.T) {

@@ -6,6 +6,9 @@ func (t *Tx) CheckExecution(g Graph, fence ExecutionFence) error {
 	if fence.Run == "" {
 		return nil
 	}
+	if fence.Lease != "reason" && fence.Lease != "curate" && fence.Lease != "explore" {
+		return Err(403, "unsupported execution lease")
+	}
 	revoked, err := t.RunRevoked(g.Project.ID, fence.Run)
 	if err != nil {
 		return err

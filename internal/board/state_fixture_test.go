@@ -25,7 +25,7 @@ const stateBenchmarkProject = "benchmark"
 
 var (
 	stateBenchmarkPlanner = ExecutionFence{Run: "planner@benchmark", Lease: "reason"}
-	stateBenchmarkWorker  = ExecutionFence{Run: "worker@benchmark", Lease: "intent", Intent: "active"}
+	stateBenchmarkWorker  = ExecutionFence{Run: "worker@benchmark", Lease: "explore", Intent: "active"}
 )
 
 // Share the same persisted graph and registered executions between regression

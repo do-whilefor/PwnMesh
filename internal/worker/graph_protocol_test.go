@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,11 +19,11 @@ import (
 func TestExecuteUpdateRPCKeepsRegisteredScopeAndIdentity(t *testing.T) {
 	job := Job{Kind: "explore", RunID: "run", GraphRPC: true, Intent: &board.Intent{ID: "step"}, Graph: board.Graph{Project: board.Project{ID: "project", Generation: 2}}}
 	request := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_updates"}
-	if err := ValidateGraphRequest(job, request); err != nil {
+	if err := protocol.ValidateGraphRequest(job, request); err != nil {
 		t.Fatal(err)
 	}
 	request.Updates = &board.ExecuteUpdateCursor{ProjectID: "project", Generation: 2, StepID: "step", RunID: "run", Revision: 3}
-	if err := ValidateGraphRequest(job, request); err != nil {
+	if err := protocol.ValidateGraphRequest(job, request); err != nil {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*Job, *GraphRequest){
@@ -44,7 +45,7 @@ func TestExecuteUpdateRPCKeepsRegisteredScopeAndIdentity(t *testing.T) {
 			cursor := *request.Updates
 			r.Updates = &cursor
 			mutate(&j, &r)
-			if err := ValidateGraphRequest(j, r); err == nil {
+			if err := protocol.ValidateGraphRequest(j, r); err == nil {
 				t.Fatal("accepted a request outside the registered Execute update scope")
 			}
 		})
@@ -57,10 +58,10 @@ func checkedGraphPage(t *testing.T, state board.State, request GraphRequest) gra
 	if request.Op == "" {
 		request.Op = "read_graph"
 	}
-	if err := ValidateGraphRequest(Job{}, request); err != nil {
+	if err := protocol.ValidateGraphRequest(Job{}, request); err != nil {
 		t.Fatal(err)
 	}
-	value, err := GraphPage(state, request)
+	value, err := protocol.GraphPage(state, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +191,7 @@ func TestMergedFindingReceiptAndSupportRemainReadable(t *testing.T) {
 	if len(raw) <= MaxGraphRPCBytes {
 		t.Fatal("fixture must exercise an oversized committed entity")
 	}
-	compact, err := CompactGraphActionResult(raw)
+	compact, err := protocol.CompactGraphActionResult(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,14 +239,14 @@ func TestGraphDetailsPaginateAccumulatedSourcesAndFenceVersions(t *testing.T) {
 	for _, section := range []string{"evidence", "sources"} {
 		for _, ids := range [][]string{nil, {"one", "two"}} {
 			r := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_graph", Section: section, IDs: ids}
-			if ValidateGraphRequest(Job{}, r) == nil {
+			if protocol.ValidateGraphRequest(Job{}, r) == nil {
 				t.Fatal("detail request must identify exactly one record")
 			}
-			if _, err := GraphPage(state, r); err == nil {
+			if _, err := protocol.GraphPage(state, r); err == nil {
 				t.Fatal("direct detail reads must validate their selector")
 			}
 		}
-		if _, err := GraphPage(state, GraphRequest{Section: section, IDs: []string{finding.ID}, ExpectedVersion: strings.Repeat("b", 64)}); err == nil || !strings.Contains(err.Error(), "state_changed") {
+		if _, err := protocol.GraphPage(state, GraphRequest{Section: section, IDs: []string{finding.ID}, ExpectedVersion: strings.Repeat("b", 64)}); err == nil || !strings.Contains(err.Error(), "state_changed") {
 			t.Fatal("detail reads bypassed version fencing")
 		}
 		missing := checkedGraphPage(t, state, GraphRequest{Section: section, IDs: []string{"missing"}})
@@ -320,13 +321,13 @@ func TestGraphSupportContinuationKeepsReadSource(t *testing.T) {
 
 func TestCompactGraphActionResultPreservesSmallResponsesAndUnchanged(t *testing.T) {
 	raw := json.RawMessage(`{"op":"fact","id":"f1","revision":3,"result":{"description":"ok"},"state_version":"version"}`)
-	got, err := CompactGraphActionResult(raw)
+	got, err := protocol.CompactGraphActionResult(raw)
 	if err != nil || string(got) != string(raw) {
 		t.Fatal("small action response changed")
 	}
 	result := board.StateActionResult{Op: "finding", ID: "finding_1", Revision: 4, StateVersion: strings.Repeat("a", 64), Unchanged: true, Result: json.RawMessage(`{"content":"` + strings.Repeat("x", MaxGraphRPCBytes) + `"}`)}
 	raw, _ = json.Marshal(result)
-	got, err = CompactGraphActionResult(raw)
+	got, err = protocol.CompactGraphActionResult(raw)
 	if err != nil || !strings.Contains(string(got), `"unchanged":true`) || !strings.Contains(string(got), `"result_omitted":true`) {
 		t.Fatal("compact idempotent result lost its acknowledgement")
 	}
@@ -342,10 +343,10 @@ func collectGraphRecord(t *testing.T, state board.State, request GraphRequest) j
 	var result []byte
 	for {
 		request.RequestID, request.Op = strings.Repeat("a", 32), "read_graph"
-		if err := ValidateGraphRequest(Job{}, request); err != nil {
+		if err := protocol.ValidateGraphRequest(Job{}, request); err != nil {
 			t.Fatal(err)
 		}
-		value, err := GraphPage(state, request)
+		value, err := protocol.GraphPage(state, request)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -412,7 +413,7 @@ func TestGraphPageContinuesOversizedSingleRecordsLosslessly(t *testing.T) {
 				t.Fatal(err)
 			}
 			want, _ := json.Marshal(tc.want)
-			if !reference.RecordOmitted || reference.RecordOffset != 0 || reference.RecordBytes != len(want) || reference.StateVersion != page.StateVersion || reference.RecordVersion != graphRecordVersion(want) {
+			if !reference.RecordOmitted || reference.RecordOffset != 0 || reference.RecordBytes != len(want) || reference.StateVersion != page.StateVersion || reference.RecordVersion != protocol.GraphRecordVersion(want) {
 				t.Fatal("oversized record did not expose a bound continuation")
 			}
 			if got := collectGraphRecord(t, state, request); string(got) != string(want) {
@@ -442,7 +443,7 @@ func TestGraphOverviewContinuesCompleteUserInputs(t *testing.T) {
 				},
 				FactRecords: []board.FactRecord{{ID: "feedback", Description: tc.feedback, Status: "valid", Legacy: true}, {ID: output.ID, Description: output.Description, Status: "valid", Legacy: true}},
 			}
-			value, err := GraphPage(state, GraphRequest{Section: "overview"})
+			value, err := protocol.GraphPage(state, GraphRequest{Section: "overview"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -477,7 +478,7 @@ func TestGraphBytePagesValidateOffsetsAndVersion(t *testing.T) {
 		{0, -1, version}, {0, 0, ""}, {0, 0, "changed"},
 		{0, insideRune, version}, {0, math.MaxInt, version}, {math.MaxInt, 0, version},
 	} {
-		_, err := GraphPage(state, GraphRequest{Section: "hints", Offset: tc.offset, ByteOffset: &tc.byteOffset, ExpectedVersion: tc.version})
+		_, err := protocol.GraphPage(state, GraphRequest{Section: "hints", Offset: tc.offset, ByteOffset: &tc.byteOffset, ExpectedVersion: tc.version})
 		if err == nil {
 			t.Fatalf("invalid byte cursor accepted: %+v", tc)
 		}
@@ -509,7 +510,7 @@ func TestGraphByteContinuationRejectsRuntimeOnlyChanges(t *testing.T) {
 	version := board.DecisionStateVersion(state)
 	zero := 0
 	request := GraphRequest{Section: "steps", ByteOffset: &zero, ExpectedVersion: version}
-	value, err := GraphPage(state, request)
+	value, err := protocol.GraphPage(state, request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -522,11 +523,11 @@ func TestGraphByteContinuationRejectsRuntimeOnlyChanges(t *testing.T) {
 	if board.DecisionStateVersion(state) != version {
 		t.Fatal("fixture must change raw record bytes without staling the decision")
 	}
-	if _, err = GraphPage(state, request); err == nil || !strings.Contains(err.Error(), "state_changed") {
+	if _, err = protocol.GraphPage(state, request); err == nil || !strings.Contains(err.Error(), "state_changed") {
 		t.Fatal("different record bytes were allowed into the same continuation")
 	}
 	request.RecordVersion = ""
-	if _, err = GraphPage(state, request); err == nil || !strings.Contains(err.Error(), "record_version") {
+	if _, err = protocol.GraphPage(state, request); err == nil || !strings.Contains(err.Error(), "record_version") {
 		t.Fatal("unbound later byte fragment was accepted")
 	}
 }

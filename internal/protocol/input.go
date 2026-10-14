@@ -17,7 +17,7 @@ func ValidateSnapshotInput(j Job) error {
 	}
 	view := j.InputView
 	if j.Kind == "reason" {
-		if j.Intent != nil || j.Decision == nil || (j.Decision.Version != 1 && j.Decision.Version != 2) || j.Decision.StateVersion != ref.StateVersion ||
+		if j.Intent != nil || j.Decision == nil || j.Decision.Version != 2 || j.Decision.StateVersion != ref.StateVersion ||
 			j.Decision.Generation != ref.Generation || j.Decision.ToRevision != ref.Revision || len(j.InputView) != 0 {
 			return errors.New("invalid decision snapshot binding")
 		}

@@ -157,7 +157,6 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 		if err != nil {
 			return 0, nil, b.Err(422, err.Error())
 		}
-		j.Decision.Version = 2
 		assessment, assessmentErr := t.CompletionAssessment(state)
 		if assessmentErr != nil {
 			return 0, nil, assessmentErr

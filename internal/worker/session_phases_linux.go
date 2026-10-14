@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/worker/internal/phase"
 )
 
@@ -86,7 +87,7 @@ func (p *sessionPhases) startConclusion() (context.Context, error) {
 
 func (p *sessionPhases) shouldConclude() bool {
 	j, o, state := p.runtime.job, p.runtime.options, &p.runtime.state
-	if !state.phaseState().CanConclude(controlJob(j)) {
+	if !state.phaseState().CanConclude(protocol.ControlJob(j)) {
 		return false
 	}
 	softStop := false
@@ -95,7 +96,7 @@ func (p *sessionPhases) shouldConclude() bool {
 		softStop = true
 	default:
 	}
-	return state.phaseState().ShouldConclude(o.Now(), controlJob(j), softStop)
+	return state.phaseState().ShouldConclude(o.Now(), protocol.ControlJob(j), softStop)
 }
 
 func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop) (context.Context, error) {
@@ -231,7 +232,7 @@ func (p *sessionPhases) onTurnEnd(turnCtx context.Context, l *agent.Loop, m agen
 		}
 	}
 	turn := phase.Turn{
-		Control: controlJob(j), NativeControl: p.runtime.roles.decision != nil || p.runtime.roles.curation != nil,
+		Control: protocol.ControlJob(j), NativeControl: p.runtime.roles.decision != nil || p.runtime.roles.curation != nil,
 		HasCalls: hasCalls, Truncated: truncated(m),
 	}
 	var problem *outputFailure

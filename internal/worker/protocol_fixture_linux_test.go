@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func sessionTestBridge(job Job, runDir string) *draftTestBridge {
 					state.FactRecords = append(state.FactRecords, board.FactRecord{ID: fact.ID, Description: fact.Description, Status: "valid"})
 				}
 			}
-			return GraphPage(state, request)
+			return protocol.GraphPage(state, request)
 		case "read_updates":
 			cursor := board.ExecuteUpdateCursor{ProjectID: job.Graph.Project.ID, Generation: job.Graph.Project.Generation, StepID: job.Intent.ID, RunID: job.RunID}
 			if request.Updates != nil {

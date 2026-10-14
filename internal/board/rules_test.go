@@ -8,6 +8,22 @@ import (
 	"time"
 )
 
+func TestExecutionRejectsRetiredLeaseNames(t *testing.T) {
+	f := newPlanFixture(t)
+	f.tx(func(tx *Tx) error {
+		g, err := tx.Load("proj_001")
+		if err != nil {
+			return err
+		}
+		g.Intents = []Intent{{ID: "step", Worker: Ptr("worker@run")}}
+		for _, lease := range []string{"bootstrap", "intent", "unknown", ""} {
+			fence := ExecutionFence{Run: "worker@run", Lease: lease, Intent: "step"}
+			requireAPIStatus(t, tx.CheckExecution(g, fence), 403)
+		}
+		return tx.CheckExecution(g, ExecutionFence{Run: "worker@run", Lease: "explore", Intent: "step"})
+	})
+}
+
 func TestExecutionReadUsesRoleTimeoutWithoutExpiringStoredLeases(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "read-lease.db"))
 	if err != nil {

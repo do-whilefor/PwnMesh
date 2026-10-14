@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	eventlog "pwnmesh/internal/worker/internal/journal"
 	"reflect"
 	"strings"
@@ -69,7 +70,7 @@ func testCompactedPublicationEvidence(t *testing.T, legacyExcerpt bool) {
 	if len(requestRaw) > MaxGraphRPCBytes || len(receiptRaw) <= maxGraphPageBytes {
 		t.Fatalf("fixture misses valid request/compacted response boundary: request=%d response=%d", len(requestRaw), len(receiptRaw))
 	}
-	compact, err := CompactGraphActionResult(receiptRaw)
+	compact, err := protocol.CompactGraphActionResult(receiptRaw)
 	if err != nil {
 		t.Fatal(err)
 	}

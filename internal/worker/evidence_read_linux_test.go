@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -47,7 +48,7 @@ func retainedReadTool(t *testing.T, workspace string, state *board.State) agent.
 	job := Job{Kind: "reason", RunID: "reader", Workspace: workspace, Graph: state.Graph, State: state, GraphRPC: true}
 	runDir := t.TempDir()
 	options := Options{RunDir: runDir, Output: &draftTestBridge{dir: runDir, handle: func(request GraphRequest) (any, error) {
-		return GraphPage(*state, request)
+		return protocol.GraphPage(*state, request)
 	}}}
 	if err := ConfigureRuntimeTools(job, &options); err != nil {
 		t.Fatal(err)
@@ -96,7 +97,7 @@ func TestReadEvidenceRecoversFullOriginalAcrossPagesAndOwnerTypes(t *testing.T) 
 		Candidates:  []board.Candidate{{ID: "candidate", Evidence: []board.EvidenceRef{ref, ref}}},
 	}
 	tool := retainedReadTool(t, workspace, &state)
-	wantSHA256 := graphRecordVersion([]byte(original))
+	wantSHA256 := protocol.GraphRecordVersion([]byte(original))
 	for _, id := range []string{"fact", "finding", "candidate"} {
 		t.Run(id, func(t *testing.T) {
 			index, offset, version, recovered, pages := 1, 0, "", "", 0
@@ -222,7 +223,7 @@ func TestCuratorReadEvidenceUsesFrozenSnapshotBridge(t *testing.T) {
 	j.State.FactRecords = []board.FactRecord{{ID: "fact", Evidence: []board.EvidenceRef{ref}}}
 	frozen := *j.State
 	raw, _ := json.Marshal(frozen)
-	j.InputSnapshot = &board.InputSnapshot{Version: 1, ID: graphRecordVersion(raw), ProjectID: j.Graph.Project.ID, Generation: j.Graph.Project.Generation, Revision: frozen.Revision, StateVersion: board.DecisionStateVersion(frozen)}
+	j.InputSnapshot = &board.InputSnapshot{Version: 1, ID: protocol.GraphRecordVersion(raw), ProjectID: j.Graph.Project.ID, Generation: j.Graph.Project.Generation, Revision: frozen.Revision, StateVersion: board.DecisionStateVersion(frozen)}
 	var err error
 	j.InputView, err = board.CurationContextView(frozen, board.DefaultContextViewBytes)
 	if err != nil {
@@ -235,7 +236,7 @@ func TestCuratorReadEvidenceUsesFrozenSnapshotBridge(t *testing.T) {
 		if r.Op != "read_snapshot" || r.Section != "evidence" || r.ExpectedVersion != j.InputSnapshot.StateVersion || r.Limit != 1 || len(r.IDs) != 1 || r.IDs[0] != "fact" {
 			t.Fatalf("raw lookup escaped curator input: %+v", r)
 		}
-		return GraphPage(frozen, r)
+		return protocol.GraphPage(frozen, r)
 	}}
 	options := Options{RunDir: runDir, Output: bridge}
 	if err := ConfigureRuntimeTools(j, &options); err != nil {
@@ -303,13 +304,13 @@ func TestReadEvidenceRecoversEscapedReferenceFromBoundRecordPages(t *testing.T) 
 				if r.ByteOffset == nil {
 					// Exercise the existing graph protocol's lossless record path,
 					// even if this valid ref fits today's outer page byte budget.
-					marker, _ := json.Marshal(graphRecordReference{RecordOmitted: true, RecordOffset: 0, RecordBytes: len(encoded), StateVersion: version, RecordVersion: graphRecordVersion(encoded), ReadMore: graphRecordReadMore})
+					marker, _ := json.Marshal(graphRecordReference{RecordOmitted: true, RecordOffset: 0, RecordBytes: len(encoded), StateVersion: version, RecordVersion: protocol.GraphRecordVersion(encoded), ReadMore: graphRecordReadMore})
 					result = graphPage{Section: "evidence", StateVersion: version, Total: 1, Items: []json.RawMessage{marker}}
 				} else {
-					if r.ExpectedVersion != version || r.RecordVersion != graphRecordVersion(encoded) || r.Offset != 0 || len(r.IDs) != 1 || r.IDs[0] != "fact" {
+					if r.ExpectedVersion != version || r.RecordVersion != protocol.GraphRecordVersion(encoded) || r.Offset != 0 || len(r.IDs) != 1 || r.IDs[0] != "fact" {
 						t.Fatalf("record read lost reference binding: %+v", r)
 					}
-					part, err := graphRecordContent(r, version, encoded)
+					part, err := protocol.GraphRecordContent(r, version, encoded)
 					if err != nil {
 						return "", err
 					}
@@ -350,7 +351,7 @@ func TestFailedReadEvidenceDoesNotSatisfyDecisionRecoveryReread(t *testing.T) {
 		if r.Op != "read_graph" || r.ExpectedVersion != j.Decision.StateVersion {
 			t.Fatalf("evidence lookup escaped the current decision fence: %+v", r)
 		}
-		return GraphPage(*j.State, r)
+		return protocol.GraphPage(*j.State, r)
 	}}
 	options := Options{RunDir: runDir, Output: bridge}
 	optionsRuntime := configureRoleTools(t, j, &options)

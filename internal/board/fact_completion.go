@@ -20,7 +20,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 	if err = s.Graph.RequireActive(); err != nil {
 		return Conclusion{}, err
 	}
-	if fence.Run == "" || fence.Intent == "" || (fence.Lease != "explore" && fence.Lease != "bootstrap") {
+	if fence.Run == "" || fence.Intent == "" || fence.Lease != "explore" {
 		return Conclusion{}, Err(403, "evidence conclusion requires an Execute lease")
 	}
 	if err = t.CheckExecution(s.Graph, fence); err != nil {

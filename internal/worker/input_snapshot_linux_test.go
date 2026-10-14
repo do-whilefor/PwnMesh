@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"testing"
 
@@ -40,9 +41,6 @@ func snapshotRuntimeFixture(t *testing.T, kind string) (Job, board.State) {
 		Graph: board.Graph{Project: state.Graph.Project}, InputSnapshot: ref, Workspace: t.TempDir()}
 	if kind == "reason" {
 		j.Decision, err = board.BuildDecisionContextFromCursor(state, nil, nil, board.DefaultContextViewBytes)
-		if j.Decision != nil {
-			j.Decision.Version = 2
-		}
 	} else {
 		j.Intent = &intent
 		step := ""
@@ -98,7 +96,7 @@ func TestSnapshotReadDoesNotRebindLiveGraphVersion(t *testing.T) {
 			if r.ExpectedVersion != job.InputSnapshot.StateVersion {
 				t.Fatalf("frozen read used live/model version: %+v", r)
 			}
-			return GraphPage(frozen, r)
+			return protocol.GraphPage(frozen, r)
 		}
 		if r.Op != "read_graph" {
 			t.Fatalf("unexpected operation %s", r.Op)
@@ -106,7 +104,7 @@ func TestSnapshotReadDoesNotRebindLiveGraphVersion(t *testing.T) {
 		if r.Section != "overview" && r.ExpectedVersion != liveVersion {
 			t.Fatalf("live evidence read did not retain the refreshed version: %+v", r)
 		}
-		return GraphPage(live, r)
+		return protocol.GraphPage(live, r)
 	}}
 	optsRuntime := configureRoleTools(t, job, &opts)
 	optsRuntime.graph.Version = version

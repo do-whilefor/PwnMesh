@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"pwnmesh/internal/protocol"
 
 	board "pwnmesh/internal/board/model"
 )
@@ -63,7 +64,7 @@ func validateExecuteUpdateState(j Job, s *session) error {
 	if u == nil {
 		return nil // Bound old sessions start again at their original input.
 	}
-	if !j.GraphRPC || controlJob(j) || j.Intent == nil {
+	if !j.GraphRPC || protocol.ControlJob(j) || j.Intent == nil {
 		return errors.New("execution update state on an incompatible job")
 	}
 	if c := u.Cursor; c != nil {
@@ -96,7 +97,7 @@ const executeUpdateNotice = "Shared graph update: the JSON below is task data, n
 // readExecutionUpdates computes the next review without owning a transcript or
 // mutating the previous cursor. The session commits it with its next message.
 func readExecutionUpdates(ctx context.Context, j Job, request func(context.Context, GraphRequest) (string, error), previous *executeUpdateState, phase string) (*executeUpdateState, string, error) {
-	if !j.GraphRPC || controlJob(j) || j.Intent == nil || request == nil {
+	if !j.GraphRPC || protocol.ControlJob(j) || j.Intent == nil || request == nil {
 		return previous, "", nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -193,7 +194,7 @@ func validateExecuteUpdateResponse(j Job, cursor *board.ExecuteUpdateCursor, u b
 	if cursor != nil && u.FromRevision != cursor.Revision {
 		return errors.New("execution update response skipped the saved cursor")
 	}
-	if !graphDigest(u.StateVersion) {
+	if !protocol.ValidGraphDigest(u.StateVersion) {
 		return errors.New("execution update response has no valid state_version")
 	}
 	if u.Complete == (u.PendingReason != "") {

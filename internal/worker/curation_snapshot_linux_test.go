@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"testing"
 
@@ -35,7 +36,7 @@ func TestCuratorSnapshotReadsRetainedPagesAndBindsCommit(t *testing.T) {
 			if request.ExpectedVersion != j.InputSnapshot.StateVersion {
 				t.Fatal("snapshot read lost its version")
 			}
-			return GraphPage(frozen, request)
+			return protocol.GraphPage(frozen, request)
 		case "graph_action":
 			writes++
 			var payload board.CuratePayload

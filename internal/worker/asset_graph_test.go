@@ -2,6 +2,7 @@ package worker
 
 import (
 	"encoding/json"
+	"pwnmesh/internal/protocol"
 	"reflect"
 	"strings"
 	"testing"
@@ -87,14 +88,14 @@ func TestAssetGraphFrozenViewsBindCatalogueAndAnchors(t *testing.T) {
 		t.Fatalf("anchor filters not combined: %+v", page)
 	}
 	s.AssetAnchors = append(s.AssetAnchors, board.AssetAnchor{AssetID: s.Assets[0].ID, NodeKind: "fact", NodeID: "other"})
-	if _, err := GraphPage(s, r); err == nil || !strings.HasPrefix(err.Error(), "state_changed:") {
+	if _, err := protocol.GraphPage(s, r); err == nil || !strings.HasPrefix(err.Error(), "state_changed:") {
 		t.Fatalf("changed anchors accepted under old version: %v", err)
 	}
 	if page := checkedGraphPage(t, frozen, r); page.Total != 1 {
 		t.Fatal("frozen catalogue drifted")
 	}
 	r.AssetIDs = []string{"unknown"}
-	if _, err := GraphPage(frozen, r); err == nil {
+	if _, err := protocol.GraphPage(frozen, r); err == nil {
 		t.Fatal("unknown asset silently appeared to have no observations")
 	}
 }
@@ -130,7 +131,7 @@ func TestAssetGraphOverviewCountsMatchVersionedSections(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			version := board.DecisionStateVersion(tc.state)
-			value, err := GraphPage(tc.state, GraphRequest{Op: tc.op, Section: "overview", ExpectedVersion: version})
+			value, err := protocol.GraphPage(tc.state, GraphRequest{Op: tc.op, Section: "overview", ExpectedVersion: version})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,7 +170,7 @@ func TestAssetGraphOverviewCountsMatchVersionedSections(t *testing.T) {
 			}
 		})
 	}
-	if _, err := GraphPage(live, GraphRequest{Section: "overview", ExpectedVersion: board.DecisionStateVersion(frozen)}); err == nil || !strings.HasPrefix(err.Error(), "state_changed:") {
+	if _, err := protocol.GraphPage(live, GraphRequest{Section: "overview", ExpectedVersion: board.DecisionStateVersion(frozen)}); err == nil || !strings.HasPrefix(err.Error(), "state_changed:") {
 		t.Fatalf("overview accepted the previous asset/history version: %v", err)
 	}
 }
@@ -184,7 +185,7 @@ func TestAssetGraphRejectsFiltersOnUnrelatedOperations(t *testing.T) {
 		{Op: "read_graph", Section: "assets", AssetIDs: []string{" "}},
 	} {
 		r.RequestID = strings.Repeat("a", 32)
-		if err := ValidateGraphRequest(Job{}, r); err == nil {
+		if err := protocol.ValidateGraphRequest(Job{}, r); err == nil {
 			t.Fatalf("accepted ignored asset filter: %+v", r)
 		}
 	}
@@ -194,7 +195,7 @@ func TestCompactGraphReceiptRetainsAssetLookup(t *testing.T) {
 	result := board.StateActionResult{Op: "fact", ID: "f001", Revision: 3, StateVersion: "version", Committed: true, AssetIDs: []string{"a001", "a002"}}
 	result.Result, _ = json.Marshal(map[string]string{"description": strings.Repeat("observation", maxGraphPageBytes)})
 	raw, _ := json.Marshal(result)
-	compact, err := CompactGraphActionResult(raw)
+	compact, err := protocol.CompactGraphActionResult(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,7 +208,7 @@ func TestCompactGraphReceiptRetainsAssetLookup(t *testing.T) {
 func TestWorkerTraceRunProtocolRequiresRegisteredExecuteScope(t *testing.T) {
 	j := Job{Kind: "explore", RunID: "self", GraphRPC: true, Intent: &board.Intent{ID: "work"}, Graph: board.Graph{Project: board.Project{ID: "p"}}}
 	r := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_trace_runs", IDs: []string{"other"}, Limit: 10}
-	if err := ValidateGraphRequest(j, r); err != nil {
+	if err := protocol.ValidateGraphRequest(j, r); err != nil {
 		t.Fatal(err)
 	}
 	for name, change := range map[string]func(*Job, *GraphRequest){
@@ -223,7 +224,7 @@ func TestWorkerTraceRunProtocolRequiresRegisteredExecuteScope(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			job, req := j, r
 			change(&job, &req)
-			if err := ValidateGraphRequest(job, req); err == nil {
+			if err := protocol.ValidateGraphRequest(job, req); err == nil {
 				t.Fatal("accepted an unauthorized trace request")
 			}
 		})

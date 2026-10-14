@@ -27,6 +27,9 @@ func TestExecutionViewsPreserveCanonicalSnapshot(t *testing.T) {
 	if err != nil || decision.StateVersion != version || decision.Generation != state.Graph.Project.Generation {
 		t.Fatalf("decision view lost its original input identity: %+v, %v", decision, err)
 	}
+	if decision.Version != 2 {
+		t.Fatalf("decision builder returned retired protocol %d", decision.Version)
+	}
 	assessment, err := CompletionAssessment(state)
 	if err != nil || assessment == nil || len(assessment.FactRecords) != 1 || assessment.FactRecords[0].ID != "proof" {
 		t.Fatalf("assessment lost the evidence-backed observation: %+v, %v", assessment, err)

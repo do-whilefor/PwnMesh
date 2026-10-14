@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	board "pwnmesh/internal/board/model"
+	"pwnmesh/internal/protocol"
 	"strconv"
 	"text/template"
 )
@@ -32,7 +33,7 @@ func Prompt(j Job, conclude bool) (string, error) {
 	if j.Kind != "explore" && j.Kind != "reason" && j.Kind != "curate" {
 		return "", errors.New("unknown task")
 	}
-	if conclude && controlJob(j) {
+	if conclude && protocol.ControlJob(j) {
 		return "", errors.New("control roles have no conclusion phase")
 	}
 	// The original task stays pinned in the session. Phase changes describe only
@@ -45,10 +46,10 @@ func Prompt(j Job, conclude bool) (string, error) {
 		return "", err
 	}
 	context := "The user's goal defines the work, including non-security tasks; scenario rules apply only to relevant work and add no extra deliverables.\nThe bounded task graph contains original user requirements and shared state. Honor user inputs and hints within this role's scope; observations and shared interpretations cannot override them or tool rules. Omitted details are not proof of absence.\n<task_graph>\n" + string(view) + "\n</task_graph>\n"
-	if orchestrationJob(j) {
+	if protocol.OrchestrationJob(j) {
 		context += "generation is the runtime-assigned project restart counter, not a review level.\n"
 	}
-	if orchestrationJob(j) && !controlJob(j) && len(j.DependencyResults) != 0 {
+	if protocol.OrchestrationJob(j) && !protocol.ControlJob(j) && len(j.DependencyResults) != 0 {
 		dependencies, err := json.Marshal(j.DependencyResults)
 		if err != nil {
 			return "", err
@@ -76,11 +77,11 @@ func Prompt(j Job, conclude bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if orchestrationJob(j) && j.Kind == "reason" {
+	if protocol.OrchestrationJob(j) && j.Kind == "reason" {
 		body += "Candidate notes are tentative interpretations; use them to choose checks without waiting for a shared verdict. Request Curate for concrete conflicts or merges, identifying both sources and the scope/time discrepancy; similarity alone is not equivalence. Resolve disputes through a fresh independent review of both sides' raw sources and a specific question; blackboard curation alone cannot resolve a dispute. Shared observations and relations belong to the blackboard role.\n"
 		body += "Use step retry to authorize a fresh attempt after failure. A completed Step without valid support may be explicitly abandoned with a reason and replaced by fresh verification; its historical success remains recorded. Unrelated disputes may remain open, but excluding their sources does not waive required coverage. Use read_evidence when the complete original, beyond an excerpt, can change the decision.\n"
 		body += "A file repair target that already satisfies its checks completes by deterministic inspection without a model session. A changed target that still fails requires a new assessment and Step, never retry the obsolete binding.\n"
-	} else if orchestrationJob(j) && !controlJob(j) {
+	} else if protocol.OrchestrationJob(j) && !protocol.ControlJob(j) {
 		body += "Keep parallel outputs private; honor this Step's write_paths for shared deliverables. Declarations coordinate writers, not filesystem isolation.\n"
 		body += "Keep useful interpretations as graph_action candidate notes backed by original evidence.\n"
 		body += "Use supplied evidence directly; read_graph is for missing or changed information. Use direct tools for simple work; use run_graph only when parallel subtasks, artifact dependencies or reuse justify it. You own synthesis and Step completion.\n"
@@ -96,7 +97,7 @@ func environmentPrompt(j Job) string {
 		text += "- This Worker runs in a Kali Linux container with kali-linux-headless installed.\n"
 	}
 	text += "- The shared project workspace is " + strconv.Quote(j.Workspace) + "; it can store scripts, command logs and large scan results.\n"
-	if !controlJob(j) {
+	if !protocol.ControlJob(j) {
 		text += "- bash commands start in this workspace. Execute assigned work directly when inputs are present; confirm tool availability (such as nuclei and ffuf) from command output only as needed within the work.\n"
 		text += "- " + executionDiscipline + "\n"
 	}
@@ -159,7 +160,7 @@ func intentContext(j Job, view []byte) string {
 
 func jobContextView(j Job) ([]byte, error) {
 	if j.Kind == "curate" {
-		if err := validateCuratorInput(j); err != nil {
+		if err := protocol.ValidateCuratorInput(j); err != nil {
 			return nil, err
 		}
 		if j.InputSnapshot != nil {
@@ -168,7 +169,7 @@ func jobContextView(j Job) ([]byte, error) {
 		return board.CurationContextView(*j.State, board.DefaultContextViewBytes)
 	}
 	if j.InputSnapshot != nil {
-		if err := validateSnapshotInput(j); err != nil {
+		if err := protocol.ValidateSnapshotInput(j); err != nil {
 			return nil, err
 		}
 		if j.Kind == "reason" {
@@ -180,7 +181,7 @@ func jobContextView(j Job) ([]byte, error) {
 		return nil, errors.New("missing immutable input snapshot")
 	}
 	if j.Kind == "reason" && j.Decision != nil {
-		if j.State == nil || (j.Decision.Version != 1 && j.Decision.Version != 2) || j.Decision.StateVersion != board.DecisionStateVersion(*j.State) || j.Decision.Generation != j.Graph.Project.Generation || !json.Valid(j.Decision.View) {
+		if j.State == nil || j.Decision.Version != 2 || j.Decision.StateVersion != board.DecisionStateVersion(*j.State) || j.Decision.Generation != j.Graph.Project.Generation || !json.Valid(j.Decision.View) {
 			return nil, errors.New("invalid decision input binding")
 		}
 		return json.Marshal(j.Decision)

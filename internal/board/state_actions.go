@@ -65,7 +65,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if err = s.Graph.RequireActive(); err != nil {
 		return StateActionResult{}, err
 	}
-	if fence.Run == "" || !slices.Contains([]string{"reason", "explore", "bootstrap", "intent", "curate"}, fence.Lease) {
+	if fence.Run == "" {
 		return StateActionResult{}, Err(403, "state actions require an execution lease")
 	}
 	if err = t.CheckExecution(s.Graph, fence); err != nil {
@@ -84,7 +84,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 			allowed = action.Op == "goal" || action.Op == "step" || action.Op == "complete" || action.Op == "curation_request"
 		case "curate":
 			allowed = action.Op == "curate"
-		case "explore", "bootstrap", "intent":
+		case "explore":
 			allowed = action.Op == "fact" || action.Op == "candidate"
 		}
 		if !allowed {

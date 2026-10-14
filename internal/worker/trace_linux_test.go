@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	eventlog "pwnmesh/internal/worker/internal/journal"
 	"strings"
 	"testing"
@@ -58,7 +59,7 @@ func newTraceFixture(t *testing.T, contents ...string) traceFixture {
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
-	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: eventlog.Checkpoint{Offset: int64(len(raw)), SHA256: graphRecordVersion(raw)}, TaskPrompt: "job-secret-must-not-leak"}
+	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: eventlog.Checkpoint{Offset: int64(len(raw)), SHA256: protocol.GraphRecordVersion(raw)}, TaskPrompt: "job-secret-must-not-leak"}
 	b, _ := json.Marshal(saved)
 	if err := os.WriteFile(filepath.Join(dir, "session.json"), b, 0600); err != nil {
 		t.Fatal(err)
@@ -74,7 +75,7 @@ func (f traceFixture) tool(t *testing.T) agent.Tool {
 			t.Fatalf("unexpected trace authorization op: %+v", r)
 		}
 		r.RequestID = strings.Repeat("a", 32)
-		if err := ValidateGraphRequest(f.job, r); err != nil {
+		if err := protocol.ValidateGraphRequest(f.job, r); err != nil {
 			t.Fatal(err)
 		}
 		items := []board.TraceRun{f.run}
@@ -176,14 +177,14 @@ func TestWorkerTraceRegisteredMapOrderingMatchesSessionIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.run.Workspace, f.run.RegisteredJob = j.Workspace, registered
-	f.run, err = BindTraceRun(f.run)
+	f.run, err = protocol.BindTraceRun(f.run)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if f.run.JobSHA256 != identity.JobDigest || f.run.JobSHA256 == graphRecordVersion(registered) || f.run.RegisteredJob != nil {
+	if f.run.JobSHA256 != identity.JobDigest || f.run.JobSHA256 == protocol.GraphRecordVersion(registered) || f.run.RegisteredJob != nil {
 		t.Fatal("trace binding used raw JSON instead of runtime Job serialization")
 	}
-	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}}
+	saved := session{SchemaVersion: sessionSchemaVersion, Identity: identity, Log: eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: protocol.GraphRecordVersion(f.raw)}}
 	raw, _ := json.Marshal(saved)
 	if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
 		t.Fatal(err)
@@ -256,7 +257,7 @@ func TestWorkerTraceContinuationKeepsPrefixAfterCheckpointAdvances(t *testing.T)
 	if err := json.Unmarshal(raw, &saved); err != nil {
 		t.Fatal(err)
 	}
-	saved.Log = eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}
+	saved.Log = eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: protocol.GraphRecordVersion(f.raw)}
 	raw, _ = json.Marshal(saved)
 	if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
 		t.Fatal(err)
@@ -425,7 +426,7 @@ func TestWorkerTraceRejectsFileAndIdentitySubstitution(t *testing.T) {
 					t.Fatal(err)
 				}
 				s.Log.Offset--
-				s.Log.SHA256 = graphRecordVersion(f.raw[:len(f.raw)-1])
+				s.Log.SHA256 = protocol.GraphRecordVersion(f.raw[:len(f.raw)-1])
 				data, _ = json.Marshal(s)
 				if err = os.WriteFile(filepath.Join(f.dir, "session.json"), data, 0600); err != nil {
 					t.Fatal(err)
@@ -473,7 +474,7 @@ func TestWorkerTraceRequestAndRoleBoundaries(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrong = traceBinding{ProjectID: "foreign", Generation: 2, RunID: f.run.RunID, Offset: int64(len(raw)), SHA256: graphRecordVersion(raw)}
+	wrong = traceBinding{ProjectID: "foreign", Generation: 2, RunID: f.run.RunID, Offset: int64(len(raw)), SHA256: protocol.GraphRecordVersion(raw)}
 	token, _ := json.Marshal(wrong)
 	if _, _, err := readTraceJournal(context.Background(), f.job.Workspace, f.run, base64.RawURLEncoding.EncodeToString(token)); err == nil {
 		t.Fatal("foreign continuation accepted")
@@ -553,7 +554,7 @@ func TestWorkerTraceDetailRetainsObservationProvenance(t *testing.T) {
 			if err := json.Unmarshal(raw, &saved); err != nil {
 				t.Fatal(err)
 			}
-			saved.Log = eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: graphRecordVersion(f.raw)}
+			saved.Log = eventlog.Checkpoint{Offset: int64(len(f.raw)), SHA256: protocol.GraphRecordVersion(f.raw)}
 			raw, _ = json.Marshal(saved)
 			if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
 				t.Fatal(err)

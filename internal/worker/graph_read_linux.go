@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"pwnmesh/internal/protocol"
 	"slices"
 )
 
@@ -39,7 +40,7 @@ func graphRecordShape(section string, raw json.RawMessage) bool {
 func modelGraphSupportMetadata(section string, item json.RawMessage, marker modelGraphRecordMarker) (json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if !slices.Contains([]string{"facts", "findings", "candidates"}, section) || marker.ID == "" || marker.RecordOmitted ||
-		marker.RecordBytes <= len(item) || !graphDigest(marker.RecordVersion) || json.Unmarshal(item, &fields) != nil ||
+		marker.RecordBytes <= len(item) || !protocol.ValidGraphDigest(marker.RecordVersion) || json.Unmarshal(item, &fields) != nil ||
 		marker.EvidenceOmitted && (marker.EvidenceCount <= 0 || fields["evidence"] != nil) ||
 		marker.SourcesOmitted && (marker.SourcesCount <= 0 || fields["sources"] != nil || section == "facts") {
 		return nil, errors.New("invalid graph support omission")
@@ -120,7 +121,7 @@ func modelGraphRead(ctx context.Context, r GraphRequest, request func(context.Co
 	if err := json.Unmarshal([]byte(raw), &result); err != nil {
 		return "", err
 	}
-	if result.Section != r.Section || result.Total < 0 || result.Offset != min(r.Offset, result.Total) || !graphDigest(result.StateVersion) {
+	if result.Section != r.Section || result.Total < 0 || result.Offset != min(r.Offset, result.Total) || !protocol.ValidGraphDigest(result.StateVersion) {
 		return "", errors.New("invalid graph read page")
 	}
 	r.ExpectedVersion = result.StateVersion
@@ -227,7 +228,7 @@ func modelGraphRead(ctx context.Context, r GraphRequest, request func(context.Co
 // binding checks, while retaining their independent logical size limits.
 func readGraphRecord(ctx context.Context, r GraphRequest, reference graphRecordReference, maxBytes int, request func(context.Context, GraphRequest) (string, error)) (json.RawMessage, error) {
 	bound := reference.RecordOmitted || reference.RecordBytes != 0 || reference.RecordVersion != ""
-	if bound && (reference.RecordBytes <= 0 || reference.RecordBytes > maxBytes || !graphDigest(reference.RecordVersion)) {
+	if bound && (reference.RecordBytes <= 0 || reference.RecordBytes > maxBytes || !protocol.ValidGraphDigest(reference.RecordVersion)) {
 		return nil, errors.New("invalid or oversized graph record; select narrower evidence or sources")
 	}
 	var result json.RawMessage
@@ -242,7 +243,7 @@ func readGraphRecord(ctx context.Context, r GraphRequest, reference graphRecordR
 			return nil, err
 		}
 		var part graphContentPage
-		if json.Unmarshal([]byte(raw), &part) != nil || part.Section != r.Section || part.Offset != r.Offset || part.StateVersion != r.ExpectedVersion || !graphDigest(part.RecordVersion) || part.ByteOffset != offset || part.TotalBytes <= 0 || part.TotalBytes > maxBytes || len(part.Content) == 0 || len(part.Content) > part.TotalBytes-offset {
+		if json.Unmarshal([]byte(raw), &part) != nil || part.Section != r.Section || part.Offset != r.Offset || part.StateVersion != r.ExpectedVersion || !protocol.ValidGraphDigest(part.RecordVersion) || part.ByteOffset != offset || part.TotalBytes <= 0 || part.TotalBytes > maxBytes || len(part.Content) == 0 || len(part.Content) > part.TotalBytes-offset {
 			return nil, errors.New("invalid graph record continuation")
 		}
 		if offset == 0 && !bound {
@@ -254,7 +255,7 @@ func readGraphRecord(ctx context.Context, r GraphRequest, reference graphRecordR
 		result = append(result, part.Content...)
 		offset += len(part.Content)
 		if part.NextByteOffset == nil {
-			if offset != total || graphRecordVersion(result) != version || !graphRecordShape(r.Section, result) {
+			if offset != total || protocol.GraphRecordVersion(result) != version || !graphRecordShape(r.Section, result) {
 				return nil, errors.New("graph record continuation failed its content check")
 			}
 			return result, nil

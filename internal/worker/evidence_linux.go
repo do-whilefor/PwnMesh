@@ -13,6 +13,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"unicode/utf8"
 
@@ -38,7 +39,7 @@ func retainEvidenceBytes(ctx context.Context, run, dir string, raw []byte) (boar
 // freezes selected files once; conclusion selects only its persisted boundary
 // fragments and never follows a newly supplied workspace path.
 func prepareFinalEvidence(ctx context.Context, j Job, runDir string, r Result, frozen []board.EvidenceRef) (Result, error) {
-	if controlJob(j) || r.Status != "success" {
+	if protocol.ControlJob(j) || r.Status != "success" {
 		return r, nil
 	}
 	parsed, err := parseOutput(j, r.Conclude, r.Text)
