@@ -17,9 +17,7 @@ func TestProjectExecutionPagingHasOneResponseShapeAndValidatesBoundaries(t *test
 	if len(defaults.Items) != 1 || len(page.Items) != 1 || page.Items[0].ID != defaults.Items[0].ID || page.Items[0].Generation != defaults.Items[0].Generation || page.NextCursor != 0 || page.Through == 0 || page.Through != defaults.Through {
 		t.Fatalf("default paging differs from explicit page: %+v %+v", defaults, page)
 	}
-	for _, query := range []string{"limit=0", "limit=101", "cursor=-1", "cursor=bad", "through=-1", "through=", "limit=1&cursor=3&through=2"} {
-		f.request("GET", f.base()+"/executions?"+query, nil, false, http.StatusUnprocessableEntity, nil)
-	}
+	f.request("GET", f.base()+"/executions?limit=1&cursor=3&through=2", nil, false, http.StatusUnprocessableEntity, nil)
 	f.request("GET", "/projects/missing/executions?limit=20", nil, false, http.StatusNotFound, nil)
 }
 
@@ -46,12 +44,46 @@ func TestExecutionChangeEndpointRequiresGenerationAndReportsRestartConflict(t *t
 	if len(page.Items) != 1 || page.Through == 0 || page.Generation != 0 {
 		t.Fatalf("missing execution change projection: %+v", page)
 	}
-	for _, query := range []string{"", "generation=-1", "generation=bad", "generation=0&after=-1", "generation=0&cursor=bad", "generation=0&limit=101"} {
-		f.request("GET", f.base()+"/executions/changes?"+query, nil, false, http.StatusUnprocessableEntity, nil)
-	}
+	f.request("GET", f.base()+"/executions/changes", nil, false, http.StatusUnprocessableEntity, nil)
 	f.request("POST", f.base()+"/restart", map[string]int{"expected_generation": 0}, false, http.StatusOK, nil)
 	f.request("GET", f.base()+"/executions/changes?generation=0", nil, false, http.StatusConflict, nil)
 	f.request("GET", f.base()+"/executions/changes?generation=1", nil, false, http.StatusOK, nil)
+}
+
+func TestProjectExecutionPagingRejectsInvalidNumbers(t *testing.T) {
+	f := newExecutionProtocolFixture(t)
+	for _, view := range []struct {
+		name   string
+		path   string
+		fields []string
+	}{
+		{"page", "/executions?", []string{"limit", "cursor", "through"}},
+		{"change", "/executions/changes?", []string{"generation", "after", "cursor", "through", "limit"}},
+	} {
+		for _, field := range view.fields {
+			values := []string{"", "-1", "invalid", "9223372036854775808"}
+			if field == "limit" {
+				values = append(values, "0", "101")
+			}
+			for _, value := range values {
+				t.Run(view.name+"/"+field+"/"+value, func(t *testing.T) {
+					fixture := *f
+					fixture.t = t
+					query := field + "=" + value
+					if view.name == "change" && field != "generation" {
+						query += "&generation=0"
+					}
+					var response struct {
+						Detail string `json:"detail"`
+					}
+					fixture.request("GET", f.base()+view.path+query, nil, false, http.StatusUnprocessableEntity, &response)
+					if want := "invalid execution " + view.name + " " + field; response.Detail != want {
+						t.Fatalf("error detail = %q, want %q", response.Detail, want)
+					}
+				})
+			}
+		}
+	}
 }
 
 func TestRetiredHTTPRoutesAreUnavailable(t *testing.T) {
