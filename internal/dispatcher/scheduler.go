@@ -125,9 +125,6 @@ func (s *Scheduler) Health(ctx context.Context, force bool) error {
 	return result
 }
 func (s *Scheduler) Run(ctx context.Context) error {
-	if err := s.bindOwnership(ctx); err != nil {
-		return err
-	}
 	parent := ctx
 	ctx, release, err := s.acquireDispatcher(ctx)
 	if err != nil {

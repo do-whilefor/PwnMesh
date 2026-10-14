@@ -60,7 +60,14 @@ func TestDispatcherOwnershipRejectsConcurrentStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	httpServer := httptest.NewServer(server.New(store))
+	var deployments atomic.Int32
+	handler := server.New(store)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/deployment" {
+			deployments.Add(1)
+		}
+		handler.ServeHTTP(w, r)
+	}))
 	defer httpServer.Close()
 	cfg := config.Config{
 		Server:    httpServer.URL,
@@ -78,10 +85,14 @@ func TestDispatcherOwnershipRejectsConcurrentStartup(t *testing.T) {
 	defer release()
 
 	secondRunner := &ownershipRunner{}
+	before := deployments.Load()
 	err = New(cfg, secondRunner).Run(ctx)
 	var protocol *ProtocolError
 	if !errors.As(err, &protocol) || protocol.Status != http.StatusConflict {
 		t.Fatalf("second dispatcher startup: got %v, want ownership conflict", err)
+	}
+	if reads := deployments.Load() - before; reads != 1 {
+		t.Fatalf("dispatcher startup read its installation %d times, want once before claiming", reads)
 	}
 	secondRunner.assertUntouched(t)
 	if firstRunner.owner == "" || secondRunner.owner != firstRunner.owner {
