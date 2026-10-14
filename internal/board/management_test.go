@@ -140,7 +140,7 @@ func TestReopenProjectRollsBackAdmissionAndPublishesHumanInput(t *testing.T) {
 }
 
 func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
-	for _, operation := range []string{"create", "hint", "reopen", "status"} {
+	for _, operation := range []string{"create", "hint", "reopen", "status", "restart_archive", "restart_reset", "terminate"} {
 		t.Run(operation, func(t *testing.T) {
 			f := newOrchestrationFixture(t)
 			if operation == "reopen" {
@@ -161,6 +161,31 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 					return err
 				})
 			}
+			if strings.HasPrefix(operation, "restart_") || operation == "terminate" {
+				pending := f.worker("pending", "")
+				retry := f.worker("retry", "")
+				f.do(func(tx *Tx) error {
+					if err := tx.ExecutionStatus(pending, "result_pending", json.RawMessage(`{"text":"retained result"}`)); err != nil {
+						return err
+					}
+					if err := tx.ExecutionStatus(retry, "failed", json.RawMessage(`{"error":"retained failure"}`)); err != nil {
+						return err
+					}
+					if err := tx.ExecutionStatus(retry, "retry_requested", nil); err != nil {
+						return err
+					}
+					if _, err := tx.Exec("INSERT INTO pwnmesh_paused_executions(project_id,execution_id) VALUES('p',?)", pending.ID); err != nil {
+						return err
+					}
+					triggers := map[string]string{
+						"restart_archive": "BEFORE INSERT ON pwnmesh_round_entries WHEN NEW.kind='inputs'",
+						"restart_reset":   "BEFORE INSERT ON pwnmesh_project_rounds",
+						"terminate":       "BEFORE INSERT ON pwnmesh_project_termination",
+					}
+					_, err := tx.Exec("CREATE TRIGGER reject_management_lifecycle " + triggers[operation] + " BEGIN SELECT RAISE(ABORT,'lifecycle persistence failed'); END")
+					return err
+				})
+			}
 			snapshot := func(tx *Tx) (string, error) {
 				state, err := tx.State("p")
 				if err != nil {
@@ -172,7 +197,13 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 				}
 				var projects, facts, hints, intents, revoked, paused, events, counters, scopedCount, scopedValue int
 				err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM projects),(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM hints),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM pwnmesh_revoked_runs),(SELECT COUNT(*) FROM pwnmesh_paused_executions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT COALESCE(SUM(value),0) FROM counters),(SELECT COUNT(*) FROM scoped_counters),(SELECT COALESCE(SUM(value),0) FROM scoped_counters)`).Scan(&projects, &facts, &hints, &intents, &revoked, &paused, &events, &counters, &scopedCount, &scopedValue)
-				return fmt.Sprintf("%s|%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", raw, projects, facts, hints, intents, revoked, paused, events, counters, scopedCount, scopedValue), err
+				if err != nil {
+					return "", err
+				}
+				var rounds, entries, terminations, executionCount, uiRevision int
+				var executionBytes string
+				err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM pwnmesh_round_history),(SELECT COUNT(*) FROM pwnmesh_round_entries),(SELECT COUNT(*) FROM pwnmesh_project_termination),(SELECT COUNT(*) FROM pwnmesh_executions),(SELECT COALESCE(SUM(revision),0) FROM pwnmesh_ui_execution_revisions),(SELECT COALESCE(json_group_array(json_object('id',id,'status',status,'job',CAST(job AS TEXT),'result',CAST(result AS TEXT),'updated_at',updated_at)),'[]') FROM pwnmesh_executions ORDER BY rowid)`).Scan(&rounds, &entries, &terminations, &executionCount, &uiRevision, &executionBytes)
+				return fmt.Sprintf("%s|%d,%d,%d,%d,%d,%d,%d,%d,%d,%d|%d,%d,%d,%d,%d|%s", raw, projects, facts, hints, intents, revoked, paused, events, counters, scopedCount, scopedValue, rounds, entries, terminations, executionCount, uiRevision, executionBytes), err
 			}
 			var before string
 			f.do(func(tx *Tx) error { var err error; before, err = snapshot(tx); return err })
@@ -191,9 +222,16 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 					_, err = tx.ReopenProject("p", oversized, "user", "request")
 				case "status":
 					_, err = tx.SetProjectStatus("p", "stopped", nil)
+				case "restart_archive", "restart_reset":
+					_, err = tx.RestartProject("p", nil)
+				case "terminate":
+					_, err = tx.TerminateProject("p", nil)
 				}
 				if err == nil {
 					t.Fatal("invalid operation unexpectedly succeeded")
+				}
+				if (strings.HasPrefix(operation, "restart_") || operation == "terminate") && !strings.Contains(err.Error(), "lifecycle persistence failed") {
+					t.Fatalf("operation failed before reaching the injected fault: %v", err)
 				}
 				settings, err := tx.Settings()
 				if err != nil {

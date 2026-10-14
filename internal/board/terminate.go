@@ -1,11 +1,15 @@
 package board
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"pwnmesh/internal/board/internal/sqlstore"
+)
 
 // Termination ends an unfinished project without asserting that its Goal was
 // achieved. The graph, evidence, history and workspace survive for inspection.
 // Only an explicit restart may start another execution round afterward.
-func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
+func (t *Tx) TerminateProject(project string, expected *int64) (out Graph, err error) {
 	g, err := t.Load(project)
 	if err != nil {
 		return Graph{}, err
@@ -19,24 +23,14 @@ func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
 	if g.Project.Status != "active" && g.Project.Status != "stopped" {
 		return Graph{}, Err(409, "Only active or stopped projects can be terminated")
 	}
+	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+		return Graph{}, err
+	}
+	defer t.finishManagement(&err)
 	if err = t.RevokeRuns(project); err != nil {
 		return Graph{}, err
 	}
-	rows, err := t.Query("SELECT id FROM pwnmesh_executions WHERE project_id=? AND status IN ('prepared','running','retryable','result_pending')", project)
-	if err != nil {
-		return Graph{}, err
-	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return Graph{}, err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
+	ids, err := sqlstore.PendingProjectExecutionIDs(t, project)
 	if err != nil {
 		return Graph{}, err
 	}
@@ -52,12 +46,12 @@ func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
 			return Graph{}, err
 		}
 	}
-	if _, err = t.Exec("DELETE FROM pwnmesh_paused_executions WHERE project_id=?", project); err != nil {
+	if err = sqlstore.DeletePausedExecutions(t, project); err != nil {
 		return Graph{}, err
 	}
 	// Cancel outstanding one-use retry grants as well as running work, while
 	// retaining the attempt's stored result and original failure history.
-	if _, err = t.Exec("UPDATE pwnmesh_executions SET status='cancelled',updated_at=? WHERE project_id=? AND status='retry_requested'", t.Now, project); err != nil {
+	if err = sqlstore.CancelProjectRetries(t, project, t.Now); err != nil {
 		return Graph{}, err
 	}
 	g.Project.Status, g.Project.Reason, g.Project.TerminatedAt = "terminated", nil, t.Now
@@ -67,7 +61,7 @@ func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
 			g.Intents[index].Worker = nil
 		}
 	}
-	if _, err = t.Exec("INSERT INTO pwnmesh_project_termination(project_id,terminated_at) VALUES(?,?)", project, t.Now); err != nil {
+	if err = sqlstore.RecordProjectTermination(t, project, t.Now); err != nil {
 		return Graph{}, err
 	}
 	return g, t.Save(g)

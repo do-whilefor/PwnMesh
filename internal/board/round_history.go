@@ -1,9 +1,7 @@
 package board
 
 import (
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"pwnmesh/internal/board/internal/sqlstore"
@@ -19,13 +17,11 @@ func (t *Tx) archiveRound(project string) error {
 		return err
 	}
 	generation := state.Graph.Project.Generation
-	if _, err = t.Exec("INSERT INTO pwnmesh_round_history(project_id,generation,archived_at) VALUES(?,?,?)", project, generation, t.Now); err != nil {
+	if err = sqlstore.InsertRound(t, project, generation, t.Now); err != nil {
 		return err
 	}
 	save := func(kind, id string, raw []byte) error {
-		sum := sha256.Sum256(raw)
-		_, err := t.Exec("INSERT INTO pwnmesh_round_entries(project_id,generation,kind,id,data,sha256) VALUES(?,?,?,?,?,?)", project, generation, kind, id, raw, hex.EncodeToString(sum[:]))
-		return err
+		return sqlstore.InsertRoundEntry(t, project, generation, kind, id, raw)
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -90,31 +86,23 @@ func (t *Tx) RoundHistory(project string, after int64, limit int) (RoundPage, er
 	if after < -1 || limit < 1 || limit > 100 {
 		return out, Err(422, "round history requires cursor >= -1 and limit between 1 and 100")
 	}
-	var exists bool
-	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM projects WHERE id=?)", project).Scan(&exists); err != nil {
+	exists, err := sqlstore.ProjectExists(t, project)
+	if err != nil {
 		return out, err
 	}
 	if !exists {
 		return out, Err(404, "Project not found")
 	}
-	rows, err := t.Query("SELECT generation,archived_at FROM pwnmesh_round_history WHERE project_id=? AND generation>? ORDER BY generation LIMIT ?", project, after, limit+1)
-	if err != nil {
-		return out, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var entry RoundSummary
-		if err = rows.Scan(&entry.Generation, &entry.ArchivedAt); err != nil {
-			return out, err
-		}
+	err = sqlstore.VisitRoundHistory(t, project, after, limit+1, func(generation int64, archivedAt string) error {
 		if len(out.Items) == limit {
 			cursor := out.Items[len(out.Items)-1].Generation
 			out.NextCursor = &cursor
-			break
+		} else {
+			out.Items = append(out.Items, RoundSummary{Generation: generation, ArchivedAt: archivedAt})
 		}
-		out.Items = append(out.Items, entry)
-	}
-	return out, rows.Err()
+		return nil
+	})
+	return out, err
 }
 
 type RoundEntry struct {
@@ -131,8 +119,8 @@ type RoundEntryPage struct {
 }
 
 func (t *Tx) requireRound(project string, generation int64) error {
-	var exists bool
-	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_round_history WHERE project_id=? AND generation=?)", project, generation).Scan(&exists); err != nil {
+	exists, err := sqlstore.RoundExists(t, project, generation)
+	if err != nil {
 		return err
 	}
 	if !exists {
@@ -149,24 +137,16 @@ func (t *Tx) RoundEntries(project string, generation, after int64, limit int) (R
 	if err := t.requireRound(project, generation); err != nil {
 		return out, err
 	}
-	rows, err := t.Query("SELECT rowid,kind,id,length(data),sha256 FROM pwnmesh_round_entries WHERE project_id=? AND generation=? AND rowid>? ORDER BY rowid LIMIT ?", project, generation, after, limit+1)
-	if err != nil {
-		return out, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var entry RoundEntry
-		if err = rows.Scan(&entry.Cursor, &entry.Kind, &entry.ID, &entry.Bytes, &entry.SHA256); err != nil {
-			return out, err
-		}
+	err := sqlstore.VisitRoundEntries(t, project, generation, after, limit+1, func(rowID int64, kind, id string, size int64, checksum string) error {
 		if len(out.Items) == limit {
 			cursor := out.Items[len(out.Items)-1].Cursor
 			out.NextCursor = &cursor
-			break
+		} else {
+			out.Items = append(out.Items, RoundEntry{Cursor: rowID, Kind: kind, ID: id, Bytes: size, SHA256: checksum})
 		}
-		out.Items = append(out.Items, entry)
-	}
-	return out, rows.Err()
+		return nil
+	})
+	return out, err
 }
 
 type RoundEntryChunk struct {
@@ -183,7 +163,8 @@ func (t *Tx) ReadRoundEntry(project string, generation, entry, offset int64, lim
 	if generation < 0 || entry < 1 || offset < 0 || limit < 1 || limit > 32<<10 {
 		return out, Err(422, "invalid archive entry; byte limit must be between 1 and 32768")
 	}
-	err := t.QueryRow("SELECT substr(data,?,?),length(data),sha256 FROM pwnmesh_round_entries WHERE project_id=? AND generation=? AND rowid=?", offset+1, limit, project, generation, entry).Scan(&out.Data, &out.TotalBytes, &out.SHA256)
+	var err error
+	out.Data, out.TotalBytes, out.SHA256, err = sqlstore.ReadRoundEntry(t, project, generation, entry, offset, limit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, Err(404, "Archived entry not found")
 	}

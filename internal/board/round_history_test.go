@@ -233,3 +233,49 @@ func TestRestartArchiveFailureRollsBackEntireRound(t *testing.T) {
 		t.Fatalf("replayed expected_generation restarted again: %v", err)
 	}
 }
+
+func TestRoundReadsPreserveValidationMissingPolicyAndEndOffsets(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	f.do(func(tx *Tx) error {
+		page, err := tx.RoundHistory("p", -1, 100)
+		if err != nil || page.Items == nil || len(page.Items) != 0 || page.NextCursor != nil {
+			t.Fatalf("empty history changed response shape: %+v, %v", page, err)
+		}
+		_, err = tx.RestartProject("p", nil)
+		return err
+	})
+	f.do(func(tx *Tx) error {
+		page, err := tx.RoundEntries("p", 0, 0, 100)
+		if err != nil {
+			return err
+		}
+		entry := page.Items[0]
+		chunk, err := tx.ReadRoundEntry("p", 0, entry.Cursor, entry.Bytes, 1)
+		if err != nil || len(chunk.Data) != 0 || chunk.TotalBytes != entry.Bytes || chunk.Offset != entry.Bytes || chunk.NextOffset != nil || chunk.SHA256 != entry.SHA256 || chunk.Encoding != "base64" {
+			t.Fatalf("exact end offset changed response: %+v, %v", chunk, err)
+		}
+		for _, check := range []struct {
+			name   string
+			status int
+			read   func() error
+		}{
+			{"history cursor", 422, func() error { _, err := tx.RoundHistory("p", -2, 1); return err }},
+			{"history limit", 422, func() error { _, err := tx.RoundHistory("p", -1, 101); return err }},
+			{"missing project", 404, func() error { _, err := tx.RoundHistory("missing", -1, 1); return err }},
+			{"entry cursor", 422, func() error { _, err := tx.RoundEntries("p", 0, -1, 1); return err }},
+			{"entry limit", 422, func() error { _, err := tx.RoundEntries("p", 0, 0, 0); return err }},
+			{"missing round", 404, func() error { _, err := tx.RoundEntries("p", 1, 0, 1); return err }},
+			{"byte limit", 422, func() error { _, err := tx.ReadRoundEntry("p", 0, entry.Cursor, 0, 32769); return err }},
+			{"negative offset", 422, func() error { _, err := tx.ReadRoundEntry("p", 0, entry.Cursor, -1, 1); return err }},
+			{"past end offset", 422, func() error { _, err := tx.ReadRoundEntry("p", 0, entry.Cursor, entry.Bytes+1, 1); return err }},
+			{"other generation", 404, func() error { _, err := tx.ReadRoundEntry("p", 1, entry.Cursor, 0, 1); return err }},
+			{"other project", 404, func() error { _, err := tx.ReadRoundEntry("missing", 0, entry.Cursor, 0, 1); return err }},
+		} {
+			var api *APIError
+			if err := check.read(); !errors.As(err, &api) || api.Status != check.status {
+				t.Fatalf("%s changed error policy: %v", check.name, err)
+			}
+		}
+		return nil
+	})
+}

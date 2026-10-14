@@ -7,7 +7,7 @@ import "pwnmesh/internal/board/internal/sqlstore"
 // regain authority or accidentally address a replacement step with an old ID.
 // The prior round is archived before resetting its current projections. This
 // operation never changes project workspace files or historical snapshots.
-func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
+func (t *Tx) RestartProject(project string, expected *int64) (out Graph, err error) {
 	g, err := t.Load(project)
 	if err != nil {
 		return Graph{}, err
@@ -24,29 +24,15 @@ func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
 	if len(inputs) != 2 {
 		return Graph{}, Err(409, "Project is missing its original input or goal")
 	}
+	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+		return Graph{}, err
+	}
+	defer t.finishManagement(&err)
 	if err = t.archiveRound(project); err != nil {
 		return Graph{}, err
 	}
 	if err = t.RevokeRuns(project); err != nil {
 		return Graph{}, err
-	}
-	if _, err = t.Exec("DELETE FROM pwnmesh_project_termination WHERE project_id=?", project); err != nil {
-		return Graph{}, err
-	}
-	if err = sqlstore.DeleteStateRecords(t, project); err != nil {
-		return Graph{}, err
-	}
-	for _, query := range []string{
-		"DELETE FROM pwnmesh_executions WHERE project_id=?",
-		// The generation fence rejects every old-round cursor. Keep the
-		// revision sequence, but discard the deletion markers just generated.
-		"DELETE FROM pwnmesh_ui_execution_changes WHERE project_id=?",
-		"DELETE FROM intents WHERE project_id=?",
-		"DELETE FROM facts WHERE project_id=? AND id NOT IN ('origin','goal')",
-	} {
-		if _, err = t.Exec(query, project); err != nil {
-			return Graph{}, err
-		}
 	}
 	g.Project.Status, g.Project.Reason = "active", nil
 	g.Project.Curator = nil
@@ -54,7 +40,7 @@ func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
 	g.Project.RestartedAt = t.Now
 	g.Project.TerminatedAt = ""
 	g.Facts, g.Intents = inputs, []Intent{}
-	if _, err = t.Exec(`INSERT INTO pwnmesh_project_rounds(project_id,generation,restarted_at) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET generation=excluded.generation,restarted_at=excluded.restarted_at`, project, g.Project.Generation, t.Now); err != nil {
+	if err = sqlstore.ResetProjectRound(t, project, g.Project.Generation, t.Now); err != nil {
 		return Graph{}, err
 	}
 	return g, t.Save(g)

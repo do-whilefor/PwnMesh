@@ -1,34 +1,20 @@
 package board
 
-import "encoding/json"
+import (
+	"encoding/json"
+
+	"pwnmesh/internal/board/internal/sqlstore"
+)
 
 // Pause records only executions interrupted by this human operation. A later
 // Continue must not grant blanket retries to unrelated failures or abandoned
 // directions. The marker survives dispatcher shutdown and cascades on restart.
 func (t *Tx) markPausedExecutions(g Graph) error {
-	_, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_paused_executions(project_id,execution_id)
- SELECT e.project_id,e.id FROM pwnmesh_executions e
- WHERE e.project_id=? AND e.status IN ('prepared','running','retryable','result_pending')
- AND NOT EXISTS(SELECT 1 FROM pwnmesh_revoked_runs r WHERE r.project_id=e.project_id AND r.worker=e.lease)`, g.Project.ID)
-	return err
+	return sqlstore.MarkPausedExecutions(t, g.Project.ID)
 }
 
 func (t *Tx) continuePausedExecutions(g Graph) error {
-	rows, err := t.Query("SELECT execution_id FROM pwnmesh_paused_executions WHERE project_id=?", g.Project.ID)
-	if err != nil {
-		return err
-	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	err = rows.Err()
-	rows.Close()
+	ids, err := sqlstore.PausedExecutionIDs(t, g.Project.ID)
 	if err != nil {
 		return err
 	}
@@ -73,6 +59,5 @@ func (t *Tx) continuePausedExecutions(g Graph) error {
 			return err
 		}
 	}
-	_, err = t.Exec("DELETE FROM pwnmesh_paused_executions WHERE project_id=?", g.Project.ID)
-	return err
+	return sqlstore.DeletePausedExecutions(t, g.Project.ID)
 }

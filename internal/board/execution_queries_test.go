@@ -10,12 +10,13 @@ import (
 	"go/token"
 	"path/filepath"
 	"pwnmesh/internal/board/internal/sqlstore"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 func TestOperationsUseStorageBoundary(t *testing.T) {
-	for _, name := range []string{"executions.go", "execution_queries.go", "input_snapshot.go", "state_projection.go"} {
+	for _, name := range []string{"executions.go", "execution_queries.go", "input_snapshot.go", "state_projection.go", "pause.go", "restart.go", "terminate.go", "round_history.go"} {
 		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -27,6 +28,16 @@ func TestOperationsUseStorageBoundary(t *testing.T) {
 			}
 			method, ok := call.Fun.(*ast.SelectorExpr)
 			if ok && (method.Sel.Name == "Exec" || method.Sel.Name == "Query" || method.Sel.Name == "QueryRow") {
+				// Board still owns the local transaction boundary around the
+				// complete business operation, including archive and settlement.
+				if method.Sel.Name == "Exec" && len(call.Args) == 1 {
+					if literal, ok := call.Args[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
+						statement, _ := strconv.Unquote(literal.Value)
+						if statement == "SAVEPOINT pwnmesh_management" {
+							return true
+						}
+					}
+				}
 				t.Errorf("%s bypasses storage through %s", name, method.Sel.Name)
 			}
 			return true
