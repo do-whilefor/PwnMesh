@@ -80,3 +80,49 @@ func TestDispatcherLeaseFencesCompetingAndExpiredOwners(t *testing.T) {
 	lease("other", b, installation, "claim", false)
 	lease("test", a, installation, "claim", true)
 }
+
+func TestDispatcherLeaseValidationDoesNotChangeOwnership(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Do(context.Background(), func(tx *Tx) error {
+		tx.Now = "2026-01-01T00:00:00Z"
+		installation, err := tx.InstallationID()
+		if err != nil {
+			return err
+		}
+		holder := strings.Repeat("a", 32)
+		if err := tx.DispatcherLease("test", holder, installation, "claim"); err != nil {
+			return err
+		}
+		tx.Now = "2026-01-01T00:00:10Z"
+		for _, invalid := range []struct {
+			namespace, holder, identity, op string
+			status                          int
+		}{
+			{"", holder, installation, "claim", 422},
+			{"UPPER", holder, installation, "claim", 422},
+			{strings.Repeat("a", 129), holder, installation, "claim", 422},
+			{"test", "invalid", installation, "claim", 422},
+			{"test", strings.Repeat("a", 30), installation, "claim", 422},
+			{"test", holder, "different", "release", 409},
+			{"test", holder, installation, "invalid", 422},
+		} {
+			err := tx.DispatcherLease(invalid.namespace, invalid.holder, invalid.identity, invalid.op)
+			requireAPIStatus(t, err, invalid.status)
+		}
+		var count int
+		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_dispatchers").Scan(&count); err != nil || count != 1 {
+			t.Fatalf("rejected operation created a namespace: %d, %v", count, err)
+		}
+		var current, expires string
+		if err := tx.QueryRow("SELECT holder,expires_at FROM pwnmesh_dispatchers WHERE namespace='test'").Scan(&current, &expires); err != nil || current != holder || expires != "2026-01-01T00:00:30Z" {
+			t.Fatalf("rejected operation changed the owner or expiry: %q, %q, %v", current, expires, err)
+		}
+		return nil // Rejections must be safe even when the caller handles them.
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

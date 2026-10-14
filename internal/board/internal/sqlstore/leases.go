@@ -2,6 +2,14 @@ package sqlstore
 
 import "pwnmesh/internal/board/model"
 
+// ReadLeaseExpired uses the same SQLite clock comparison as lease housekeeping,
+// treating missing or invalid dates as expired without mutating the snapshot.
+func ReadLeaseExpired(q Queries, now, heartbeat string, timeout int) (bool, error) {
+	var expired bool
+	err := q.QueryRow("SELECT COALESCE((julianday(?)-julianday(?))*86400>?,1)", now, heartbeat, timeout).Scan(&expired)
+	return expired, err
+}
+
 // Lease writes touch only their owning columns. Board checks authority and
 // eligibility before calling them in its existing transaction.
 func SaveReasonLease(q Queries, project string, reason *model.Reason) error {

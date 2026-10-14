@@ -30,7 +30,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
 | `internal/board/` | Transactional business operations, admission, mutations and consistent state assembly |
 | `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
-| `internal/board/internal/sqlstore/` | SQLite connections, transactions, targeted graph writes, execution/lease/input rows, bounded UI reads, lifecycle and archive storage, metadata, events, receipts, snapshots, schema and migrations |
+| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph/execution/input rows, retry and review queries, leases and dispatcher ownership, bounded UI reads, lifecycle and archive storage, metadata, events, receipts, snapshots, schema and migrations |
 | `internal/board/internal/projection/` | Metadata decoding and pure state, dependency support and asset derivation |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
@@ -70,9 +70,19 @@ keep archived Job/Result bodies out of scheduling and state projection. Executio
 registration, result updates, revocation and resume counters use that same caller
 transaction; Board still validates transitions and combines them with review
 state, revisions and failure events. Historical execution archival streams rows
-in registration order. Retry/dispute queries, dispatcher ownership and the
-read-lease clock comparison still contain SQL in Board. There is one canonical
-model, not a duplicate transport model.
+in registration order. Retry and dispute queries, dispatcher ownership records
+and lease clock comparisons also belong to sqlstore. Board contains only local
+savepoint statements, with a source-boundary test covering all its production
+files. There is one canonical model, not a duplicate transport model.
+
+Retry reads return project generation, owner, attempt counts and pending work
+without loading saved Job/Result bodies. Board chooses the retry input scope,
+failure eligibility and one-use allowance. An automatic retry grant keeps its
+defensive revocation, lease release and status update within a local savepoint;
+a handled write failure leaves the saved execution and authority unchanged.
+Review queries count every registered attempt for the selected project and Step
+and match a live planner's exact saved input. Board decides review limits and
+whether a dispute transition requires a fresh decision revision.
 
 Targeted graph storage owns immutable Fact insertion, scoped ID sequences,
 Intent conclusion/abandonment/deletion and asset anchors. Board normalizes assets,
@@ -185,8 +195,9 @@ Server calls semantic Board operations for project management and all three
 role leases; it does not execute SQL. Board callbacks expose query operations,
 but no underlying `sql.Tx` field or transaction lifecycle methods. A private query
 wrapper also prevents recovering the raw transaction through a type assertion.
-The private store owns normal commit and rollback; query methods still permit raw
-SQL inside Board. It does not interpret or restrict SQL statement text.
+The private store owns normal commit and rollback; query methods remain available
+on Board transactions, while source checks restrict production use to local
+savepoints. The query wrapper does not interpret or restrict SQL statement text.
 Multiwrite management operations, including restart and termination, use a local
 savepoint, so callers may handle a rejection and continue the outer transaction
 without retaining partial archive rows, revocations, events or projection resets.
@@ -200,6 +211,10 @@ version and timeouts. Sqlstore applies targeted lease writes, conditional curato
 release, project revocation and expiry in the caller's transaction. Intent release
 and expiry retain heartbeat metadata; completed intents keep their owners. Planner
 cleanup after batch commit or retry uses the same storage operation as lease release.
+Dispatcher storage retains installation identity and namespace binding after
+release; Board validates owners and computes lease deadlines. Observational lease
+reads retain SQLite date parsing and expiry comparison without updating stored
+leases or reserving a writer.
 Source-boundary tests prevent SQL from returning to HTTP
 handlers or storage dependencies from returning to execution clients.
 

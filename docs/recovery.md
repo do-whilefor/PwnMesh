@@ -51,6 +51,12 @@ The historical planner-conflict adapter runs only after this receipt check. Old
 Curate batches with an accepted receipt but pending settlement still use the
 explicit apply path; newly committed batches settle within their Board transaction.
 
+Automatic Decide and infrastructure-failed Curate retries grant a successor while
+retaining the failed execution's Job and Result. The saved attempt history bounds
+that allowance across dispatcher restarts. Defensive revocation, lease release and
+the grant share a local savepoint; a failed grant rolls back those changes even
+when the caller handles the error and commits unrelated work.
+
 The `execute-v1` acceptance adapter has been removed. A `graph.json` without a
 current `acceptance.json` is rejected before session callbacks, bookkeeping or
 result output. Current receipts remain recoverable even if an old graph file is

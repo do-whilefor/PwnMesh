@@ -16,13 +16,14 @@ import (
 )
 
 func TestOperationsUseStorageBoundary(t *testing.T) {
-	for _, name := range []string{
-		"executions.go", "execution_queries.go", "input_snapshot.go", "state_projection.go",
-		"pause.go", "restart.go", "terminate.go", "round_history.go", "inputs.go",
-		"assets.go", "fact_completion.go", "management.go", "state_actions.go", "step_writes.go",
-		"ui.go", "project_summary.go", "trace_runs.go", "decision_read.go", "decision_version.go",
-		"decision_batch.go", "execution_observation.go", "step_dependencies.go", "step_ready.go", "leases.go",
-	} {
+	names, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -33,7 +34,11 @@ func TestOperationsUseStorageBoundary(t *testing.T) {
 				return true
 			}
 			method, ok := call.Fun.(*ast.SelectorExpr)
-			if ok && (method.Sel.Name == "Exec" || method.Sel.Name == "Query" || method.Sel.Name == "QueryRow") {
+			if !ok {
+				return true
+			}
+			switch method.Sel.Name {
+			case "Exec", "ExecContext", "Query", "QueryContext", "QueryRow", "QueryRowContext", "Prepare", "PrepareContext":
 				// Board still owns the local transaction boundary around the
 				// complete business operation, including archive and settlement.
 				if method.Sel.Name == "Exec" && len(call.Args) == 1 {

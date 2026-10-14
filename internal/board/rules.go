@@ -1,5 +1,7 @@
 package board
 
+import "pwnmesh/internal/board/internal/sqlstore"
+
 func (t *Tx) CheckExecution(g Graph, fence ExecutionFence) error {
 	if fence.Run == "" {
 		return nil
@@ -61,8 +63,8 @@ func (t *Tx) CheckExecutionRead(g Graph, fence ExecutionFence) error {
 			}
 		}
 	}
-	var expired bool
-	if err := t.QueryRow("SELECT COALESCE((julianday(?)-julianday(?))*86400>?,1)", t.Now, heartbeat, timeout).Scan(&expired); err != nil {
+	expired, err := sqlstore.ReadLeaseExpired(t.transactionQueries, t.Now, heartbeat, timeout)
+	if err != nil {
 		return err
 	}
 	if expired {

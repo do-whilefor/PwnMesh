@@ -30,8 +30,8 @@ func (t *Tx) validateReviewStep(s State, d *stateData, id string) error {
 		}
 		attempts := 0
 		for _, stepID := range dispute.ReviewStepIDs {
-			var count int
-			if err := t.QueryRow("SELECT COUNT(*) FROM pwnmesh_executions WHERE project_id=? AND intent=?", s.Graph.Project.ID, stepID).Scan(&count); err != nil {
+			count, err := sqlstore.IntentExecutionCount(t, s.Graph.Project.ID, stepID)
+			if err != nil {
 				return err
 			}
 			attempts += count
@@ -68,8 +68,8 @@ func (t *Tx) validateReviewExecution(e Execution) error {
 		}
 		count := 0
 		for _, id := range dispute.ReviewStepIDs {
-			var attempts int
-			if err = t.QueryRow("SELECT COUNT(*) FROM pwnmesh_executions WHERE project_id=? AND intent=?", e.ProjectID, id).Scan(&attempts); err != nil {
+			attempts, err := sqlstore.IntentExecutionCount(t, e.ProjectID, id)
+			if err != nil {
 				return err
 			}
 			count += attempts
@@ -118,13 +118,10 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 				// transition alone invalidates a live, uncommitted planner, preserve
 				// its outstanding planning signal under a fresh input retry key.
 				// Already stale or committed planners cannot renew that allowance.
-				err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions
-					WHERE project_id=? AND kind='reason' AND lease=?
-					AND status IN ('prepared','running','retryable','result_pending')
-					AND generation=? AND decision_revision=? AND state_version=?
-					AND json_extract(job,'$.decision.version')=2)`,
-					e.ProjectID, planner.Worker, before.Graph.Project.Generation,
-					before.DecisionRevision, DecisionStateVersion(before)).Scan(&decisionChanged)
+				decisionChanged, err = sqlstore.PendingDecisionExecution(t, sqlstore.DecisionExecutionInput{
+					ProjectID: e.ProjectID, Lease: planner.Worker, Generation: before.Graph.Project.Generation,
+					DecisionRevision: before.DecisionRevision, StateVersion: DecisionStateVersion(before),
+				})
 				if err != nil {
 					return err
 				}

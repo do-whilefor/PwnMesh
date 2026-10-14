@@ -146,7 +146,7 @@ func TestReviewStartDoesNotRequestDecisionButPreservesVersionAndEvents(t *testin
 }
 
 func TestReviewStartPreservesOnlyCurrentUncommittedPlanningSignal(t *testing.T) {
-	for _, mode := range []string{"prepared", "running", "committed", "already_stale", "failed"} {
+	for _, mode := range []string{"prepared", "running", "retryable", "result_pending", "committed", "already_stale", "failed"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newOrchestrationFixture(t)
 			dispute, _, _ := f.conflict()
@@ -167,8 +167,8 @@ func TestReviewStartPreservesOnlyCurrentUncommittedPlanningSignal(t *testing.T) 
 					return err
 				}
 				switch mode {
-				case "running":
-					return tx.ExecutionStatus(planner, "running", nil)
+				case "running", "retryable", "result_pending":
+					return tx.ExecutionStatus(planner, mode, nil)
 				case "committed":
 					_, err = tx.CommitDecision("p", f.planner, DecisionBatch{ExpectedVersion: ref.StateVersion, Actions: []DecisionAction{}})
 					return err
@@ -186,7 +186,7 @@ func TestReviewStartPreservesOnlyCurrentUncommittedPlanningSignal(t *testing.T) 
 			review := f.worker("review-start", step)
 			after := f.state()
 			increment := int64(0)
-			if mode == "prepared" || mode == "running" {
+			if mode == "prepared" || mode == "running" || mode == "retryable" || mode == "result_pending" {
 				increment = 1
 			}
 			if after.DecisionRevision != before.DecisionRevision+increment || after.Revision != before.Revision+1 || after.Disputes[0].Status != "reviewing" {

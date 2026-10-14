@@ -1,11 +1,11 @@
 package board
 
 import (
-	"database/sql"
 	"encoding/hex"
-	"errors"
 	"strings"
 	"time"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 const DispatcherLeaseSeconds = 30
@@ -14,9 +14,7 @@ const DispatcherLeaseSeconds = 30
 // A restarted dispatcher must recover the same owned containers; another database
 // must never adopt or clean them up just because its project IDs happen to match.
 func (t *Tx) InstallationID() (string, error) {
-	var id string
-	err := t.QueryRow("SELECT identity FROM pwnmesh_installation WHERE singleton=1").Scan(&id)
-	return id, err
+	return sqlstore.InstallationID(t.transactionQueries)
 }
 
 // The dispatcher owns all process cleanup in its namespace. A lease is taken
@@ -39,26 +37,24 @@ func (t *Tx) DispatcherLease(namespace, holder, installation, op string) error {
 		return Err(409, "server installation changed")
 	}
 	if op == "release" {
-		_, err := t.Exec("UPDATE pwnmesh_dispatchers SET expires_at=? WHERE namespace=? AND holder=?", t.Now, namespace, holder)
-		return err
+		return sqlstore.ReleaseDispatcherLease(t.transactionQueries, namespace, holder, t.Now)
 	}
-	var current, expires string
-	err = t.QueryRow("SELECT holder,expires_at FROM pwnmesh_dispatchers WHERE namespace=?", namespace).Scan(&current, &expires)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+	lease, err := sqlstore.LoadDispatcherLease(t.transactionQueries, namespace)
+	if err != nil {
 		return err
 	}
 	if op == "heartbeat" {
-		if current != holder || expires <= t.Now {
+		if lease.Holder != holder || lease.ExpiresAt <= t.Now {
 			return Err(409, "dispatcher lease lost")
 		}
 	} else if op != "claim" {
 		return Err(422, "invalid dispatcher lease operation")
-	} else if current != holder && expires > t.Now {
+	} else if lease.Holder != holder && lease.ExpiresAt > t.Now {
 		return Err(409, "another dispatcher owns this installation namespace")
 	}
 	if op == "claim" {
-		var boundElsewhere bool
-		if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_dispatchers WHERE namespace<>?)", namespace).Scan(&boundElsewhere); err != nil {
+		boundElsewhere, err := sqlstore.DispatcherNamespaceBoundElsewhere(t.transactionQueries, namespace)
+		if err != nil {
 			return err
 		}
 		if boundElsewhere {
@@ -69,8 +65,6 @@ func (t *Tx) DispatcherLease(namespace, holder, installation, op string) error {
 	if err != nil {
 		return err
 	}
-	expires = now.Add(DispatcherLeaseSeconds * time.Second).Format(time.RFC3339)
-	_, err = t.Exec(`INSERT INTO pwnmesh_dispatchers(namespace,holder,expires_at) VALUES(?,?,?)
-ON CONFLICT(namespace) DO UPDATE SET holder=excluded.holder,expires_at=excluded.expires_at`, namespace, holder, expires)
-	return err
+	expires := now.Add(DispatcherLeaseSeconds * time.Second).Format(time.RFC3339)
+	return sqlstore.SaveDispatcherLease(t.transactionQueries, namespace, holder, expires)
 }

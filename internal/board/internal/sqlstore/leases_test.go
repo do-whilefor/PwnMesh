@@ -9,6 +9,38 @@ import (
 	"pwnmesh/internal/board/model"
 )
 
+func TestReadLeaseExpiryPreservesSQLiteDateSemantics(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.View(context.Background(), func(q Queries) error {
+		for _, test := range []struct {
+			name, now, heartbeat string
+			timeout              int
+			expired              bool
+		}{
+			{"live", "2026-01-01T00:00:10Z", "2026-01-01T00:00:00Z", 15, false},
+			{"expired", "2026-01-01T00:00:20Z", "2026-01-01T00:00:00Z", 15, true},
+			{"equal", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", 0, false},
+			{"sqlite_date", "2026-01-01 00:00:10", "2026-01-01 08:00:00+08:00", 15, false},
+			{"sqlite_expired", "2026-01-01 00:00:20", "2026-01-01 08:00:00+08:00", 15, true},
+			{"missing_heartbeat", "2026-01-01T00:00:00Z", "", 15, true},
+			{"invalid_heartbeat", "2026-01-01T00:00:00Z", "invalid", 15, true},
+			{"invalid_now", "invalid", "2026-01-01T00:00:00Z", 15, true},
+		} {
+			expired, err := ReadLeaseExpired(q, test.now, test.heartbeat, test.timeout)
+			if err != nil || expired != test.expired {
+				t.Errorf("%s expiry = %v, want %v: %v", test.name, expired, test.expired, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func leaseGraph(project string, version int) model.Graph {
 	const old = "2026-09-28T08:00:00Z"
 	return model.Graph{
