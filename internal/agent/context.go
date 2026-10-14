@@ -282,7 +282,13 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 			}
 		}
 	}
-	attemptRecord := &CompactionRecord{CompactionCheckpoint: CompactionCheckpoint{Version: 1, ID: l.Checkpoint.CompactionCount + 1, PreviousID: previousID, SourceStart: sourceStart, SourceEnd: sourceEnd, AtSequence: l.Checkpoint.LastSequence, BeforeBytes: before, BeforeTokensEstimate: beforeTokens, TokenBasis: basis, Reason: "threshold", Status: "failed"}}
+	attemptRecord := &CompactionRecord{CompactionCheckpoint: CompactionCheckpoint{
+		Version: ContextCheckpointVersion, ID: l.Checkpoint.CompactionCount + 1,
+		PreviousID: previousID, SourceStart: sourceStart, SourceEnd: sourceEnd,
+		AtSequence: l.Checkpoint.LastSequence, BeforeBytes: before,
+		BeforeTokensEstimate: beforeTokens, TokenBasis: basis,
+		Reason: "threshold", Status: "failed",
+	}}
 	if force {
 		attemptRecord.Reason = "overflow"
 	}
@@ -325,18 +331,20 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 	if after >= before || after > target || (targetTokens > 0 && afterTokens > targetTokens) {
 		return -1, budgetError("compaction did not produce a smaller request within the input budget")
 	}
-	record := &CompactionRecord{CompactionCheckpoint: CompactionCheckpoint{Version: 1, ID: l.Checkpoint.CompactionCount + 1, PreviousID: previousID, SourceStart: sourceStart, SourceEnd: sourceEnd, AtSequence: l.Checkpoint.LastSequence, Summary: text, BeforeBytes: before, AfterBytes: after, BeforeTokensEstimate: beforeTokens, AfterTokensEstimate: afterTokens, TokenBasis: basis + " -> " + afterBasis, Usage: summary.Usage, Reason: "threshold", Status: "committed"}, View: candidate}
-	record.Quotes = quotes
-	if force {
-		record.Reason = "overflow"
-	}
+	// All events for this attempt share its identity and source range. Enrich a
+	// copy so a failed save still reports an attempt without a committed view.
+	record := *attemptRecord
+	record.Status = "committed"
+	record.Summary, record.Quotes, record.View = text, quotes, candidate
+	record.AfterBytes, record.AfterTokensEstimate = after, afterTokens
+	record.TokenBasis = basis + " -> " + afterBasis
 	if cut < len(body) {
 		record.FirstKeptSequence = body[cut].Sequence
 	}
 	// Write the complete candidate to the durable event stream before the
 	// checkpoint advances. The session checkpoint is the commit authority;
 	// a crash after its save cannot erase this record on the next compaction.
-	prepared := *record
+	prepared := record
 	prepared.Status = "prepared"
 	l.emit(Event{Type: "context_compaction_prepared", Compaction: &prepared})
 	oldHistory, oldCheckpoint := l.History, l.Checkpoint
@@ -349,7 +357,7 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 		l.History, l.Checkpoint = oldHistory, oldCheckpoint
 		return -1, err
 	}
-	l.emit(Event{Type: "context_compacted", Compaction: record})
+	l.emit(Event{Type: "context_compacted", Compaction: &record})
 	return after, nil
 }
 

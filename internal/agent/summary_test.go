@@ -498,6 +498,70 @@ func TestSummaryCompactionFailureDoesNotAdvanceSavedState(t *testing.T) {
 	}
 }
 
+func TestSummaryCompactionEventsPreserveAttemptLineage(t *testing.T) {
+	for _, force := range []bool{false, true} {
+		for _, failSave := range []bool{false, true} {
+			t.Run(fmt.Sprintf("overflow=%t/save_failure=%t", force, failSave), func(t *testing.T) {
+				usage := &Usage{InputTokens: 100, OutputTokens: 20}
+				l := summaryTestLoop(func([]Message) (Message, error) {
+					message := Text("assistant", `{"notes":"Continue from saved evidence.","quotes":[]}`)
+					message.Usage = usage
+					return message, nil
+				})
+				l.Checkpoint.CompactionCount = 7
+				l.Checkpoint.LastCompaction = &CompactionCheckpoint{ID: 3, SourceStart: 1, SourceEnd: 2, AtSequence: 2, Status: "committed"}
+				var events []Event
+				l.Emit = func(event Event) {
+					if event.Compaction != nil {
+						events = append(events, event)
+					}
+				}
+				saveErr := errors.New("disk unavailable")
+				l.SaveState = func([]Message, *ContextCheckpoint) error {
+					if failSave {
+						return saveErr
+					}
+					return nil
+				}
+				_, err := l.compactRequest(context.Background(), force)
+				if (failSave && !errors.Is(err, saveErr)) || (!failSave && err != nil) {
+					t.Fatalf("unexpected compaction result: %v", err)
+				}
+				if len(events) != 2 || events[0].Type != "context_compaction_prepared" {
+					t.Fatalf("unexpected compaction events: %+v", events)
+				}
+				prepared, final := events[0].Compaction, events[1].Compaction
+				reason := "threshold"
+				if force {
+					reason = "overflow"
+				}
+				for _, record := range []*CompactionRecord{prepared, final} {
+					if record.Version != ContextCheckpointVersion || record.ID != 8 || record.PreviousID != 3 || record.SourceStart != 1 || record.SourceEnd != 4 || record.AtSequence != 4 || record.Reason != reason || !reflect.DeepEqual(record.Usage, usage) {
+						t.Fatalf("event lost attempt lineage: %+v", record)
+					}
+				}
+				if prepared.Status != "prepared" || len(prepared.View) == 0 || prepared.Summary == "" {
+					t.Fatal("prepared event lost its replayable candidate")
+				}
+				if failSave {
+					if events[1].Type != "context_compaction_failed" || final.Status != "failed" || final.View != nil || final.Summary != "" || final.AfterBytes != 0 || final.BeforeBytes != prepared.BeforeBytes || final.BeforeTokensEstimate != prepared.BeforeTokensEstimate {
+						t.Fatal("failed save published committed data or lost input measurements")
+					}
+				} else {
+					if events[1].Type != "context_compacted" || final.Status != "committed" || !reflect.DeepEqual(final.CompactionCheckpoint, *l.Checkpoint.LastCompaction) || !reflect.DeepEqual(final.View, l.History) {
+						t.Fatal("committed event disagrees with saved context")
+					}
+					candidate := *prepared
+					candidate.Status = "committed"
+					if !reflect.DeepEqual(candidate, *final) {
+						t.Fatal("commit changed the prepared candidate")
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestSummaryLegacyCheckpointRemainsUnverifiedAndUnquotable(t *testing.T) {
 	legacy := "Earlier execution summary (derived from the recorded transcript):\n" + strings.Repeat("Model copied JSON, which is not original evidence. ", 600)
 	l := &Loop{
