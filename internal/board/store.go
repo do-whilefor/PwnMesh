@@ -66,77 +66,7 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	// Migrate atomically: a crash cannot add bootstrap_enabled without mapping
-	// a legacy disabled bootstrap_mode, or leave only some counters repaired.
-	migration, err := db.Begin()
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	defer migration.Rollback()
-	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema); err != nil {
-		migration.Rollback()
-		db.Close()
-		return nil, err
-	}
-	rows, err := migration.Query("PRAGMA table_info(projects)")
-	if err != nil {
-		migration.Rollback()
-		db.Close()
-		return nil, err
-	}
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid, nn, pk int
-		var name, typ string
-		var def any
-		if err = rows.Scan(&cid, &name, &typ, &nn, &def, &pk); err != nil {
-			rows.Close()
-			migration.Rollback()
-			db.Close()
-			return nil, err
-		}
-		columns[name] = true
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		migration.Rollback()
-		db.Close()
-		return nil, err
-	}
-	if !columns["bootstrap_enabled"] {
-		_, err = migration.Exec("ALTER TABLE projects ADD COLUMN bootstrap_enabled INTEGER NOT NULL DEFAULT 1")
-		if err == nil && columns["bootstrap_mode"] {
-			_, err = migration.Exec("UPDATE projects SET bootstrap_enabled=CASE WHEN bootstrap_mode='disabled' THEN 0 ELSE 1 END")
-		}
-		if err != nil {
-			migration.Rollback()
-			db.Close()
-			return nil, err
-		}
-	}
-	// Older or partially restored Cairn databases may omit their counters. Never
-	// let a newly allocated ID overwrite a project or reference an old Fact.
-	if _, err = migration.Exec(`UPDATE counters SET value=MAX(value,COALESCE((SELECT MAX(CAST(SUBSTR(id,6) AS INTEGER)) FROM projects WHERE id GLOB 'proj_[0-9]*'),0)) WHERE name='project'`); err != nil {
-		migration.Rollback()
-		db.Close()
-		return nil, err
-	}
-	for _, item := range []struct{ table, kind, prefix string }{{"facts", "fact", "f"}, {"intents", "intent", "i"}, {"hints", "hint", "h"}} {
-		query := fmt.Sprintf(`INSERT INTO scoped_counters(project_id,kind,value) SELECT project_id,?,MAX(CAST(SUBSTR(id,2) AS INTEGER)) FROM %s WHERE id GLOB ? GROUP BY project_id ON CONFLICT(project_id,kind) DO UPDATE SET value=MAX(value,excluded.value)`, item.table)
-		if _, err = migration.Exec(query, item.kind, item.prefix+"[0-9]*"); err != nil {
-			migration.Rollback()
-			db.Close()
-			return nil, err
-		}
-	}
-	if err = migrateExecutionMetadata(migration); err != nil {
-		migration.Rollback()
-		db.Close()
-		return nil, err
-	}
-	if err = migration.Commit(); err != nil {
+	if err = migrateStore(db); err != nil {
 		db.Close()
 		return nil, err
 	}
@@ -159,6 +89,65 @@ func Open(path string) (*Store, error) {
 	}
 	return s, nil
 }
+
+// migrateStore owns the migration transaction; Open owns the connections.
+// A crash cannot add bootstrap_enabled without mapping a legacy disabled
+// bootstrap_mode, or leave only some counters repaired.
+func migrateStore(db *sql.DB) error {
+	migration, err := db.Begin()
+	if err != nil {
+		return err
+	}
+	defer migration.Rollback()
+	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema); err != nil {
+		return err
+	}
+	rows, err := migration.Query("PRAGMA table_info(projects)")
+	if err != nil {
+		return err
+	}
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid, nn, pk int
+		var name, typ string
+		var def any
+		if err = rows.Scan(&cid, &name, &typ, &nn, &def, &pk); err != nil {
+			rows.Close()
+			return err
+		}
+		columns[name] = true
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	if !columns["bootstrap_enabled"] {
+		_, err = migration.Exec("ALTER TABLE projects ADD COLUMN bootstrap_enabled INTEGER NOT NULL DEFAULT 1")
+		if err == nil && columns["bootstrap_mode"] {
+			_, err = migration.Exec("UPDATE projects SET bootstrap_enabled=CASE WHEN bootstrap_mode='disabled' THEN 0 ELSE 1 END")
+		}
+		if err != nil {
+			return err
+		}
+	}
+	// Older or partially restored Cairn databases may omit their counters. Never
+	// let a newly allocated ID overwrite a project or reference an old Fact.
+	if _, err = migration.Exec(`UPDATE counters SET value=MAX(value,COALESCE((SELECT MAX(CAST(SUBSTR(id,6) AS INTEGER)) FROM projects WHERE id GLOB 'proj_[0-9]*'),0)) WHERE name='project'`); err != nil {
+		return err
+	}
+	for _, item := range []struct{ table, kind, prefix string }{{"facts", "fact", "f"}, {"intents", "intent", "i"}, {"hints", "hint", "h"}} {
+		query := fmt.Sprintf(`INSERT INTO scoped_counters(project_id,kind,value) SELECT project_id,?,MAX(CAST(SUBSTR(id,2) AS INTEGER)) FROM %s WHERE id GLOB ? GROUP BY project_id ON CONFLICT(project_id,kind) DO UPDATE SET value=MAX(value,excluded.value)`, item.table)
+		if _, err = migration.Exec(query, item.kind, item.prefix+"[0-9]*"); err != nil {
+			return err
+		}
+	}
+	if err = migrateExecutionMetadata(migration); err != nil {
+		return err
+	}
+	return migration.Commit()
+}
+
 func (s *Store) Close() error {
 	var readErr error
 	if s.readers != nil {

@@ -491,7 +491,8 @@ func TestExecutionMetadataMigrationFailureRollsBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err = db.Exec(schema + executionSchema + `INSERT INTO projects(id,title,created_at) VALUES('p','test','now'); INSERT INTO xloom_executions(` + executionColumns + `) VALUES('p','bad','ns','planner','reason','','planner@bad','invalid','reason:bad','failed',NULL,0,'now','now');`); err != nil {
+	legacySchema := strings.Replace(schema, "bootstrap_enabled INTEGER NOT NULL DEFAULT 1", "bootstrap_mode TEXT NOT NULL DEFAULT 'disabled'", 1)
+	if _, err = db.Exec(legacySchema + executionSchema + `INSERT INTO projects(id,title,created_at) VALUES('proj_017','test','now'); INSERT INTO xloom_executions(` + executionColumns + `) VALUES('proj_017','bad','ns','planner','reason','','planner@bad','invalid','reason:bad','failed',NULL,0,'now','now');`); err != nil {
 		t.Fatal(err)
 	}
 	if s, err := Open(path); err == nil {
@@ -502,4 +503,32 @@ func TestExecutionMetadataMigrationFailureRollsBack(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('xloom_executions') WHERE name='metadata_version'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed migration left partial schema: count=%d err=%v", count, err)
 	}
+	if err := db.QueryRow("SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name='bootstrap_enabled'").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed execution migration committed the project migration: count=%d err=%v", count, err)
+	}
+	if err := db.QueryRow("SELECT value FROM counters WHERE name='project'").Scan(&count); err != nil || count != 0 {
+		t.Fatalf("failed migration committed a counter repair: value=%d err=%v", count, err)
+	}
+	// The failed Open must release its write reservation before returning so
+	// another connection can repair the input and retry the whole migration.
+	if _, err := db.Exec(`UPDATE xloom_executions SET job='{"graph":{}}' WHERE id='bad'`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(path)
+	if err != nil {
+		t.Fatalf("repaired database could not reopen: %v", err)
+	}
+	defer store.Close()
+	executionQueryTx(t, store, func(tx *Tx) {
+		g, err := tx.Load("proj_017")
+		if err != nil || g.Project.Bootstrap {
+			t.Fatalf("migration retry lost disabled bootstrap: %+v err=%v", g.Project, err)
+		}
+		if id, err := tx.Next("", "project"); err != nil || id != "proj_018" {
+			t.Fatalf("migration retry omitted counter repair: id=%q err=%v", id, err)
+		}
+		if _, err := tx.GetExecutionSummary("ns", "proj_017", "bad"); err != nil {
+			t.Fatalf("migration retry omitted execution metadata: %v", err)
+		}
+	})
 }
