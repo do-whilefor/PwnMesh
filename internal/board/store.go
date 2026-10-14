@@ -434,11 +434,3 @@ func (t *Tx) saveIntent(project string, i Intent) error {
 	}
 	return nil
 }
-
-type APIError struct {
-	Status int
-	Detail any
-}
-
-func (e *APIError) Error() string         { return fmt.Sprint(e.Detail) }
-func Err(status int, detail string) error { return &APIError{status, detail} }
