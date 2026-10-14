@@ -67,13 +67,13 @@ func (s Settings) Public() Public {
 func Defaults(getenv func(string) string) Settings {
 	s := Settings{Protocol: "anthropic", BaseURL: getenv("ANTHROPIC_BASE_URL"), Model: getenv("ANTHROPIC_MODEL"), Token: getenv("ANTHROPIC_AUTH_TOKEN"), ConnectionMode: "direct", ProxyURL: "http://host.docker.internal:7897", MaxTokens: provider.DefaultMaxTokens, RequestTimeout: 180, ReasoningEffort: provider.DefaultReasoningEffort}
 	if s.BaseURL == "" {
-		s.BaseURL = "https://api.deepseek.com/anthropic"
+		s.BaseURL = provider.DefaultBaseURL
 	}
 	if s.Model == "" {
 		s.Model = getenv("ANTHROPIC_DEFAULT_FABLE_MODEL")
 	}
 	if s.Model == "" {
-		s.Model = "deepseek-flash"
+		s.Model = provider.DefaultModel
 	}
 	for key, target := range map[string]*int{"PWNMESH_MAX_OUTPUT_TOKENS": &s.MaxTokens, "PWNMESH_REQUEST_TIMEOUT": &s.RequestTimeout} {
 		if n, err := strconv.Atoi(getenv(key)); err == nil && n > 0 {

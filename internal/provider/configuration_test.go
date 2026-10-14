@@ -1,9 +1,42 @@
 package provider
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
 	"testing"
 	"time"
+
+	"pwnmesh/internal/agent"
 )
+
+func TestFromEnvironmentUsesDeepSeekDefaults(t *testing.T) {
+	p, err := FromEnvironment(func(key string) string {
+		if key == "ANTHROPIC_AUTH_TOKEN" {
+			return "fixture"
+		}
+		return ""
+	}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.URL.String(); got != "https://api.deepseek.com/anthropic/v1/messages" {
+			t.Errorf("default request endpoint = %q", got)
+		}
+		var payload struct{ Model string }
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Model != "deepseek-flash" {
+			t.Errorf("default request model = %q", payload.Model)
+		}
+		return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"text","text":"OK"}],"stop_reason":"end_turn"}`), nil
+	})}
+	if _, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "Reply OK")}, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestFromEnvironmentMatchesRoleAndModelSettings(t *testing.T) {
 	env := map[string]string{

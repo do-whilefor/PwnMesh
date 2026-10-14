@@ -6,7 +6,16 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/provider"
 )
+
+func TestDefaultsMatchProvider(t *testing.T) {
+	settings := Defaults(func(string) string { return "" })
+	if settings.BaseURL != provider.DefaultBaseURL || settings.Model != provider.DefaultModel {
+		t.Fatalf("saved settings and provider defaults differ: base_url=%q model=%q", settings.BaseURL, settings.Model)
+	}
+}
 
 func TestSettingsPersistAndRetainSecretWithoutExposingIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config", "models.json")

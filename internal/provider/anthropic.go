@@ -23,8 +23,8 @@ import (
 )
 
 const System = "Work toward the assigned task using available tools. Distinguish confirmed facts from guesses. Follow the current request's output contract."
-const DefaultBaseURL = "https://opencode.ai/zen/go"
-const DefaultModel = "deepseek-v4.1-flash"
+const DefaultBaseURL = "https://api.deepseek.com/anthropic"
+const DefaultModel = "deepseek-flash"
 const DefaultReasoningEffort = "max"
 const DefaultMaxTokens = 32768
 
