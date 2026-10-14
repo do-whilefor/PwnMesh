@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"strings"
 	"time"
 )

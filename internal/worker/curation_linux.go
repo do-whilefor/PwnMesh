@@ -7,7 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 const committedCurationText = `{"accepted":true,"data":{"curated":true}}`

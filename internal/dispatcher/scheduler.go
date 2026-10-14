@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelconfig"
 	"pwnmesh/internal/protocol"

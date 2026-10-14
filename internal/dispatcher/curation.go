@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 // Coalesce a producer's fact/candidate/final-result burst without waiting

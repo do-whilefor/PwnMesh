@@ -19,9 +19,7 @@ func TestDAGEvidenceHandoffRejectsChangedVerifiedOutput(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
 	j.ResultContractVersion = 2
 	o := Options{RunDir: dir}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	oRuntime := configureRoleTools(t, j, &o)
 	raw, err := marshalCommandGraphCall(dag.Spec{Key: "handoff", Nodes: []dag.Node{{
 		ID: "observe", Command: `printf 'original observation\n'`, Resources: []string{},
 	}}})
@@ -42,7 +40,7 @@ func TestDAGEvidenceHandoffRejectsChangedVerifiedOutput(t *testing.T) {
 	if err := os.WriteFile(path, []byte("replacement never observed by parent\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := o.stepFinish.tool().Execute(context.Background(), finishStepInput(t, path)); err == nil {
+	if _, err := oRuntime.stepFinish.tool().Execute(context.Background(), finishStepInput(t, path)); err == nil {
 		t.Fatal("finish_step accepted changed DAG evidence without binding it to the verified observation")
 	}
 }

@@ -10,7 +10,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"pwnmesh/internal/board"
 	"pwnmesh/internal/board/model"
 )
 
@@ -31,8 +30,8 @@ type GraphRequest struct {
 	IDs             []string                   `json:"ids,omitempty"`
 	AssetIDs        []string                   `json:"asset_ids,omitempty"`
 	Action          model.StateAction          `json:"action,omitempty"`
-	Batch           *board.DecisionBatch       `json:"batch,omitempty"`
-	Updates         *board.ExecuteUpdateCursor `json:"updates,omitempty"`
+	Batch           *model.DecisionBatch       `json:"batch,omitempty"`
+	Updates         *model.ExecuteUpdateCursor `json:"updates,omitempty"`
 }
 
 type GraphRequestEvent struct {
@@ -139,14 +138,14 @@ func ValidateGraphRequest(j Job, r GraphRequest) error {
 // GraphPage retains complete objects when they fit. Oversized evidence/support
 // arrays have explicit omission markers and their own lossless detail pages.
 // The server obtains State under the current execution fence before calling.
-func GraphPage(s board.State, r GraphRequest) (any, error) {
+func GraphPage(s model.State, r GraphRequest) (any, error) {
 	if err := validateGraphAssetFilter(r); err != nil {
 		return nil, err
 	}
 	if err := validateGraphIDs(r); err != nil {
 		return nil, err
 	}
-	version := board.DecisionStateVersion(s)
+	version := model.DecisionStateVersion(s)
 	if r.ExpectedVersion != "" && r.ExpectedVersion != version {
 		return nil, errors.New("state_changed: graph changed since the previous view; read overview and re-read affected evidence before deciding")
 	}
@@ -239,7 +238,7 @@ func validateGraphOffsets(r GraphRequest) error {
 
 // Select identities before encoding payloads. A byte continuation serializes
 // only its bound record; an ordinary page serializes only its requested window.
-func graphRecordsPage[T any](s board.State, r GraphRequest, version string, records []T) (any, error) {
+func graphRecordsPage[T any](s model.State, r GraphRequest, version string, records []T) (any, error) {
 	if len(r.IDs) == 0 && len(r.AssetIDs) == 0 {
 		return graphItemsPage(s, r, version, records, nil)
 	}
@@ -273,7 +272,7 @@ func graphRecordsPage[T any](s board.State, r GraphRequest, version string, reco
 	return graphItemsPage(s, r, version, selected, missing)
 }
 
-func graphItemsPage[T any](s board.State, r GraphRequest, version string, records []T, missing []string) (any, error) {
+func graphItemsPage[T any](s model.State, r GraphRequest, version string, records []T, missing []string) (any, error) {
 	start := min(r.Offset, len(records))
 	end := start + min(r.Limit, len(records)-start)
 	if r.ByteOffset != nil {
@@ -285,7 +284,7 @@ func graphItemsPage[T any](s board.State, r GraphRequest, version string, record
 	items := make([]json.RawMessage, end-start)
 	for index := start; index < end; index++ {
 		var record any = records[index]
-		if candidate, ok := record.(board.Candidate); ok {
+		if candidate, ok := record.(model.Candidate); ok {
 			record = s.CandidateView(candidate)
 		}
 		raw, err := json.Marshal(record)
@@ -349,7 +348,7 @@ func GraphRecordVersion(raw []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func graphDetails(s board.State, r GraphRequest, version string) (any, error) {
+func graphDetails(s model.State, r GraphRequest, version string) (any, error) {
 	if r.Section == "evidence" {
 		for _, fact := range s.FactRecords {
 			if fact.ID == r.IDs[0] {
@@ -376,7 +375,7 @@ func graphDetails(s board.State, r GraphRequest, version string) (any, error) {
 	return graphItemsPage[json.RawMessage](s, r, version, nil, r.IDs)
 }
 
-func boundedGraphPage(s board.State, r GraphRequest, version string, total int, items []json.RawMessage, missing []string) (GraphItemsPage, error) {
+func boundedGraphPage(s model.State, r GraphRequest, version string, total int, items []json.RawMessage, missing []string) (GraphItemsPage, error) {
 	start := min(r.Offset, total)
 	end := start + len(items)
 	value := GraphItemsPage{Section: r.Section, Offset: start, Total: total, Revision: s.Revision, Generation: s.Graph.Project.Generation, StateVersion: version, RequestedIDs: r.IDs, MissingIDs: missing}

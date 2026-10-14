@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"pwnmesh/internal/board/model"
 )
 
 func (t *Tx) FreezeInput(state State) (out *InputSnapshot, err error) {
@@ -113,28 +114,11 @@ func DecisionRetryKey(g Graph, revision int64) string {
 
 // ScheduleProtocolVersion identifies the normalized Step scheduling projection.
 // Server and Dispatcher must agree before treating absent fields as idle work.
-const ScheduleProtocolVersion = 1
+const ScheduleProtocolVersion = model.ScheduleProtocolVersion
 
 // SchedulePage contains runtime metadata only. Node descriptions, evidence,
 // hints and historical Jobs never cross the daily scheduling boundary.
-type SchedulePage struct {
-	ProtocolVersion   int                       `json:"protocol_version"`
-	Project           Project                   `json:"project"`
-	FactCount         int                       `json:"fact_count"`
-	HintCount         int                       `json:"hint_count"`
-	OpenCount         int                       `json:"open_count"`
-	Initial           bool                      `json:"initial"`
-	Revision          int64                     `json:"revision"`
-	DecisionRevision  int64                     `json:"decision_revision"`
-	StateVersion      string                    `json:"state_version"`
-	RetryKey          string                    `json:"retry_key"`
-	Steps             []ScheduleStep            `json:"steps"`
-	NextOffset        int                       `json:"next_offset,omitempty"`
-	ExecutionChecks   map[string]ExecutionCheck `json:"execution_checks,omitempty"`
-	CurationNeeded    bool                      `json:"curation_needed,omitempty"`
-	CurationRequested bool                      `json:"curation_requested,omitempty"`
-	CurationRetryKey  string                    `json:"curation_retry_key,omitempty"`
-}
+type SchedulePage = model.SchedulePage
 
 func (t *Tx) ScheduleInput(project string, offset int, expected string) (SchedulePage, error) {
 	s, err := t.State(project)

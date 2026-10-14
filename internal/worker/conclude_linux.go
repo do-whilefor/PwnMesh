@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 const (

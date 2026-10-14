@@ -80,9 +80,7 @@ func TestCommandGraphEvidenceReceiptIsByteExactAndDoesNotFinishStep(t *testing.T
 	j, dir := graphWrapperJob(t), t.TempDir()
 	j.ResultContractVersion = 2
 	o := Options{RunDir: dir}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	oRuntime := configureRoleTools(t, j, &o)
 	spec := dag.Spec{Key: "receipt", Nodes: []dag.Node{
 		{ID: "exact", Command: `printf 'first\nsecond'`, Resources: []string{}},
 		{ID: "empty", Command: `true`, Resources: []string{}},
@@ -117,13 +115,13 @@ func TestCommandGraphEvidenceReceiptIsByteExactAndDoesNotFinishStep(t *testing.T
 			t.Fatalf("diagnostic, truncated, empty or binary output certified as complete evidence: %+v", ref)
 		}
 	}
-	if o.stepFinish == nil {
+	if oRuntime.stepFinish == nil {
 		t.Fatal("missing explicit finish handoff")
 	}
-	if _, done := o.stepFinish.result(); done {
+	if _, done := oRuntime.stepFinish.result(); done {
 		t.Fatal("command success automatically declared Step completion")
 	}
-	if _, err := o.stepFinish.tool().Execute(context.Background(), finishStepInput(t, exact.Path)); err != nil {
+	if _, err := oRuntime.stepFinish.tool().Execute(context.Background(), finishStepInput(t, exact.Path)); err != nil {
 		t.Fatalf("verified evidence could not be handed off directly: %v", err)
 	}
 	// An old succeeded status after a failed restoration must not be offered

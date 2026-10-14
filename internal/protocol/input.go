@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 
-	"pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
 )
 
 func ValidateSnapshotInput(j Job) error {
@@ -25,7 +25,7 @@ func ValidateSnapshotInput(j Job) error {
 	} else if j.Decision != nil {
 		return errors.New("Execute cannot carry a Decide input")
 	}
-	if len(view) > board.DefaultContextViewBytes || !json.Valid(view) {
+	if len(view) > model.DefaultContextViewBytes || !json.Valid(view) {
 		return errors.New("invalid bounded snapshot view")
 	}
 	return nil

@@ -34,10 +34,9 @@ func TestCurationRequestStagesPrivatelyAndPublishesOnlyAtCommit(t *testing.T) {
 		return board.DecisionReceipt{Committed: true, ChangedActions: 1, StateVersion: job.Decision.StateVersion}, nil
 	}}
 	metrics := newDecisionMetrics()
-	options := Options{RunDir: runDir, Output: bridge, decisionEmit: metrics.observe}
-	if err := ConfigureRuntimeTools(job, &options); err != nil {
-		t.Fatal(err)
-	}
+	options := Options{RunDir: runDir, Output: bridge}
+	optionsRuntime := configureRoleTools(t, job, &options)
+	optionsRuntime.emit = metrics.observe
 	tool := snapshotRuntimeTool(t, options, "graph_action")
 	input := json.RawMessage(`{"op":"curation_request","idempotency_key":"review","payload":{"sources":["left","right"],"reason":"The retained observations conflict"}}`)
 	for n := 0; n < 2; n++ {
@@ -48,13 +47,13 @@ func TestCurationRequestStagesPrivatelyAndPublishesOnlyAtCommit(t *testing.T) {
 			t.Fatalf("request did not stage: %s %v", raw, err)
 		}
 	}
-	if requests != 0 || len(options.decision.actions) != 1 || metrics.DraftCalls != 2 || metrics.DraftActions != 1 || metrics.Committed {
-		t.Fatalf("draft request published or duplicated: requests=%d actions=%d metrics=%+v", requests, len(options.decision.actions), metrics)
+	if requests != 0 || len(optionsRuntime.decision.actions) != 1 || metrics.DraftCalls != 2 || metrics.DraftActions != 1 || metrics.Committed {
+		t.Fatalf("draft request published or duplicated: requests=%d actions=%d metrics=%+v", requests, len(optionsRuntime.decision.actions), metrics)
 	}
 	if _, err := tool.Execute(context.Background(), json.RawMessage(`{"op":"commit","idempotency_key":"publish"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if requests != 1 || !options.decision.committed || metrics.CommittedActions != 1 {
+	if requests != 1 || !optionsRuntime.decision.committed || metrics.CommittedActions != 1 {
 		t.Fatal("request did not use the ordinary atomic decision commit")
 	}
 }

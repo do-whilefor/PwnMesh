@@ -11,7 +11,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/artifactcheck"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 const committedDecisionText = `{"accepted":true,"data":{"decided":true}}`

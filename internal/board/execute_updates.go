@@ -3,35 +3,17 @@ package board
 import (
 	"encoding/json"
 	"errors"
+	"pwnmesh/internal/board/model"
 	"slices"
 )
 
-const MaxExecuteUpdateBytes = 16 << 10
+const MaxExecuteUpdateBytes = model.MaxExecuteUpdateBytes
 
 // ExecuteUpdateCursor acknowledges only corrections to this run's registered
 // Step.From. It is not an acknowledgement that the whole graph was read.
-type ExecuteUpdateCursor struct {
-	ProjectID  string `json:"project_id"`
-	Generation int64  `json:"generation"`
-	StepID     string `json:"step_id"`
-	RunID      string `json:"run_id"`
-	Revision   int64  `json:"revision"`
-}
+type ExecuteUpdateCursor = model.ExecuteUpdateCursor
 
-type ExecuteUpdates struct {
-	Version int `json:"version"`
-	ExecuteUpdateCursor
-	FromRevision   int64          `json:"from_revision"`
-	ToRevision     int64          `json:"to_revision"`
-	StateVersion   string         `json:"state_version"`
-	Complete       bool           `json:"complete"`
-	PendingReason  string         `json:"pending_reason,omitempty"`
-	InvalidSources []string       `json:"invalid_sources"`
-	Facts          []FactRecord   `json:"facts"`
-	Relations      []FactRelation `json:"relations"`
-	Omitted        map[string]int `json:"omitted"`
-	ReadMore       string         `json:"read_more,omitempty"`
-}
+type ExecuteUpdates = model.ExecuteUpdates
 
 // BuildExecuteUpdates uses one current State and its transaction's event index.
 // The caller derives sources and the initial revision from the immutable Job.

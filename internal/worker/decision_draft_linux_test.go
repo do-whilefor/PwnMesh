@@ -386,15 +386,13 @@ func (b *draftTestBridge) Write(raw []byte) (int, error) {
 	return len(raw), nil
 }
 
-func draftTestTools(t *testing.T, handle func(GraphRequest) (any, error)) (*Options, agent.Tool, agent.Tool) {
+func draftTestTools(t *testing.T, handle func(GraphRequest) (any, error)) (*roleRuntime, agent.Tool, agent.Tool) {
 	t.Helper()
 	opts := &Options{RunDir: t.TempDir()}
 	opts.Output = &draftTestBridge{dir: opts.RunDir, handle: handle}
 	job := Job{Kind: "reason", RunID: "draft-test", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}}
-	if err := ConfigureRuntimeTools(job, opts); err != nil {
-		t.Fatal(err)
-	}
-	return opts, opts.Tools[0], opts.Tools[1]
+	optsRuntime := configureRoleTools(t, job, opts)
+	return optsRuntime, opts.Tools[0], opts.Tools[1]
 }
 
 func draftToolAction(t *testing.T, tool agent.Tool, op, key, payload string) (string, error) {
@@ -435,13 +433,13 @@ func TestDecisionDraftPreviewDoesNotAdvanceVersion(t *testing.T) {
 	if _, err := draftToolAction(t, action, "preview", "preview", `{}`); err != nil {
 		t.Fatal(err)
 	}
-	if previews != 1 || *opts.GraphVersion != original || opts.decision.version != original || opts.decision.committed {
+	if previews != 1 || opts.graph.Version != original || opts.decision.version != original || opts.decision.committed {
 		t.Fatal("hypothetical preview state became the actual decision version or a committed result")
 	}
 	if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"overview"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if *opts.GraphVersion != current || opts.decision.version != original {
+	if opts.graph.Version != current || opts.decision.version != original {
 		t.Fatal("reading current state retroactively changed a staged plan's base")
 	}
 	if _, err := draftToolAction(t, action, "commit", "commit", `{}`); err == nil || !strings.Contains(err.Error(), "state_changed") {

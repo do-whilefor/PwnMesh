@@ -56,9 +56,7 @@ func TestDecisionDependencyDraftCommitsEarlierStepAliases(t *testing.T) {
 		}
 		return board.DecisionReceipt{Committed: true, StateVersion: j.Decision.StateVersion}, nil
 	}}
-	if err := ConfigureRuntimeTools(j, &opts); err != nil {
-		t.Fatal(err)
-	}
+	optsRuntime := configureRoleTools(t, j, &opts)
 	action := opts.Tools[1]
 	first := `{"op":"step","idempotency_key":"first","payload":{"action":"add","from":["origin"],"description":"Collect evidence"}}`
 	dependent := `{"op":"step","idempotency_key":"second","payload":{"action":"add","from":["origin"],"depends_on":["step_existing","$first"],"description":"Review accepted outcomes"}}`
@@ -70,10 +68,10 @@ func TestDecisionDependencyDraftCommitsEarlierStepAliases(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if requests != 0 || len(opts.decision.actions) != 2 {
+	if requests != 0 || len(optsRuntime.decision.actions) != 2 {
 		t.Fatal("private dependencies published prematurely or duplicated on retry")
 	}
-	if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"commit","idempotency_key":"commit"}`)); err != nil || requests != 1 || !opts.decision.committed {
+	if _, err := action.Execute(context.Background(), json.RawMessage(`{"op":"commit","idempotency_key":"commit"}`)); err != nil || requests != 1 || !optsRuntime.decision.committed {
 		t.Fatalf("dependency plan failed to commit: %v, requests=%d", err, requests)
 	}
 }

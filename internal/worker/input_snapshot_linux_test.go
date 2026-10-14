@@ -90,7 +90,7 @@ func TestSnapshotReadDoesNotRebindLiveGraphVersion(t *testing.T) {
 	live.Revision++
 	liveVersion := board.DecisionStateVersion(live)
 	version := job.InputSnapshot.StateVersion
-	opts := Options{RunDir: t.TempDir(), GraphVersion: &version}
+	opts := Options{RunDir: t.TempDir()}
 	var requests []GraphRequest
 	opts.Output = &draftTestBridge{dir: opts.RunDir, handle: func(r GraphRequest) (any, error) {
 		requests = append(requests, r)
@@ -108,15 +108,14 @@ func TestSnapshotReadDoesNotRebindLiveGraphVersion(t *testing.T) {
 		}
 		return GraphPage(live, r)
 	}}
-	if err := ConfigureRuntimeTools(job, &opts); err != nil {
-		t.Fatal(err)
-	}
+	optsRuntime := configureRoleTools(t, job, &opts)
+	optsRuntime.graph.Version = version
 	currentRead := snapshotRuntimeTool(t, opts, "read_graph")
 	frozenRead := snapshotRuntimeTool(t, opts, "read_snapshot")
 	if _, err := currentRead.Execute(context.Background(), json.RawMessage(`{"section":"overview"}`)); err != nil {
 		t.Fatal(err)
 	}
-	if version != liveVersion {
+	if optsRuntime.graph.Version != liveVersion {
 		t.Fatal("read_graph did not refresh the runtime version")
 	}
 	if _, err := frozenRead.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["fact_original"],"expected_version":"model-selected-input"}`)); err == nil {
@@ -127,7 +126,7 @@ func TestSnapshotReadDoesNotRebindLiveGraphVersion(t *testing.T) {
 		if err != nil || !strings.Contains(result, "Frozen fixture observation") || strings.Contains(result, "New live fixture observation") {
 			t.Fatalf("original input was replaced by current evidence: %s %v", result, err)
 		}
-		if version != liveVersion {
+		if optsRuntime.graph.Version != liveVersion {
 			t.Fatal("read_snapshot rebound the live decision version to old input")
 		}
 	}

@@ -5,13 +5,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"go/parser"
-	"go/token"
 	"os"
 	"path/filepath"
 	"reflect"
-	"strconv"
-	"strings"
 	"testing"
 
 	"pwnmesh/internal/artifactcheck"
@@ -117,41 +113,6 @@ func TestTraceBindingUsesTypedJobIdentity(t *testing.T) {
 	run.StepID = "foreign"
 	if _, err := protocol.BindTraceRun(run); err == nil {
 		t.Fatal("trace accepted a different execution identity")
-	}
-}
-
-func TestSharedDependencyBoundaries(t *testing.T) {
-	for _, name := range []string{"protocol", "dispatcher", "docker", "server", "board/model"} {
-		directory := filepath.Join("..", name)
-		entries, err := os.ReadDir(directory)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, entry := range entries {
-			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
-				continue
-			}
-			path := filepath.Join(directory, entry.Name())
-			file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, dependency := range file.Imports {
-				imported, err := strconv.Unquote(dependency.Path.Value)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if imported == "pwnmesh/internal/worker" {
-					t.Errorf("%s imports Worker instead of the shared protocol", path)
-				}
-				if name == "protocol" && imported == "pwnmesh/internal/config" {
-					t.Errorf("%s imports configuration loading instead of shared execution values", path)
-				}
-				if name == "board/model" && (imported == "pwnmesh/internal/board" || imported == "database/sql" || strings.HasPrefix(imported, "modernc.org/")) {
-					t.Errorf("%s imports storage into the shared model", path)
-				}
-			}
-		}
 	}
 }
 

@@ -7,32 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"regexp"
+	"pwnmesh/internal/board/model"
 	"slices"
 	"strings"
 )
 
-type DecisionAction struct {
-	Op      string          `json:"op"`
-	Ref     string          `json:"ref,omitempty"`
-	GapID   string          `json:"gap_id,omitempty"`
-	Payload json.RawMessage `json:"payload"`
-}
-type DecisionBatch struct {
-	ExpectedVersion string           `json:"expected_version"`
-	Actions         []DecisionAction `json:"actions"`
-	Assessment      *RootAssessment  `json:"assessment,omitempty"`
-}
-type DecisionReceipt struct {
-	Committed        bool                `json:"committed"`
-	StateVersion     string              `json:"state_version,omitempty"`
-	Results          []StateActionResult `json:"results"`
-	ChangedActions   int                 `json:"changed_actions,omitempty"`
-	IDs              map[string]string   `json:"ids"`
-	Completed        bool                `json:"completed"`
-	ValidationScope  string              `json:"validation_scope,omitempty"`
-	CompletionReview *CompletionReview   `json:"completion_review,omitempty"`
-}
+type DecisionAction = model.DecisionAction
+type DecisionBatch = model.DecisionBatch
+type DecisionReceipt = model.DecisionReceipt
 
 // CheckDirectDecisionWrite keeps old jobs' protocol while fencing all writes
 // by a registered version 2 planner into its one transactional commit.
@@ -142,8 +124,6 @@ func (t *Tx) CommitDecision(project string, fence ExecutionFence, batch Decision
 	return t.decisionBatch(project, fence, batch, true)
 }
 
-var decisionAlias = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]{0,63}$`)
-
 func normalizeDecisionActions(actions []DecisionAction) ([]DecisionAction, error) {
 	if len(actions) > 64 {
 		return nil, Err(422, "decision batch may contain at most 64 actions")
@@ -162,7 +142,7 @@ func normalizeDecisionActions(actions []DecisionAction) ([]DecisionAction, error
 			return nil, err
 		}
 		if action.Ref != "" {
-			if !decisionAlias.MatchString(action.Ref) || refs[action.Ref] || (action.Op != "goal" && action.Op != "step") || payload["action"] != "add" {
+			if !model.ValidDecisionAlias(action.Ref) || refs[action.Ref] || (action.Op != "goal" && action.Op != "step") || payload["action"] != "add" {
 				return nil, Err(422, "ref must uniquely name a newly added goal or step")
 			}
 			refs[action.Ref] = true

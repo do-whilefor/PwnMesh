@@ -174,10 +174,8 @@ func TestModelGraphReadLargeFindingKeepsMetadataAndPagedSupport(t *testing.T) {
 		dir := t.TempDir()
 		job := Job{Kind: "reason", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}}
 		options := Options{RunDir: dir, Output: &draftTestBridge{dir: dir, handle: func(r GraphRequest) (any, error) { return GraphPage(state, r) }}}
-		if err := ConfigureRuntimeTools(job, &options); err != nil {
-			t.Fatal(err)
-		}
-		options.decision.invalidate()
+		optionsRuntime := configureRoleTools(t, job, &options)
+		optionsRuntime.decision.invalidate()
 		read := options.Tools[0]
 		if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"overview"}`)); err != nil {
 			t.Fatal(err)
@@ -187,19 +185,19 @@ func TestModelGraphReadLargeFindingKeepsMetadataAndPagedSupport(t *testing.T) {
 			t.Fatal(err)
 		}
 		loop := &agent.Loop{}
-		options.decision.beforeRequest(loop)
-		if !options.decision.reread || options.decision.detailRead || len(options.decision.refreshData) != 2 || !strings.Contains(options.decision.refreshData[1], partial) {
+		optionsRuntime.decision.beforeRequest(loop)
+		if !optionsRuntime.decision.reread || optionsRuntime.decision.detailRead || len(optionsRuntime.decision.refreshData) != 2 || !strings.Contains(optionsRuntime.decision.refreshData[1], partial) {
 			t.Fatal("metadata omission authorized a stale decision or lost the partial observation")
 		}
 		input, _ := json.Marshal(map[string]any{"section": "evidence", "ids": []string{finding.ID}, "limit": 1})
 		if _, err := read.Execute(context.Background(), input); err != nil {
 			t.Fatal(err)
 		}
-		if !options.decision.reread {
+		if !optionsRuntime.decision.reread {
 			t.Fatal("support tool call authorized replanning before the next model request")
 		}
-		options.decision.beforeRequest(loop)
-		if options.decision.reread || len(loop.ContextData) != 3 || !strings.Contains(loop.ContextData[1], partial) {
+		optionsRuntime.decision.beforeRequest(loop)
+		if optionsRuntime.decision.reread || len(loop.ContextData) != 3 || !strings.Contains(loop.ContextData[1], partial) {
 			t.Fatal("actual support and retained metadata did not refresh the decision")
 		}
 	})

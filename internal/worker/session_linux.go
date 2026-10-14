@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/config"
 )
 

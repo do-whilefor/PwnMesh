@@ -2,22 +2,12 @@ package board
 
 import (
 	"encoding/json"
+	"pwnmesh/internal/board/model"
 )
 
 // TraceRun is an internal capability descriptor, not a model-visible record.
 // Workspace and JobSHA256 bind the registered execution to its local journal.
-type TraceRun struct {
-	ProjectID  string `json:"project_id"`
-	Generation int64  `json:"generation"`
-	RunID      string `json:"run_id"`
-	StepID     string `json:"step_id"`
-	Status     string `json:"status"`
-	Workspace  string `json:"workspace"`
-	JobSHA256  string `json:"job_sha256"`
-	// Server-side only: Worker owns Job's canonical serialization. It binds
-	// JobSHA256 before delivering this descriptor through the trace bridge.
-	RegisteredJob json.RawMessage `json:"-"`
-}
+type TraceRun = model.TraceRun
 
 // TraceRuns lists only registered Explore attempts of the current project
 // round. Callers must additionally enforce the requesting execution's fence.

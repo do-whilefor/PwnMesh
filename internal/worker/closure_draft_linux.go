@@ -8,7 +8,7 @@ import (
 	"slices"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 func (d *decisionDraft) clearRootAssessment() {
@@ -73,12 +73,12 @@ func (d *decisionDraft) checkRootAction(action board.DecisionAction, payload map
 	return nil
 }
 
-func rootAssessmentTool(d *decisionDraft, version *string) agent.Tool {
+func rootAssessmentTool(d *decisionDraft, version func() string) agent.Tool {
 	return agent.Tool{Definition: agent.Definition{
 		Name:        "assess_root",
 		Description: "Before planning, compare original user_inputs and hints against observed evidence, even with active Steps. Return satisfied with proof, or missing with concrete unmet requirements anchored by input_ids. Preserve uncertainty; existing Step descriptions are plans, not additional user requirements. This private assessment must be read in a subsequent model request before any graph_action; conflicts/reset/recovery discard it. The server still checks evidence and completion.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"status":{"type":"string","enum":["satisfied","missing"]},"from":{"type":"array","items":{"type":"string"},"uniqueItems":true},"description":{"type":"string","minLength":1},"gaps":{"type":"array","maxItems":32,"items":{"type":"object","properties":{"id":{"type":"string"},"input_ids":{"type":"array","items":{"type":"string"},"minItems":1,"uniqueItems":true},"description":{"type":"string","minLength":1}},"required":["id","input_ids","description"],"additionalProperties":false}}},"required":["status","from","description"],"additionalProperties":false}`),
 	}, Execute: func(_ context.Context, raw json.RawMessage) (string, error) {
-		return d.assessRoot(raw, *version)
+		return d.assessRoot(raw, version())
 	}}
 }

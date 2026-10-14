@@ -89,57 +89,22 @@ func (runtime *sessionRuntime) recover(ctx context.Context) (Result, bool, error
 		}
 		o.Provider = p
 	}
-	o.GraphVersion = &state.GraphVersion
 	o.graphDeadline = state.ExecutionDeadline
-	o.decisionConflict = &state.DecisionConflict
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
+	roles, err := newRoleRuntime(j, o, runtime.emit)
+	if err != nil {
 		return Result{}, true, err
 	}
-	runtime.options = o
-	if o.stepFinish != nil {
-		if err := o.stepFinish.recover(ctx); err != nil {
-			return Result{}, true, err
-		}
-		if text, done := o.stepFinish.result(); done {
-			return finish(Result{Type: "result", Status: "success", Text: text})
-		}
+	roles.graph = graphRuntimeState{Version: state.GraphVersion, Conflict: state.DecisionConflict}
+	runtime.options, runtime.roles = o, roles
+	text, done, err := roles.recover(ctx, j, resuming)
+	if err != nil {
+		return Result{}, true, err
 	}
-	if o.curation != nil {
-		if _, err := o.curation.recover(ctx); err != nil {
-			return Result{}, true, err
-		}
-		if o.curation.committed {
-			return finish(Result{Type: "result", Status: "success", Text: committedCurationText})
-		}
-		state.Repairing, state.RepairPending = false, false
-		state.RepairPrompt = ""
+	if done {
+		return finish(Result{Type: "result", Status: "success", Text: text})
 	}
-	if o.decision != nil {
-		if orchestrationJob(j) && j.Decision != nil {
-			o.decision.assessment = j.Decision.CompletionAssessment
-		}
-		if _, err := o.decision.recover(ctx); err != nil {
-			return Result{}, true, err
-		}
-		if o.decision.committed {
-			return finish(Result{Type: "result", Status: "success", Text: committedDecisionText})
-		}
-		if state.DecisionConflict != "" {
-			// Older sessions persisted a terminal planner conflict. The receipt
-			// above is authoritative; absent a commit, discard its private draft
-			// and reread current evidence under the original deadline.
-			o.decision.invalidate()
-			state.DecisionConflict = ""
-		}
-		if resuming {
-			o.decision.invalidate()
-		}
-		// A batch planner succeeds through a tool receipt, never repaired final
-		// JSON. Resume its uncommitted planning phase without restoring consumed
-		// repair/continuation allowances or deadlines. Execute repair is unchanged.
-		state.Repairing, state.RepairPending = false, false
-		state.RepairPrompt = ""
+	if roles.decision != nil || roles.curation != nil {
+		runtime.setRepair(false, "", false)
 	}
-
 	return Result{}, false, nil
 }

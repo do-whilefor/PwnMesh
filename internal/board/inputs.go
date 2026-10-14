@@ -7,25 +7,16 @@ import (
 	"encoding/json"
 	"errors"
 	"path"
-	"strings"
-	"unicode"
-	"unicode/utf8"
+	"pwnmesh/internal/board/model"
 )
 
-const MaxInputBytes = 256 << 20
-const MaxProjectInputBytes = 512 << 20
-const MaxProjectInputs = 32
+const MaxInputBytes = model.MaxInputBytes
+const MaxProjectInputBytes = model.MaxProjectInputBytes
+const MaxProjectInputs = model.MaxProjectInputs
 
 // InputFile is metadata only. Captured credentials and binary contents never
 // enter the graph, execution JSON or model prompt as part of file transfer.
-type InputFile struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Size      int64  `json:"size"`
-	SHA256    string `json:"sha256"`
-	Path      string `json:"path"`
-	CreatedAt string `json:"created_at"`
-}
+type InputFile = model.InputFile
 
 // Upload acknowledgements survive project restarts just like the original
 // user inputs. Replaying one must not append a second instruction or event.
@@ -61,19 +52,7 @@ func (t *Tx) SaveInputBatchReceipt(project, key, requestSHA256 string, inputs []
 	return err
 }
 
-func ValidInputName(name string) bool {
-	return name != "" && name != "." && name != ".." && len(name) <= 200 && utf8.ValidString(name) &&
-		!strings.ContainsAny(name, "/\\") && strings.IndexFunc(name, unicode.IsControl) < 0
-}
-
-func (f InputFile) Valid() bool {
-	id, e1 := hex.DecodeString(f.ID)
-	sum, e2 := hex.DecodeString(f.SHA256)
-	return e1 == nil && e2 == nil && len(id) == 32 && len(sum) == 32 &&
-		f.ID == strings.ToLower(f.ID) && f.SHA256 == strings.ToLower(f.SHA256) &&
-		ValidInputName(f.Name) && f.Size >= 0 && f.Size <= MaxInputBytes &&
-		f.Path == path.Join("/workspace/.pwnmesh/inputs", f.ID, f.Name)
-}
+func ValidInputName(name string) bool { return model.ValidInputName(name) }
 
 func scanInput(row scanner) (InputFile, error) {
 	var f InputFile

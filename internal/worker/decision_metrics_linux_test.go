@@ -176,7 +176,7 @@ func TestDecisionMetricsRuntimeCompactCommit(t *testing.T) {
 	for _, changed := range []int{0, 2} {
 		dir, version := t.TempDir(), strings.Repeat("a", 64)
 		m := newDecisionMetrics()
-		o := Options{RunDir: dir, decisionEmit: m.observe}
+		o := Options{RunDir: dir}
 		o.Output = decisionMetricsOutput(func(raw []byte) (int, error) {
 			var event GraphRequestEvent
 			if err := json.Unmarshal(raw, &event); err != nil {
@@ -191,15 +191,14 @@ func TestDecisionMetricsRuntimeCompactCommit(t *testing.T) {
 			return len(raw), err
 		})
 		j := Job{Kind: "reason", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: version}}
-		if err := ConfigureRuntimeTools(j, &o); err != nil {
-			t.Fatal(err)
-		}
+		oRuntime := configureRoleTools(t, j, &o)
+		oRuntime.emit = m.observe
 		batch := board.DecisionBatch{ExpectedVersion: version, Actions: []board.DecisionAction{}}
 		for n := 0; n < changed; n++ {
 			payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": strings.Repeat("Fixture", n+1)})
 			batch.Actions = append(batch.Actions, board.DecisionAction{Op: "step", Payload: payload})
 		}
-		if _, err := o.decision.request(context.Background(), GraphRequest{Op: "decision_commit", Batch: &batch}); err != nil {
+		if _, err := oRuntime.decision.request(context.Background(), GraphRequest{Op: "decision_commit", Batch: &batch}); err != nil {
 			t.Fatal(err)
 		}
 		got := m.finish(j, Result{Status: "success"}, time.Time{}, time.Time{})
@@ -217,7 +216,7 @@ func TestDecisionMetricsRuntimeOperationsAndLostCommit(t *testing.T) {
 	dir, version := t.TempDir(), strings.Repeat("a", 64)
 	m := newDecisionMetrics()
 	conflict, committed := true, false
-	o := Options{RunDir: dir, decisionEmit: m.observe}
+	o := Options{RunDir: dir}
 	o.Output = decisionMetricsOutput(func(raw []byte) (int, error) {
 		var event GraphRequestEvent
 		if err := json.Unmarshal(raw, &event); err != nil {
@@ -248,9 +247,8 @@ func TestDecisionMetricsRuntimeOperationsAndLostCommit(t *testing.T) {
 		return len(raw), err
 	})
 	j := Job{Kind: "reason", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: version}}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	oRuntime := configureRoleTools(t, j, &o)
+	oRuntime.emit = m.observe
 	call := func(name, input string, wantError bool) {
 		t.Helper()
 		for _, tool := range o.Tools {
@@ -275,13 +273,13 @@ func TestDecisionMetricsRuntimeOperationsAndLostCommit(t *testing.T) {
 	call("read_graph", `{"section":"facts"}`, true)
 	call("read_graph", `{"section":"overview"}`, false)
 	call("read_graph", `{"section":"facts"}`, false)
-	o.decision.beforeRequest(&agent.Loop{})
+	oRuntime.decision.beforeRequest(&agent.Loop{})
 	call("graph_action", stage, false)
 	call("graph_action", `{"op":"commit","idempotency_key":"commit","payload":{}}`, true)
 	if m.Committed || m.StateChanged != 1 || m.CommitCalls != 1 || m.CommitFailures != 1 {
 		t.Fatalf("lost commit response cannot prove publication: %+v", m)
 	}
-	if _, err := o.decision.recover(context.Background()); err != nil {
+	if _, err := oRuntime.decision.recover(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if !m.Committed || m.CommittedActions != 1 || m.ReceiptCalls != 1 || m.DraftActions != 2 {

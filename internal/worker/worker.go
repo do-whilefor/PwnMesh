@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+// Options configures a Worker invocation. Mutable role and graph state belong
+// to the private roleRuntime created for that invocation.
 type Options struct {
 	Provider            agent.Provider
 	Tools               []agent.Tool
@@ -24,13 +26,6 @@ type Options struct {
 	ContextBytes        int
 	ContextTokens       int
 	ContextTargetTokens int
-	GraphVersion        *string
-	decision            *decisionDraft
-	curation            *curationCommit
-	stepFinish          *stepFinish
-	decisionEmit        agent.Emit
-	decisionConflict    *string
-	graphRequest        func(context.Context, GraphRequest) (string, error)
 	graphDeadline       time.Time
 	graphProvider       func(string) (agent.Provider, error)
 }

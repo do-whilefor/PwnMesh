@@ -7,7 +7,7 @@ import (
 	"net/url"
 	"strconv"
 
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 func (s *Scheduler) schedulePage(ctx context.Context, id string, query url.Values) (board.SchedulePage, error) {

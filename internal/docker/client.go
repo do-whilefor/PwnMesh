@@ -22,7 +22,7 @@ import (
 	"sync"
 	"time"
 
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelrpc"
 	"pwnmesh/internal/protocol"

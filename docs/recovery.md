@@ -18,6 +18,16 @@ The current same-run recovery limit is two resumptions after the initial attempt
 Recovery does not reset task
 deadlines, repair/continuation budgets or already consumed allowances.
 
+Role controllers own live graph observations separately from the saved session.
+Each successful save captures their values and the supplied Agent checkpoint;
+runtime-triggered saves detach the live checkpoint first. If a save fails, the
+callback restores its own in-memory changes to their values at entry and reports
+the failure. The session file is replaced atomically; a directory-sync error after
+replacement leaves durability uncertain. Phase policy belongs to Session, with an
+explicit mirror in the Agent loop. Acceptance reads
+only the identity-bound saved transcript or its verified committed journal prefix,
+never an uncommitted crash tail.
+
 For Execute, an accepted receipt binds the run and input hash to retained session
 and artifact hashes. Evidence is verified again on read. A changed repair target
 cannot reuse the previous success. Deterministic acceptance failure is terminal;
@@ -26,6 +36,9 @@ an uncertain callback remains tied to its existing session recovery path.
 For Decide and Curate, the server commit receipt is authoritative. Recovery checks
 it before planning again. A private draft may be discarded after a conflict;
 that does not erase a committed mutation or grant extra execution budget.
+The historical planner-conflict adapter runs only after this receipt check. Old
+Curate batches with an accepted receipt but pending settlement still use the
+explicit apply path; newly committed batches settle within their Board transaction.
 
 The `execute-v1` acceptance adapter has been removed. A `graph.json` without a
 current `acceptance.json` is rejected before session callbacks, bookkeeping or

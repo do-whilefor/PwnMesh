@@ -139,3 +139,5 @@ func (s State) PendingCurationCandidateIDs() map[string]bool {
 	}
 	return selected
 }
+
+const MaxCurationRelations = 128

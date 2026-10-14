@@ -1,19 +1,11 @@
 package board
 
+import "pwnmesh/internal/board/model"
+
 // ScheduleStep is the current scheduling projection. Historical Intent fences
 // are resolved server-side; dispatchers need neither a second task list nor
 // descriptions and evidence. Ready still requires an execution-registry grant.
-type ScheduleStep struct {
-	ID             string   `json:"id"`
-	Status         string   `json:"status"`
-	Priority       int      `json:"priority"`
-	CreatedAt      string   `json:"created_at"`
-	Ready          bool     `json:"ready"`
-	Running        bool     `json:"running,omitempty"`
-	InvalidSources []string `json:"invalid_sources,omitempty"`
-	BlockedBy      []string `json:"blocked_by,omitempty"`
-	WritePaths     []string `json:"-"` // Server-side admission only; checks carry the result.
-}
+type ScheduleStep = model.ScheduleStep
 
 // Preserve persisted task order and legacy fences at this one boundary. Failed
 // Steps remain candidates because only the execution registry authorizes retry.

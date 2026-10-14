@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/protocol"
 )
 

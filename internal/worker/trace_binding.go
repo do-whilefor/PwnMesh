@@ -1,7 +1,7 @@
 package worker
 
 import (
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/protocol"
 )
 

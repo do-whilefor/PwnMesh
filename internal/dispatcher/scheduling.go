@@ -11,7 +11,7 @@ import (
 	"sort"
 	"time"
 
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/protocol"
 )

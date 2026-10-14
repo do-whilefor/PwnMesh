@@ -48,9 +48,7 @@ func TestCuratorSnapshotReadsRetainedPagesAndBindsCommit(t *testing.T) {
 		}
 	}}
 	o := Options{RunDir: dir, Output: bridge}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	oRuntime := configureRoleTools(t, j, &o)
 	if len(o.Tools) != 3 || o.Tools[2].Name != "read_evidence" {
 		t.Fatal("snapshot added redundant curator tools")
 	}
@@ -73,7 +71,7 @@ func TestCuratorSnapshotReadsRetainedPagesAndBindsCommit(t *testing.T) {
 	if _, err := o.Tools[1].Execute(context.Background(), json.RawMessage(`{"op":"curate","payload":{"groups":[]}}`)); err != nil {
 		t.Fatal(err)
 	}
-	if reads < 3 || writes != 1 || *o.GraphVersion != j.InputSnapshot.StateVersion {
+	if reads < 3 || writes != 1 || oRuntime.graph.Version != j.InputSnapshot.StateVersion {
 		t.Fatal("snapshot read or commit was not bound")
 	}
 }
@@ -91,9 +89,7 @@ func TestCuratorReadsImmutableSnapshotLocallyAndKeepsCommitCAS(t *testing.T) {
 		return nil, errors.New("state_changed: newer observations arrived")
 	}}
 	o := Options{RunDir: dir, Output: bridge}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	oRuntime := configureRoleTools(t, j, &o)
 	read := o.Tools[0]
 	if strings.Contains(read.Description, "refresh overview") || !strings.Contains(read.Description, "immutable curation snapshot") {
 		t.Fatal("curator read protocol must not suggest replacing its immutable input")
@@ -124,8 +120,8 @@ func TestCuratorReadsImmutableSnapshotLocallyAndKeepsCommitCAS(t *testing.T) {
 	if _, err := read.Execute(context.Background(), json.RawMessage(`{"section":"candidates","expected_version":"model-version"}`)); err == nil {
 		t.Fatal("model supplied a transport-only snapshot version")
 	}
-	if rpcs != 0 || *o.GraphVersion != version {
-		t.Fatalf("reads used RPC or replaced immutable input: %d %s", rpcs, *o.GraphVersion)
+	if rpcs != 0 || oRuntime.graph.Version != version {
+		t.Fatalf("reads used RPC or replaced immutable input: %d %s", rpcs, oRuntime.graph.Version)
 	}
 	if _, err := o.Tools[1].Execute(context.Background(), json.RawMessage(`{"op":"curate","payload":{"groups":[]}}`)); err == nil || !strings.Contains(err.Error(), "state_changed") || rpcs != 1 {
 		t.Fatalf("local reads bypassed authoritative commit CAS: RPCs=%d err=%v", rpcs, err)

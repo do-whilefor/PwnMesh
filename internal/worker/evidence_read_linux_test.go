@@ -297,7 +297,7 @@ func TestReadEvidenceRecoversEscapedReferenceFromBoundRecordPages(t *testing.T) 
 	for _, scenario := range []string{"complete", "changed_record", "changed_version"} {
 		t.Run(scenario, func(t *testing.T) {
 			reads := 0
-			tool := rawEvidenceTool(Job{Kind: "reason", Workspace: workspace}, &Options{}, func(_ context.Context, r GraphRequest) (string, error) {
+			tool := rawEvidenceTool(Job{Kind: "reason", Workspace: workspace}, &roleRuntime{}, func(_ context.Context, r GraphRequest) (string, error) {
 				reads++
 				var result any
 				if r.ByteOffset == nil {
@@ -353,27 +353,25 @@ func TestFailedReadEvidenceDoesNotSatisfyDecisionRecoveryReread(t *testing.T) {
 		return GraphPage(*j.State, r)
 	}}
 	options := Options{RunDir: runDir, Output: bridge}
-	if err := ConfigureRuntimeTools(j, &options); err != nil {
-		t.Fatal(err)
-	}
-	options.decision.reread, options.decision.overviewRead = true, true
+	optionsRuntime := configureRoleTools(t, j, &options)
+	optionsRuntime.decision.reread, optionsRuntime.decision.overviewRead = true, true
 	if err := os.Remove(ref.Path); err != nil {
 		t.Fatal(err)
 	}
 	tool := snapshotRuntimeTool(t, options, "read_evidence")
 	input := json.RawMessage(`{"id":"fact","evidence_index":0}`)
-	if output, err := tool.Execute(context.Background(), input); err == nil || output != "" || !options.decision.reread {
+	if output, err := tool.Execute(context.Background(), input); err == nil || output != "" || !optionsRuntime.decision.reread {
 		t.Fatalf("hidden reference lookup satisfied recovery without evidence: %s %v", output, err)
 	}
 	if err := os.WriteFile(ref.Path, []byte(original), 0400); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tool.Execute(context.Background(), input); err != nil || !options.decision.reread {
+	if _, err := tool.Execute(context.Background(), input); err != nil || !optionsRuntime.decision.reread {
 		t.Fatalf("successful raw read bypassed the next model request: %v", err)
 	}
 	loop := &agent.Loop{}
-	options.decision.beforeRequest(loop)
-	if options.decision.reread || len(loop.ContextData) != 1 || !strings.Contains(loop.ContextData[0], "original retained context") {
+	optionsRuntime.decision.beforeRequest(loop)
+	if optionsRuntime.decision.reread || len(loop.ContextData) != 1 || !strings.Contains(loop.ContextData[0], "original retained context") {
 		t.Fatal("successful raw observation was not retained for the model before recovery")
 	}
 }

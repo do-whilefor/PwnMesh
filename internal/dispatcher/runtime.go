@@ -6,7 +6,7 @@ import (
 	"log/slog"
 	"time"
 
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 func (s *Scheduler) loadLeaseTimeout(ctx context.Context) error {

@@ -2,7 +2,7 @@ package protocol
 
 import (
 	"errors"
-	"pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
 )
 
 func ControlJob(j Job) bool { return j.Kind == "reason" || j.Kind == "curate" }
@@ -37,7 +37,7 @@ func ValidateCuratorInput(j Job) error {
 	}
 	bound := *j.State
 	bound.Graph = j.Graph
-	if board.DecisionStateVersion(bound) != board.DecisionStateVersion(*j.State) {
+	if model.DecisionStateVersion(bound) != model.DecisionStateVersion(*j.State) {
 		return errors.New("curate graph differs from its immutable state")
 	}
 	return nil
@@ -48,7 +48,7 @@ func (j Job) CurationVersion() string {
 		return j.InputSnapshot.StateVersion
 	}
 	if j.State != nil {
-		return board.DecisionStateVersion(*j.State)
+		return model.DecisionStateVersion(*j.State)
 	}
 	return ""
 }

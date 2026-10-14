@@ -17,7 +17,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/artifactcheck"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 // Walk from an open workspace descriptor: neither parent nor final symlinks

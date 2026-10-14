@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"strconv"
 	"text/template"
 )

@@ -21,7 +21,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 const maxTraceBytes = 64 << 20

@@ -5,7 +5,6 @@ import (
 	"slices"
 	"strings"
 
-	"pwnmesh/internal/board"
 	"pwnmesh/internal/board/model"
 )
 
@@ -31,7 +30,7 @@ func validateGraphAssetFilter(r GraphRequest) error {
 
 // Filter identities, never evidence validity. Both the catalogue and anchors
 // come from the same State, including when that State is a frozen read view.
-func graphAssetFilter(s board.State, r GraphRequest) (func(graphRecordIdentity) bool, error) {
+func graphAssetFilter(s model.State, r GraphRequest) (func(graphRecordIdentity) bool, error) {
 	if len(r.AssetIDs) == 0 {
 		return nil, nil
 	}
@@ -87,9 +86,9 @@ func graphIdentity(record any) graphRecordIdentity {
 		return graphRecordIdentity{id: v.ID}
 	case model.Finding:
 		return graphRecordIdentity{id: v.ID}
-	case board.Candidate:
+	case model.Candidate:
 		return graphRecordIdentity{id: v.ID}
-	case board.Dispute:
+	case model.Dispute:
 		return graphRecordIdentity{id: v.ID}
 	case model.FactRelation:
 		return graphRecordIdentity{source: v.Source, target: v.Target}
@@ -99,7 +98,7 @@ func graphIdentity(record any) graphRecordIdentity {
 		return graphRecordIdentity{id: v.ID}
 	case model.AssetAnchor:
 		return graphRecordIdentity{id: v.NodeID, assetID: v.AssetID}
-	case board.HistoryEntry:
+	case model.HistoryEntry:
 		return graphRecordIdentity{id: v.ID, assetIDs: v.AssetIDs}
 	default:
 		panic("unsupported graph record type")

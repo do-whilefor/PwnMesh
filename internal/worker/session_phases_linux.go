@@ -45,8 +45,7 @@ func (p *sessionPhases) startConclusion() (context.Context, error) {
 		}
 	}
 	wasConcluding := state.Concluding
-	state.Concluding = true
-	l.Concluding = true
+	p.runtime.setConcluding()
 	if state.ConcludeStartedAt.IsZero() {
 		if wasConcluding {
 			return nil, errors.New("saved conclusion has no start time; cannot refresh its deadline")
@@ -76,7 +75,8 @@ func (p *sessionPhases) startConclusion() (context.Context, error) {
 		if err != nil {
 			return nil, err
 		}
-		l.ConclusionPrompt = input
+		state.ConclusionPrompt = input
+		p.runtime.applyPhase()
 		state.ConclusionEvidence = refs
 		state.ConclusionInputVersion = conclusionInputVersion
 		// Persist the frozen input before another model request. Recovery
@@ -103,19 +103,18 @@ func (p *sessionPhases) shouldConclude() bool {
 }
 
 func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop) (context.Context, error) {
-	j, o, state := p.runtime.job, p.runtime.options, &p.runtime.state
-	save := p.runtime.save
+	state := &p.runtime.state
 
 	if !loop.Concluding && !loop.Repairing && !p.shouldConclude() {
 		if err := state.ToolProgress.problem(); err != nil {
 			return nil, err
 		}
 	}
-	if state.DecisionConflict != "" {
-		return nil, errors.New(state.DecisionConflict)
+	if p.runtime.roles.graph.Conflict != "" {
+		return nil, errors.New(p.runtime.roles.graph.Conflict)
 	}
-	if o.decision != nil {
-		o.decision.beforeRequest(loop)
+	if p.runtime.roles.decision != nil {
+		p.runtime.roles.decision.beforeRequest(loop)
 	}
 	concludeAtBoundary := func() error {
 		next, err := p.startConclusion()
@@ -130,7 +129,7 @@ func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop)
 			return nil, err
 		}
 	}
-	if err := refreshExecutionUpdates(turnCtx, j, o.graphRequest, state, loop, save); err != nil {
+	if err := p.runtime.refreshExecutionUpdates(turnCtx); err != nil {
 		return nil, err
 	}
 	// A slow graph read cannot buy another exploration turn. Enter the same
@@ -139,7 +138,7 @@ func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop)
 		if err := concludeAtBoundary(); err != nil {
 			return nil, err
 		}
-		if err := refreshExecutionUpdates(turnCtx, j, o.graphRequest, state, loop, save); err != nil {
+		if err := p.runtime.refreshExecutionUpdates(turnCtx); err != nil {
 			return nil, err
 		}
 	}
@@ -169,14 +168,11 @@ func (p *sessionPhases) startRepair(turnCtx context.Context, problem *outputFail
 		return "", fmt.Errorf("result-format repair exhausted after %d attempts: %w", maxOutputRepairs, problem)
 	}
 	state.RepairCount++
-	state.Repairing = true
-	l.Repairing = true
 	instruction, err := repairInstruction(j, l.Concluding, state.RepairCount, problem)
 	if err != nil {
 		return "", err
 	}
-	l.RepairPrompt = instruction
-	state.RepairPending = true
+	p.runtime.setRepair(true, instruction, true)
 	// Consume the attempt before adding its prompt or making a request.
 	if err = save(l.History); err != nil {
 		return "", err
@@ -188,7 +184,7 @@ func (p *sessionPhases) startRepair(turnCtx context.Context, problem *outputFail
 }
 
 func (p *sessionPhases) continueExecution() (string, error) {
-	o, state, l := p.runtime.options, &p.runtime.state, p.runtime.loop
+	state, l := &p.runtime.state, p.runtime.loop
 	save := p.runtime.save
 
 	last, ok := lastAssistant(l.History)
@@ -202,31 +198,30 @@ func (p *sessionPhases) continueExecution() (string, error) {
 		state.ContinuationCount++
 		state.ContinuationSequence = last.Sequence
 	}
-	state.Repairing, state.RepairPending, l.Repairing = false, false, false
-	state.RepairPrompt, l.RepairPrompt = "", ""
+	p.runtime.setRepair(false, "", false)
 	// Persist consumption before the follow-up instruction. Recovery can
 	// then reissue that instruction without replaying tools or buying turns.
 	if err := save(l.History); err != nil {
 		return "", err
 	}
-	if o.decision != nil {
+	if p.runtime.roles.decision != nil {
 		return "This Decide has no committed receipt. Use native tool calls for read_graph, assess_root when available, and graph_action; XML/JSON text is not executed. Then commit the draft; an empty plan requires a valid open or running Step. For truncated tool calls, reissue complete arguments. The original deadline still applies. If unable to proceed, return accepted:false with a reason.", nil
 	}
-	if o.curation != nil {
+	if p.runtime.roles.curation != nil {
 		return "This curation has no committed receipt. Read the supplied evidence and submit graph_action curate using native tool calls; XML/JSON text is not executed. The original input boundary and deadline still apply. If unable to proceed, return accepted:false with a reason.", nil
 	}
 	return "Continue the unfinished work in this same execution. Tools are enabled. The original task deadline still applies. Use completed only when the assigned task is finished; otherwise continue working or report incomplete with the remaining work and blocker.", nil
 }
 
 func (p *sessionPhases) onTurnEnd(turnCtx context.Context, l *agent.Loop, m agent.Message) (context.Context, string, error) {
-	j, o, state, ctx := p.runtime.job, p.runtime.options, &p.runtime.state, p.ctx
+	j, state, ctx := p.runtime.job, &p.runtime.state, p.ctx
 	save := p.runtime.save
 
 	if err := ctx.Err(); err != nil {
 		return nil, "", err
 	}
-	if state.DecisionConflict != "" {
-		return nil, "", errors.New(state.DecisionConflict)
+	if p.runtime.roles.graph.Conflict != "" {
+		return nil, "", errors.New(p.runtime.roles.graph.Conflict)
 	}
 	hasCalls := hasToolCalls(m)
 	if hasCalls && !l.Concluding && !l.Repairing && !truncated(m) && !p.shouldConclude() {
@@ -241,7 +236,7 @@ func (p *sessionPhases) onTurnEnd(turnCtx context.Context, l *agent.Loop, m agen
 			return turnCtx, "Recent tools have repeated unchanged observations or kept failing. Reassess the blocker and change the approach; do not repeat the same unsuccessful call or unchanged read without a reason to expect new information. If unable to proceed, Reason and Curate return accepted:false with a reason; execution tasks report incomplete with the blocker. The original task and budgets still apply.", nil
 		}
 	}
-	if o.decision != nil || o.curation != nil {
+	if p.runtime.roles.decision != nil || p.runtime.roles.curation != nil {
 		if !truncated(m) {
 			if hasCalls {
 				return turnCtx, "", nil

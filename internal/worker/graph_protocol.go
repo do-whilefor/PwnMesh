@@ -2,7 +2,7 @@ package worker
 
 import (
 	"encoding/json"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/protocol"
 )
 

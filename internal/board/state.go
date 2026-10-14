@@ -1,8 +1,6 @@
 package board
 
 import (
-	"encoding/json"
-
 	"pwnmesh/internal/artifactcheck"
 	"pwnmesh/internal/board/model"
 )
@@ -18,15 +16,7 @@ type Finding = model.Finding
 type StateAction = model.StateAction
 type StateActionResult = model.StateActionResult
 
-type StateEvent struct {
-	Revision  int64           `json:"revision"`
-	Op        string          `json:"op"`
-	ID        string          `json:"id"`
-	RunID     string          `json:"run_id"`
-	CreatedAt string          `json:"created_at"`
-	Payload   json.RawMessage `json:"payload"`
-	Result    json.RawMessage `json:"result"`
-}
+type StateEvent = model.StateEvent
 type stateData struct {
 	Goals         []Goal           `json:"goals"`
 	Steps         []stepMetadata   `json:"steps"`

@@ -29,7 +29,7 @@ type CuratePayload struct {
 	Relations       []CurateRelation `json:"relations,omitempty"`
 }
 
-const MaxCurationRelations = 128
+const MaxCurationRelations = model.MaxCurationRelations
 
 // CurateRelation preserves the existing relation protocol inside the one
 // curation transaction, alongside its findings and acknowledged input boundary.

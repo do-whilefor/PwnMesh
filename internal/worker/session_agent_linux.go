@@ -12,25 +12,18 @@ import (
 
 func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 	j, o, state := runtime.job, runtime.options, &runtime.state
-	save, emit := runtime.save, runtime.emit
+	emit := runtime.emit
 	finish := func(r Result) (Result, error) { return runtime.finish(ctx, r) }
 	var err error
 	o = contextOptions(o)
-	l := &agent.Loop{Provider: o.Provider, Tools: o.Tools, History: state.History, Concluding: state.Concluding, Repairing: state.Repairing, RepairPrompt: state.RepairPrompt, Emit: emit, Checkpoint: state.ContextCheckpoint, SaveState: func(history []agent.Message, _ *agent.ContextCheckpoint) error {
-		return save(history)
-	}, ContextBytes: o.ContextBytes, ContextTokens: o.ContextTokens, ContextTargetTokens: o.ContextTargetTokens, ObserveRequests: true, TaskPrompt: state.TaskPrompt, ConclusionPrompt: state.ConclusionPrompt, ContextData: state.ExecuteUpdates.contextData()}
-	if o.decision != nil {
-		l.StopResult = o.decision.result
-	}
-	if o.curation != nil {
-		l.StopResult = o.curation.result
-	}
-	if o.stepFinish != nil {
-		l.StopResult = o.stepFinish.result
-		l.StopResultTools = []string{"finish_step"}
-	}
+	l := &agent.Loop{Provider: o.Provider, Tools: runtime.roles.tools, History: state.History, Emit: emit,
+		Checkpoint: state.ContextCheckpoint, SaveState: runtime.saveAgentState,
+		ContextBytes: o.ContextBytes, ContextTokens: o.ContextTokens, ContextTargetTokens: o.ContextTargetTokens,
+		ObserveRequests: true, ContextData: state.ExecuteUpdates.contextData()}
+	runtime.roles.bindLoop(l)
 
 	runtime.options, runtime.loop = o, l
+	runtime.applyPhase()
 	phases := &sessionPhases{runtime: runtime, ctx: ctx, phaseCtx: ctx, endCancel: func() {}}
 	defer func() { phases.endCancel() }()
 	l.BeforeRequest, l.OnTurnEnd = phases.beforeRequest, phases.onTurnEnd
@@ -109,7 +102,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if runtime.resuming && o.decision != nil {
+	if runtime.resuming && runtime.roles.decision != nil {
 		// Saved tool results describe a previous private draft, not a plan that
 		// survived the restart. Keep the immutable job and its original budget.
 		if err := l.RepairHistory(); err != nil {
@@ -124,7 +117,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 		return Result{}, err
 	}
 	r := Result{Type: "result", Status: "success", Text: text, Conclude: l.Concluding}
-	if runErr == nil && !(o.decision != nil && o.decision.committed) && !(o.curation != nil && o.curation.committed) && !(o.stepFinish != nil && o.stepFinish.text != "") {
+	if _, committed := runtime.roles.stopResult(); runErr == nil && !committed {
 		if last, ok := lastAssistant(l.History); ok {
 			if problem := outputProblem(j, l.Concluding, last); problem != nil {
 				runErr = problem
@@ -146,10 +139,10 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 			r.FailureKind = "recovery_exhausted"
 		}
 	}
-	if state.DecisionConflict != "" && o.curation != nil && !o.curation.committed {
+	if runtime.roles.graph.Conflict != "" && runtime.roles.curation != nil && !runtime.roles.curation.committed {
 		// Curate owns an immutable boundary and cannot refresh its evidence in
 		// place. Batch planners instead discard and rebuild their private draft.
-		r.Status, r.FailureKind, r.Error, r.Retryable = "failed", "state_changed", state.DecisionConflict, false
+		r.Status, r.FailureKind, r.Error, r.Retryable = "failed", "state_changed", runtime.roles.graph.Conflict, false
 		r.FailureCause = ""
 	}
 	if runtime.logErr != nil {

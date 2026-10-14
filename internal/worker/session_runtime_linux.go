@@ -23,6 +23,7 @@ type sessionRuntime struct {
 	journal              *eventJournal
 	encoder              *json.Encoder
 	loop                 *agent.Loop
+	roles                *roleRuntime
 	logErr               error
 	resuming             bool
 	infrastructureResume bool
@@ -75,7 +76,6 @@ func restoreSession(j Job, o Options) (*sessionRuntime, error) {
 	}
 
 	runtime := &sessionRuntime{job: j, options: o, state: state, journal: journal, encoder: json.NewEncoder(o.Output), resuming: resuming}
-	runtime.options.decisionEmit = runtime.emit
 	return runtime, nil
 }
 
@@ -92,13 +92,26 @@ func (r *sessionRuntime) emit(e agent.Event) {
 	}
 }
 
+// save is used at runtime-owned boundaries; Agent callbacks supply their exact
+// checkpoint through saveAgentState instead of reading a mutable Loop pointer.
 func (r *sessionRuntime) save(history []agent.Message) error {
+	checkpoint := r.state.ContextCheckpoint
+	if r.loop != nil {
+		checkpoint = r.loop.SnapshotCheckpoint()
+	}
+	return r.saveAgentState(history, checkpoint)
+}
+
+func (r *sessionRuntime) saveAgentState(history []agent.Message, checkpoint *agent.ContextCheckpoint) error {
 	state, journal, o, l := &r.state, r.journal, r.options, r.loop
 	if r.logErr != nil {
 		return r.logErr
 	}
 	before := *state
-	state.History = history
+	state.History, state.ContextCheckpoint = history, checkpoint
+	if r.roles != nil {
+		state.GraphVersion, state.DecisionConflict = r.roles.graph.Version, r.roles.graph.Conflict
+	}
 	progress, err := state.ToolProgress.settle(history)
 	if err != nil {
 		*state = before
@@ -111,7 +124,6 @@ func (r *sessionRuntime) save(history []agent.Message) error {
 		state.TaskPrompt = l.TaskPrompt
 		state.ConclusionPrompt = l.ConclusionPrompt
 		state.RepairPrompt = l.RepairPrompt
-		state.ContextCheckpoint = l.Checkpoint
 	}
 	if err := state.save(o.RunDir, journal); err != nil {
 		*state = before
@@ -149,10 +161,13 @@ func (runtime *sessionRuntime) finish(ctx context.Context, r Result) (Result, er
 	if r.Status == "failed" && r.FailureKind == "" {
 		r.FailureKind = "execution"
 	}
+	if runtime.roles != nil {
+		state.GraphVersion, state.DecisionConflict = runtime.roles.graph.Version, runtime.roles.graph.Conflict
+	}
 	r.StateVersion = state.GraphVersion
 	if controlJob(j) {
 		metrics := journal.metrics.finish(j, r, state.StartedAt, o.Now())
-		if o.curation != nil && o.curation.committed {
+		if runtime.roles != nil && runtime.roles.curation != nil && runtime.roles.curation.committed {
 			metrics.Committed, metrics.Outcome = true, "curation_committed"
 		}
 		r.Metrics = &metrics
@@ -165,4 +180,37 @@ func (runtime *sessionRuntime) finish(ctx context.Context, r Result) (Result, er
 		return r, err
 	}
 	return r, enc.Encode(r)
+}
+
+// Graph updates enter the transcript only through the session persistence owner.
+// A rejected save retains the old cursor and old pinned request data.
+func (r *sessionRuntime) refreshExecutionUpdates(ctx context.Context) error {
+	phase := ""
+	if r.state.Concluding {
+		phase = "conclude"
+	}
+	if r.state.Repairing {
+		phase = "repair"
+	}
+	previous := r.state.ExecuteUpdates
+	next, notice, err := readExecutionUpdates(ctx, r.job, r.roles.request, previous, phase)
+	if err != nil || next == previous {
+		return err
+	}
+	loop := r.loop
+	previousData := loop.ContextData
+	loop.ContextData, r.state.ExecuteUpdates = next.contextData(), next
+	if notice != "" {
+		next.NoticeSequence = loop.Checkpoint.LastSequence + 1
+		if next.Review == notice {
+			next.ReviewSequence = next.NoticeSequence
+		}
+		err = loop.AppendInstruction(notice)
+	} else {
+		err = r.save(loop.History)
+	}
+	if err != nil {
+		r.state.ExecuteUpdates, loop.ContextData = previous, previousData
+	}
+	return err
 }

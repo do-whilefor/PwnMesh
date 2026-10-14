@@ -27,9 +27,9 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | Location | Responsibility |
 | --- | --- |
 | `cmd/` | CLI configuration and process wiring |
-| `internal/server/` | HTTP admission, authorization, read/write transaction choice |
-| `internal/board/` | Transactional mutations, projections, SQLite and migrations |
-| `internal/board/model/` | Storage-free canonical state, identity, evidence rules and reading views |
+| `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
+| `internal/board/` | Transactional project/lease operations, mutations, SQL-backed projections and migrations |
+| `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
@@ -49,12 +49,13 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `docs/` | Maintained architecture, protocol, recovery, format and development guides |
 
 `board/model` owns the canonical State, its JSON encoding and decision hash,
-curation values, evidence-support rules, history views, input identities and task
-budgets. Board and Config retain aliases for their existing callers. SQL-backed
-projections and mutations remain in Board, within the existing transaction.
-`protocol` uses shared model values but still imports aggregate Board views, so
-SQLite remains a transitive dependency. Do not introduce a second model merely
-to hide that coupling.
+shared execution/scheduling/input values, evidence rules, bounded context and
+completion views, history views and task budgets. Board and Config retain aliases
+for their existing callers. Protocol, Worker, Dispatcher and Docker use the
+storage-free definitions directly; their production imports do not depend on
+aggregate Board or SQLite.
+SQL-backed projections and mutations remain in Board, within the existing
+transaction. There is one canonical model, not a duplicate transport model.
 
 The embedded frontend keeps project form rules in `project-model.js`, provider
 settings in `model-settings.js`, and activity rendering in `activity-view.js`.
@@ -80,12 +81,30 @@ sessions, scenario policy and publication stay in Worker. DAG owns dependency
 files and artifact receipts, including verification when Worker selects evidence.
 The child package never imports Worker or a model provider.
 
+Worker Options contains caller configuration. A per-invocation role runtime owns
+tools, private drafts, commit receipts and graph version/conflict values; it never
+holds pointers into the durable session. Session owns phase transitions and
+captures graph values and the explicit Agent checkpoint when saving. Graph update
+reading returns a proposed cursor and notice; Session publishes them with the
+transcript and restores the prior cursor on a rejected save. Acceptance reads an
+identity-bound committed transcript rather than interpreting session storage
+fields itself. The retained session JSON and journal commit boundaries are unchanged.
+
 Board's `Store.Do` keeps lease/generation validation, idempotency lookup, mutation,
 revisions and receipts in one `BEGIN IMMEDIATE` transaction. `Store.View` uses
 query-only WAL readers for consistent snapshots without reserving the writer.
 Keep these operations together even when their source files are split. Health
 and settings GET requests use observational reads and do not expire leases;
 scheduling and settings mutations retain their write transaction maintenance.
+Server calls semantic Board operations for project management and all three
+role leases; it does not execute SQL. Board callbacks expose query operations,
+but no underlying `sql.Tx` field or transaction lifecycle methods. Store owns
+commit and rollback; the query methods still permit raw SQL inside Board.
+Multiwrite management operations use a local savepoint, so callers may handle a
+rejection and continue the outer transaction without retaining partial writes.
+Lease operations update lease columns without rewriting
+unrelated graph content. Source-boundary tests prevent SQL from returning to HTTP
+handlers or storage dependencies from returning to execution clients.
 
 The schema and migration sequence live in `schema.go` and `migrations.go`.
 Schema version `2` uses `pwnmesh_*` names for branded SQL objects. A supported

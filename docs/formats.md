@@ -17,9 +17,10 @@ formats, replay old work or migrate an operator's environment and workspace.
 | Worker graph | Schema `1` with matching graph and per-node definition digests; missing node bindings cannot be reconstructed |
 | Evidence | Validated current `.pwnmesh/runs/.../evidence/` references; no `.xloom` fallback |
 
-Both inline state and immutable input snapshots are current Job forms. Small
-inputs still use inline state. Optional timing fields may be absent; they do not
-authorize reconstruction of missing execution identity or evidence.
+Both inline state and immutable input snapshots are supported current Job forms.
+Server preparation creates immutable snapshots for new runs; retained current
+inline jobs remain readable and recoverable. Optional timing fields may be absent;
+they do not authorize reconstruction of missing execution identity or evidence.
 
 Existing current acceptance receipts take precedence over leftover old graph
 files. They still pass identity and evidence checks. Unsupported files remain

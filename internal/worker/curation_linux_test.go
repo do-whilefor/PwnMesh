@@ -322,21 +322,19 @@ func TestCuratorUncertainReceiptRecoversBeforeAnotherMutation(t *testing.T) {
 					return nil, nil
 				}
 			}}
-			if err := ConfigureRuntimeTools(j, &o); err != nil {
-				t.Fatal(err)
-			}
+			oRuntime := configureRoleTools(t, j, &o)
 			action := snapshotRuntimeTool(t, o, "graph_action")
 			input := json.RawMessage(`{"op":"curate","payload":{"groups":[]}}`)
 			if _, err := action.Execute(context.Background(), input); err == nil {
 				t.Fatal("uncommitted or malformed response finished curation")
 			}
-			if _, done := o.curation.result(); done {
+			if _, done := oRuntime.curation.result(); done {
 				t.Fatal("uncertain response became a committed result")
 			}
 			if _, err := action.Execute(context.Background(), input); err != nil {
 				t.Fatal(err)
 			}
-			if _, done := o.curation.result(); !done || writes != 1 || reads != 1 {
+			if _, done := oRuntime.curation.result(); !done || writes != 1 || reads != 1 {
 				t.Fatalf("recovery repeated the mutation: committed=%v writes=%d reads=%d", done, writes, reads)
 			}
 		})

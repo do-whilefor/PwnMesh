@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"pwnmesh/internal/artifactcheck"
-	"pwnmesh/internal/board"
 	"pwnmesh/internal/board/model"
 )
 
@@ -14,7 +13,7 @@ import (
 var ErrInterrupted = errors.New("execution interrupted; same-run recovery permitted")
 
 type Job struct {
-	InputFiles            []board.InputFile        `json:"input_files,omitempty"`
+	InputFiles            []model.InputFile        `json:"input_files,omitempty"`
 	Repair                *artifactcheck.Spec      `json:"repair,omitempty"`
 	RunID                 string                   `json:"run_id"`
 	PreviousRunID         string                   `json:"previous_run_id,omitempty"`
@@ -22,14 +21,14 @@ type Job struct {
 	ResultContractVersion int                      `json:"result_contract_version,omitempty"`
 	EnvironmentID         string                   `json:"environment_id,omitempty"`
 	DecisionRevision      int64                    `json:"decision_revision,omitempty"`
-	Decision              *board.DecisionContext   `json:"decision,omitempty"`
+	Decision              *model.DecisionContext   `json:"decision,omitempty"`
 	DecisionTrigger       string                   `json:"decision_trigger,omitempty"`
 	DecisionTriggers      []string                 `json:"decision_triggers,omitempty"`
 	DecisionRepeated      bool                     `json:"decision_repeated,omitempty"`
 	Kind                  string                   `json:"kind"`
 	WorkerType            string                   `json:"worker_type"`
 	Graph                 model.Graph              `json:"graph"`
-	State                 *board.State             `json:"state,omitempty"`
+	State                 *model.State             `json:"state,omitempty"`
 	InputSnapshot         *model.InputSnapshot     `json:"input_snapshot,omitempty"`
 	InputView             json.RawMessage          `json:"input_view,omitempty"`
 	PreparationKey        string                   `json:"preparation_key,omitempty"`

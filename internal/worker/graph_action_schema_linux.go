@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 
 	"pwnmesh/internal/artifactcheck"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 const evidenceSelectionDescription = "For new evidence, select a UTF-8 file at most 32 MiB and a nonempty excerpt at most 8192 bytes. Omit both line bounds for the whole file, or supply start_line and end_line together (1-based, inclusive)."

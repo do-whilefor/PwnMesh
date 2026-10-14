@@ -16,22 +16,13 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 )
 
 // configureGraphRequest owns graph versions, snapshot routing and receipts.
 // Role tool assembly supplies the capabilities that may call this boundary.
-func configureGraphRequest(j Job, o *Options) func(context.Context, GraphRequest) (string, error) {
+func configureGraphRequest(j Job, o Options, runtime *roleRuntime) func(context.Context, GraphRequest) (string, error) {
 	versioned := j.Kind == "reason" && j.Decision != nil || j.Kind == "curate"
-	if versioned && o.GraphVersion == nil {
-		version := ""
-		if j.Kind == "curate" {
-			version = j.CurationVersion()
-		} else {
-			version = j.Decision.StateVersion
-		}
-		o.GraphVersion = &version
-	}
 	// Version tracking belongs to the runtime, not model-generated arguments.
 	// Tool execution is serial, and the session saves it with the tool result.
 	track := func(result string, err error) (string, error) {
@@ -44,12 +35,12 @@ func configureGraphRequest(j Job, o *Options) func(context.Context, GraphRequest
 		if json.Unmarshal([]byte(result), &receipt) != nil || len(receipt.StateVersion) != 64 {
 			return "", errors.New("versioned graph response has no valid state_version")
 		}
-		*o.GraphVersion = receipt.StateVersion
+		runtime.graph.Version = receipt.StateVersion
 		return result, nil
 	}
 	return func(ctx context.Context, r GraphRequest) (string, error) {
-		if o.decisionConflict != nil && *o.decisionConflict != "" && r.Op != "decision_receipt" && r.Op != "curate_receipt" {
-			return "", errors.New(*o.decisionConflict)
+		if runtime.graph.Conflict != "" && r.Op != "decision_receipt" && r.Op != "curate_receipt" {
+			return "", errors.New(runtime.graph.Conflict)
 		}
 		// The curator's read_graph capability always means its frozen input.
 		// Keep the tool contract while serving new jobs through snapshot RPC.
@@ -64,12 +55,12 @@ func configureGraphRequest(j Job, o *Options) func(context.Context, GraphRequest
 			r.ExpectedVersion = j.InputSnapshot.StateVersion
 		} else if versioned {
 			if r.Op == "graph_action" {
-				r.Action.ExpectedVersion = *o.GraphVersion
+				r.Action.ExpectedVersion = runtime.graph.Version
 				if j.Kind == "curate" {
 					r.Action.ExpectedVersion = j.CurationVersion()
 				}
 			} else if (r.ByteOffset != nil || (r.Section != "" && r.Section != "overview")) && (j.Kind != "curate" || r.ExpectedVersion == "") {
-				r.ExpectedVersion = *o.GraphVersion
+				r.ExpectedVersion = runtime.graph.Version
 			}
 		}
 		id := make([]byte, 16)
@@ -110,13 +101,13 @@ func configureGraphRequest(j Job, o *Options) func(context.Context, GraphRequest
 			}
 			return raw, err
 		}
-		if j.Kind == "curate" && graphStateConflict(err) && o.decisionConflict != nil {
-			*o.decisionConflict = err.Error()
+		if j.Kind == "curate" && graphStateConflict(err) {
+			runtime.graph.Conflict = err.Error()
 		}
 		if frozen {
 			return raw, err
 		}
-		if batchDecision(j) && o.decisionEmit != nil {
+		if batchDecision(j) && runtime.emit != nil {
 			operation := decisionOperation{Op: r.Op, ElapsedMS: time.Since(started).Milliseconds(), Failed: err != nil, StateChanged: graphStateConflict(err)}
 			if err == nil && (r.Op == "decision_commit" || r.Op == "decision_receipt") {
 				var receipt board.DecisionReceipt
@@ -133,10 +124,10 @@ func configureGraphRequest(j Job, o *Options) func(context.Context, GraphRequest
 					}
 				}
 			}
-			o.decisionEmit(operation.event())
+			runtime.emit(operation.event())
 		}
-		if o.decision != nil && graphStateConflict(err) {
-			o.decision.invalidate()
+		if runtime.decision != nil && graphStateConflict(err) {
+			runtime.decision.invalidate()
 		}
 		if r.Op == "decision_preview" {
 			return raw, err
@@ -148,8 +139,8 @@ func configureGraphRequest(j Job, o *Options) func(context.Context, GraphRequest
 			}
 		}
 		raw, err = track(raw, err)
-		if err == nil && r.Op == "read_graph" && !internalGraphRead(ctx) && o.decision != nil {
-			o.decision.observeRead(r.Section, raw)
+		if err == nil && r.Op == "read_graph" && !internalGraphRead(ctx) && runtime.decision != nil {
+			runtime.decision.observeRead(r.Section, raw)
 		}
 		return raw, err
 	}

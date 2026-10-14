@@ -128,9 +128,7 @@ func TestGraphActionRejectsMalformedCollectionsBeforeExecution(t *testing.T) {
 			if tc.kind == "reason" {
 				job.Decision = &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}
 			}
-			if err := ConfigureRuntimeTools(job, &opts); err != nil {
-				t.Fatal(err)
-			}
+			optsRuntime := configureRoleTools(t, job, &opts)
 			executed := 0
 			for n := range opts.Tools {
 				if opts.Tools[n].Name == "graph_action" {
@@ -156,8 +154,8 @@ func TestGraphActionRejectsMalformedCollectionsBeforeExecution(t *testing.T) {
 			if _, err := loop.Run(context.Background(), "Inspect"); err != nil {
 				t.Fatal(err)
 			}
-			if calls != 2 || executed != 0 || requests != 0 || (opts.decision != nil && len(opts.decision.actions) != 0) {
-				t.Fatalf("malformed input reached execution: calls=%d executed=%d requests=%d draft=%+v", calls, executed, requests, opts.decision)
+			if calls != 2 || executed != 0 || requests != 0 || (optsRuntime.decision != nil && len(optsRuntime.decision.actions) != 0) {
+				t.Fatalf("malformed input reached execution: calls=%d executed=%d requests=%d draft=%+v", calls, executed, requests, optsRuntime.decision)
 			}
 		})
 	}

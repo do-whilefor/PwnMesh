@@ -17,7 +17,7 @@ import (
 	"unicode/utf8"
 
 	"golang.org/x/sys/unix"
-	"pwnmesh/internal/board"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/contract"
 	"pwnmesh/internal/worker/dag"
 )

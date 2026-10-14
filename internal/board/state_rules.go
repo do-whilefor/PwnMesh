@@ -1,30 +1,16 @@
 package board
 
 import (
-	"bytes"
 	"encoding/json"
-	"io"
 	"path"
+	"pwnmesh/internal/board/model"
 	"slices"
 	"strings"
 )
 
-func decodeAction(raw json.RawMessage, target any) error {
-	d := json.NewDecoder(bytes.NewReader(raw))
-	d.DisallowUnknownFields()
-	if err := d.Decode(target); err != nil {
-		return Err(422, "Invalid action payload: "+err.Error())
-	}
-	if err := d.Decode(new(any)); err != io.EOF {
-		return Err(422, "Action payload must contain one JSON object")
-	}
-	if len(bytes.TrimSpace(raw)) == 0 || bytes.TrimSpace(raw)[0] != '{' {
-		return Err(422, "Action payload must be an object")
-	}
-	return nil
-}
+func decodeAction(raw json.RawMessage, target any) error { return model.DecodeAction(raw, target) }
 
-func required(value string, max int) bool { return strings.TrimSpace(value) != "" && len(value) <= max }
+func required(value string, max int) bool { return model.Required(value, max) }
 func runMatches(identity, id string) bool {
 	return identity == id || (id != "" && strings.HasSuffix(identity, "@"+id))
 }

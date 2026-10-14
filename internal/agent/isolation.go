@@ -12,6 +12,10 @@ func (l *Loop) ownState() {
 	}
 }
 
+// SnapshotCheckpoint returns an owned checkpoint for runtime-only persistence
+// boundaries. Agent-triggered saves already provide the same detached value.
+func (l *Loop) SnapshotCheckpoint() *ContextCheckpoint { return cloneCheckpoint(l.Checkpoint) }
+
 func cloneUsage(usage *Usage) *Usage {
 	if usage == nil {
 		return nil

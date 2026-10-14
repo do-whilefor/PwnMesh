@@ -124,7 +124,14 @@ func (f *updateSessionFixture) reopen() {
 }
 
 func (f *updateSessionFixture) refresh(request func(context.Context, GraphRequest) (string, error)) error {
-	return refreshExecutionUpdates(context.Background(), f.job, request, f.state, f.loop, f.save)
+	runtime := &sessionRuntime{job: f.job, options: Options{RunDir: f.dir}, state: *f.state, journal: f.journal, loop: f.loop, roles: &roleRuntime{request: request}, logErr: f.logErr}
+	if f.failSave {
+		runtime.logErr = errUpdateSessionSave
+	}
+	originalSave := f.loop.SaveState
+	f.loop.SaveState = runtime.saveAgentState
+	defer func() { f.loop.SaveState = originalSave; *f.state = runtime.state }()
+	return runtime.refreshExecutionUpdates(context.Background())
 }
 
 func (f *updateSessionFixture) response(from, through int64, pending string) board.ExecuteUpdates {
@@ -382,7 +389,17 @@ func TestExecuteUpdateFrozenPhasesOnlyPersistDeferredStatus(t *testing.T) {
 	for _, phase := range []string{"conclude", "repair"} {
 		t.Run(phase, func(t *testing.T) {
 			f := newUpdateSessionFixture(t)
-			f.loop.Concluding, f.loop.Repairing = phase == "conclude", phase == "repair"
+			f.state.Concluding, f.state.Repairing = phase == "conclude", phase == "repair"
+			if f.state.Concluding {
+				f.state.ConcludeStartedAt = f.state.StartedAt
+				f.state.ConcludeDeadline = f.state.StartedAt.Add(time.Duration(f.job.Budget.ConcludeTimeout) * time.Second)
+			} else {
+				f.state.RepairCount, f.state.RepairPrompt = 1, "frozen repair"
+				f.loop.RepairPrompt = f.state.RepairPrompt
+			}
+			if err := f.save(f.loop.History); err != nil {
+				t.Fatal(err)
+			}
 			before := f.diskState()
 			read := func(context.Context, GraphRequest) (string, error) {
 				t.Fatal("frozen phase performed a graph read")
