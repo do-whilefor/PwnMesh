@@ -8,11 +8,6 @@ import (
 	"time"
 )
 
-const deploymentSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_installation(
- singleton INTEGER PRIMARY KEY CHECK(singleton=1),identity TEXT NOT NULL);
-INSERT OR IGNORE INTO pwnmesh_installation(singleton,identity) VALUES(1,lower(hex(randomblob(16))));
-CREATE TABLE IF NOT EXISTS pwnmesh_dispatchers(namespace TEXT PRIMARY KEY,holder TEXT NOT NULL,expires_at TEXT NOT NULL);`
-
 const DispatcherLeaseSeconds = 30
 
 // InstallationID belongs to the database, not its URL or a Compose project name.

@@ -2,10 +2,6 @@ package board
 
 import "encoding/json"
 
-const terminationSchema = `CREATE TABLE IF NOT EXISTS xloom_project_termination(
- project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
- terminated_at TEXT NOT NULL);`
-
 // Termination ends an unfinished project without asserting that its Goal was
 // achieved. The graph, evidence, history and workspace survive for inspection.
 // Only an explicit restart may start another execution round afterward.

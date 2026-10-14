@@ -13,24 +13,6 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schema = `
-CREATE TABLE IF NOT EXISTS settings(intent_timeout INTEGER NOT NULL DEFAULT 15,reason_timeout INTEGER NOT NULL DEFAULT 15);
-INSERT OR IGNORE INTO settings(rowid,intent_timeout,reason_timeout) VALUES(1,15,15);
-CREATE TABLE IF NOT EXISTS projects(id TEXT PRIMARY KEY,title TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'active',bootstrap_enabled INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,reason_worker TEXT,reason_trigger TEXT,reason_started_at TEXT,reason_last_heartbeat_at TEXT);
-CREATE TABLE IF NOT EXISTS facts(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,description TEXT NOT NULL,PRIMARY KEY(id,project_id));
-CREATE TABLE IF NOT EXISTS intents(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,to_fact_id TEXT,description TEXT NOT NULL,creator TEXT NOT NULL,worker TEXT,last_heartbeat_at TEXT,created_at TEXT NOT NULL,concluded_at TEXT,PRIMARY KEY(id,project_id));
-CREATE TABLE IF NOT EXISTS intent_sources(intent_id TEXT NOT NULL,project_id TEXT NOT NULL,fact_id TEXT NOT NULL,PRIMARY KEY(intent_id,project_id,fact_id),FOREIGN KEY(intent_id,project_id) REFERENCES intents(id,project_id) ON DELETE CASCADE);
-CREATE INDEX IF NOT EXISTS intent_sources_project ON intent_sources(project_id);
-CREATE TABLE IF NOT EXISTS hints(id TEXT NOT NULL,project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,content TEXT NOT NULL,creator TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(id,project_id));
-CREATE INDEX IF NOT EXISTS facts_project ON facts(project_id);
-CREATE INDEX IF NOT EXISTS intents_project ON intents(project_id,created_at);
-CREATE INDEX IF NOT EXISTS hints_project ON hints(project_id,created_at);
-CREATE INDEX IF NOT EXISTS intents_active_leases ON intents(project_id) WHERE to_fact_id IS NULL AND worker IS NOT NULL;
-CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER NOT NULL DEFAULT 0);
-INSERT OR IGNORE INTO counters(name,value) VALUES('project',0);
-CREATE TABLE IF NOT EXISTS scoped_counters(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,kind TEXT NOT NULL,value INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(project_id,kind));
-CREATE TABLE IF NOT EXISTS xloom_revoked_runs(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,worker TEXT NOT NULL,PRIMARY KEY(project_id,worker));`
-
 type Store struct {
 	db      *sql.DB
 	readers *sql.DB
@@ -88,64 +70,6 @@ func Open(path string) (*Store, error) {
 		}
 	}
 	return s, nil
-}
-
-// migrateStore owns the migration transaction; Open owns the connections.
-// A crash cannot add bootstrap_enabled without mapping a legacy disabled
-// bootstrap_mode, or leave only some counters repaired.
-func migrateStore(db *sql.DB) error {
-	migration, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer migration.Rollback()
-	if _, err = migration.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema); err != nil {
-		return err
-	}
-	rows, err := migration.Query("PRAGMA table_info(projects)")
-	if err != nil {
-		return err
-	}
-	columns := map[string]bool{}
-	for rows.Next() {
-		var cid, nn, pk int
-		var name, typ string
-		var def any
-		if err = rows.Scan(&cid, &name, &typ, &nn, &def, &pk); err != nil {
-			rows.Close()
-			return err
-		}
-		columns[name] = true
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return err
-	}
-	if !columns["bootstrap_enabled"] {
-		_, err = migration.Exec("ALTER TABLE projects ADD COLUMN bootstrap_enabled INTEGER NOT NULL DEFAULT 1")
-		if err == nil && columns["bootstrap_mode"] {
-			_, err = migration.Exec("UPDATE projects SET bootstrap_enabled=CASE WHEN bootstrap_mode='disabled' THEN 0 ELSE 1 END")
-		}
-		if err != nil {
-			return err
-		}
-	}
-	// Older or partially restored Cairn databases may omit their counters. Never
-	// let a newly allocated ID overwrite a project or reference an old Fact.
-	if _, err = migration.Exec(`UPDATE counters SET value=MAX(value,COALESCE((SELECT MAX(CAST(SUBSTR(id,6) AS INTEGER)) FROM projects WHERE id GLOB 'proj_[0-9]*'),0)) WHERE name='project'`); err != nil {
-		return err
-	}
-	for _, item := range []struct{ table, kind, prefix string }{{"facts", "fact", "f"}, {"intents", "intent", "i"}, {"hints", "hint", "h"}} {
-		query := fmt.Sprintf(`INSERT INTO scoped_counters(project_id,kind,value) SELECT project_id,?,MAX(CAST(SUBSTR(id,2) AS INTEGER)) FROM %s WHERE id GLOB ? GROUP BY project_id ON CONFLICT(project_id,kind) DO UPDATE SET value=MAX(value,excluded.value)`, item.table)
-		if _, err = migration.Exec(query, item.kind, item.prefix+"[0-9]*"); err != nil {
-			return err
-		}
-	}
-	if err = migrateExecutionMetadata(migration); err != nil {
-		return err
-	}
-	return migration.Commit()
 }
 
 func (s *Store) Close() error {
@@ -284,7 +208,7 @@ func (t *Tx) Load(id string) (Graph, error) {
 		return g, err
 	}
 	if rw != nil {
-		g.Project.Reason = &Reason{*rw, Value(rt), Value(rs), Value(rh)}
+		g.Project.Reason = &Reason{Worker: *rw, Trigger: Value(rt), StartedAt: Value(rs), Heartbeat: Value(rh)}
 	}
 	if err = t.loadOrchestration(&g.Project); err != nil {
 		return g, err

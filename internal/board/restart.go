@@ -1,9 +1,5 @@
 package board
 
-const restartSchema = `CREATE TABLE IF NOT EXISTS xloom_project_rounds(
- project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
- generation INTEGER NOT NULL DEFAULT 0,restarted_at TEXT NOT NULL);` + roundHistorySchema
-
 // RestartProject begins a fresh board round, preserving human inputs. Lease
 // tombstones and ID counters deliberately survive: late workers must never
 // regain authority or accidentally address a replacement step with an old ID.

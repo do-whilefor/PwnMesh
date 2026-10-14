@@ -16,17 +16,6 @@ const MaxInputBytes = 256 << 20
 const MaxProjectInputBytes = 512 << 20
 const MaxProjectInputs = 32
 
-const inputFileSchema = `
-CREATE TABLE IF NOT EXISTS xloom_input_files(
- project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- id TEXT NOT NULL,name TEXT NOT NULL,size INTEGER NOT NULL,sha256 TEXT NOT NULL,
- created_at TEXT NOT NULL,data BLOB NOT NULL,
- PRIMARY KEY(project_id,id),UNIQUE(project_id,name,sha256));
-CREATE TABLE IF NOT EXISTS xloom_input_batches(
- project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- idempotency_key TEXT NOT NULL,request_sha256 TEXT NOT NULL,response TEXT NOT NULL,
- PRIMARY KEY(project_id,idempotency_key));`
-
 // InputFile is metadata only. Captured credentials and binary contents never
 // enter the graph, execution JSON or model prompt as part of file transfer.
 type InputFile struct {

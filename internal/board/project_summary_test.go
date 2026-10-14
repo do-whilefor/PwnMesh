@@ -83,7 +83,7 @@ func TestProjectSummariesPreserveCountsMetadataAndOrder(t *testing.T) {
 	if err := store.Do(context.Background(), func(tx *Tx) error {
 		for _, project := range []Project{
 			{ID: "late", Title: "Late project", Status: "completed", CreatedAt: "2026-09-26T00:00:00Z"},
-			{ID: "z-first-tie", Title: "First tie", Status: "terminated", Scenario: "audit", Bootstrap: true, CreatedAt: "2026-09-25T00:00:00Z", Reason: &Reason{"planner", "changed", "started", "heartbeat"}},
+			{ID: "z-first-tie", Title: "First tie", Status: "terminated", Scenario: "audit", Bootstrap: true, CreatedAt: "2026-09-25T00:00:00Z", Reason: &Reason{Worker: "planner", Trigger: "changed", StartedAt: "started", Heartbeat: "heartbeat"}},
 			{ID: "a-second-tie", Title: "Second tie", Status: "stopped", CreatedAt: "2026-09-25T00:00:00Z"},
 			{ID: "early", Title: "Early project", Status: "active", CreatedAt: "2026-09-24T00:00:00Z"},
 		} {

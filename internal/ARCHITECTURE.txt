@@ -1,0 +1,88 @@
+PwnMesh module guide
+====================
+
+Execution flow
+
+cmd/pwnmesh wires three Linux commands: serve, dispatch and worker.
+Server owns HTTP admission and board transactions. Dispatcher acquires exclusive
+ownership, reconciles project generations, recovers registered executions and
+then admits new work. Docker transports immutable jobs and bridges graph/model
+requests. Worker executes the Agent Loop and verifies retained evidence before
+publishing an accepted result. Server remains authoritative for committed state.
+
+Module boundaries
+
+protocol/       Shared jobs, results, graph RPC validation/paging and trace binding.
+                Server, Dispatcher and Docker import this instead of Worker.
+worker/         Execution, recovery, tools, phase changes and evidence acceptance.
+agent/          Provider-independent model/tool loop and context checkpoints.
+dispatcher/     Ownership, reconciliation, admission, heartbeats and settlement.
+docker/         Container lifecycle, transport and request bridges.
+server/         HTTP handlers and execution authorization.
+board/model/    Storage-free graph types, errors and graph/asset identity rules.
+board/          State projection, transactional domain mutations and SQLite storage.
+contract/       Result/evidence contracts and policy checks.
+workergraph/    Local dependency graph execution within a Worker run.
+web/            Embedded browser application and its tests.
+container/      Worker image and environment helpers.
+tests/integration/ Cross-component scenarios, including opt-in live tests.
+
+Protocol still uses board.State and related transactional-package data types.
+It is independent of the Worker implementation, but not yet independent of the
+board package or its SQLite dependency. Existing Worker and board type aliases
+keep source compatibility while the shared definitions have one owner.
+
+Where to make changes
+
+Wire fields, graph page limits or shared request checks: protocol/.
+Keep JSON field order as well as tags stable: typed Job JSON participates in
+saved-session identity and trace hashes. compatibility_test.go locks these bytes.
+Worker-only read-observation metadata belongs in graph_observation_linux.go and
+must never become a model-visible wire field or a successful evidence observation.
+
+Worker lifecycle: worker.go coordinates admission, ownership, restore, recovery
+and Agent execution. session_lifecycle_linux.go owns lock/PID/cancellation cleanup;
+session_runtime_linux.go owns journal/state persistence and result settlement;
+session_recovery_linux.go owns saved-result and committed-receipt recovery;
+session_agent_linux.go binds the loop and resumes its transcript;
+session_phases_linux.go owns conclusion, repair and continuation boundaries.
+graph_run_linux.go and acceptance_linux.go retain the outer evidence receipt gate.
+
+Scheduling: scheduler.go presents Run/Step ordering. runtime.go owns startup,
+wakeups and worker shutdown/join; reconciliation.go owns project generations and
+cleanup; scheduling.go owns eligibility/capacity/admission; lease.go owns task
+heartbeats and lease release.
+executions.go owns registered-run recovery and retained-result delivery.
+
+Board: model/ has no database dependency. state.go defines the extended state;
+state_projection.go builds read views; state_rules.go validates pure input;
+state_actions.go and state_events.go keep mutations and their events together.
+store.go owns connections and Do/View; schema.go and migrations.go own database
+initialization; legacy_read.go isolates historical execution fallback reads.
+
+Safety boundaries
+
+Lease/generation checks, idempotency lookup, mutations, revisions and receipts
+stay in the same board write transaction. Writes retain BEGIN IMMEDIATE, while
+query-only WAL readers retain snapshot consistency without reserving the writer.
+Migrations remain atomic; historical xloom table names and persisted JSON remain
+compatible. Do not split a transactional operation merely to create a new package.
+
+Worker journals/checkpoints precede side effects. Recovery keeps the original
+identity, budgets and consumed allowances. A retained result retries delivery
+without replaying the model or tools. Execute completion passes durable evidence
+acceptance; Decide/Curate writes are established by their server commit receipts.
+Infrastructure interruption differs from a hard stop.
+
+Dispatcher reconciles cancellation and cleanup even when model settings fail.
+It recovers registered work before fresh admission and joins workers before
+releasing ownership. Wake notifications coalesce; completion queues retain data.
+
+Validation
+
+Keep behavior tests beside their owner. Run focused Linux package tests for the
+changed boundary; reuse existing recovery, lease, idempotency, migration rollback,
+snapshot and acceptance regressions. New protocol tests preserve exact wire
+encoding and prevent production transport consumers from importing Worker.
+Use go test ./... -run '^$' for an all-package compile check and go vet ./... for
+static checks. Live model and Docker acceptance scenarios remain opt-in.

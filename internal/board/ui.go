@@ -6,47 +6,6 @@ import (
 	"errors"
 )
 
-// Keep optional scenario metadata outside Cairn's projects table so both
-// legacy schemas and clients continue to work without inventing a scenario.
-const projectMetadataSchema = `CREATE TABLE IF NOT EXISTS xloom_project_metadata(
- project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
- scenario TEXT NOT NULL CHECK(scenario IN ('ctf','pentest','audit')));` + executionChangeSchema
-
-// Keep only the latest change per execution. A persistent sequence observes
-// updates within one second, including result observations without updated_at.
-const executionChangeSchema = `
-CREATE TABLE IF NOT EXISTS xloom_ui_execution_revisions(
- project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
- revision INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS xloom_ui_execution_changes(
- project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- execution_id TEXT NOT NULL,revision INTEGER NOT NULL,deleted INTEGER NOT NULL DEFAULT 0,
- PRIMARY KEY(project_id,execution_id));
-CREATE INDEX IF NOT EXISTS xloom_ui_execution_changes_revision ON xloom_ui_execution_changes(project_id,revision);
-INSERT OR IGNORE INTO xloom_ui_execution_revisions(project_id,revision)
- SELECT project_id,MAX(rowid) FROM xloom_executions GROUP BY project_id;
-INSERT OR IGNORE INTO xloom_ui_execution_changes(project_id,execution_id,revision)
- SELECT project_id,id,rowid FROM xloom_executions;
-CREATE TRIGGER IF NOT EXISTS xloom_ui_execution_insert AFTER INSERT ON xloom_executions BEGIN
- INSERT INTO xloom_ui_execution_revisions VALUES(NEW.project_id,1)
- ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
- INSERT INTO xloom_ui_execution_changes VALUES(NEW.project_id,NEW.id,(SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=NEW.project_id),0)
- ON CONFLICT(project_id,execution_id) DO UPDATE SET revision=excluded.revision,deleted=0;
-END;
-CREATE TRIGGER IF NOT EXISTS xloom_ui_execution_update AFTER UPDATE ON xloom_executions BEGIN
- INSERT INTO xloom_ui_execution_revisions VALUES(NEW.project_id,1)
- ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
- INSERT INTO xloom_ui_execution_changes VALUES(NEW.project_id,NEW.id,(SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=NEW.project_id),0)
- ON CONFLICT(project_id,execution_id) DO UPDATE SET revision=excluded.revision,deleted=0;
-END;
-CREATE TRIGGER IF NOT EXISTS xloom_ui_execution_delete AFTER DELETE ON xloom_executions
-WHEN EXISTS(SELECT 1 FROM projects WHERE id=OLD.project_id) BEGIN
- INSERT INTO xloom_ui_execution_revisions VALUES(OLD.project_id,1)
- ON CONFLICT(project_id) DO UPDATE SET revision=revision+1;
- INSERT INTO xloom_ui_execution_changes VALUES(OLD.project_id,OLD.id,(SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=OLD.project_id),1)
- ON CONFLICT(project_id,execution_id) DO UPDATE SET revision=excluded.revision,deleted=1;
-END;`
-
 func ValidScenario(scenario string) bool {
 	return scenario == "ctf" || scenario == "pentest" || scenario == "audit"
 }

@@ -9,17 +9,6 @@ import (
 	"strconv"
 )
 
-const roundHistorySchema = `
-CREATE TABLE IF NOT EXISTS xloom_round_history(
- project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- generation INTEGER NOT NULL,archived_at TEXT NOT NULL,
- PRIMARY KEY(project_id,generation));
-CREATE TABLE IF NOT EXISTS xloom_round_entries(
- project_id TEXT NOT NULL,generation INTEGER NOT NULL,kind TEXT NOT NULL,id TEXT NOT NULL,
- data BLOB NOT NULL,sha256 TEXT NOT NULL,
- PRIMARY KEY(project_id,generation,kind,id),
- FOREIGN KEY(project_id,generation) REFERENCES xloom_round_history(project_id,generation) ON DELETE CASCADE);`
-
 // Archive the prior round before removing its current projections. The archive
 // and reset share the caller's transaction; any failure preserves the live round.
 // These records have no update path and never grant authority to an old Worker.

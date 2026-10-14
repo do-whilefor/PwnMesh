@@ -509,6 +509,13 @@ func TestExecutionMetadataMigrationFailureRollsBack(t *testing.T) {
 	if err := db.QueryRow("SELECT value FROM counters WHERE name='project'").Scan(&count); err != nil || count != 0 {
 		t.Fatalf("failed migration committed a counter repair: value=%d err=%v", count, err)
 	}
+	// Creating the graph schema, UI triggers and installation identity is part
+	// of the same migration as the late execution metadata backfill.
+	for _, name := range []string{"xloom_state", "xloom_assets", "xloom_ui_execution_insert", "pwnmesh_installation", "xloom_execution_pending"} {
+		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE name=?", name).Scan(&count); err != nil || count != 0 {
+			t.Fatalf("failed migration retained schema object %s: count=%d err=%v", name, count, err)
+		}
+	}
 	// The failed Open must release its write reservation before returning so
 	// another connection can repair the input and retry the whole migration.
 	if _, err := db.Exec(`UPDATE xloom_executions SET job='{"graph":{}}' WHERE id='bad'`); err != nil {

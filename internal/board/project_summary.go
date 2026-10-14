@@ -44,7 +44,7 @@ ORDER BY p.created_at,p.rowid`)
 			return nil, err
 		}
 		if worker != nil {
-			summary.Reason = &Reason{*worker, Value(trigger), Value(started), Value(heartbeat)}
+			summary.Reason = &Reason{Worker: *worker, Trigger: Value(trigger), StartedAt: Value(started), Heartbeat: Value(heartbeat)}
 		}
 		if curator != nil {
 			summary.Curator = &Reason{Worker: *curator, Trigger: Value(curatorTrigger), StartedAt: Value(curatorStarted), Heartbeat: Value(curatorHeartbeat)}

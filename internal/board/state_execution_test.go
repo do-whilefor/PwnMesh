@@ -78,6 +78,10 @@ func TestStateLegacyFailureTrimsBeforeApplyingReadBoundary(t *testing.T) {
 			if err != nil || reason != "original diagnostic" {
 				t.Fatalf("%s lost whitespace-prefixed diagnostic: %q %v", status, reason, err)
 			}
+			var stored []byte
+			if err := tx.QueryRow("SELECT result FROM xloom_executions WHERE project_id=? AND id=?", e.ProjectID, e.ID).Scan(&stored); err != nil || string(stored) != string(raw) {
+				t.Fatalf("%s legacy projection rewrote retained result: %v", status, err)
+			}
 		}
 		return nil
 	})

@@ -6,11 +6,6 @@ import (
 	"pwnmesh/internal/artifactcheck"
 )
 
-const stateSchema = `
-CREATE TABLE IF NOT EXISTS xloom_state(project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,data TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,decision_revision INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS xloom_state_actions(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,idempotency_key TEXT NOT NULL,request TEXT NOT NULL,response TEXT NOT NULL,PRIMARY KEY(project_id,idempotency_key));
-CREATE TABLE IF NOT EXISTS xloom_state_events(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,revision INTEGER NOT NULL,event TEXT NOT NULL,PRIMARY KEY(project_id,revision));`
-
 // State extends the Cairn graph without changing the legacy JSON representation.
 type State struct {
 	Graph            Graph            `json:"graph"`

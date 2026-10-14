@@ -7,10 +7,6 @@ import (
 	"slices"
 )
 
-const orchestrationSchema = `CREATE TABLE IF NOT EXISTS xloom_project_orchestration(
- project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
- version INTEGER NOT NULL,curator_worker TEXT,curator_trigger TEXT,curator_started_at TEXT,curator_heartbeat TEXT);`
-
 // Bound the transport envelope, not the retained immutable input. New curator
 // jobs use a snapshot and bounded view; legacy inline jobs keep this limit.
 const MaxCurationInputBytes = 256 << 10

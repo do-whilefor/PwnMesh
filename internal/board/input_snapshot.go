@@ -8,15 +8,6 @@ import (
 	"errors"
 )
 
-const inputSnapshotSchema = `CREATE TABLE IF NOT EXISTS xloom_input_snapshots(
- project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- id TEXT NOT NULL,metadata BLOB NOT NULL,state BLOB NOT NULL,
- PRIMARY KEY(project_id,id));
-CREATE TABLE IF NOT EXISTS xloom_snapshot_chunks(
- project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- sha256 TEXT NOT NULL,data BLOB NOT NULL,
- PRIMARY KEY(project_id,sha256));`
-
 // InputSnapshot identifies an immutable input, not a promise to reconstruct a
 // historical revision from the current graph. Its state remains server-side.
 type InputSnapshot struct {

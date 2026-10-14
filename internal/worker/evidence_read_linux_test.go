@@ -307,7 +307,7 @@ func TestReadEvidenceRecoversEscapedReferenceFromBoundRecordPages(t *testing.T) 
 				if r.ByteOffset == nil {
 					// Exercise the existing graph protocol's lossless record path,
 					// even if this valid ref fits today's outer page byte budget.
-					marker, _ := json.Marshal(graphRecordReference{true, 0, len(encoded), version, graphRecordVersion(encoded), graphRecordReadMore})
+					marker, _ := json.Marshal(graphRecordReference{RecordOmitted: true, RecordOffset: 0, RecordBytes: len(encoded), StateVersion: version, RecordVersion: graphRecordVersion(encoded), ReadMore: graphRecordReadMore})
 					result = graphPage{Section: "evidence", StateVersion: version, Total: 1, Items: []json.RawMessage{marker}}
 				} else {
 					if r.ExpectedVersion != version || r.RecordVersion != graphRecordVersion(encoded) || r.Offset != 0 || len(r.IDs) != 1 || r.IDs[0] != "fact" {

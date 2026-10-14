@@ -7,17 +7,6 @@ import (
 	"pwnmesh/internal/board/model"
 )
 
-const assetSchema = `
-CREATE TABLE IF NOT EXISTS xloom_assets(
- project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
- id TEXT NOT NULL,kind TEXT NOT NULL,value TEXT NOT NULL,method TEXT NOT NULL,
- PRIMARY KEY(project_id,id),UNIQUE(project_id,kind,value,method));
-CREATE TABLE IF NOT EXISTS xloom_asset_anchors(
- project_id TEXT NOT NULL,generation INTEGER NOT NULL,node_kind TEXT NOT NULL,node_id TEXT NOT NULL,asset_id TEXT NOT NULL,
- PRIMARY KEY(project_id,generation,node_kind,node_id,asset_id),
- FOREIGN KEY(project_id,asset_id) REFERENCES xloom_assets(project_id,id) ON DELETE CASCADE);
-CREATE INDEX IF NOT EXISTS xloom_asset_anchors_asset ON xloom_asset_anchors(project_id,generation,asset_id);`
-
 const MaxActionAssets = model.MaxActionAssets
 
 type AssetSpec = model.AssetSpec
