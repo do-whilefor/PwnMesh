@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 )
 
@@ -61,8 +62,8 @@ func DecisionJobVersion(raw json.RawMessage) (string, error) {
 // must supply one. Existing lease and source checks remain independent.
 func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expected string) error {
 	if fence.Lease == "curate" {
-		var raw []byte
-		if err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='curate'", state.Graph.Project.ID, fence.Run).Scan(&raw); err != nil {
+		_, raw, err := sqlstore.ExecutionInputByLease(t, state.Graph.Project.ID, fence.Run, "curate")
+		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return Err(403, "curation requires a registered input snapshot")
 			}
@@ -77,8 +78,7 @@ func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expect
 		}
 	}
 	if fence.Lease == "reason" {
-		var raw []byte
-		err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", state.Graph.Project.ID, fence.Run).Scan(&raw)
+		_, raw, err := sqlstore.ExecutionInputByLease(t, state.Graph.Project.ID, fence.Run, "reason")
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}

@@ -15,14 +15,15 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 	if fence.Run == "" || fence.Lease != "reason" {
 		return current, nil
 	}
-	e, err := sqlstore.ExecutionByLease(t, current.Graph.Project.ID, fence.Run, "reason")
+	project := current.Graph.Project.ID
+	id, raw, err := sqlstore.ExecutionInputByLease(t, project, fence.Run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return current, nil
 	}
 	if err != nil {
 		return State{}, err
 	}
-	version, err := DecisionJobVersion(e.Job)
+	version, err := DecisionJobVersion(raw)
 	if err != nil || version == "" {
 		return current, err
 	}
@@ -34,7 +35,7 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 			Version int `json:"version"`
 		} `json:"decision"`
 	}
-	if err = json.Unmarshal(e.Job, &job); err != nil {
+	if err = json.Unmarshal(raw, &job); err != nil {
 		return State{}, err
 	}
 	// Version 1 publishes individual actions and advances its read version
@@ -50,14 +51,13 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 		if err != nil {
 			return State{}, err
 		}
-		_, err = t.Exec("INSERT INTO pwnmesh_decision_read_views(project_id,execution_id,state_version,state) VALUES(?,?,?,?) ON CONFLICT(project_id,execution_id) DO UPDATE SET state_version=excluded.state_version,state=excluded.state", e.ProjectID, e.ID, DecisionStateVersion(current), raw)
+		err = sqlstore.SaveDecisionReadView(t, project, id, DecisionStateVersion(current), raw)
 		return current, err
 	}
-	var raw []byte
-	err = t.QueryRow("SELECT state_version,state FROM pwnmesh_decision_read_views WHERE project_id=? AND execution_id=?", e.ProjectID, e.ID).Scan(&version, &raw)
+	version, raw, err = sqlstore.DecisionReadView(t, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		if job.InputSnapshot != nil {
-			return t.ReadInputSnapshot(e.ProjectID, job.InputSnapshot.ID)
+			return t.ReadInputSnapshot(project, job.InputSnapshot.ID)
 		}
 		return *job.State, nil // DecisionJobVersion validated the legacy input.
 	}
@@ -68,7 +68,7 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 	if err = json.Unmarshal(raw, &state); err != nil {
 		return State{}, err
 	}
-	if state.Graph.Project.ID != e.ProjectID || state.Graph.Project.Generation != current.Graph.Project.Generation || DecisionStateVersion(state) != version {
+	if state.Graph.Project.ID != project || state.Graph.Project.Generation != current.Graph.Project.Generation || DecisionStateVersion(state) != version {
 		return State{}, errors.New("decision read view binding mismatch")
 	}
 	return state, nil

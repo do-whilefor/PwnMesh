@@ -2,18 +2,25 @@ package board
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
+	"errors"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 // RecordExecutionObservation attaches runtime observations after authoritative
 // success. It cannot change the outcome, input, receipt or lease. The completed
 // execution identity authorizes this write even after its lease was revoked.
 func (t *Tx) RecordExecutionObservation(project, run string, fence ExecutionFence, metrics json.RawMessage) error {
-	e, err := t.Execution(project, run)
+	e, err := sqlstore.ExecutionResult(t, project, run)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Err(404, "Execution not found")
+	}
 	if err != nil {
 		return err
 	}
-	if !controlKind(e.Kind) || e.Fence() != fence {
+	if !controlKind(e.Kind) || (ExecutionFence{Run: e.Lease, Lease: e.Kind, Intent: e.Intent}) != fence {
 		return Err(403, "observation requires the registered control execution identity")
 	}
 	if e.Status != "succeeded" {
@@ -48,6 +55,5 @@ func (t *Tx) RecordExecutionObservation(project, run string, fence ExecutionFenc
 	if err != nil {
 		return err
 	}
-	_, err = t.Exec("UPDATE pwnmesh_executions SET result=? WHERE project_id=? AND id=?", raw, project, run)
-	return err
+	return sqlstore.SaveExecutionObservation(t, project, run, raw)
 }

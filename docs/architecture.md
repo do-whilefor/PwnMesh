@@ -30,7 +30,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
 | `internal/board/` | Transactional business operations, admission, mutations and consistent state assembly |
 | `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
-| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph/execution/lease rows, lifecycle and archive storage, state metadata, events and receipts, snapshot bytes, projection inputs, schema and migrations |
+| `internal/board/internal/sqlstore/` | SQLite connections, transactions, targeted graph writes, execution/lease/input rows, bounded UI reads, lifecycle and archive storage, metadata, events, receipts, snapshots, schema and migrations |
 | `internal/board/internal/projection/` | Metadata decoding and pure state, dependency support and asset derivation |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
@@ -70,9 +70,33 @@ keep archived Job/Result bodies out of scheduling and state projection. Executio
 registration, result updates, revocation and resume counters use that same caller
 transaction; Board still validates transitions and combines them with review
 state, revisions and failure events. Historical execution archival streams rows
-in registration order. Specialized graph mutations, input uploads and some
-execution/UI queries still contain SQL in Board. There is one canonical model,
-not a duplicate transport model.
+in registration order. Retry/dispute queries, dispatcher ownership and the
+read-lease clock comparison still contain SQL in Board. There is one canonical
+model, not a duplicate transport model.
+
+Targeted graph storage owns immutable Fact insertion, scoped ID sequences,
+Intent conclusion/abandonment/deletion and asset anchors. Board normalizes assets,
+chooses authorization and diagnoses allocation conflicts. Storage reports only
+primary-key collisions as an existing Fact; other constraint failures propagate.
+Writes preserve unrelated graph columns. Write reservations combine current
+Intent leases and pending executions; Board applies Step path conflict policy.
+Evidence conclusion uses a local savepoint for its optional final Fact, receipt,
+Intent update, revision and completion event, including a nested Fact action.
+
+Input storage separates metadata from binary file contents and preserves batch
+receipt text. Board owns filenames, content-derived identities, quotas, workspace
+paths and replay validation. An upload's file, hint, revision and event share a
+local savepoint, so a caller can handle failure without keeping a partial upload.
+
+UI storage reads bounded public result fields, streams execution changes and
+aggregates project summaries without loading historical Jobs. Board owns Unicode
+truncation, encoded page budgets, continuation cursors and generation fences.
+Visitors stop as soon as the page is full and retain the caller's read snapshot.
+Trace storage streams registered Job bytes for Board to validate before exposing
+file access. Execution identity queries omit Job/Result; decision input queries
+omit Result. Decision read views preserve raw bytes, while Board validates their
+version and project binding. Observation writes update Result alone, retaining
+execution identity, status and read-view cleanup semantics.
 
 Sqlstore owns state metadata, event and action receipt rows. Board supplies the
 encoded metadata, initial state, revision changes and canonical receipt bytes,

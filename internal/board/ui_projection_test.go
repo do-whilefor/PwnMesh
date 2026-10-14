@@ -15,12 +15,14 @@ func TestProjectExecutionsUseMetadataAndBoundedPublicResult(t *testing.T) {
 		putQueryExecution(t, tx, Execution{ProjectID: "proj_001", ID: "malformed", Kind: "reason", Status: "failed", Job: json.RawMessage("archived"), Result: json.RawMessage("not JSON")}, 8, "")
 		nul, _ := json.Marshal(map[string]string{"text": "before\x00after"})
 		putQueryExecution(t, tx, Execution{ProjectID: "proj_001", ID: "nul", Kind: "reason", Status: "succeeded", Result: nul}, 8, "")
+		fourByte, _ := json.Marshal(map[string]string{"text": strings.Repeat("\U0001f680", 65537), "error": strings.Repeat("\U0001f680", 4097)})
+		putQueryExecution(t, tx, Execution{ProjectID: "proj_001", ID: "four-byte", Kind: "reason", Status: "succeeded", Result: fourByte}, 8, "")
 		page, err := tx.ProjectExecutionPage("proj_001", 0, 0, 100)
 		views := page.Items
 		if err != nil {
 			return err
 		}
-		if len(views) != 3 || views[0].Generation != 7 || views[1].Generation != 8 || views[1].Result != nil {
+		if len(views) != 4 || views[0].Generation != 7 || views[1].Generation != 8 || views[1].Result != nil {
 			t.Fatalf("wrong metadata projection: %+v", views)
 		}
 		if result := views[0].Result; result == nil || len([]rune(result.Text)) != 65536 || len([]rune(result.Error)) != 4096 || !result.Truncated {
@@ -28,6 +30,9 @@ func TestProjectExecutionsUseMetadataAndBoundedPublicResult(t *testing.T) {
 		}
 		if result := views[2].Result; result == nil || result.Text != "before\x00after" || result.Truncated {
 			t.Fatalf("embedded NUL changed result: %+v", result)
+		}
+		if result := views[3].Result; result == nil || result.Text != strings.Repeat("\U0001f680", 65536) || result.Error != strings.Repeat("\U0001f680", 4096) || !result.Truncated {
+			t.Fatal("maximum-width UTF-8 lost its character boundary or truncation sentinel")
 		}
 		raw, _ := json.Marshal(views)
 		if strings.Contains(string(raw), "PRIVATE") || strings.Contains(string(raw), "archived, not JSON") || strings.Contains(string(raw), `"job"`) {

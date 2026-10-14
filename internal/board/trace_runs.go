@@ -2,6 +2,8 @@ package board
 
 import (
 	"encoding/json"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 )
 
@@ -24,26 +26,8 @@ func (t *Tx) TraceRuns(project string, generation int64, offset, limit int, runI
 	if current.Generation != generation {
 		return nil, Err(409, "trace input belongs to a previous project round")
 	}
-	query := `SELECT id,intent,status,job FROM pwnmesh_executions WHERE project_id=? AND generation=? AND kind='explore'`
-	args := []any{project, generation}
-	if runID != "" {
-		query += " AND id=?"
-		args = append(args, runID)
-	}
-	query += " ORDER BY rowid LIMIT ? OFFSET ?"
-	args = append(args, limit, offset)
-	rows, err := t.Query(query, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
 	out := []TraceRun{}
-	for rows.Next() {
-		run := TraceRun{ProjectID: project, Generation: generation}
-		var raw []byte
-		if err := rows.Scan(&run.RunID, &run.StepID, &run.Status, &raw); err != nil {
-			return nil, err
-		}
+	err = sqlstore.VisitTraceRuns(t, project, generation, offset, limit, runID, func(run TraceRun) error {
 		var job struct {
 			RunID     string  `json:"run_id"`
 			Kind      string  `json:"kind"`
@@ -52,11 +36,15 @@ func (t *Tx) TraceRuns(project string, generation int64, offset, limit int, runI
 			Intent    *Intent `json:"intent"`
 		}
 		// Malformed or legacy unbound jobs never become file capabilities.
-		if json.Unmarshal(raw, &job) != nil || job.RunID != run.RunID || job.Kind != "explore" || job.Graph.Project.ID != project || job.Graph.Project.Generation != generation || job.Intent == nil || job.Intent.ID != run.StepID || run.StepID == "" || job.Workspace == "" {
-			return nil, Err(409, "trace unavailable: registered execution identity is incomplete")
+		if json.Unmarshal(run.RegisteredJob, &job) != nil || job.RunID != run.RunID || job.Kind != "explore" || job.Graph.Project.ID != project || job.Graph.Project.Generation != generation || job.Intent == nil || job.Intent.ID != run.StepID || run.StepID == "" || job.Workspace == "" {
+			return Err(409, "trace unavailable: registered execution identity is incomplete")
 		}
-		run.Workspace, run.RegisteredJob = job.Workspace, raw
+		run.Workspace = job.Workspace
 		out = append(out, run)
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	return out, nil
 }

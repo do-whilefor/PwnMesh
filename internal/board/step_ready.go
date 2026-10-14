@@ -1,5 +1,7 @@
 package board
 
+import "pwnmesh/internal/board/internal/sqlstore"
+
 // StepReady is checked at claim, registration and process start, each inside
 // the write transaction. Raw observations remain available after invalidation,
 // while new execution and success require valid registered prerequisites.
@@ -47,8 +49,8 @@ func (t *Tx) stepReadyState(s State, id, lease string) error {
 			if premiseErr == nil || lease == "" {
 				return premiseErr
 			}
-			var running bool
-			if err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE project_id=? AND intent=? AND lease=? AND kind='explore' AND status IN ('running','result_pending'))`, project, id, lease).Scan(&running); err != nil {
+			running, err := sqlstore.RunningStepExecution(t, project, id, lease)
+			if err != nil {
 				return err
 			}
 			if !running {

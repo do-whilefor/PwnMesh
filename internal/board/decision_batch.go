@@ -23,8 +23,7 @@ func (t *Tx) CheckDirectDecisionWrite(project string, fence ExecutionFence) erro
 	if fence.Run == "" || fence.Lease != "reason" {
 		return nil
 	}
-	var raw []byte
-	err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", project, fence.Run).Scan(&raw)
+	_, raw, err := sqlstore.ExecutionInputByLease(t, project, fence.Run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

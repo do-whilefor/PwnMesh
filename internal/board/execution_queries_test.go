@@ -16,7 +16,13 @@ import (
 )
 
 func TestOperationsUseStorageBoundary(t *testing.T) {
-	for _, name := range []string{"executions.go", "execution_queries.go", "input_snapshot.go", "state_projection.go", "pause.go", "restart.go", "terminate.go", "round_history.go"} {
+	for _, name := range []string{
+		"executions.go", "execution_queries.go", "input_snapshot.go", "state_projection.go",
+		"pause.go", "restart.go", "terminate.go", "round_history.go", "inputs.go",
+		"assets.go", "fact_completion.go", "management.go", "state_actions.go", "step_writes.go",
+		"ui.go", "project_summary.go", "trace_runs.go", "decision_read.go", "decision_version.go",
+		"decision_batch.go", "execution_observation.go", "step_dependencies.go", "step_ready.go", "leases.go",
+	} {
 		file, err := parser.ParseFile(token.NewFileSet(), name, nil, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -33,7 +39,10 @@ func TestOperationsUseStorageBoundary(t *testing.T) {
 				if method.Sel.Name == "Exec" && len(call.Args) == 1 {
 					if literal, ok := call.Args[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
 						statement, _ := strconv.Unquote(literal.Value)
-						if statement == "SAVEPOINT pwnmesh_management" {
+						switch statement {
+						case "SAVEPOINT pwnmesh_management", "ROLLBACK TO pwnmesh_management", "RELEASE pwnmesh_management",
+							"SAVEPOINT pwnmesh_state_action", "ROLLBACK TO pwnmesh_state_action", "RELEASE pwnmesh_state_action",
+							"SAVEPOINT pwnmesh_decision_batch", "ROLLBACK TO pwnmesh_decision_batch", "RELEASE pwnmesh_decision_batch":
 							return true
 						}
 					}
