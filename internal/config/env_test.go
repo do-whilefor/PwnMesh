@@ -1,6 +1,7 @@
 package config
 
 import (
+	"maps"
 	"os"
 	"strings"
 	"testing"
@@ -86,17 +87,39 @@ func TestConfigNormalizesLegacyWorkerEnvironment(t *testing.T) {
 				c.CommonEnv[key] = value
 			}
 			c.Workers[0].Env = tc.worker
+			commonBefore, workerBefore := maps.Clone(c.CommonEnv), maps.Clone(tc.worker)
 			if err := c.Validate(); err != nil {
 				t.Fatal(err)
 			}
 			if got, exists := c.Workers[0].Env[canonical]; !exists || got != tc.want {
 				t.Fatalf("canonical setting = %q, exists = %v; want %q", got, exists, tc.want)
 			}
-			if _, initiallyCanonical := tc.common[canonical]; !initiallyCanonical {
-				if _, addedToCommon := c.CommonEnv[canonical]; addedToCommon {
-					t.Fatal("normalization changed common configuration")
-				}
+			if !maps.Equal(c.CommonEnv, commonBefore) || !maps.Equal(tc.worker, workerBefore) {
+				t.Fatal("normalization mutated an input environment")
 			}
 		})
+	}
+}
+
+func TestConfigIsolatesResolvedWorkerEnvironments(t *testing.T) {
+	t.Setenv("PWNMESH_CONFIG_TEST_VALUE", "expanded")
+	c := coldStartConfig()
+	c.CommonEnv["SHARED"] = "${PWNMESH_CONFIG_TEST_VALUE}"
+	c.CommonEnv["OVERRIDE"] = "common"
+	c.Workers[0].Env = map[string]string{"OVERRIDE": "${PWNMESH_CONFIG_TEST_VALUE}", "LOCAL": "first"}
+	second := c.Workers[0]
+	second.Name, second.Env = "second", nil
+	c.Workers = append(c.Workers, second)
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	firstEnv, secondEnv := c.Workers[0].Env, c.Workers[1].Env
+	if firstEnv["SHARED"] != "expanded" || secondEnv["SHARED"] != "expanded" ||
+		firstEnv["OVERRIDE"] != "expanded" || secondEnv["OVERRIDE"] != "common" || secondEnv["LOCAL"] != "" {
+		t.Fatal("worker environment precedence or expansion changed")
+	}
+	firstEnv["SHARED"] = "changed"
+	if secondEnv["SHARED"] != "expanded" || c.CommonEnv["SHARED"] != "${PWNMESH_CONFIG_TEST_VALUE}" {
+		t.Fatal("resolved worker environments share mutable state")
 	}
 }

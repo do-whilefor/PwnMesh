@@ -190,40 +190,11 @@ func (c *Config) Validate() error {
 			types[typ] = true
 			capabilities[typ] = true
 		}
-		env := map[string]string{}
-		for k, v := range c.CommonEnv {
-			env[k] = v
-		}
-		for k, v := range w.Env {
-			env[k] = v
-		}
-		for k, v := range env {
-			var missing string
-			env[k] = os.Expand(v, func(name string) string {
-				value, ok := os.LookupEnv(name)
-				if !ok && !strings.HasPrefix(name, "ANTHROPIC_") {
-					missing = name
-				}
-				return value
-			})
-			if missing != "" {
-				return fmt.Errorf("environment variable %s is required for worker %q", missing, w.Name)
-			}
-		}
-		// Normalize after merging so execution and its environment identity use
-		// the same value. An explicitly empty canonical setting still wins.
-		for key, value := range env {
-			if suffix, legacy := strings.CutPrefix(key, "XLOOM_"); legacy {
-				canonical := "PWNMESH_" + suffix
-				if _, exists := env[canonical]; !exists {
-					env[canonical] = value
-				}
-			}
+		env, err := w.resolveEnv(c.CommonEnv)
+		if err != nil {
+			return err
 		}
 		w.Env = env
-		if w.Env["ANTHROPIC_MODEL"] == "" {
-			w.Env["ANTHROPIC_MODEL"] = w.Env["ANTHROPIC_DEFAULT_FABLE_MODEL"]
-		}
 		if hasModelSettings {
 			*w = w.WithModelSettings(&modelSettings)
 		}
