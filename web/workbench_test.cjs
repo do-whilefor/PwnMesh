@@ -258,6 +258,21 @@ test('archived UTF-8 state chunks join without corrupting a split multibyte char
  const service=new Service({async request(url){if(url.endsWith('/entries?limit=100&cursor=0'))return {items:[{cursor:1,kind:'state',bytes:bytes.length}]};const offset=Number(new URL(url,'http://local').searchParams.get('offset'));return {encoding:'base64',offset,total_bytes:bytes.length,data:bytes.subarray(offset,offset?bytes.length:split).toString('base64'),...(offset?{}:{next_offset:split})};}});service.projects=[project];const archived=await service.archive(project,0);assert.equal(archived.name,'中文项目');
 });
 
+test('archive hydration rejects oversized chunks and overlapping continuations',async t=>{
+ const bytes=Buffer.from(JSON.stringify(snapshot()));
+ for(const kind of ['oversized','overlapping'])await t.test(kind,async()=>{
+  const summary={id:'a',generation:0,archivedAt:stamp,files:[]},project={id:'a',history:[summary]};
+  const service=new Service({async request(url){
+   if(url.endsWith('/entries?limit=100&cursor=0'))return {items:[{cursor:1,kind:'state',bytes:bytes.length}]};
+   const offset=Number(new URL(url,'http://local').searchParams.get('offset'));
+   const body=kind==='oversized'?Buffer.concat([bytes,Buffer.from('extra')]):bytes.subarray(offset,offset?bytes.length:bytes.length-1);
+   return {encoding:'base64',offset,total_bytes:bytes.length,data:body.toString('base64'),...(kind==='overlapping'&&offset===0?{next_offset:1}:{})};
+  }});
+  await assert.rejects(service.archive(project,0),/历史记录分块边界无效/);
+  assert.equal(summary.state,undefined,'rejected bytes must not populate the archive cache');
+ });
+});
+
 test('archive materials come from the retained manifest and survive later refreshes',async()=>{
  const oldState=snapshot('a',0),api=fixture({a:snapshot('a',1)}),request=api.request.bind(api);
  const original={id:'before',name:'before.txt',created_at:stamp},later={id:'after',name:'after.txt',created_at:stamp};

@@ -103,7 +103,15 @@
       const entries=await this.pages(base+'/entries',{},0), records={state:[],event:[],execution:[],inputs:[]};
       for(const entry of entries){if(!Object.hasOwn(records,entry.kind))continue;if(entry.bytes>32*1024*1024)throw new Error('单条历史记录超过 32 MiB，无法在页面完整读取。');
         const bytes=new Uint8Array(entry.bytes);let offset=0;
-        for(;;){const chunk=await this.api.request(base+'/entries/'+entry.cursor+'?offset='+offset+'&limit=32768');if(chunk.encoding!=='base64'||chunk.offset!==offset||chunk.total_bytes!==entry.bytes)throw new Error('历史记录分块不一致');const raw=atob(chunk.data);for(let i=0;i<raw.length;i++)bytes[offset+i]=raw.charCodeAt(i);if(chunk.next_offset==null)break;if(chunk.next_offset<=offset)throw new Error('历史记录分块边界无效');offset=chunk.next_offset;}
+        for(;;){
+          const chunk=await this.api.request(base+'/entries/'+entry.cursor+'?offset='+offset+'&limit=32768');
+          if(chunk.encoding!=='base64'||chunk.offset!==offset||chunk.total_bytes!==entry.bytes)throw new Error('历史记录分块不一致');
+          const raw=atob(chunk.data),end=offset+raw.length;
+          if(end>bytes.length||(chunk.next_offset==null?end!==bytes.length:!raw.length||chunk.next_offset!==end||end>=bytes.length))throw new Error('历史记录分块边界无效');
+          for(let i=0;i<raw.length;i++)bytes[offset+i]=raw.charCodeAt(i);
+          if(chunk.next_offset==null)break;
+          offset=end;
+        }
         records[entry.kind].push(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes)));
       }
       if(!records.state.length)throw new Error('历史轮次缺少状态快照。');
