@@ -181,6 +181,66 @@ test('a reset execution cursor invalidates the cache and recovers on the next re
  await service.refresh('a');assert.deepEqual(seen,[0,7,0]);
 });
 test('refresh filters executions from old rounds and bounds event projection to state revision',async()=>{const state=snapshot('a',2,2),api=fixture({a:state}),old=api.request.bind(api);api.executionChanges=async()=>({items:[{id:'old',generation:1},{id:'current',generation:2}],deleted:[],through:2});api.request=(url,opts)=>url.includes('/state/events?')?[{revision:2,op:'event'},{revision:3,op:'event'}]:old(url,opts);const service=new Service(api),result=await service.refresh('a');assert.deepEqual(result.selected.runs.map(r=>r.id),['current']);assert.equal(result.selected.events.length,1);assert.equal(service.events.get('a').after,3);});
+
+test('terminal refresh resumes its bounded event backlog before reusing the caught-up view',async()=>{
+ const state=snapshot('a',0,5002);state.graph.project.status='completed';
+ const api=fixture({a:state}),request=api.request.bind(api),cursors=[];
+ const events=Array.from({length:5002},(_,index)=>({revision:index+1,op:'checkpoint'}));
+ api.request=(url,options)=>{
+  if(!url.includes('/state/events?'))return request(url,options);
+  const after=Number(new URL(url,'http://local').searchParams.get('after'));cursors.push(after);
+  return events.slice(after,after+1000);
+ };
+ const service=new Service(api),first=(await service.refresh('a')).selected,partial=service.events.get('a');
+ assert.deepEqual(cursors,[0,1000,2000,3000,4000]);
+ assert.equal(first.events.length,5000);assert.equal(partial.after,5000);assert.equal(partial.caughtUp,false);
+ const second=(await service.refresh('a')).selected;
+ assert.deepEqual(cursors,[0,1000,2000,3000,4000,5000]);
+ assert.equal(second.events.length,5002);assert.equal(service.events.get('a').caughtUp,true);
+ assert.equal(partial.items.length,5000,'catch-up must not mutate the previously accepted cache');
+ assert.equal(first.events.length,5000,'the previous view must retain its event projection');
+ const third=(await service.refresh('a')).selected;
+ assert.equal(cursors.length,6);assert.equal(third.logs,second.logs);
+});
+
+test('failed event catch-up retries from the last accepted cursor without publishing partial pages',async()=>{
+ const states={a:snapshot()},api=fixture(states),request=api.request.bind(api),cursors=[];
+ const events=Array.from({length:1002},(_,index)=>({revision:index+1,op:'checkpoint'}));
+ let fail=false;
+ api.request=(url,options)=>{
+  if(!url.includes('/state/events?'))return request(url,options);
+  const after=Number(new URL(url,'http://local').searchParams.get('after'));cursors.push(after);
+  assert.equal(options.signal instanceof AbortSignal,true);
+  if(fail&&after===1001)throw new APIError('event read interrupted',503);
+  return events.slice(after,Math.min(after+1000,states.a.revision));
+ };
+ const service=new Service(api);await service.refresh('a');
+ const accepted=service.events.get('a'),projects=service.projects;
+ states.a=snapshot('a',0,1002);fail=true;
+ await assert.rejects(service.refresh('a'),/event read interrupted/);
+ assert.equal(service.projects,projects);assert.equal(service.events.get('a'),accepted);
+ assert.equal(accepted.after,1);assert.equal(accepted.items.length,1);
+ fail=false;const result=await service.refresh('a');
+ assert.deepEqual(cursors,[0,1,1001,1,1001]);
+ assert.deepEqual(result.selected.events.map(event=>event.revision),events.map(event=>event.revision));
+});
+
+test('event caches restart from zero after a revision rollback or a new round',async t=>{
+ for(const generation of [0,1])await t.test('generation '+generation,async()=>{
+  const states={a:snapshot('a',0,4)},api=fixture(states),request=api.request.bind(api),cursors=[];
+  api.request=(url,options)=>{
+   if(!url.includes('/state/events?'))return request(url,options);
+   cursors.push(Number(new URL(url,'http://local').searchParams.get('after')));
+   return [{revision:states.a.revision,op:'checkpoint',id:'round-'+states.a.graph.project.generation}];
+  };
+  const service=new Service(api);await service.refresh('a');
+  const previous=service.events.get('a'),revision=generation===0?2:5;states.a=snapshot('a',generation,revision);
+  const result=await service.refresh('a');
+  assert.deepEqual(cursors,[0,0]);assert.deepEqual(result.selected.events.map(event=>event.revision),[revision]);
+  assert.equal(service.events.get('a').generation,generation);assert.equal(previous.items[0].revision,4);
+ });
+});
+
 test('project creation retries only unfinished uploads on the same paused project',async()=>{const calls=[],files=[new File(['a'],'a.txt'),new File(['b'],'b.txt')];let fail=true;const service=new Service({async request(url,options){calls.push({url,options});return {project:{id:'created'}};},async uploadInput(base,file){calls.push({upload:file.name});if(file.name==='b.txt'&&fail){fail=false;throw new APIError('upload interrupted',503);}}});const values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files};await assert.rejects(service.create(values),error=>error.pendingCreate);assert.equal(calls[0].options.body.start_paused,true);assert.equal(await service.create(values),'created');assert.equal(calls.filter(c=>c.url==='/projects').length,1);assert.deepEqual(calls.filter(c=>c.upload).map(c=>c.upload),['a.txt','b.txt','b.txt']);assert.deepEqual(calls.at(-1).options.body,{status:'active',expected_generation:0});});
 test('ambiguous creation is never blindly retried',async()=>{let creates=0;const service=new Service({async request(){creates++;throw new APIError('lost connection',0);}}),values={name:'Test',type:'pentest',target:'authorized',goal:'evidence',files:[]};await assert.rejects(service.create(values),error=>error.uncertainCreate);await assert.rejects(service.create(values),/尚未确认/);assert.equal(creates,1);});
 test('lifecycle operations use real endpoints and generation fencing',async()=>{const calls=[],service=new Service({async request(url,options){calls.push({url,options});}});for(const action of ['pause','resume','restart','terminate','delete'])await service.change('a/b',action,7);assert.equal(calls[0].url,'/projects/a%2Fb/status');assert.deepEqual(calls[0].options.body,{status:'stopped',expected_generation:7});assert.deepEqual(calls[1].options.body,{status:'active',expected_generation:7});assert.deepEqual(calls[2].options.body,{expected_generation:7});assert.equal(calls.at(-1).options.method,'DELETE');});

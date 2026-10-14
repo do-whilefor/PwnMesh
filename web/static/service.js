@@ -14,6 +14,26 @@
     const timing=Data.projectTiming(state,runs);
     return {...project,state,logs:Data.buildLogs(state,events,runs),runs,events,files,target:facts.find(f=>f.id==='origin')?.description || '',goal:facts.find(f=>f.id==='goal')?.description || state.goals?.find(g=>g.id==='goal')?.condition || '',startedAt:timing.startedAt,endedAt:timing.endedAt || null};
   }
+  async function readEventCache(api, base, state, previous, options) {
+    const generation = state.graph.project.generation || 0, revision = state.revision;
+    const cache = !previous || previous.generation !== generation || revision < previous.revision
+      ? {generation,revision:0,after:0,items:[],caughtUp:false} : previous;
+    if (cache.caughtUp && cache.revision === revision) return cache;
+    const batch = [];
+    let after = cache.after, caughtUp = false;
+    // Limit work per refresh; an unfinished backlog resumes even if state is unchanged.
+    for (let page = 0; page < 5; page++) {
+      const items = await api.request(base + '/state/events?after=' + after, options);
+      if (!items.length) { caughtUp = true; break; }
+      const next = Math.max(...items.map(event => event.revision));
+      if (next <= after) { caughtUp = true; break; }
+      batch.push(...items);
+      after = next;
+      if (items.length < 1000) { caughtUp = true; break; }
+    }
+    // Keep the accepted cache untouched until refresh passes its identity fence.
+    return {generation,revision,after,caughtUp,items:batch.length ? cache.items.concat(batch) : cache.items};
+  }
   async function readArchiveEntry(api, base, entry) {
     if (entry.bytes > 32 * 1024 * 1024) throw new Error('单条历史记录超过 32 MiB，无法在页面完整读取。');
     const bytes = new Uint8Array(entry.bytes);
@@ -75,19 +95,14 @@
         for(const id of changes.deleted)runsByID.delete(id);
         for(const run of changes.items)if((run.generation||0)===generation)runsByID.set(run.id,run);
         const runs=[...runsByID.values()];
-        let cache=this.events.get(selected.id)||{generation,revision:0,after:0,items:[],caughtUp:false};
-        if(cache.generation!==generation||state.revision<cache.revision)cache={generation,revision:0,after:0,items:[],caughtUp:false};
-        let after=cache.after,caughtUp=cache.caughtUp;const batch=[];
-        if(!caughtUp||state.revision!==cache.revision){
-          caughtUp=false;
-          for(let page=0;page<5;page++){const items=await this.api.request(base+'/state/events?after='+after,options);if(!items.length){caughtUp=true;break;}const next=Math.max(...items.map(e=>e.revision));if(next<=after){caughtUp=true;break;}batch.push(...items);after=next;if(items.length<1000){caughtUp=true;break;}}
-        }
+        const previousEvents=this.events.get(selected.id);
+        const cache=await readEventCache(this.api,base,state,previousEvents,options);
         const identity=await this.api.request(base+'/identity',options);if(!this.scope.current(request.version))return null;
         // Fence both sides of the parallel reads: state can already be from a
         // new round while execution and archive pages still describe the old one.
         if(selected.generation!==generation||(identity.generation||0)!==generation){this.events.delete(selected.id);this.views.delete(selected.id);throw new API.APIError('项目已进入新轮次，正在重新同步。',409);}
-        cache={generation,revision:state.revision,after,caughtUp,items:batch.length?cache.items.concat(batch):cache.items};this.events.set(selected.id,cache);
-        if(!stableTerminal||changes.items.length||changes.deleted.length||batch.length)Object.assign(selected,snapshotView(state,cache.items.filter(e=>e.revision<=state.revision),runs,files,selected));
+        this.events.set(selected.id,cache);
+        if(!stableTerminal||changes.items.length||changes.deleted.length||cache.items!==previousEvents?.items)Object.assign(selected,snapshotView(state,cache.items.filter(e=>e.revision<=state.revision),runs,files,selected));
         selected.history=rounds.map(round=>{const previous=selected.history.find(p=>p.generation===round.generation);return Object.assign(previous||{status:'paused'},{id:selected.id,name:selected.name,type:selected.type,generation:round.generation,archived:true,archivedAt:round.archived_at,endedAt:previous?.endedAt || round.archived_at,files:previous?.files||[],filesKnown:previous?.filesKnown===true,history:[]});});
         this.views.set(selected.id,{generation,summary,state,runs,files,rounds,executionRevision:changes.through});
       }
