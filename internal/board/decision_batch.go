@@ -353,7 +353,7 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	// its planner lease now; process cancellation happens outside this transaction.
 	if state.Graph.Project.Reason != nil && state.Graph.Project.Reason.Worker == fence.Run {
 		state.Graph.Project.Reason = nil
-		if _, err = t.Exec("UPDATE projects SET reason_worker=NULL,reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE id=?", project); err != nil {
+		if err = sqlstore.SaveReasonLease(t.transactionQueries, project, nil); err != nil {
 			return out, err
 		}
 	}

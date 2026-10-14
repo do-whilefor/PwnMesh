@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 // Bound the transport envelope, not the retained immutable input. New curator
@@ -88,8 +90,7 @@ func (t *Tx) HeartbeatCurator(project, worker string) error {
 
 func (t *Tx) ReleaseCurator(project, worker string) error {
 	// Conditional release is safe after a successful execution revoked its run.
-	_, err := t.Exec(`UPDATE pwnmesh_project_orchestration SET curator_worker=NULL,curator_trigger=NULL,curator_started_at=NULL,curator_heartbeat=NULL WHERE project_id=? AND curator_worker=?`, project, worker)
-	return err
+	return sqlstore.ReleaseCuratorLease(t.transactionQueries, project, worker)
 }
 
 func controlKind(kind string) bool { return kind == "reason" || kind == "curate" }

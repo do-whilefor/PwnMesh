@@ -103,7 +103,7 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 		if current.Kind == "curate" {
 			err = t.ReleaseCurator(current.ProjectID, current.Lease)
 		} else {
-			_, err = t.Exec("UPDATE projects SET reason_worker=NULL,reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE id=?", current.ProjectID)
+			err = sqlstore.SaveReasonLease(t.transactionQueries, current.ProjectID, nil)
 		}
 		if err != nil {
 			return err

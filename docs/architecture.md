@@ -30,7 +30,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/server/` | HTTP decoding, admission, responses and read/write transaction choice |
 | `internal/board/` | Transactional business operations, admission, mutations and consistent state assembly |
 | `internal/board/model/` | Storage-free canonical state, shared execution values, evidence rules and bounded reading views |
-| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph/execution rows, snapshot bytes, projection inputs, schema and migrations |
+| `internal/board/internal/sqlstore/` | SQLite connections, transactions, graph/execution/lease rows, snapshot bytes, projection inputs, schema and migrations |
 | `internal/board/internal/projection/` | Metadata decoding and pure state, dependency support and asset derivation |
 | `internal/protocol/` | Shared jobs, results, RPC validation, paging and trace binding |
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
@@ -70,8 +70,8 @@ keep archived Job/Result bodies out of scheduling and state projection. Executio
 registration, result updates, revocation and resume counters use that same caller
 transaction; Board still validates transitions and combines them with review
 state, revisions and failure events. Historical execution archival streams rows
-in registration order. Specialized mutations, leases and event queries still
-contain SQL in Board. There is one canonical model, not a duplicate transport model.
+in registration order. Specialized mutations, receipt lookups and event queries
+still contain SQL in Board. There is one canonical model, not a duplicate transport model.
 
 The private `projection` package consumes canonical graph/runtime values and
 compact metadata without querying storage or changing its input. Metadata decoding
@@ -144,8 +144,12 @@ calls. The transaction carries no mutable batch authorization. Public state acti
 and direct completion always enforce the registered planner's protocol boundary;
 each batched action still checks its lease, role, idempotency and capacity. The
 batch owns its local snapshot and savepoint through preview, rollback or commit.
-Lease operations update lease columns without rewriting
-unrelated graph content. Source-boundary tests prevent SQL from returning to HTTP
+Board chooses lease authority, eligibility, expiry scope, supported orchestration
+version and timeouts. Sqlstore applies targeted lease writes, conditional curator
+release, project revocation and expiry in the caller's transaction. Intent release
+and expiry retain heartbeat metadata; completed intents keep their owners. Planner
+cleanup after batch commit or retry uses the same storage operation as lease release.
+Source-boundary tests prevent SQL from returning to HTTP
 handlers or storage dependencies from returning to execution clients.
 
 The schema and migration sequence live in `sqlstore/schema.go` and

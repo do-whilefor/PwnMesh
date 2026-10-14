@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 // LeaseOperation carries a decoded request. Authority and shared-state checks
@@ -85,12 +87,7 @@ func (t *Tx) ReasonLease(project string, input LeaseOperation) (Project, error) 
 		g.Project.Reason = nil
 	}
 	// A lease change must never re-save unrelated graph or state records.
-	if reason := g.Project.Reason; reason != nil {
-		_, err = t.Exec("UPDATE projects SET reason_worker=?,reason_trigger=?,reason_started_at=?,reason_last_heartbeat_at=? WHERE id=?", reason.Worker, reason.Trigger, reason.StartedAt, reason.Heartbeat, project)
-	} else {
-		_, err = t.Exec("UPDATE projects SET reason_worker=NULL,reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE id=?", project)
-	}
-	return g.Project, err
+	return g.Project, sqlstore.SaveReasonLease(t.transactionQueries, project, g.Project.Reason)
 }
 
 func (t *Tx) IntentLease(project, intent string, input LeaseOperation) (Intent, error) {
@@ -137,8 +134,7 @@ func (t *Tx) IntentLease(project, intent string, input LeaseOperation) (Intent, 
 		}
 		if input.Op == "release" {
 			current.Worker = nil
-			_, err = t.Exec("UPDATE intents SET worker=NULL WHERE project_id=? AND id=?", project, intent)
-			return current, err
+			return current, sqlstore.ReleaseIntentLease(t.transactionQueries, project, intent)
 		}
 		if err = t.StepHeartbeatReady(project, intent, fence.Run); err != nil {
 			if current.Worker != nil {
@@ -147,8 +143,7 @@ func (t *Tx) IntentLease(project, intent string, input LeaseOperation) (Intent, 
 			return Intent{}, err
 		}
 		current.Worker, current.Heartbeat = Ptr(input.Worker), Ptr(t.Now)
-		_, err = t.Exec("UPDATE intents SET worker=?,last_heartbeat_at=? WHERE project_id=? AND id=?", input.Worker, t.Now, project, intent)
-		return current, err
+		return current, sqlstore.SaveIntentLease(t.transactionQueries, project, intent, input.Worker, t.Now)
 	}
 	return Intent{}, Err(404, "Intent not found")
 }
