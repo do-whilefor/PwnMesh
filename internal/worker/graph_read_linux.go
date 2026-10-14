@@ -5,7 +5,6 @@ package worker
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -23,11 +22,6 @@ type modelGraphRecordMarker struct {
 	SourcesOmitted  bool   `json:"sources_omitted"`
 	EvidenceCount   int    `json:"evidence_count"`
 	SourcesCount    int    `json:"sources_count"`
-}
-
-func graphDigest(value string) bool {
-	raw, err := hex.DecodeString(value)
-	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == value
 }
 
 func graphRecordShape(section string, raw json.RawMessage) bool {

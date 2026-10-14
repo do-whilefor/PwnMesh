@@ -48,6 +48,11 @@ func TestSnapshotPromptRejectsInvalidBindings(t *testing.T) {
 			"wrong generation":  func(j *Job) { j.InputSnapshot.Generation++ },
 			"unknown format":    func(j *Job) { j.InputSnapshot.Version++ },
 			"invalid digest":    func(j *Job) { j.InputSnapshot.ID = strings.Repeat("z", 64) },
+			"short digest":      func(j *Job) { j.InputSnapshot.ID = strings.Repeat("a", 62) },
+			"long digest":       func(j *Job) { j.InputSnapshot.ID = strings.Repeat("a", 66) },
+			"uppercase digest":  func(j *Job) { j.InputSnapshot.ID = strings.Repeat("A", 64) },
+			"invalid version":   func(j *Job) { j.InputSnapshot.StateVersion = strings.Repeat("z", 64) },
+			"uppercase version": func(j *Job) { j.InputSnapshot.StateVersion = strings.Repeat("A", 64) },
 			"inline state":      func(j *Job) { j.State = &board.State{} },
 			"inline graph":      func(j *Job) { j.Graph.Facts = []board.Fact{{ID: "stale"}} },
 			"wrong decision": func(j *Job) {

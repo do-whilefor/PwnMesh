@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -10,11 +9,7 @@ import (
 
 func validateSnapshotInput(j Job) error {
 	ref := j.InputSnapshot
-	validDigest := func(value string) bool {
-		decoded, err := hex.DecodeString(value)
-		return err == nil && len(decoded) == 32 && hex.EncodeToString(decoded) == value
-	}
-	if ref == nil || ref.Version != 1 || !validDigest(ref.ID) || !validDigest(ref.StateVersion) ||
+	if ref == nil || ref.Version != 1 || !graphDigest(ref.ID) || !graphDigest(ref.StateVersion) ||
 		ref.ProjectID != j.Graph.Project.ID || ref.Generation != j.Graph.Project.Generation || ref.Generation < 0 || ref.Revision < 0 || ref.DecisionRevision < 0 ||
 		ref.FactCount < 0 || ref.HintCount < 0 || ref.OpenCount < 0 || ref.StepCount < 0 || j.State != nil ||
 		len(j.Graph.Facts)+len(j.Graph.Intents)+len(j.Graph.Hints) != 0 {

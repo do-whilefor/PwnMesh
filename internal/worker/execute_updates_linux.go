@@ -214,8 +214,7 @@ func validateExecuteUpdateResponse(j Job, cursor *board.ExecuteUpdateCursor, u b
 	if cursor != nil && u.FromRevision != cursor.Revision {
 		return errors.New("execution update response skipped the saved cursor")
 	}
-	digest, err := hex.DecodeString(u.StateVersion)
-	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != u.StateVersion {
+	if !graphDigest(u.StateVersion) {
 		return errors.New("execution update response has no valid state_version")
 	}
 	if u.Complete == (u.PendingReason != "") {

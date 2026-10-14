@@ -48,6 +48,11 @@ type GraphResponse struct {
 	Error     string          `json:"error,omitempty"`
 }
 
+func graphDigest(value string) bool {
+	raw, err := hex.DecodeString(value)
+	return err == nil && len(raw) == sha256.Size && hex.EncodeToString(raw) == value
+}
+
 func ValidGraphRequestID(id string) bool {
 	if len(id) != 32 {
 		return false
