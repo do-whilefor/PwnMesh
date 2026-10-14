@@ -41,6 +41,12 @@ API/tooling; copying only the database file while WAL writes are active is not a
 consistent backup. Do not rename runtime directories or edit saved JSON to force
 a mismatch through validation.
 
+Stop the old Server and Dispatcher before opening a schema `1` database with the
+current binary. The automatic upgrade to schema `2` renames SQL objects in one
+transaction while preserving installation identity, stored JSON and workspace
+paths. A previous binary that queries the old names cannot share that upgraded
+database; rollback requires a compatible binary or the matching database backup.
+
 After interruption, let Dispatcher reconcile generations and recover registered
 executions before admitting new work. Investigate identity, evidence hash or
 unsupported-version errors using the original artifacts. Removing checkpoints,

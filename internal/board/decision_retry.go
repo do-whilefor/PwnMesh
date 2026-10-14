@@ -33,7 +33,7 @@ func automaticDecisionRetryEligible(kind, status, resultStatus, failureKind, fai
 // a separate operation and does not replenish the automatic allowance.
 func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 	var resultStatus, failureKind, failureCause string
-	current, err := scanExecutionSummary(t.QueryRow("SELECT "+executionFailureColumns+","+executionSummaryColumns+" FROM xloom_executions WHERE project_id=? AND id=?", e.ProjectID, e.ID), &resultStatus, &failureKind, &failureCause)
+	current, err := scanExecutionSummary(t.QueryRow("SELECT "+executionFailureColumns+","+executionSummaryColumns+" FROM pwnmesh_executions WHERE project_id=? AND id=?", e.ProjectID, e.ID), &resultStatus, &failureKind, &failureCause)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Err(404, "Execution not found")
 	}
@@ -50,7 +50,7 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 	var projectStatus string
 	var generation int64
 	var leaseWorker *string
-	if err = t.QueryRow(`SELECT p.status,COALESCE(round.generation,0),p.reason_worker FROM projects p LEFT JOIN xloom_project_rounds round ON round.project_id=p.id WHERE p.id=?`, current.ProjectID).Scan(&projectStatus, &generation, &leaseWorker); err != nil {
+	if err = t.QueryRow(`SELECT p.status,COALESCE(round.generation,0),p.reason_worker FROM projects p LEFT JOIN pwnmesh_project_rounds round ON round.project_id=p.id WHERE p.id=?`, current.ProjectID).Scan(&projectStatus, &generation, &leaseWorker); err != nil {
 		return err
 	}
 	if projectStatus != "active" {
@@ -81,14 +81,14 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 		}
 	}
 	var attempts int
-	if err = t.QueryRow("SELECT COUNT(*) FROM xloom_executions WHERE project_id=? AND namespace=? AND kind=? AND retry_key=? AND generation=?", current.ProjectID, current.Namespace, current.Kind, current.RetryKey, generation).Scan(&attempts); err != nil {
+	if err = t.QueryRow("SELECT COUNT(*) FROM pwnmesh_executions WHERE project_id=? AND namespace=? AND kind=? AND retry_key=? AND generation=?", current.ProjectID, current.Namespace, current.Kind, current.RetryKey, generation).Scan(&attempts); err != nil {
 		return err
 	}
 	if attempts != 1 {
 		return Err(409, "Automatic decision retry allowance exhausted for this input")
 	}
 	var pending bool
-	if err = t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE project_id=? AND id!=? AND kind=? AND status IN ('prepared','running','retryable','result_pending','retry_requested') AND (status!='retry_requested' OR ?!='curate' OR (retry_key=? AND generation=?)))", current.ProjectID, current.ID, current.Kind, current.Kind, current.RetryKey, generation).Scan(&pending); err != nil {
+	if err = t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE project_id=? AND id!=? AND kind=? AND status IN ('prepared','running','retryable','result_pending','retry_requested') AND (status!='retry_requested' OR ?!='curate' OR (retry_key=? AND generation=?)))", current.ProjectID, current.ID, current.Kind, current.Kind, current.RetryKey, generation).Scan(&pending); err != nil {
 		return err
 	}
 	if pending || leaseWorker != nil && *leaseWorker != current.Lease {
@@ -96,7 +96,7 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 	}
 	// Terminal failures are already revoked. Revoke defensively and release
 	// only this attempt's lease in the same transaction as its one-use grant.
-	if _, err = t.Exec("INSERT OR IGNORE INTO xloom_revoked_runs(project_id,worker) VALUES(?,?)", current.ProjectID, current.Lease); err != nil {
+	if _, err = t.Exec("INSERT OR IGNORE INTO pwnmesh_revoked_runs(project_id,worker) VALUES(?,?)", current.ProjectID, current.Lease); err != nil {
 		return err
 	}
 	if leaseWorker != nil {
@@ -114,6 +114,6 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 	if current.Status == "retry_requested" {
 		return nil
 	}
-	_, err = t.Exec("UPDATE xloom_executions SET status='retry_requested',updated_at=? WHERE project_id=? AND id=?", t.Now, current.ProjectID, current.ID)
+	_, err = t.Exec("UPDATE pwnmesh_executions SET status='retry_requested',updated_at=? WHERE project_id=? AND id=?", t.Now, current.ProjectID, current.ID)
 	return err
 }

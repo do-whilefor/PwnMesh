@@ -70,7 +70,7 @@ func (s *Server) curationReceipt(t *b.Tx, _ *request, r *http.Request) (int, any
 		return 0, nil, b.Err(403, "Curation receipt requires its curator identity")
 	}
 	var status string
-	if err := t.QueryRow("SELECT status FROM xloom_executions WHERE project_id=? AND lease=? AND kind='curate' AND intent=''", r.PathValue("pid"), fence.Run).Scan(&status); errors.Is(err, sql.ErrNoRows) {
+	if err := t.QueryRow("SELECT status FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='curate' AND intent=''", r.PathValue("pid"), fence.Run).Scan(&status); errors.Is(err, sql.ErrNoRows) {
 		return 0, nil, b.Err(403, "Curation receipt requires a registered curator execution")
 	} else if err != nil {
 		return 0, nil, err

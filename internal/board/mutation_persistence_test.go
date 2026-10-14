@@ -27,7 +27,7 @@ func TestStateFactIDCollisionRollsBackWithoutSplittingObservation(t *testing.T) 
 	var beforeMetadata string
 	var beforeActions, beforeEvents int
 	f.do(func(tx *Tx) error {
-		return tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM xloom_state_actions),(SELECT COUNT(*) FROM xloom_state_events) FROM xloom_state WHERE project_id='p'`).Scan(&beforeMetadata, &beforeActions, &beforeEvents)
+		return tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events) FROM pwnmesh_state WHERE project_id='p'`).Scan(&beforeMetadata, &beforeActions, &beforeEvents)
 	})
 	err := f.store.Do(context.Background(), func(tx *Tx) error {
 		_, err := tx.StateAction("p", e.Fence(), StateAction{Op: "fact", IdempotencyKey: "new-observation", Payload: payload})
@@ -43,7 +43,7 @@ func TestStateFactIDCollisionRollsBackWithoutSplittingObservation(t *testing.T) 
 	f.do(func(tx *Tx) error {
 		var metadata string
 		var actions, events int
-		if err := tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM xloom_state_actions),(SELECT COUNT(*) FROM xloom_state_events) FROM xloom_state WHERE project_id='p'`).Scan(&metadata, &actions, &events); err != nil {
+		if err := tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events) FROM pwnmesh_state WHERE project_id='p'`).Scan(&metadata, &actions, &events); err != nil {
 			return err
 		}
 		if metadata != beforeMetadata || actions != beforeActions || events != beforeEvents {
@@ -116,7 +116,7 @@ func TestStateNodeFailureRollsBackAllPersistence(t *testing.T) {
 					}
 					var metadata string
 					var facts, intents, sources, actions, events, factCounter, intentCounter int
-					if err = tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM intent_sources),(SELECT COUNT(*) FROM xloom_state_actions),(SELECT COUNT(*) FROM xloom_state_events),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='fact'),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='intent') FROM xloom_state WHERE project_id=?`, stateBenchmarkProject, stateBenchmarkProject, stateBenchmarkProject).Scan(&metadata, &facts, &intents, &sources, &actions, &events, &factCounter, &intentCounter); err != nil {
+					if err = tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM intent_sources),(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='fact'),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='intent') FROM pwnmesh_state WHERE project_id=?`, stateBenchmarkProject, stateBenchmarkProject, stateBenchmarkProject).Scan(&metadata, &facts, &intents, &sources, &actions, &events, &factCounter, &intentCounter); err != nil {
 						return err
 					}
 					encoded, err := json.Marshal(state)
@@ -129,7 +129,7 @@ func TestStateNodeFailureRollsBackAllPersistence(t *testing.T) {
 			}
 			before := snapshot()
 			if err := f.store.Do(context.Background(), func(tx *Tx) error {
-				_, err := tx.Exec(`CREATE TRIGGER reject_node_event BEFORE INSERT ON xloom_state_events BEGIN SELECT RAISE(ABORT,'event unavailable'); END`)
+				_, err := tx.Exec(`CREATE TRIGGER reject_node_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'event unavailable'); END`)
 				return err
 			}); err != nil {
 				t.Fatal(err)

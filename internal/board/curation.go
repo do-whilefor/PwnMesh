@@ -529,7 +529,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 }
 
 func (t *Tx) executionForLease(project, lease string) (Execution, error) {
-	return scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM xloom_executions WHERE project_id=? AND lease=?", project, lease))
+	return scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND lease=?", project, lease))
 }
 
 func (t *Tx) validateReviewFacts(s State, dispute Dispute, ids []string) error {

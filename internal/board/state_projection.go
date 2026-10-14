@@ -12,7 +12,7 @@ func (t *Tx) stateData(project string) (stateData, int64, int64, error) {
 	d := stateData{Goals: []Goal{}, Steps: []stepMetadata{}, Facts: []FactRecord{}, Findings: []Finding{}, FactRelations: []FactRelation{}}
 	var raw string
 	var revision, decision int64
-	err := t.QueryRow("SELECT data,revision,decision_revision FROM xloom_state WHERE project_id=?", project).Scan(&raw, &revision, &decision)
+	err := t.QueryRow("SELECT data,revision,decision_revision FROM pwnmesh_state WHERE project_id=?", project).Scan(&raw, &revision, &decision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return d, 0, 0, nil
 	}
@@ -86,8 +86,8 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 	currentRuns := map[string]bool{}
 	// A graph read needs only the latest runtime state of each existing Step.
 	// Never materialize archived Job/Result bodies to build the current FGS.
-	rows, err := t.Query(`SELECT e.id,e.intent,e.lease,e.status,e.generation FROM intents i JOIN xloom_executions e ON e.rowid=(
-		SELECT rowid FROM xloom_executions WHERE project_id=i.project_id AND intent=i.id AND kind!='reason' ORDER BY rowid DESC LIMIT 1
+	rows, err := t.Query(`SELECT e.id,e.intent,e.lease,e.status,e.generation FROM intents i JOIN pwnmesh_executions e ON e.rowid=(
+		SELECT rowid FROM pwnmesh_executions WHERE project_id=i.project_id AND intent=i.id AND kind!='reason' ORDER BY rowid DESC LIMIT 1
 	) WHERE i.project_id=?`, project)
 	if err != nil {
 		return State{}, err
@@ -140,7 +140,7 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 			// A terminal delivery error cannot overwrite a pending result. Its
 			// diagnostic lives in the failure event instead of that result blob.
 			var detail string
-			err := t.QueryRow("SELECT json_extract(event,'$.payload.reason') FROM xloom_state_events WHERE project_id=? AND json_extract(event,'$.op')='execution_failed' AND json_extract(event,'$.run_id')=? ORDER BY revision DESC LIMIT 1", project, execution.Lease).Scan(&detail)
+			err := t.QueryRow("SELECT json_extract(event,'$.payload.reason') FROM pwnmesh_state_events WHERE project_id=? AND json_extract(event,'$.op')='execution_failed' AND json_extract(event,'$.run_id')=? ORDER BY revision DESC LIMIT 1", project, execution.Lease).Scan(&detail)
 			if err == nil && detail != "" {
 				step.Reason = detail
 			} else if err != nil && !errors.Is(err, sql.ErrNoRows) {

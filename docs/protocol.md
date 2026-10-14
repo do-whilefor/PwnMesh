@@ -17,12 +17,14 @@ checks. Browser labels are not wire names: Decide uses `reason`, Execute uses
 | Worker session | `schema_version: 1` with immutable session identity |
 | Acceptance receipt | `schema_version: 1` in `acceptance.json` |
 | Agent context checkpoint | Version `1`, separate from session and acceptance |
-| SQLite schema migration | Independent ordered ledger; see [supported formats](formats.md) |
+| SQLite schema migration | Schema `2` with `pwnmesh_*` object names; supported schema `1` upgrades once on open |
 
 These numbers are independent. Incrementing one does not authorize rewriting
 another. Server rejects unsupported project protocols, and
 `requireCurrentExecution` rejects historical execution protocols for
 resume/apply/retry. Worker recovery accepts current bound receipts and checkpoints.
+The database namespace migration changes SQL object names without changing Job,
+State, Result or checkpoint serialization; see [supported formats](formats.md).
 
 ## Prepare, execute, settle
 

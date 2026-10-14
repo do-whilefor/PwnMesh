@@ -195,7 +195,7 @@ func (t *Tx) stepDependencyResults(s State, id string) ([]DependencyResult, erro
 		// Binding needs runtime identity only, not the upstream Worker's saved
 		// input or local DAG result, which can be much larger than this graph.
 		var e Execution
-		err := t.QueryRow("SELECT id,status,intent FROM xloom_executions WHERE project_id=? AND lease=?", s.Graph.Project.ID, fact.RunID).Scan(&e.ID, &e.Status, &e.Intent)
+		err := t.QueryRow("SELECT id,status,intent FROM pwnmesh_executions WHERE project_id=? AND lease=?", s.Graph.Project.ID, fact.RunID).Scan(&e.ID, &e.Status, &e.Intent)
 		if err != nil || e.Status != "succeeded" || e.Intent != upstream {
 			return nil, Err(409, "Step dependency "+upstream+" has no successful producing run")
 		}

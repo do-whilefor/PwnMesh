@@ -76,7 +76,7 @@ func (t *Tx) activeStepWriteOwners(project string, metadata []stepMetadata) ([]S
 		byID[step.ID] = step
 	}
 	rows, err := t.Query(`SELECT id,worker FROM intents WHERE project_id=? AND worker IS NOT NULL AND to_fact_id IS NULL AND concluded_at IS NULL
-UNION SELECT intent,lease FROM xloom_executions WHERE project_id=? AND kind='explore' AND `+pendingExecutionSQL+` ORDER BY id,worker`, project, project)
+UNION SELECT intent,lease FROM pwnmesh_executions WHERE project_id=? AND kind='explore' AND `+pendingExecutionSQL+` ORDER BY id,worker`, project, project)
 	if err != nil {
 		return nil, err
 	}

@@ -34,7 +34,7 @@ func (t *Tx) InputBatchReceipt(project, key, requestSHA256 string) ([]InputFile,
 		return nil, false, nil
 	}
 	var digest, response string
-	err := t.QueryRow("SELECT request_sha256,response FROM xloom_input_batches WHERE project_id=? AND idempotency_key=?", project, key).Scan(&digest, &response)
+	err := t.QueryRow("SELECT request_sha256,response FROM pwnmesh_input_batches WHERE project_id=? AND idempotency_key=?", project, key).Scan(&digest, &response)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -57,7 +57,7 @@ func (t *Tx) SaveInputBatchReceipt(project, key, requestSHA256 string, inputs []
 	if err != nil {
 		return err
 	}
-	_, err = t.Exec("INSERT INTO xloom_input_batches(project_id,idempotency_key,request_sha256,response) VALUES(?,?,?,?)", project, key, requestSHA256, string(response))
+	_, err = t.Exec("INSERT INTO pwnmesh_input_batches(project_id,idempotency_key,request_sha256,response) VALUES(?,?,?,?)", project, key, requestSHA256, string(response))
 	return err
 }
 
@@ -90,7 +90,7 @@ func (t *Tx) InputFiles(project string) ([]InputFile, error) {
 	if !exists {
 		return nil, Err(404, "Project not found")
 	}
-	rows, err := t.Query("SELECT id,name,size,sha256,created_at FROM xloom_input_files WHERE project_id=? ORDER BY created_at,id", project)
+	rows, err := t.Query("SELECT id,name,size,sha256,created_at FROM pwnmesh_input_files WHERE project_id=? ORDER BY created_at,id", project)
 	if err != nil {
 		return nil, err
 	}
@@ -107,7 +107,7 @@ func (t *Tx) InputFiles(project string) ([]InputFile, error) {
 }
 
 func (t *Tx) InputData(project, id string) (InputFile, []byte, error) {
-	f, err := scanInput(t.QueryRow("SELECT id,name,size,sha256,created_at FROM xloom_input_files WHERE project_id=? AND id=?", project, id))
+	f, err := scanInput(t.QueryRow("SELECT id,name,size,sha256,created_at FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return f, nil, Err(404, "Input file not found")
 	}
@@ -115,7 +115,7 @@ func (t *Tx) InputData(project, id string) (InputFile, []byte, error) {
 		return f, nil, err
 	}
 	var data []byte
-	err = t.QueryRow("SELECT data FROM xloom_input_files WHERE project_id=? AND id=?", project, id).Scan(&data)
+	err = t.QueryRow("SELECT data FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id).Scan(&data)
 	return f, data, err
 }
 
@@ -137,7 +137,7 @@ func (t *Tx) AddInput(project, name string, data []byte) (InputFile, error) {
 	digest := hex.EncodeToString(sum[:])
 	idHash := sha256.Sum256([]byte(name + "\x00" + digest))
 	id := hex.EncodeToString(idHash[:])
-	old, err := scanInput(t.QueryRow("SELECT id,name,size,sha256,created_at FROM xloom_input_files WHERE project_id=? AND id=?", project, id))
+	old, err := scanInput(t.QueryRow("SELECT id,name,size,sha256,created_at FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id))
 	if err == nil {
 		return old, nil
 	}
@@ -146,14 +146,14 @@ func (t *Tx) AddInput(project, name string, data []byte) (InputFile, error) {
 	}
 	var size int64
 	var count int
-	if err = t.QueryRow("SELECT COUNT(*),COALESCE(SUM(size),0) FROM xloom_input_files WHERE project_id=?", project).Scan(&count, &size); err != nil {
+	if err = t.QueryRow("SELECT COUNT(*),COALESCE(SUM(size),0) FROM pwnmesh_input_files WHERE project_id=?", project).Scan(&count, &size); err != nil {
 		return InputFile{}, err
 	}
 	if count >= MaxProjectInputs || size+int64(len(data)) > MaxProjectInputBytes {
 		return InputFile{}, Err(413, "Project input limit is 32 files and 512 MiB")
 	}
 	f := InputFile{ID: id, Name: name, Size: int64(len(data)), SHA256: digest, Path: path.Join("/workspace/.pwnmesh/inputs", id, name), CreatedAt: t.Now}
-	if _, err = t.Exec("INSERT INTO xloom_input_files(project_id,id,name,size,sha256,created_at,data) VALUES(?,?,?,?,?,?,?)", project, id, name, f.Size, digest, t.Now, data); err != nil {
+	if _, err = t.Exec("INSERT INTO pwnmesh_input_files(project_id,id,name,size,sha256,created_at,data) VALUES(?,?,?,?,?,?,?)", project, id, name, f.Size, digest, t.Now, data); err != nil {
 		return InputFile{}, err
 	}
 	hintID, err := t.Next(project, "hint")

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -312,21 +313,43 @@ func TestOrchestrationIndependentReviewClosesThroughProductionScheduler(t *testi
 	}
 }
 
-func TestLegacyProjectRemainsReadableWithoutScheduling(t *testing.T) {
+func TestUnsupportedProjectRejectedWithoutSchedulingOrMutation(t *testing.T) {
 	scheduler, runner, _, graph, store := batchSchedulerFixture(t, 1)
 	// Historical rows predate the current project-creation boundary.
 	if err := store.Do(context.Background(), func(tx *board.Tx) error {
-		_, err := tx.Exec("DELETE FROM xloom_project_orchestration WHERE project_id=?", graph.Project.ID)
+		_, err := tx.Exec("DELETE FROM pwnmesh_project_orchestration WHERE project_id=?", graph.Project.ID)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	retryTicks(t, scheduler, 1)
-	var state board.State
-	if err := scheduler.Client.Do(context.Background(), "GET", projectPath(graph.Project.ID)+"/state", nil, &state, nil); err != nil {
-		t.Fatal(err)
+	storedState := func() board.State {
+		t.Helper()
+		var state board.State
+		if err := store.View(context.Background(), func(tx *board.Tx) error {
+			var err error
+			state, err = tx.State(graph.Project.ID)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return state
 	}
-	if state.Graph.Project.OrchestrationVersion != 0 || len(runner.jobs) != 0 || len(testExecutions(t, store)) != 0 {
-		t.Fatal("historical project was migrated or scheduled")
+	before := storedState()
+	if before.Graph.Project.OrchestrationVersion != 0 {
+		t.Fatal("fixture did not retain an unsupported project")
+	}
+	retryTicks(t, scheduler, 1)
+	for _, path := range []string{projectPath(graph.Project.ID), projectPath(graph.Project.ID) + "/state"} {
+		err := scheduler.Client.Do(context.Background(), "GET", path, nil, nil, nil)
+		var protocolErr *ProtocolError
+		if !errors.As(err, &protocolErr) || protocolErr.Status != http.StatusConflict {
+			t.Fatalf("unsupported project read %s: got %v, want HTTP 409", path, err)
+		}
+	}
+	if !reflect.DeepEqual(storedState(), before) {
+		t.Fatal("rejected access or scheduling changed the unsupported project")
+	}
+	if len(runner.jobs) != 0 || len(testExecutions(t, store)) != 0 {
+		t.Fatal("unsupported project was scheduled")
 	}
 }

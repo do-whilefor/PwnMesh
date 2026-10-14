@@ -53,10 +53,10 @@ func (s State) AssetIDs(nodeKind, nodeID string) []string {
 
 func (t *Tx) addAssetAnchors(project string, generation int64, kind, id string, assets []Asset) error {
 	for _, a := range assets {
-		if _, err := t.Exec(`INSERT OR IGNORE INTO xloom_assets(project_id,id,kind,value,method) VALUES(?,?,?,?,?)`, project, a.ID, a.Kind, a.Value, a.Method); err != nil {
+		if _, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_assets(project_id,id,kind,value,method) VALUES(?,?,?,?,?)`, project, a.ID, a.Kind, a.Value, a.Method); err != nil {
 			return err
 		}
-		if _, err := t.Exec(`INSERT OR IGNORE INTO xloom_asset_anchors(project_id,generation,node_kind,node_id,asset_id) VALUES(?,?,?,?,?)`, project, generation, kind, id, a.ID); err != nil {
+		if _, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_asset_anchors(project_id,generation,node_kind,node_id,asset_id) VALUES(?,?,?,?,?)`, project, generation, kind, id, a.ID); err != nil {
 			return err
 		}
 	}
@@ -64,7 +64,7 @@ func (t *Tx) addAssetAnchors(project string, generation int64, kind, id string, 
 }
 
 func (t *Tx) projectAssets(s *State) error {
-	rows, err := t.Query(`SELECT a.id,a.kind,a.value,a.method,n.node_kind,n.node_id FROM xloom_asset_anchors n JOIN xloom_assets a ON a.project_id=n.project_id AND a.id=n.asset_id WHERE n.project_id=? AND n.generation=? ORDER BY a.id,n.node_kind,n.node_id`, s.Graph.Project.ID, s.Graph.Project.Generation)
+	rows, err := t.Query(`SELECT a.id,a.kind,a.value,a.method,n.node_kind,n.node_id FROM pwnmesh_asset_anchors n JOIN pwnmesh_assets a ON a.project_id=n.project_id AND a.id=n.asset_id WHERE n.project_id=? AND n.generation=? ORDER BY a.id,n.node_kind,n.node_id`, s.Graph.Project.ID, s.Graph.Project.Generation)
 	if err != nil {
 		return err
 	}

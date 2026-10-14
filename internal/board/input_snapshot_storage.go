@@ -59,7 +59,7 @@ func (t *Tx) encodeInputSnapshot(project string, raw []byte) ([]byte, error) {
 	for _, chunk := range snapshotChunks(raw) {
 		digest := sha256.Sum256(chunk)
 		id := hex.EncodeToString(digest[:])
-		if _, err := t.Exec("INSERT OR IGNORE INTO xloom_snapshot_chunks(project_id,sha256,data) VALUES(?,?,?)", project, id, chunk); err != nil {
+		if _, err := t.Exec("INSERT OR IGNORE INTO pwnmesh_snapshot_chunks(project_id,sha256,data) VALUES(?,?,?)", project, id, chunk); err != nil {
 			return nil, err
 		}
 		manifest.Chunks = append(manifest.Chunks, id)
@@ -89,7 +89,7 @@ func (t *Tx) decodeInputSnapshot(project string, stored []byte) ([]byte, error) 
 			return nil, errors.New("invalid input snapshot chunk identity")
 		}
 		var chunk []byte
-		if err := t.QueryRow("SELECT data FROM xloom_snapshot_chunks WHERE project_id=? AND sha256=? AND length(data)<=?", project, id, snapshotChunkMax).Scan(&chunk); err != nil {
+		if err := t.QueryRow("SELECT data FROM pwnmesh_snapshot_chunks WHERE project_id=? AND sha256=? AND length(data)<=?", project, id, snapshotChunkMax).Scan(&chunk); err != nil {
 			return nil, errors.New("input snapshot chunk is missing or oversized")
 		}
 		actual := sha256.Sum256(chunk)

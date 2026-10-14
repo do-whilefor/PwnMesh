@@ -38,7 +38,7 @@ func TestRestartArchivesCompleteRoundAndReadsEveryByte(t *testing.T) {
 		for _, event := range events {
 			expected[fmt.Sprintf("event/%d", event.Revision)], _ = json.Marshal(event)
 		}
-		rows, err := tx.Query("SELECT idempotency_key,request,response FROM xloom_state_actions WHERE project_id=?", "proj_001")
+		rows, err := tx.Query("SELECT idempotency_key,request,response FROM pwnmesh_state_actions WHERE project_id=?", "proj_001")
 		if err != nil {
 			return err
 		}
@@ -128,7 +128,7 @@ func TestRestartArchivesCompleteRoundAndReadsEveryByte(t *testing.T) {
 	f.tx(func(tx *Tx) error { _, err := tx.RestartProject("proj_001", &one); return err })
 	f.tx(func(tx *Tx) error {
 		var prior []byte
-		if err := tx.QueryRow("SELECT data FROM xloom_round_entries WHERE project_id=? AND generation=0 AND kind='state' AND id='state'", "proj_001").Scan(&prior); err != nil {
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_round_entries WHERE project_id=? AND generation=0 AND kind='state' AND id='state'", "proj_001").Scan(&prior); err != nil {
 			return err
 		}
 		if !bytes.Equal(prior, expected["state/state"]) {
@@ -176,7 +176,7 @@ func TestRoundInputManifestUsesTheArchiveTransactionNotTimestamps(t *testing.T) 
 	}
 	f.do(func(tx *Tx) error {
 		var raw []byte
-		if err := tx.QueryRow("SELECT data FROM xloom_round_entries WHERE project_id='p' AND generation=0 AND kind='inputs' AND id='inputs'").Scan(&raw); err != nil {
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_round_entries WHERE project_id='p' AND generation=0 AND kind='inputs' AND id='inputs'").Scan(&raw); err != nil {
 			return err
 		}
 		var inputs []InputFile
@@ -198,7 +198,7 @@ func TestRestartArchiveFailureRollsBackEntireRound(t *testing.T) {
 	f := roundFixture(t)
 	before, _ := json.Marshal(f.state())
 	f.tx(func(tx *Tx) error {
-		_, err := tx.Exec(`CREATE TRIGGER fail_round_archive BEFORE INSERT ON xloom_round_entries WHEN NEW.kind='event' BEGIN SELECT RAISE(ABORT,'archive write failed'); END`)
+		_, err := tx.Exec(`CREATE TRIGGER fail_round_archive BEFORE INSERT ON pwnmesh_round_entries WHEN NEW.kind='event' BEGIN SELECT RAISE(ABORT,'archive write failed'); END`)
 		return err
 	})
 	zero := int64(0)
@@ -211,7 +211,7 @@ func TestRestartArchiveFailureRollsBackEntireRound(t *testing.T) {
 		t.Fatal("archive failure modified live state")
 	}
 	f.tx(func(tx *Tx) error {
-		for _, table := range []string{"xloom_round_history", "xloom_round_entries", "xloom_revoked_runs"} {
+		for _, table := range []string{"pwnmesh_round_history", "pwnmesh_round_entries", "pwnmesh_revoked_runs"} {
 			var count int
 			if err := tx.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE project_id=?", "proj_001").Scan(&count); err != nil {
 				return err

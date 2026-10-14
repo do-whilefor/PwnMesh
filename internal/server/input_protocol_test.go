@@ -25,7 +25,7 @@ func TestPrepareRejectsMalformedProtocolsBeforeFreezingInput(t *testing.T) {
 				})
 			}
 			if err := store.Do(context.Background(), func(tx *board.Tx) error {
-				for _, table := range []string{"xloom_executions", "xloom_input_snapshots"} {
+				for _, table := range []string{"pwnmesh_executions", "pwnmesh_input_snapshots"} {
 					var count int
 					if err := tx.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE project_id=?", f.project).Scan(&count); err != nil {
 						return err

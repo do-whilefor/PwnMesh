@@ -29,7 +29,7 @@ func (t *Tx) validateReviewStep(s State, d *stateData, id string) error {
 		attempts := 0
 		for _, stepID := range dispute.ReviewStepIDs {
 			var count int
-			if err := t.QueryRow("SELECT COUNT(*) FROM xloom_executions WHERE project_id=? AND intent=?", s.Graph.Project.ID, stepID).Scan(&count); err != nil {
+			if err := t.QueryRow("SELECT COUNT(*) FROM pwnmesh_executions WHERE project_id=? AND intent=?", s.Graph.Project.ID, stepID).Scan(&count); err != nil {
 				return err
 			}
 			attempts += count
@@ -67,7 +67,7 @@ func (t *Tx) validateReviewExecution(e Execution) error {
 		count := 0
 		for _, id := range dispute.ReviewStepIDs {
 			var attempts int
-			if err = t.QueryRow("SELECT COUNT(*) FROM xloom_executions WHERE project_id=? AND intent=?", e.ProjectID, id).Scan(&attempts); err != nil {
+			if err = t.QueryRow("SELECT COUNT(*) FROM pwnmesh_executions WHERE project_id=? AND intent=?", e.ProjectID, id).Scan(&attempts); err != nil {
 				return err
 			}
 			count += attempts
@@ -116,7 +116,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 				// transition alone invalidates a live, uncommitted planner, preserve
 				// its outstanding planning signal under a fresh input retry key.
 				// Already stale or committed planners cannot renew that allowance.
-				err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_executions
+				err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions
 					WHERE project_id=? AND kind='reason' AND lease=?
 					AND status IN ('prepared','running','retryable','result_pending')
 					AND generation=? AND decision_revision=? AND state_version=?
@@ -133,7 +133,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 		if err != nil {
 			return err
 		}
-		if _, err = t.Exec("UPDATE xloom_state SET data=? WHERE project_id=?", string(raw), e.ProjectID); err != nil {
+		if _, err = t.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id=?", string(raw), e.ProjectID); err != nil {
 			return err
 		}
 		// Without an invalidated in-flight plan, authorized startup is execution
@@ -145,7 +145,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 		result, _ := json.Marshal(dispute)
 		payload, _ := json.Marshal(map[string]string{"step_id": e.Intent, "status": status})
 		event, _ := json.Marshal(StateEvent{Revision: revision, Op: "dispute", ID: dispute.ID, RunID: e.Lease, CreatedAt: t.Now, Payload: payload, Result: result})
-		_, err = t.Exec("INSERT INTO xloom_state_events(project_id,revision,event) VALUES(?,?,?)", e.ProjectID, revision, string(event))
+		_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", e.ProjectID, revision, string(event))
 		return err
 	}
 	return nil

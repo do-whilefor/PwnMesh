@@ -22,7 +22,7 @@ func TestUnsupportedProjectDownloadPreservesStoredBytes(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("UPDATE xloom_project_orchestration SET version=0 WHERE project_id=?", f.project)
+		_, err = tx.Exec("UPDATE pwnmesh_project_orchestration SET version=0 WHERE project_id=?", f.project)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -32,7 +32,7 @@ func TestUnsupportedProjectDownloadPreservesStoredBytes(t *testing.T) {
 	}
 	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
 		var data []byte
-		if err := tx.QueryRow("SELECT data FROM xloom_input_files WHERE project_id=? AND id=?", f.project, file.ID).Scan(&data); err != nil {
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_input_files WHERE project_id=? AND id=?", f.project, file.ID).Scan(&data); err != nil {
 			return err
 		}
 		if !bytes.Equal(data, want) {
@@ -120,7 +120,7 @@ func TestRetiredExecutionCannotResumeApplyOrRetryInCurrentProject(t *testing.T) 
 		}
 		job["result_contract_version"] = 1
 		raw, _ := json.Marshal(job)
-		if _, err = tx.Exec("UPDATE xloom_executions SET job=? WHERE project_id=? AND id=?", raw, f.project, f.run); err != nil {
+		if _, err = tx.Exec("UPDATE pwnmesh_executions SET job=? WHERE project_id=? AND id=?", raw, f.project, f.run); err != nil {
 			return err
 		}
 		original, err = tx.Execution(f.project, f.run)
@@ -134,14 +134,14 @@ func TestRetiredExecutionCannotResumeApplyOrRetryInCurrentProject(t *testing.T) 
 	// Even the idempotent apply path must reject a retired protocol before
 	// returning an already-settled status.
 	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		_, err := tx.Exec("UPDATE xloom_executions SET status='succeeded' WHERE project_id=? AND id=?", f.project, f.run)
+		_, err := tx.Exec("UPDATE pwnmesh_executions SET status='succeeded' WHERE project_id=? AND id=?", f.project, f.run)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	f.request("POST", f.base()+"/executions/"+f.run+"/apply", map[string]any{}, true, http.StatusConflict, nil)
 	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		_, err := tx.Exec("UPDATE xloom_executions SET status=? WHERE project_id=? AND id=?", original.Status, f.project, f.run)
+		_, err := tx.Exec("UPDATE pwnmesh_executions SET status=? WHERE project_id=? AND id=?", original.Status, f.project, f.run)
 		return err
 	}); err != nil {
 		t.Fatal(err)

@@ -120,7 +120,7 @@ func testExecutions(t *testing.T, store *board.Store) []board.Execution {
 	t.Helper()
 	var executions []board.Execution
 	err := store.Do(context.Background(), func(tx *board.Tx) error {
-		rows, err := tx.Query("SELECT project_id,id FROM xloom_executions WHERE namespace=? ORDER BY created_at,rowid", "pwnmesh")
+		rows, err := tx.Query("SELECT project_id,id FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", "pwnmesh")
 		if err != nil {
 			return err
 		}

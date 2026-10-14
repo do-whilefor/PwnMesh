@@ -57,7 +57,7 @@ func TestExecutionReadsRejectForeignRegisteredJob(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err = f.store.Do(context.Background(), func(tx *board.Tx) error {
-					_, err := tx.Exec("UPDATE xloom_executions SET job=? WHERE project_id=? AND id=?", raw, f.project, f.run)
+					_, err := tx.Exec("UPDATE pwnmesh_executions SET job=? WHERE project_id=? AND id=?", raw, f.project, f.run)
 					return err
 				}); err != nil {
 					t.Fatal(err)

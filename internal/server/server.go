@@ -239,7 +239,7 @@ func (s *Server) wrapAction(fn action, readOnly bool) http.HandlerFunc {
 
 func requireCurrentProject(t *b.Tx, project string) error {
 	var version int
-	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN xloom_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, project).Scan(&version)
+	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN pwnmesh_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, project).Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return b.Err(404, "Project not found")
 	}

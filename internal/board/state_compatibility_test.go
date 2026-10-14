@@ -32,7 +32,7 @@ func TestCompactStepMetadataLifecycleAndRollbackRead(t *testing.T) {
 		}
 		f.tx(func(tx *Tx) error {
 			var raw []byte
-			if err := tx.QueryRow("SELECT data FROM xloom_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
+			if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
 				return err
 			}
 			var stored struct {
@@ -136,7 +136,7 @@ func TestLegacyStepMetadataProjectionAfterReopen(t *testing.T) {
 				}); err != nil {
 					return err
 				}
-				_, err := tx.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES('proj_001',?,4,2)", tc.metadata)
+				_, err := tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES('proj_001',?,4,2)", tc.metadata)
 				return err
 			})
 			if err != nil {
@@ -184,7 +184,7 @@ func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
 			return err
 		}
 		const raw = `{"facts":[{"id":"f002","description":"Second observation","status":"valid"},{"id":"f001","description":"First observation","status":"valid"},{"id":"f001","description":"Duplicate must not replace the first","status":"refuted"},{"id":"missing","description":"Unlinked record","status":"valid"}],"fact_relations":[{"kind":"refutes","target":"f001","source":"f002"},{"kind":"narrows","target":"f001","source":"f002"}]}`
-		if _, err := tx.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES('legacy',?,4,2)", raw); err != nil {
+		if _, err := tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES('legacy',?,4,2)", raw); err != nil {
 			return err
 		}
 		state, err := tx.State("legacy")
@@ -202,7 +202,7 @@ func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
 			t.Fatalf("historical fact projection changed: %+v", state.FactRecords)
 		}
 		var saved string
-		if err := tx.QueryRow("SELECT data FROM xloom_state WHERE project_id='legacy'").Scan(&saved); err != nil {
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='legacy'").Scan(&saved); err != nil {
 			return err
 		}
 		if saved != raw || state.Revision != 4 || state.DecisionRevision != 2 {
@@ -224,7 +224,7 @@ func TestNewFactMatchesLegacyReaderAndFrozenInput(t *testing.T) {
 	var ref *InputSnapshot
 	f.do(func(tx *Tx) error {
 		var raw []byte
-		if err := tx.QueryRow("SELECT data FROM xloom_state WHERE project_id='p'").Scan(&raw); err != nil {
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='p'").Scan(&raw); err != nil {
 			return err
 		}
 		// The rollback reader replaces the SQL Fact with this complete record.

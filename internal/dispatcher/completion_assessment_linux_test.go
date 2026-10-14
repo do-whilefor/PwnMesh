@@ -89,7 +89,7 @@ func TestCompletionAssessmentProductionBridgeCompletesOrKeepsMissingCoverage(t *
 					return err
 				}
 				data, _ := json.Marshal(map[string]any{"facts": facts, "curation": board.CurationProgress{ThroughRevision: 2}})
-				_, err = tx.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES(?,?,2,2) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", graph.Project.ID, string(data))
+				_, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,2,2) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", graph.Project.ID, string(data))
 				return err
 			}); err != nil {
 				t.Fatal(err)

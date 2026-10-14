@@ -47,7 +47,7 @@ func bindTestContainerOwner(t *testing.T, runner *docker.Client, store *board.St
 func testExecutions(ctx context.Context, store *board.Store, namespace string) ([]board.Execution, error) {
 	out := []board.Execution{}
 	err := store.Do(ctx, func(tx *board.Tx) error {
-		rows, err := tx.Query("SELECT project_id,id FROM xloom_executions WHERE namespace=? ORDER BY created_at,rowid", namespace)
+		rows, err := tx.Query("SELECT project_id,id FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", namespace)
 		if err != nil {
 			return err
 		}

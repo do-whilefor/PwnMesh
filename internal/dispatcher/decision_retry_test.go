@@ -189,7 +189,7 @@ func TestAutomaticDecisionRetryNeverReplaysRefusalOrCancellation(t *testing.T) {
 			retryTicks(t, s, 1)
 			original := testExecutions(t, store)[0]
 			if err := store.Do(context.Background(), func(tx *board.Tx) error {
-				_, err := tx.Exec("UPDATE xloom_executions SET status=? WHERE project_id=? AND id=?", status, graph.Project.ID, original.ID)
+				_, err := tx.Exec("UPDATE pwnmesh_executions SET status=? WHERE project_id=? AND id=?", status, graph.Project.ID, original.ID)
 				return err
 			}); err != nil {
 				t.Fatal(err)
@@ -268,10 +268,10 @@ func TestDispatcherRecoveryExhaustionReleasesLeaseBeforeSuccessor(t *testing.T) 
 	original := testExecutions(t, store)[0]
 	// Reconstruct a process interrupted after consuming both resume attempts.
 	if err := store.Do(context.Background(), func(tx *board.Tx) error {
-		if _, err := tx.Exec("UPDATE xloom_executions SET status='running',result=NULL,resumes=2 WHERE project_id=? AND id=?", original.ProjectID, original.ID); err != nil {
+		if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='running',result=NULL,resumes=2 WHERE project_id=? AND id=?", original.ProjectID, original.ID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("DELETE FROM xloom_revoked_runs WHERE project_id=? AND worker=?", original.ProjectID, original.Lease); err != nil {
+		if _, err := tx.Exec("DELETE FROM pwnmesh_revoked_runs WHERE project_id=? AND worker=?", original.ProjectID, original.Lease); err != nil {
 			return err
 		}
 		g, err := tx.Load(graph.Project.ID)

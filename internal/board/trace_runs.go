@@ -34,7 +34,7 @@ func (t *Tx) TraceRuns(project string, generation int64, offset, limit int, runI
 	if current.Generation != generation {
 		return nil, Err(409, "trace input belongs to a previous project round")
 	}
-	query := `SELECT id,intent,status,job FROM xloom_executions WHERE project_id=? AND generation=? AND kind='explore'`
+	query := `SELECT id,intent,status,job FROM pwnmesh_executions WHERE project_id=? AND generation=? AND kind='explore'`
 	args := []any{project, generation}
 	if runID != "" {
 		query += " AND id=?"

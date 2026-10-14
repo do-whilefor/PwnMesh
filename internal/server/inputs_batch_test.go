@@ -333,7 +333,7 @@ func TestInputBatchKeyReplaysDurableReceiptWithoutDuplicatingInstructions(t *tes
 	f.request("DELETE", f.base(), nil, false, http.StatusNoContent, nil)
 	if err := reopened.Do(context.Background(), func(tx *board.Tx) error {
 		var count int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM xloom_input_batches").Scan(&count); err != nil {
+		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_input_batches").Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 {
@@ -371,7 +371,7 @@ func TestInputBatchTextOnlyRetryDoesNotDuplicateInstructions(t *testing.T) {
 func TestInputBatchTextOnlyCannotModifyUnsupportedProject(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		_, err := tx.Exec("DELETE FROM xloom_project_orchestration WHERE project_id=?", f.project)
+		_, err := tx.Exec("DELETE FROM pwnmesh_project_orchestration WHERE project_id=?", f.project)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -406,7 +406,7 @@ func TestInputBatchTextOnlyCannotModifyUnsupportedProject(t *testing.T) {
 	}
 	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
 		var count int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM xloom_input_batches WHERE project_id=?", f.project).Scan(&count); err != nil {
+		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_input_batches WHERE project_id=?", f.project).Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 {

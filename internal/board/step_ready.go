@@ -48,7 +48,7 @@ func (t *Tx) stepReadyState(s State, id, lease string) error {
 				return premiseErr
 			}
 			var running bool
-			if err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE project_id=? AND intent=? AND lease=? AND kind='explore' AND status IN ('running','result_pending'))`, project, id, lease).Scan(&running); err != nil {
+			if err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE project_id=? AND intent=? AND lease=? AND kind='explore' AND status IN ('running','result_pending'))`, project, id, lease).Scan(&running); err != nil {
 				return err
 			}
 			if !running {

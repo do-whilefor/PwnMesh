@@ -71,7 +71,7 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec("INSERT INTO xloom_state(project_id,data) VALUES(?,?)", graph.Project.ID, string(data)); err != nil {
+		if _, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data) VALUES(?,?)", graph.Project.ID, string(data)); err != nil {
 			return err
 		}
 		state, err = tx.State(graph.Project.ID)

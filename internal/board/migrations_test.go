@@ -25,10 +25,10 @@ func TestStoreMigrationBaselineAndReopenMaintenance(t *testing.T) {
 	if err := store.Do(context.Background(), func(tx *Tx) error {
 		var version int
 		var name string
-		if err := tx.QueryRow("SELECT version,name,applied_at FROM pwnmesh_schema_migrations").Scan(&version, &name, &appliedAt); err != nil {
+		if err := tx.QueryRow("SELECT version,name,applied_at FROM pwnmesh_schema_migrations WHERE version=2").Scan(&version, &name, &appliedAt); err != nil {
 			return err
 		}
-		if version != 1 || name != "unversioned-baseline" || appliedAt == "" {
+		if version != 2 || name != "pwnmesh-namespace" || appliedAt == "" {
 			t.Fatalf("unexpected baseline: %d %q %q", version, name, appliedAt)
 		}
 		// Retained/imported identities must still repair counters on later opens.
@@ -41,7 +41,7 @@ func TestStoreMigrationBaselineAndReopenMaintenance(t *testing.T) {
 		putQueryExecution(t, tx, Execution{ProjectID: "proj_041", ID: "restored", Status: "succeeded"}, 7, "")
 		_, err := tx.Exec(`DELETE FROM counters WHERE name='project'; DELETE FROM scoped_counters;
 DELETE FROM settings; DELETE FROM pwnmesh_installation;
-DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions;`)
+DELETE FROM pwnmesh_ui_execution_changes; DELETE FROM pwnmesh_ui_execution_revisions;`)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -59,7 +59,7 @@ DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions
 		if err := tx.QueryRow("SELECT COUNT(*),MAX(applied_at) FROM pwnmesh_schema_migrations").Scan(&count, &after); err != nil {
 			return err
 		}
-		if count != 1 || after != appliedAt {
+		if count != 2 || after != appliedAt {
 			t.Fatalf("reopen rewrote migration history: count=%d before=%q after=%q", count, appliedAt, after)
 		}
 		if id, err := tx.Next("", "project"); err != nil || id != "proj_042" {
@@ -69,7 +69,7 @@ DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions
 			t.Fatalf("versioned reopen did not repair fact counter: %q %v", id, err)
 		}
 		var generation, metadataVersion int
-		if err := tx.QueryRow("SELECT generation,metadata_version FROM xloom_executions WHERE id='restored'").Scan(&generation, &metadataVersion); err != nil || generation != 7 || metadataVersion != 1 {
+		if err := tx.QueryRow("SELECT generation,metadata_version FROM pwnmesh_executions WHERE id='restored'").Scan(&generation, &metadataVersion); err != nil || generation != 7 || metadataVersion != 1 {
 			t.Fatalf("versioned reopen changed execution metadata: generation=%d version=%d err=%v", generation, metadataVersion, err)
 		}
 		settings, err := tx.Settings()
@@ -80,7 +80,7 @@ DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions
 		if err := tx.QueryRow("SELECT identity FROM pwnmesh_installation WHERE singleton=1").Scan(&identity); err != nil || len(identity) != 32 {
 			t.Fatalf("versioned reopen did not reseed missing installation: %q %v", identity, err)
 		}
-		if err := tx.QueryRow("SELECT COUNT(*) FROM xloom_ui_execution_changes c JOIN xloom_ui_execution_revisions r ON c.project_id=r.project_id WHERE c.execution_id='restored' AND c.revision<=r.revision").Scan(&count); err != nil || count != 1 {
+		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_ui_execution_changes c JOIN pwnmesh_ui_execution_revisions r ON c.project_id=r.project_id WHERE c.execution_id='restored' AND c.revision<=r.revision").Scan(&count); err != nil || count != 1 {
 			t.Fatalf("versioned reopen did not restore execution change projection: %d %v", count, err)
 		}
 		return nil
@@ -121,8 +121,8 @@ func TestStoreMigrationRejectsUnsupportedHistoryBeforeApplicationSchema(t *testi
 	for _, test := range []struct {
 		name, history, want string
 	}{
-		{"future", "(1,'unversioned-baseline'),(2,'future')", "unsupported PwnMesh schema version"},
-		{"missing_baseline", "(2,'future')", "unsupported PwnMesh schema version"},
+		{"future", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace'),(3,'future')", "unsupported PwnMesh schema version"},
+		{"missing_baseline", "(2,'pwnmesh-namespace')", "inconsistent PwnMesh migration history"},
 		{"renamed", "(1,'different-baseline')", "inconsistent PwnMesh migration history"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -214,7 +214,7 @@ func TestStoreRejectsUnsupportedExecutionMetadataWithoutBackfill(t *testing.T) {
 		}
 		executionQueryTx(t, store, func(tx *Tx) {
 			putQueryExecution(t, tx, Execution{ID: "retained", Status: "succeeded"}, 7, "")
-			if _, err := tx.Exec("UPDATE xloom_executions SET metadata_version=?; DELETE FROM settings", version); err != nil {
+			if _, err := tx.Exec("UPDATE pwnmesh_executions SET metadata_version=?; DELETE FROM settings", version); err != nil {
 				t.Fatal(err)
 			}
 		})

@@ -81,7 +81,7 @@ func (t *Tx) replayCuration(project string, fence ExecutionFence, action StateAc
 		return StateActionResult{}, false, err
 	}
 	var request, response string
-	err = t.QueryRow("SELECT request,response FROM xloom_state_actions WHERE project_id=? AND idempotency_key=?", project, action.IdempotencyKey).Scan(&request, &response)
+	err = t.QueryRow("SELECT request,response FROM pwnmesh_state_actions WHERE project_id=? AND idempotency_key=?", project, action.IdempotencyKey).Scan(&request, &response)
 	if errors.Is(err, sql.ErrNoRows) {
 		return StateActionResult{}, false, nil
 	}

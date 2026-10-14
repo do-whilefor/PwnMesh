@@ -89,7 +89,7 @@ func (t *Tx) ProjectExecutionChanges(project string, generation, after, cursor, 
 		return out, Err(409, "Project round changed; refresh before reading execution changes")
 	}
 	var latest int64
-	if err = t.QueryRow("SELECT COALESCE((SELECT revision FROM xloom_ui_execution_revisions WHERE project_id=?),0)", project).Scan(&latest); err != nil {
+	if err = t.QueryRow("SELECT COALESCE((SELECT revision FROM pwnmesh_ui_execution_revisions WHERE project_id=?),0)", project).Scan(&latest); err != nil {
 		return out, err
 	}
 	if through == 0 {
@@ -100,7 +100,7 @@ func (t *Tx) ProjectExecutionChanges(project string, generation, after, cursor, 
 	}
 	// An initial snapshot has no cached rows to remove, so old-round tombstones
 	// must not make a new round reload every prior execution's deletion.
-	rows, err := t.Query("SELECT execution_id,revision,deleted FROM xloom_ui_execution_changes WHERE project_id=? AND revision>? AND revision<=? AND (? > 0 OR deleted=0) ORDER BY revision LIMIT ?", project, max(after, cursor), out.Through, after, limit+1)
+	rows, err := t.Query("SELECT execution_id,revision,deleted FROM pwnmesh_ui_execution_changes WHERE project_id=? AND revision>? AND revision<=? AND (? > 0 OR deleted=0) ORDER BY revision LIMIT ?", project, max(after, cursor), out.Through, after, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -120,7 +120,7 @@ func (t *Tx) ProjectExecutionChanges(project string, generation, after, cursor, 
 		} else {
 			var row int64
 			var text, failure string
-			err = t.QueryRow("SELECT "+executionViewColumns+" FROM xloom_executions WHERE project_id=? AND id=?", project, id).Scan(&row, &entry.ID, &entry.ProjectID, &entry.Generation, &entry.Kind, &entry.Backend, &entry.Intent, &entry.Status, &entry.Resumes, &entry.CreatedAt, &entry.UpdatedAt, &text, &failure)
+			err = t.QueryRow("SELECT "+executionViewColumns+" FROM pwnmesh_executions WHERE project_id=? AND id=?", project, id).Scan(&row, &entry.ID, &entry.ProjectID, &entry.Generation, &entry.Kind, &entry.Backend, &entry.Intent, &entry.Status, &entry.Resumes, &entry.CreatedAt, &entry.UpdatedAt, &text, &failure)
 			if err == nil {
 				entry.Result = executionResultView(text, failure)
 				raw, err = json.Marshal(entry)
@@ -162,11 +162,11 @@ func (t *Tx) ProjectExecutionPage(project string, after, through int64, limit in
 		return out, Err(404, "Project not found")
 	}
 	if through == 0 {
-		if err := t.QueryRow("SELECT COALESCE(MAX(rowid),0) FROM xloom_executions WHERE project_id=?", project).Scan(&out.Through); err != nil {
+		if err := t.QueryRow("SELECT COALESCE(MAX(rowid),0) FROM pwnmesh_executions WHERE project_id=?", project).Scan(&out.Through); err != nil {
 			return out, err
 		}
 	}
-	rows, err := t.Query("SELECT "+executionViewColumns+" FROM xloom_executions WHERE project_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?", project, after, out.Through, limit+1)
+	rows, err := t.Query("SELECT "+executionViewColumns+" FROM pwnmesh_executions WHERE project_id=? AND rowid>? AND rowid<=? ORDER BY rowid LIMIT ?", project, after, out.Through, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -207,7 +207,7 @@ type ProjectIdentity struct {
 
 func (t *Tx) ProjectIdentity(project string) (ProjectIdentity, error) {
 	var identity ProjectIdentity
-	err := t.QueryRow(`SELECT p.id,COALESCE(r.generation,0) FROM projects p LEFT JOIN xloom_project_rounds r ON r.project_id=p.id WHERE p.id=?`, project).Scan(&identity.ID, &identity.Generation)
+	err := t.QueryRow(`SELECT p.id,COALESCE(r.generation,0) FROM projects p LEFT JOIN pwnmesh_project_rounds r ON r.project_id=p.id WHERE p.id=?`, project).Scan(&identity.ID, &identity.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Project not found")
 	}

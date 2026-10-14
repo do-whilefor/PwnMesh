@@ -29,14 +29,14 @@ func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
 		return Graph{}, err
 	}
 	for _, query := range []string{
-		"DELETE FROM xloom_project_termination WHERE project_id=?",
-		"DELETE FROM xloom_state_actions WHERE project_id=?",
-		"DELETE FROM xloom_state_events WHERE project_id=?",
-		"DELETE FROM xloom_state WHERE project_id=?",
-		"DELETE FROM xloom_executions WHERE project_id=?",
+		"DELETE FROM pwnmesh_project_termination WHERE project_id=?",
+		"DELETE FROM pwnmesh_state_actions WHERE project_id=?",
+		"DELETE FROM pwnmesh_state_events WHERE project_id=?",
+		"DELETE FROM pwnmesh_state WHERE project_id=?",
+		"DELETE FROM pwnmesh_executions WHERE project_id=?",
 		// The generation fence rejects every old-round cursor. Keep the
 		// revision sequence, but discard the deletion markers just generated.
-		"DELETE FROM xloom_ui_execution_changes WHERE project_id=?",
+		"DELETE FROM pwnmesh_ui_execution_changes WHERE project_id=?",
 		"DELETE FROM intents WHERE project_id=?",
 		"DELETE FROM facts WHERE project_id=? AND id NOT IN ('origin','goal')",
 	} {
@@ -50,7 +50,7 @@ func (t *Tx) RestartProject(project string, expected *int64) (Graph, error) {
 	g.Project.RestartedAt = t.Now
 	g.Project.TerminatedAt = ""
 	g.Facts, g.Intents = inputs, []Intent{}
-	if _, err = t.Exec(`INSERT INTO xloom_project_rounds(project_id,generation,restarted_at) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET generation=excluded.generation,restarted_at=excluded.restarted_at`, project, g.Project.Generation, t.Now); err != nil {
+	if _, err = t.Exec(`INSERT INTO pwnmesh_project_rounds(project_id,generation,restarted_at) VALUES(?,?,?) ON CONFLICT(project_id) DO UPDATE SET generation=excluded.generation,restarted_at=excluded.restarted_at`, project, g.Project.Generation, t.Now); err != nil {
 		return Graph{}, err
 	}
 	return g, t.Save(g)

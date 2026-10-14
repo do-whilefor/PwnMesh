@@ -179,8 +179,8 @@ func TestSnapshotReadFailsClosedWhenStoredInputIsMissingOrCorrupt(t *testing.T) 
 		name, query string
 		status      int
 	}{
-		{"missing", "DELETE FROM xloom_input_snapshots WHERE project_id=? AND id=?", http.StatusNotFound},
-		{"corrupt", "UPDATE xloom_input_snapshots SET state='{}' WHERE project_id=? AND id=?", http.StatusInternalServerError},
+		{"missing", "DELETE FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?", http.StatusNotFound},
+		{"corrupt", "UPDATE pwnmesh_input_snapshots SET state='{}' WHERE project_id=? AND id=?", http.StatusInternalServerError},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f, store := newSnapshotHTTPFixture(t)

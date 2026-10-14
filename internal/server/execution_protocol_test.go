@@ -100,7 +100,7 @@ func (f *executionProtocolFixture) executionRecords() []board.Execution {
 	f.t.Helper()
 	var executions []board.Execution
 	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		rows, err := tx.Query("SELECT project_id,id FROM xloom_executions WHERE namespace=? ORDER BY created_at,rowid", "protocol-test")
+		rows, err := tx.Query("SELECT project_id,id FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", "protocol-test")
 		if err != nil {
 			return err
 		}

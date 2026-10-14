@@ -41,7 +41,7 @@ func (t *Tx) CheckDirectDecisionWrite(project string, fence ExecutionFence) erro
 		return nil
 	}
 	var raw []byte
-	err := t.QueryRow("SELECT job FROM xloom_executions WHERE project_id=? AND lease=? AND kind='reason'", project, fence.Run).Scan(&raw)
+	err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", project, fence.Run).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -66,7 +66,7 @@ func (t *Tx) batchExecution(project string, fence ExecutionFence) (Execution, er
 	if fence.Run == "" || fence.Lease != "reason" || fence.Intent != "" {
 		return Execution{}, Err(403, "decision batches require a registered Decide lease")
 	}
-	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM xloom_executions WHERE project_id=? AND lease=? AND kind='reason'", project, fence.Run))
+	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", project, fence.Run))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Execution{}, Err(403, "decision batches require a registered Decide execution")
 	}
@@ -102,7 +102,7 @@ func emptyDecisionReceipt() DecisionReceipt {
 func (t *Tx) savedDecision(project, lease string) (DecisionReceipt, string, error) {
 	out := emptyDecisionReceipt()
 	var request, response string
-	err := t.QueryRow("SELECT request,response FROM xloom_state_actions WHERE project_id=? AND idempotency_key=?", project, "decision:"+lease).Scan(&request, &response)
+	err := t.QueryRow("SELECT request,response FROM pwnmesh_state_actions WHERE project_id=? AND idempotency_key=?", project, "decision:"+lease).Scan(&request, &response)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, "", nil
 	}
@@ -303,7 +303,7 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	if t.inDecisionBatch {
 		return out, Err(409, "nested decision batch is not allowed")
 	}
-	if _, err = t.Exec("SAVEPOINT xloom_decision_batch"); err != nil {
+	if _, err = t.Exec("SAVEPOINT pwnmesh_decision_batch"); err != nil {
 		return out, err
 	}
 	keep := false
@@ -311,10 +311,10 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	defer func() {
 		t.inDecisionBatch = false
 		if !keep {
-			_, rollbackErr := t.Exec("ROLLBACK TO xloom_decision_batch")
+			_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_decision_batch")
 			err = errors.Join(err, rollbackErr)
 		}
-		_, releaseErr := t.Exec("RELEASE xloom_decision_batch")
+		_, releaseErr := t.Exec("RELEASE pwnmesh_decision_batch")
 		err = errors.Join(err, releaseErr)
 	}()
 	for n, action := range actions {
@@ -363,7 +363,7 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	if err != nil {
 		return out, err
 	}
-	if _, err = t.Exec("INSERT INTO xloom_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, "decision:"+fence.Run, string(canonical), string(response)); err != nil {
+	if _, err = t.Exec("INSERT INTO pwnmesh_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, "decision:"+fence.Run, string(canonical), string(response)); err != nil {
 		return out, err
 	}
 	result, _ := json.Marshal(map[string]any{"status": "success", "type": "result", "text": `{"accepted":true,"data":{"decided":true}}`, "state_version": out.StateVersion})

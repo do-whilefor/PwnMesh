@@ -184,10 +184,10 @@ func TestLegacyCommittedCurationSettlesBeforeBackendAndRecoveryChecks(t *testing
 				t.Fatal(err)
 			}
 			if err := store.Do(context.Background(), func(tx *board.Tx) error {
-				if _, err := tx.Exec("UPDATE xloom_executions SET status='running',result=NULL,resumes=2 WHERE project_id=? AND id=?", graph.Project.ID, run.Job.RunID); err != nil {
+				if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='running',result=NULL,resumes=2 WHERE project_id=? AND id=?", graph.Project.ID, run.Job.RunID); err != nil {
 					return err
 				}
-				_, err := tx.Exec("DELETE FROM xloom_revoked_runs WHERE project_id=? AND worker=?", graph.Project.ID, run.Lease.Run)
+				_, err := tx.Exec("DELETE FROM pwnmesh_revoked_runs WHERE project_id=? AND worker=?", graph.Project.ID, run.Lease.Run)
 				return err
 			}); err != nil {
 				t.Fatal(err)

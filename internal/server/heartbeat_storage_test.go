@@ -24,7 +24,7 @@ func TestLeaseUpdatesWriteOnlyLeaseColumns(t *testing.T) {
 				return err
 			}
 		}
-		_, err := tx.Exec("CREATE TRIGGER reject_lease_metadata BEFORE UPDATE OF data ON xloom_state BEGIN SELECT RAISE(ABORT,'lease rewrote metadata'); END")
+		_, err := tx.Exec("CREATE TRIGGER reject_lease_metadata BEFORE UPDATE OF data ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'lease rewrote metadata'); END")
 		return err
 	}); err != nil {
 		t.Fatal(err)

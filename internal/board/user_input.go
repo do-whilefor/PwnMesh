@@ -44,6 +44,6 @@ func (t *Tx) SaveUserInput(g Graph, op, id, run string, payload, result any) err
 	if err != nil {
 		return err
 	}
-	_, err = t.Exec("INSERT INTO xloom_state_events(project_id,revision,event) VALUES(?,?,?)", g.Project.ID, revision, string(event))
+	_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", g.Project.ID, revision, string(event))
 	return err
 }

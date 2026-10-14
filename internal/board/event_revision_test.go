@@ -34,15 +34,15 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 			before := f.state()
 			f.tx(func(tx *Tx) error {
 				var raw string
-				if err := tx.QueryRow("SELECT data FROM xloom_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
+				if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
 					return err
 				}
 				// Retain even unknown future fields and formatting on version writes.
 				raw = "{ \"future_metadata\": {\"preserve\":true}, " + raw[1:]
-				if _, err := tx.Exec("UPDATE xloom_state SET data=? WHERE project_id='proj_001'", raw); err != nil {
+				if _, err := tx.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id='proj_001'", raw); err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`CREATE TRIGGER guard_metadata BEFORE UPDATE OF data ON xloom_state BEGIN SELECT RAISE(ABORT,'event rewrote metadata'); END`); err != nil {
+				if _, err := tx.Exec(`CREATE TRIGGER guard_metadata BEFORE UPDATE OF data ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'event rewrote metadata'); END`); err != nil {
 					return err
 				}
 				if op == "conclusion" {
@@ -77,7 +77,7 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 					}
 				}
 				var after string
-				if err := tx.QueryRow("SELECT data FROM xloom_state WHERE project_id='proj_001'").Scan(&after); err != nil {
+				if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&after); err != nil {
 					return err
 				}
 				if after != raw {

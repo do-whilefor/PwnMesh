@@ -11,6 +11,12 @@ See [the development guide](../docs/development.md) for the shared build and
 validation entry points, and [supported formats](../docs/formats.md) before
 migrating an existing installation.
 
+The current server uses SQLite schema `2` and `pwnmesh_*` SQL object names. Stop
+the old Server and Dispatcher before the first upgraded startup; a supported
+schema `1` database is renamed transactionally on open. Preserve its installation
+ID and workspace volumes. This database migration does not rename containers,
+volumes or workspace files, and older binaries must not share the upgraded database.
+
 Worker containers are owned by a persistent installation ID stored in the server
 database, plus the configured dispatcher namespace and project ID. Restarting
 against the same database reuses that identity. A different database cannot adopt

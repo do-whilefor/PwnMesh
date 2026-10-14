@@ -35,7 +35,7 @@ func TestTraceRunsEnforcesProjectRoundAndExploreIdentity(t *testing.T) {
 		if _, err := tx.TraceRuns("p", 1, 0, 1, ""); err == nil || !strings.Contains(err.Error(), "previous project round") {
 			t.Fatalf("forged round accepted: %v", err)
 		}
-		if _, err := tx.Exec(`INSERT INTO xloom_project_rounds(project_id,generation,restarted_at) VALUES('p',2,?)`, tx.Now); err != nil {
+		if _, err := tx.Exec(`INSERT INTO pwnmesh_project_rounds(project_id,generation,restarted_at) VALUES('p',2,?)`, tx.Now); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := tx.TraceRuns("p", 0, 0, 1, "first"); err == nil {

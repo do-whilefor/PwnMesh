@@ -34,7 +34,7 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 	if !slices.ContainsFunc(s.Goals, func(goal Goal) bool { return goal.ID == step.GoalID && goal.Status == "open" }) {
 		return "", nil, false, Err(409, "retry requires an open task goal")
 	}
-	latest, err := scanExecutionSummary(t.QueryRow("SELECT "+executionSummaryColumns+" FROM xloom_executions WHERE project_id=? AND intent=? ORDER BY rowid DESC LIMIT 1", s.Graph.Project.ID, id))
+	latest, err := scanExecutionSummary(t.QueryRow("SELECT "+executionSummaryColumns+" FROM pwnmesh_executions WHERE project_id=? AND intent=? ORDER BY rowid DESC LIMIT 1", s.Graph.Project.ID, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, false, Err(409, "Step has no execution to retry")
 	}
@@ -51,7 +51,7 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 		return "", nil, false, err
 	}
 	var pending bool
-	if err = t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE project_id=? AND intent=? AND id!=? AND status IN ('prepared','running','retryable','result_pending','retry_requested'))", latest.ProjectID, latest.Intent, latest.ID).Scan(&pending); err != nil {
+	if err = t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE project_id=? AND intent=? AND id!=? AND status IN ('prepared','running','retryable','result_pending','retry_requested'))", latest.ProjectID, latest.Intent, latest.ID).Scan(&pending); err != nil {
 		return "", nil, false, err
 	}
 	if pending {
@@ -104,7 +104,7 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 
 func (t *Tx) CheckRepairRetry(project, run string) error {
 	var stale bool
-	err := t.QueryRow("SELECT COALESCE(json_extract(result,'$.failure_kind'),'')='repair_stale' FROM xloom_executions WHERE project_id=? AND id=?", project, run).Scan(&stale)
+	err := t.QueryRow("SELECT COALESCE(json_extract(result,'$.failure_kind'),'')='repair_stale' FROM pwnmesh_executions WHERE project_id=? AND id=?", project, run).Scan(&stale)
 	if err != nil {
 		return err
 	}

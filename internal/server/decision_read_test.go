@@ -92,7 +92,7 @@ func TestDecisionReadsSurviveConcurrentFactsAndKeepWritesCurrent(t *testing.T) {
 	}
 	var views int
 	if err = reopened.Do(context.Background(), func(tx *board.Tx) error {
-		return tx.QueryRow("SELECT count(*) FROM xloom_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&views)
+		return tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&views)
 	}); err != nil || views != 1 {
 		t.Fatalf("refresh retained historical full graphs: count=%d err=%v", views, err)
 	}
@@ -190,7 +190,7 @@ func TestDecisionReadViewDoesNotBypassFences(t *testing.T) {
 			}
 			var count int
 			if err := store.Do(context.Background(), func(tx *board.Tx) error {
-				return tx.QueryRow("SELECT count(*) FROM xloom_decision_read_views WHERE project_id=?", f.project).Scan(&count)
+				return tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views WHERE project_id=?", f.project).Scan(&count)
 			}); err != nil || count != 0 {
 				t.Fatalf("%s retained stale views: %d %v", operation, count, err)
 			}
@@ -216,7 +216,7 @@ func TestDecisionReadViewRetainedForRecoveryAndPrunedOnCompletion(t *testing.T) 
 						return err
 					}
 					var count int
-					if err := tx.QueryRow("SELECT count(*) FROM xloom_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&count); err != nil {
+					if err := tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&count); err != nil {
 						return err
 					}
 					want := 1

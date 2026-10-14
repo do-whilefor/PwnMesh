@@ -57,7 +57,7 @@ func TestEmptyDecisionRequiresExecutableWork(t *testing.T) {
 					return err
 				}
 				var writes int
-				if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM xloom_state_actions)+(SELECT COUNT(*) FROM xloom_state_events)").Scan(&writes); err != nil {
+				if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM pwnmesh_state_actions)+(SELECT COUNT(*) FROM pwnmesh_state_events)").Scan(&writes); err != nil {
 					return err
 				}
 				batch := DecisionBatch{ExpectedVersion: version}
@@ -99,7 +99,7 @@ func TestEmptyDecisionRequiresExecutableWork(t *testing.T) {
 						return err
 					}
 					var afterWrites int
-					if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM xloom_state_actions)+(SELECT COUNT(*) FROM xloom_state_events)").Scan(&afterWrites); err != nil {
+					if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM pwnmesh_state_actions)+(SELECT COUNT(*) FROM pwnmesh_state_events)").Scan(&afterWrites); err != nil {
 						return err
 					}
 					if string(after) != string(before) || e.Status != original.Status || saved.Committed || afterWrites != writes {

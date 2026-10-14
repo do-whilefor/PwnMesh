@@ -16,7 +16,7 @@ func (t *Tx) StateChanges(project string, after, through int64) ([]StateChange, 
 	if after < 0 || through < after {
 		return nil, Err(422, "invalid change revision interval")
 	}
-	rows, err := t.Query(`SELECT revision,json_extract(event,'$.op'),json_extract(event,'$.id') FROM xloom_state_events WHERE project_id=? AND revision>? AND revision<=? ORDER BY revision LIMIT 1000`, project, after, through)
+	rows, err := t.Query(`SELECT revision,json_extract(event,'$.op'),json_extract(event,'$.id') FROM pwnmesh_state_events WHERE project_id=? AND revision>? AND revision<=? ORDER BY revision LIMIT 1000`, project, after, through)
 	if err != nil {
 		return nil, err
 	}

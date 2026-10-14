@@ -52,7 +52,7 @@ func completeDependencyHTTPProducer(t *testing.T, f *executionProtocolFixture, s
 func invalidateDependencyHTTPFact(t *testing.T, f *executionProtocolFixture, id string) {
 	t.Helper()
 	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		_, err := tx.Exec(`UPDATE xloom_state SET data=json_set(data,
+		_, err := tx.Exec(`UPDATE pwnmesh_state SET data=json_set(data,
 			'$.facts['||(SELECT key FROM json_each(data,'$.facts') WHERE json_extract(value,'$.id')=?)||'].status','refuted'),
 			revision=revision+1,decision_revision=decision_revision+1 WHERE project_id=?`, id, f.project)
 		return err

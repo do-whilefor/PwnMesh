@@ -123,17 +123,17 @@ func (t *Tx) Settings() (Settings, error) {
 // heartbeat metadata on concluded intents. A resumed project must reject
 // delayed writes from revoked workers.
 func (t *Tx) RevokeRuns(project string) error {
-	_, err := t.Exec(`INSERT OR IGNORE INTO xloom_revoked_runs(project_id,worker)
+	_, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_revoked_runs(project_id,worker)
 SELECT project_id,worker FROM intents WHERE project_id=? AND worker IS NOT NULL
 UNION SELECT id,reason_worker FROM projects WHERE id=? AND reason_worker IS NOT NULL
-UNION SELECT project_id,lease FROM xloom_executions WHERE project_id=?
-UNION SELECT project_id,curator_worker FROM xloom_project_orchestration WHERE project_id=? AND curator_worker IS NOT NULL`, project, project, project, project)
+UNION SELECT project_id,lease FROM pwnmesh_executions WHERE project_id=?
+UNION SELECT project_id,curator_worker FROM pwnmesh_project_orchestration WHERE project_id=? AND curator_worker IS NOT NULL`, project, project, project, project)
 	return err
 }
 
 func (t *Tx) RunRevoked(project, worker string) (bool, error) {
 	var revoked bool
-	err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_revoked_runs WHERE project_id=? AND worker=?)", project, worker).Scan(&revoked)
+	err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_revoked_runs WHERE project_id=? AND worker=?)", project, worker).Scan(&revoked)
 	return revoked, err
 }
 
@@ -151,10 +151,10 @@ func (t *Tx) ExpireProject(project string) error {
 	}{
 		{`UPDATE intents SET worker=NULL WHERE to_fact_id IS NULL AND worker IS NOT NULL AND (julianday(?)-julianday(last_heartbeat_at))*86400>?`, "project_id", s.IntentTimeout},
 		{`UPDATE projects SET reason_worker=NULL,reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE reason_worker IS NOT NULL AND (julianday(?)-julianday(reason_last_heartbeat_at))*86400>?`, "id", s.ReasonTimeout},
-		{`UPDATE xloom_project_orchestration SET curator_worker=NULL,curator_trigger=NULL,curator_started_at=NULL,curator_heartbeat=NULL WHERE curator_worker IS NOT NULL AND (julianday(?)-julianday(curator_heartbeat))*86400>?`, "project_id", s.ReasonTimeout},
+		{`UPDATE pwnmesh_project_orchestration SET curator_worker=NULL,curator_trigger=NULL,curator_started_at=NULL,curator_heartbeat=NULL WHERE curator_worker IS NOT NULL AND (julianday(?)-julianday(curator_heartbeat))*86400>?`, "project_id", s.ReasonTimeout},
 	} {
 		args := []any{t.Now, expiry.timeout}
-		expiry.query += " AND " + expiry.projectColumn + " IN (SELECT project_id FROM xloom_project_orchestration WHERE version=1)"
+		expiry.query += " AND " + expiry.projectColumn + " IN (SELECT project_id FROM pwnmesh_project_orchestration WHERE version=1)"
 		if project != "" {
 			expiry.query += " AND " + expiry.projectColumn + "=?"
 			args = append(args, project)
@@ -201,7 +201,7 @@ func (t *Tx) IDs() ([]string, error) {
 func (t *Tx) Load(id string) (Graph, error) {
 	g := Graph{Facts: []Fact{}, Intents: []Intent{}, Hints: []Hint{}}
 	var rw, rt, rs, rh *string
-	err := t.QueryRow(`SELECT p.id,p.title,p.status,p.bootstrap_enabled,p.created_at,p.reason_worker,p.reason_trigger,p.reason_started_at,p.reason_last_heartbeat_at,COALESCE(m.scenario,''),COALESCE(round.generation,0),COALESCE(round.restarted_at,''),COALESCE(termination.terminated_at,'') FROM projects p LEFT JOIN xloom_project_metadata m ON m.project_id=p.id LEFT JOIN xloom_project_rounds round ON round.project_id=p.id LEFT JOIN xloom_project_termination termination ON termination.project_id=p.id WHERE p.id=?`, id).Scan(&g.Project.ID, &g.Project.Title, &g.Project.Status, &g.Project.Bootstrap, &g.Project.CreatedAt, &rw, &rt, &rs, &rh, &g.Project.Scenario, &g.Project.Generation, &g.Project.RestartedAt, &g.Project.TerminatedAt)
+	err := t.QueryRow(`SELECT p.id,p.title,p.status,p.bootstrap_enabled,p.created_at,p.reason_worker,p.reason_trigger,p.reason_started_at,p.reason_last_heartbeat_at,COALESCE(m.scenario,''),COALESCE(round.generation,0),COALESCE(round.restarted_at,''),COALESCE(termination.terminated_at,'') FROM projects p LEFT JOIN pwnmesh_project_metadata m ON m.project_id=p.id LEFT JOIN pwnmesh_project_rounds round ON round.project_id=p.id LEFT JOIN pwnmesh_project_termination termination ON termination.project_id=p.id WHERE p.id=?`, id).Scan(&g.Project.ID, &g.Project.Title, &g.Project.Status, &g.Project.Bootstrap, &g.Project.CreatedAt, &rw, &rt, &rs, &rh, &g.Project.Scenario, &g.Project.Generation, &g.Project.RestartedAt, &g.Project.TerminatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return g, Err(404, "Project not found")
 	}
@@ -325,7 +325,7 @@ func (t *Tx) Save(g Graph) error {
 	// Older graph callers omit this optional metadata. Keep their updates from
 	// silently clearing the scenario chosen by the project creator.
 	if p.Scenario != "" {
-		if _, err = t.Exec(`INSERT INTO xloom_project_metadata(project_id,scenario) VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET scenario=excluded.scenario`, p.ID, p.Scenario); err != nil {
+		if _, err = t.Exec(`INSERT INTO pwnmesh_project_metadata(project_id,scenario) VALUES(?,?) ON CONFLICT(project_id) DO UPDATE SET scenario=excluded.scenario`, p.ID, p.Scenario); err != nil {
 			return err
 		}
 	}

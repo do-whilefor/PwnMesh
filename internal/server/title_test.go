@@ -17,12 +17,12 @@ func TestTitleUpdatesOnlyTitleAndPreservesState(t *testing.T) {
 	before, events := f.state(), storedEvents(f)
 	version := board.DecisionStateVersion(before)
 	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		for _, table := range []string{"facts", "hints", "intents", "intent_sources", "xloom_project_orchestration"} {
+		for _, table := range []string{"facts", "hints", "intents", "intent_sources", "pwnmesh_project_orchestration"} {
 			if _, err := tx.Exec("CREATE TRIGGER reject_title_insert_" + table + " BEFORE INSERT ON " + table + " BEGIN SELECT RAISE(ABORT,'title rewrote graph'); END"); err != nil {
 				return err
 			}
 		}
-		for _, table := range []string{"facts", "hints", "intents", "intent_sources", "xloom_state"} {
+		for _, table := range []string{"facts", "hints", "intents", "intent_sources", "pwnmesh_state"} {
 			if _, err := tx.Exec("CREATE TRIGGER reject_title_update_" + table + " BEFORE UPDATE ON " + table + " BEGIN SELECT RAISE(ABORT,'title rewrote graph'); END"); err != nil {
 				return err
 			}

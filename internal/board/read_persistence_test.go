@@ -92,7 +92,7 @@ func TestEventReadsPreserveExistenceBoundariesAndLimit(t *testing.T) {
 	f.tx(func(tx *Tx) error {
 		for revision := int64(1); revision <= 1003; revision++ {
 			raw, _ := json.Marshal(StateEvent{Revision: revision, Op: "step", ID: "i001"})
-			if _, err := tx.Exec("INSERT INTO xloom_state_events(project_id,revision,event) VALUES('proj_001',?,?)", revision, string(raw)); err != nil {
+			if _, err := tx.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES('proj_001',?,?)", revision, string(raw)); err != nil {
 				return err
 			}
 		}

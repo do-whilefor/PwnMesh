@@ -21,7 +21,7 @@ func curationSnapshotKey(id string) string { return "/server/input-snapshots/" +
 func retainCurationSnapshots(ctx context.Context, store *board.Store, project string, files map[string][]byte, output string) error {
 	snapshots := map[string][]byte{}
 	if err := store.Do(ctx, func(tx *board.Tx) error {
-		rows, err := tx.Query("SELECT job FROM xloom_executions WHERE project_id=? AND kind='curate'", project)
+		rows, err := tx.Query("SELECT job FROM pwnmesh_executions WHERE project_id=? AND kind='curate'", project)
 		if err != nil {
 			return err
 		}
@@ -51,7 +51,7 @@ func retainCurationSnapshots(ctx context.Context, store *board.Store, project st
 			if _, err := tx.ReadInputSnapshot(project, ref.ID); err != nil {
 				return err
 			}
-			if err := tx.QueryRow("SELECT state FROM xloom_input_snapshots WHERE project_id=? AND id=?", project, ref.ID).Scan(&raw); err != nil {
+			if err := tx.QueryRow("SELECT state FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?", project, ref.ID).Scan(&raw); err != nil {
 				return err
 			}
 			snapshots[ref.ID] = raw

@@ -45,7 +45,7 @@ func TestStateFailureUsesEventsWithoutReadingRetainedResults(t *testing.T) {
 		t.Fatalf("missing event read a retained result: %q", reason)
 	}
 	f.tx(func(tx *Tx) error {
-		_, err := tx.Exec(`UPDATE xloom_executions SET result='unavailable' WHERE id='failure'`)
+		_, err := tx.Exec(`UPDATE pwnmesh_executions SET result='unavailable' WHERE id='failure'`)
 		return err
 	})
 	if reason := f.state().Steps[0].Reason; reason != "execution failed" {
@@ -53,7 +53,7 @@ func TestStateFailureUsesEventsWithoutReadingRetainedResults(t *testing.T) {
 	}
 	f.tx(func(tx *Tx) error {
 		event, _ := json.Marshal(StateEvent{Revision: 2, Op: "execution_failed", ID: step, RunID: "planner@failure", Payload: json.RawMessage(`{"reason":"recorded graph failure"}`)})
-		_, err := tx.Exec(`INSERT INTO xloom_state_events(project_id,revision,event) VALUES('proj_001',2,?)`, string(event))
+		_, err := tx.Exec(`INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES('proj_001',2,?)`, string(event))
 		return err
 	})
 	if reason := f.state().Steps[0].Reason; reason != "recorded graph failure" {

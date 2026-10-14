@@ -77,7 +77,7 @@ func TestNewDecisionDoesNotReadCompletedJobSnapshot(t *testing.T) {
 	// registration metadata and outcome still exist; new planning must not
 	// deserialize this completed run or fall back to a private transcript.
 	if err := store.Do(ctx, func(tx *board.Tx) error {
-		result, err := tx.Exec("UPDATE xloom_executions SET job='{}' WHERE project_id=? AND kind='reason' AND status='succeeded'", graph.Project.ID)
+		result, err := tx.Exec("UPDATE pwnmesh_executions SET job='{}' WHERE project_id=? AND kind='reason' AND status='succeeded'", graph.Project.ID)
 		if err != nil {
 			return err
 		}

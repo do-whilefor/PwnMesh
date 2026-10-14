@@ -84,7 +84,7 @@ func DecisionJobVersion(raw json.RawMessage) (string, error) {
 func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expected string) error {
 	if fence.Lease == "curate" {
 		var raw []byte
-		if err := t.QueryRow("SELECT job FROM xloom_executions WHERE project_id=? AND lease=? AND kind='curate'", state.Graph.Project.ID, fence.Run).Scan(&raw); err != nil {
+		if err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='curate'", state.Graph.Project.ID, fence.Run).Scan(&raw); err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return Err(403, "curation requires a registered input snapshot")
 			}
@@ -100,7 +100,7 @@ func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expect
 	}
 	if fence.Lease == "reason" {
 		var raw []byte
-		err := t.QueryRow("SELECT job FROM xloom_executions WHERE project_id=? AND lease=? AND kind='reason'", state.Graph.Project.ID, fence.Run).Scan(&raw)
+		err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", state.Graph.Project.ID, fence.Run).Scan(&raw)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}

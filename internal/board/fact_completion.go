@@ -78,7 +78,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 		payload, _ := json.Marshal(map[string]string{"fact_id": factID})
 		encoded, _ := json.Marshal(result)
 		event, _ := json.Marshal(StateEvent{Revision: revision, Op: "step_completed", ID: fence.Intent, RunID: fence.Run, CreatedAt: t.Now, Payload: payload, Result: encoded})
-		_, err = t.Exec("INSERT INTO xloom_state_events(project_id,revision,event) VALUES(?,?,?)", project, revision, string(event))
+		_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", project, revision, string(event))
 		return result, err
 	}
 	return Conclusion{}, Err(404, "Step not found")

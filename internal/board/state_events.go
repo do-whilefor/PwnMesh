@@ -21,7 +21,7 @@ func (t *Tx) recordExecutionFailure(e Execution, status string, failure json.Raw
 	}
 	detail, _ := json.Marshal(map[string]any{"run_id": e.ID, "status": status, "reason": executionFailureDescription(status, failure), "result": failure})
 	event, _ := json.Marshal(StateEvent{Revision: revision, Op: "execution_failed", ID: e.Intent, RunID: e.Lease, CreatedAt: t.Now, Payload: detail, Result: detail})
-	_, err = t.Exec("INSERT INTO xloom_state_events(project_id,revision,event) VALUES(?,?,?)", e.ProjectID, revision, string(event))
+	_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", e.ProjectID, revision, string(event))
 	return err
 }
 
@@ -33,7 +33,7 @@ func (t *Tx) advanceStateRevision(project string, decisionChange bool) (int64, e
 		increment = 1
 	}
 	var revision int64
-	err := t.QueryRow(`INSERT INTO xloom_state(project_id,data,revision,decision_revision)
+	err := t.QueryRow(`INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision)
 		VALUES(?,'{"goals":[],"steps":[],"facts":[],"findings":[],"fact_relations":[]}',1,?)
 		ON CONFLICT(project_id) DO UPDATE SET revision=revision+1,decision_revision=decision_revision+excluded.decision_revision
 		RETURNING revision`, project, increment).Scan(&revision)
@@ -44,7 +44,7 @@ func (t *Tx) StateEvents(project string, after int64) ([]StateEvent, error) {
 	if err := t.RequireProject(project); err != nil {
 		return nil, err
 	}
-	rows, err := t.Query("SELECT event FROM xloom_state_events WHERE project_id=? AND revision>? ORDER BY revision LIMIT 1000", project, after)
+	rows, err := t.Query("SELECT event FROM pwnmesh_state_events WHERE project_id=? AND revision>? ORDER BY revision LIMIT 1000", project, after)
 	if err != nil {
 		return nil, err
 	}

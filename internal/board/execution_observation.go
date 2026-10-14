@@ -48,6 +48,6 @@ func (t *Tx) RecordExecutionObservation(project, run string, fence ExecutionFenc
 	if err != nil {
 		return err
 	}
-	_, err = t.Exec("UPDATE xloom_executions SET result=? WHERE project_id=? AND id=?", raw, project, run)
+	_, err = t.Exec("UPDATE pwnmesh_executions SET result=? WHERE project_id=? AND id=?", raw, project, run)
 	return err
 }

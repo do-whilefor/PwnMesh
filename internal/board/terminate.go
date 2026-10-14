@@ -22,7 +22,7 @@ func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
 	if err = t.RevokeRuns(project); err != nil {
 		return Graph{}, err
 	}
-	rows, err := t.Query("SELECT id FROM xloom_executions WHERE project_id=? AND status IN ('prepared','running','retryable','result_pending')", project)
+	rows, err := t.Query("SELECT id FROM pwnmesh_executions WHERE project_id=? AND status IN ('prepared','running','retryable','result_pending')", project)
 	if err != nil {
 		return Graph{}, err
 	}
@@ -52,12 +52,12 @@ func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
 			return Graph{}, err
 		}
 	}
-	if _, err = t.Exec("DELETE FROM xloom_paused_executions WHERE project_id=?", project); err != nil {
+	if _, err = t.Exec("DELETE FROM pwnmesh_paused_executions WHERE project_id=?", project); err != nil {
 		return Graph{}, err
 	}
 	// Cancel outstanding one-use retry grants as well as running work, while
 	// retaining the attempt's stored result and original failure history.
-	if _, err = t.Exec("UPDATE xloom_executions SET status='cancelled',updated_at=? WHERE project_id=? AND status='retry_requested'", t.Now, project); err != nil {
+	if _, err = t.Exec("UPDATE pwnmesh_executions SET status='cancelled',updated_at=? WHERE project_id=? AND status='retry_requested'", t.Now, project); err != nil {
 		return Graph{}, err
 	}
 	g.Project.Status, g.Project.Reason, g.Project.TerminatedAt = "terminated", nil, t.Now
@@ -67,7 +67,7 @@ func (t *Tx) TerminateProject(project string, expected *int64) (Graph, error) {
 			g.Intents[index].Worker = nil
 		}
 	}
-	if _, err = t.Exec("INSERT INTO xloom_project_termination(project_id,terminated_at) VALUES(?,?)", project, t.Now); err != nil {
+	if _, err = t.Exec("INSERT INTO pwnmesh_project_termination(project_id,terminated_at) VALUES(?,?)", project, t.Now); err != nil {
 		return Graph{}, err
 	}
 	return g, t.Save(g)

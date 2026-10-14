@@ -21,15 +21,15 @@ func (t *Tx) StateAction(project string, fence ExecutionFence, action StateActio
 	}
 	// The record, its asset anchors and the receipt form one write. Preserve
 	// this boundary even when an outer caller handles a failed action itself.
-	if _, err = t.Exec("SAVEPOINT xloom_state_action"); err != nil {
+	if _, err = t.Exec("SAVEPOINT pwnmesh_state_action"); err != nil {
 		return out, err
 	}
 	defer func() {
 		if err != nil {
-			_, rollbackErr := t.Exec("ROLLBACK TO xloom_state_action")
+			_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_state_action")
 			err = errors.Join(err, rollbackErr)
 		}
-		_, releaseErr := t.Exec("RELEASE xloom_state_action")
+		_, releaseErr := t.Exec("RELEASE pwnmesh_state_action")
 		err = errors.Join(err, releaseErr)
 	}()
 	if action.Op == "curate" {
@@ -99,7 +99,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		return StateActionResult{}, err
 	}
 	var oldRequest, oldResponse string
-	err = t.QueryRow("SELECT request,response FROM xloom_state_actions WHERE project_id=? AND idempotency_key=?", project, action.IdempotencyKey).Scan(&oldRequest, &oldResponse)
+	err = t.QueryRow("SELECT request,response FROM pwnmesh_state_actions WHERE project_id=? AND idempotency_key=?", project, action.IdempotencyKey).Scan(&oldRequest, &oldResponse)
 	if err == nil {
 		if oldRequest != string(canonical) {
 			return StateActionResult{}, Err(409, "idempotency key was used for a different action")
@@ -113,7 +113,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	}
 	if action.Op == "curate" {
 		var committed bool
-		if err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_state_actions WHERE project_id=? AND json_extract(request,'$.Run')=? AND json_extract(request,'$.Op')='curate')`, project, fence.Run).Scan(&committed); err != nil {
+		if err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_state_actions WHERE project_id=? AND json_extract(request,'$.Run')=? AND json_extract(request,'$.Op')='curate')`, project, fence.Run).Scan(&committed); err != nil {
 			return StateActionResult{}, err
 		}
 		if committed {
@@ -174,7 +174,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		if err != nil {
 			return StateActionResult{}, err
 		}
-		if _, err = t.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", project, string(raw), s.Revision, s.DecisionRevision); err != nil {
+		if _, err = t.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", project, string(raw), s.Revision, s.DecisionRevision); err != nil {
 			return StateActionResult{}, err
 		}
 	}
@@ -204,7 +204,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	out.AssetIDs = current.AssetIDs(action.Op, id)
 	out.Committed = action.Op == "curate"
 	response, _ := json.Marshal(out)
-	if _, err = t.Exec("INSERT INTO xloom_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
+	if _, err = t.Exec("INSERT INTO pwnmesh_state_actions(project_id,idempotency_key,request,response) VALUES(?,?,?,?)", project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
 		return StateActionResult{}, err
 	}
 	if !changed {
@@ -212,7 +212,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		return out, nil
 	}
 	event, _ := json.Marshal(StateEvent{Revision: s.Revision, Op: action.Op, ID: id, RunID: fence.Run, CreatedAt: t.Now, Payload: action.Payload, Result: resultJSON})
-	_, err = t.Exec("INSERT INTO xloom_state_events(project_id,revision,event) VALUES(?,?,?)", project, s.Revision, string(event))
+	_, err = t.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", project, s.Revision, string(event))
 	if err == nil {
 		*snapshot = current
 	}
@@ -653,7 +653,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 					continue
 				}
 				if i.Worker != nil {
-					if _, err := t.Exec("INSERT OR IGNORE INTO xloom_revoked_runs(project_id,worker) VALUES(?,?)", s.Graph.Project.ID, *i.Worker); err != nil {
+					if _, err := t.Exec("INSERT OR IGNORE INTO pwnmesh_revoked_runs(project_id,worker) VALUES(?,?)", s.Graph.Project.ID, *i.Worker); err != nil {
 						return "", nil, false, err
 					}
 				}

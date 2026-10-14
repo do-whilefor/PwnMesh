@@ -14,7 +14,7 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 	if fence.Run == "" || fence.Lease != "reason" {
 		return current, nil
 	}
-	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM xloom_executions WHERE project_id=? AND lease=? AND kind='reason'", current.Graph.Project.ID, fence.Run))
+	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason'", current.Graph.Project.ID, fence.Run))
 	if errors.Is(err, sql.ErrNoRows) {
 		return current, nil
 	}
@@ -49,11 +49,11 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 		if err != nil {
 			return State{}, err
 		}
-		_, err = t.Exec("INSERT INTO xloom_decision_read_views(project_id,execution_id,state_version,state) VALUES(?,?,?,?) ON CONFLICT(project_id,execution_id) DO UPDATE SET state_version=excluded.state_version,state=excluded.state", e.ProjectID, e.ID, DecisionStateVersion(current), raw)
+		_, err = t.Exec("INSERT INTO pwnmesh_decision_read_views(project_id,execution_id,state_version,state) VALUES(?,?,?,?) ON CONFLICT(project_id,execution_id) DO UPDATE SET state_version=excluded.state_version,state=excluded.state", e.ProjectID, e.ID, DecisionStateVersion(current), raw)
 		return current, err
 	}
 	var raw []byte
-	err = t.QueryRow("SELECT state_version,state FROM xloom_decision_read_views WHERE project_id=? AND execution_id=?", e.ProjectID, e.ID).Scan(&version, &raw)
+	err = t.QueryRow("SELECT state_version,state FROM pwnmesh_decision_read_views WHERE project_id=? AND execution_id=?", e.ProjectID, e.ID).Scan(&version, &raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		if job.InputSnapshot != nil {
 			return t.ReadInputSnapshot(e.ProjectID, job.InputSnapshot.ID)

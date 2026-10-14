@@ -19,7 +19,7 @@ func TestExecutionChangesRestoreProjectionAndPersistCursors(t *testing.T) {
 	executionQueryTx(t, store, func(tx *Tx) {
 		putQueryExecution(t, tx, Execution{ID: "existing", Status: "running"}, 0, "")
 		// Rebuild missing derived rows while retaining the current schema.
-		_, err := tx.Exec(`DELETE FROM xloom_ui_execution_changes; DELETE FROM xloom_ui_execution_revisions;`)
+		_, err := tx.Exec(`DELETE FROM pwnmesh_ui_execution_changes; DELETE FROM pwnmesh_ui_execution_revisions;`)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -41,7 +41,7 @@ func TestExecutionChangesRestoreProjectionAndPersistCursors(t *testing.T) {
 	})
 	rollback := errors.New("rollback")
 	if err = store.Do(context.Background(), func(tx *Tx) error {
-		if _, err := tx.Exec("UPDATE xloom_executions SET status='failed' WHERE id='existing'"); err != nil {
+		if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='failed' WHERE id='existing'"); err != nil {
 			return err
 		}
 		return rollback
@@ -73,7 +73,7 @@ func TestExecutionChangesObserveSameSecondUpdatesAndDeletions(t *testing.T) {
 			t.Fatalf("initial execution changes: %+v %v", first, err)
 		}
 		// Neither the timestamp nor insertion rowid changes here.
-		if _, err := tx.Exec(`UPDATE xloom_executions SET status='succeeded',result='{"text":"done","thinking":"private"}' WHERE id='mutable'`); err != nil {
+		if _, err := tx.Exec(`UPDATE pwnmesh_executions SET status='succeeded',result='{"text":"done","thinking":"private"}' WHERE id='mutable'`); err != nil {
 			t.Fatal(err)
 		}
 		second, err := tx.ProjectExecutionChanges("p", 0, first.Through, 0, 0, 100)
@@ -84,14 +84,14 @@ func TestExecutionChangesObserveSameSecondUpdatesAndDeletions(t *testing.T) {
 		if strings.Contains(string(raw), "private") || strings.Contains(string(raw), `"job"`) {
 			t.Fatal("execution changes exposed private execution fields")
 		}
-		if _, err := tx.Exec(`UPDATE xloom_executions SET result='{"text":"final observation"}' WHERE id='mutable'`); err != nil {
+		if _, err := tx.Exec(`UPDATE pwnmesh_executions SET result='{"text":"final observation"}' WHERE id='mutable'`); err != nil {
 			t.Fatal(err)
 		}
 		third, err := tx.ProjectExecutionChanges("p", 0, second.Through, 0, 0, 100)
 		if err != nil || len(third.Items) != 1 || third.Items[0].Result.Text != "final observation" {
 			t.Fatalf("result-only update lost: %+v %v", third, err)
 		}
-		if _, err := tx.Exec("DELETE FROM xloom_executions WHERE id='mutable'"); err != nil {
+		if _, err := tx.Exec("DELETE FROM pwnmesh_executions WHERE id='mutable'"); err != nil {
 			t.Fatal(err)
 		}
 		deleted, err := tx.ProjectExecutionChanges("p", 0, third.Through, 0, 0, 100)
@@ -121,7 +121,7 @@ func TestExecutionChangesRetainUpdatesPastPageBoundaryAndFenceRestarts(t *testin
 		if err != nil || len(page.Items) != 1 || page.NextCursor == 0 {
 			t.Fatalf("missing initial page boundary: %+v %v", page, err)
 		}
-		if _, err := tx.Exec("UPDATE xloom_executions SET status='succeeded' WHERE id='second'"); err != nil {
+		if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='succeeded' WHERE id='second'"); err != nil {
 			t.Fatal(err)
 		}
 		tail, err := tx.ProjectExecutionChanges("p", 0, 0, page.NextCursor, page.Through, 1)
@@ -132,7 +132,7 @@ func TestExecutionChangesRetainUpdatesPastPageBoundaryAndFenceRestarts(t *testin
 		if err != nil || len(next.Items) != 1 || next.Items[0].ID != "second" || next.Items[0].Status != "succeeded" {
 			t.Fatalf("concurrent update fell behind cursor: %+v %v", next, err)
 		}
-		if _, err := tx.Exec("INSERT INTO xloom_project_rounds VALUES('p',1,?)", tx.Now); err != nil {
+		if _, err := tx.Exec("INSERT INTO pwnmesh_project_rounds VALUES('p',1,?)", tx.Now); err != nil {
 			t.Fatal(err)
 		}
 		_, err = tx.ProjectExecutionChanges("p", 0, next.Through, 0, 0, 1)
@@ -176,7 +176,7 @@ func TestRestartPrunesExecutionChangesWithoutResettingRevision(t *testing.T) {
 			return err
 		}
 		var changes int
-		if err := tx.QueryRow("SELECT count(*) FROM xloom_ui_execution_changes WHERE project_id='p'").Scan(&changes); err != nil {
+		if err := tx.QueryRow("SELECT count(*) FROM pwnmesh_ui_execution_changes WHERE project_id='p'").Scan(&changes); err != nil {
 			return err
 		}
 		if changes != 0 {

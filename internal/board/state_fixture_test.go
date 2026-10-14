@@ -77,7 +77,7 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, decisionVe
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES(?,?,0,0)", stateBenchmarkProject, string(raw)); err != nil {
+		if _, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,0,0)", stateBenchmarkProject, string(raw)); err != nil {
 			return err
 		}
 		state, err := tx.State(stateBenchmarkProject)

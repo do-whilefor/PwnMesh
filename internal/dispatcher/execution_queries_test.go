@@ -31,7 +31,7 @@ func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(`INSERT INTO xloom_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, unrelated.Project.ID, "old", "pwnmesh", "old", "reason", "", "old@old", raw, "old-input", "succeeded", tx.Now, tx.Now)
+		_, err = tx.Exec(`INSERT INTO pwnmesh_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, unrelated.Project.ID, "old", "pwnmesh", "old", "reason", "", "old@old", raw, "old-input", "succeeded", tx.Now, tx.Now)
 		return err
 	})
 	if err != nil {
@@ -39,7 +39,7 @@ func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
 	}
 	var retainedBytes int64
 	if err = store.Do(context.Background(), func(tx *board.Tx) error {
-		return tx.QueryRow("SELECT SUM(LENGTH(job)+COALESCE(LENGTH(result),0)) FROM xloom_executions WHERE namespace=?", "pwnmesh").Scan(&retainedBytes)
+		return tx.QueryRow("SELECT SUM(LENGTH(job)+COALESCE(LENGTH(result),0)) FROM pwnmesh_executions WHERE namespace=?", "pwnmesh").Scan(&retainedBytes)
 	}); err != nil || retainedBytes <= 32<<20 {
 		t.Fatalf("fixture did not retain more than 32 MiB: bytes=%d err=%v", retainedBytes, err)
 	}
@@ -272,7 +272,7 @@ func TestLiveGraphReadPagesBeforeDispatcherResponseLimit(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES(?,?,1,1) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=1,decision_revision=1", graph.Project.ID, string(data))
+		_, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,1,1) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=1,decision_revision=1", graph.Project.ID, string(data))
 		return err
 	})
 	if err != nil {

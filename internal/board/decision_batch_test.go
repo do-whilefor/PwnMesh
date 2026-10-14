@@ -86,7 +86,7 @@ func TestDecisionBatchSQLFailureDiscardsReusableStateAndCounters(t *testing.T) {
 	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, 2)
 	batch := f.batch(2)
 	if err := f.store.Do(context.Background(), func(tx *Tx) error {
-		if _, err := tx.Exec(`CREATE TRIGGER reject_second_batch_event BEFORE INSERT ON xloom_state_events WHEN NEW.revision=2 BEGIN SELECT RAISE(ABORT,'event unavailable'); END`); err != nil {
+		if _, err := tx.Exec(`CREATE TRIGGER reject_second_batch_event BEFORE INSERT ON pwnmesh_state_events WHEN NEW.revision=2 BEGIN SELECT RAISE(ABORT,'event unavailable'); END`); err != nil {
 			return err
 		}
 		if _, err := tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, batch); err == nil {
@@ -97,7 +97,7 @@ func TestDecisionBatchSQLFailureDiscardsReusableStateAndCounters(t *testing.T) {
 			return err
 		}
 		var count int
-		if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM xloom_state_events)+(SELECT COUNT(*) FROM xloom_state_actions)").Scan(&count); err != nil {
+		if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM pwnmesh_state_events)+(SELECT COUNT(*) FROM pwnmesh_state_actions)").Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 || state.Revision != 0 || DecisionStateVersion(state) != f.version || state.Graph.Project.Reason == nil {

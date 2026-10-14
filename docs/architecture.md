@@ -67,6 +67,10 @@ query-only WAL readers for consistent snapshots without reserving the writer.
 Keep these operations together even when their source files are split.
 
 The schema and migration sequence live in `schema.go` and `migrations.go`.
+Schema version `2` uses `pwnmesh_*` names for branded SQL objects. A supported
+version `1` database receives a transactional namespace migration on open; new
+databases create the current names directly. Runtime queries use only the current
+names. This migration preserves stored records and execution identities.
 Current-format validation stays beside storage and execution boundaries.
 Unsupported inputs fail before they can trigger fresh work or implicit upgrades.
 

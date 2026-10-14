@@ -27,7 +27,7 @@ and separately builds/smoke-tests `serve`, `dispatch`, and `worker`.
 For a focused change, run its package and test names first. For example:
 
 ```sh
-go test ./internal/board -run 'TestStoreMigration|TestExecutionMetadataMigration' -count=1
+go test ./internal/board -run 'TestStore' -count=1
 go test ./internal/worker -run '^TestAcceptance' -count=1
 go test ./internal/protocol -count=1
 ```
@@ -83,5 +83,8 @@ Keep regression tests beside the owning Go package or in the existing integratio
 package. Preserve transaction, wire/hash and recovery boundaries described in
 [architecture](architecture.md) and [supported formats](formats.md). Before a
 schema change, test empty initialization, a current versioned reopen, unsupported
-input rejection and rollback; before a protocol move, retain exact wire fixtures. Commit reviewable
-changes with their focused regressions, without generated evidence or local plans.
+input rejection and rollback. Namespace changes also need a populated schema `1`
+upgrade fixture that checks canonical object names, stored bytes, foreign keys,
+triggers and query behavior. Before a protocol move, retain exact wire fixtures.
+Commit reviewable changes with their focused regressions, without generated
+evidence or local plans.

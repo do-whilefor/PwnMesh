@@ -32,7 +32,7 @@ func seedCurationGroups(f *orchestrationFixture, groups, notes int, source strin
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("INSERT INTO xloom_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", "p", raw, revision+1, decision+1)
+		_, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", "p", raw, revision+1, decision+1)
 		return err
 	})
 }

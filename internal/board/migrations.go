@@ -13,6 +13,7 @@ var storeMigrations = []struct {
 	apply func(*sql.Tx) error
 }{
 	{"unversioned-baseline", createStoreSchema},
+	{"pwnmesh-namespace", migratePwnMeshNamespace},
 }
 
 const migrationLedgerSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_schema_migrations(
@@ -20,7 +21,7 @@ const migrationLedgerSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_schema_migrati
  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));`
 
 // Validate support before any writes. Only an empty database may initialize
-// version 1; current stores retain their original ledger and record bytes.
+// the current schema directly; upgrades retain existing ledger and record bytes.
 func migrateStore(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -32,11 +33,15 @@ func migrateStore(db *sql.DB) error {
 		return err
 	}
 	applied := 0
+	fresh := ledgers == 0
 	if ledgers == 0 {
 		if objects != 0 {
 			return errors.New("unversioned databases are unsupported; use a database already migrated to PwnMesh schema version 1")
 		}
 		if _, err := tx.Exec(migrationLedgerSchema); err != nil {
+			return err
+		}
+		if err := createStoreSchema(tx); err != nil {
 			return err
 		}
 	} else {
@@ -50,19 +55,19 @@ func migrateStore(db *sql.DB) error {
 	}
 	for n := applied; n < len(storeMigrations); n++ {
 		step := storeMigrations[n]
-		if err := step.apply(tx); err != nil {
-			return fmt.Errorf("schema migration %d (%s): %w", n+1, step.name, err)
+		if !fresh {
+			if err := step.apply(tx); err != nil {
+				return fmt.Errorf("schema migration %d (%s): %w", n+1, step.name, err)
+			}
 		}
 		if _, err := tx.Exec("INSERT INTO pwnmesh_schema_migrations(version,name) VALUES(?,?)", n+1, step.name); err != nil {
 			return err
 		}
 	}
-	var metadataVersion int
-	err = tx.QueryRow("SELECT metadata_version FROM xloom_executions WHERE metadata_version!=1 LIMIT 1").Scan(&metadataVersion)
-	if err == nil {
-		return fmt.Errorf("unsupported execution metadata version %d; expected 1", metadataVersion)
+	if err := validatePwnMeshNamespace(tx); err != nil {
+		return err
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err := validateExecutionMetadata(tx, "pwnmesh_executions"); err != nil {
 		return err
 	}
 	if err := repairStoreRows(tx); err != nil {
@@ -75,6 +80,18 @@ func migrateStore(db *sql.DB) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func validateExecutionMetadata(tx *sql.Tx, table string) error {
+	var metadataVersion int
+	err := tx.QueryRow("SELECT metadata_version FROM " + quoteSchemaName(table) + " WHERE metadata_version!=1 LIMIT 1").Scan(&metadataVersion)
+	if err == nil {
+		return fmt.Errorf("unsupported execution metadata version %d; expected 1", metadataVersion)
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	return nil
 }
 
 func appliedStoreMigrations(tx *sql.Tx) (int, error) {

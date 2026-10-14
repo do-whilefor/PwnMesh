@@ -6,15 +6,15 @@ import "encoding/json"
 // Continue must not grant blanket retries to unrelated failures or abandoned
 // directions. The marker survives dispatcher shutdown and cascades on restart.
 func (t *Tx) markPausedExecutions(g Graph) error {
-	_, err := t.Exec(`INSERT OR IGNORE INTO xloom_paused_executions(project_id,execution_id)
- SELECT e.project_id,e.id FROM xloom_executions e
+	_, err := t.Exec(`INSERT OR IGNORE INTO pwnmesh_paused_executions(project_id,execution_id)
+ SELECT e.project_id,e.id FROM pwnmesh_executions e
  WHERE e.project_id=? AND e.status IN ('prepared','running','retryable','result_pending')
- AND NOT EXISTS(SELECT 1 FROM xloom_revoked_runs r WHERE r.project_id=e.project_id AND r.worker=e.lease)`, g.Project.ID)
+ AND NOT EXISTS(SELECT 1 FROM pwnmesh_revoked_runs r WHERE r.project_id=e.project_id AND r.worker=e.lease)`, g.Project.ID)
 	return err
 }
 
 func (t *Tx) continuePausedExecutions(g Graph) error {
-	rows, err := t.Query("SELECT execution_id FROM xloom_paused_executions WHERE project_id=?", g.Project.ID)
+	rows, err := t.Query("SELECT execution_id FROM pwnmesh_paused_executions WHERE project_id=?", g.Project.ID)
 	if err != nil {
 		return err
 	}
@@ -73,6 +73,6 @@ func (t *Tx) continuePausedExecutions(g Graph) error {
 			return err
 		}
 	}
-	_, err = t.Exec("DELETE FROM xloom_paused_executions WHERE project_id=?", g.Project.ID)
+	_, err = t.Exec("DELETE FROM pwnmesh_paused_executions WHERE project_id=?", g.Project.ID)
 	return err
 }

@@ -34,7 +34,7 @@ func (t *Tx) FreezeInput(state State) (out *InputSnapshot, err error) {
 		Generation: state.Graph.Project.Generation, Revision: state.Revision, DecisionRevision: state.DecisionRevision,
 		StateVersion: DecisionStateVersion(state), FactCount: len(state.Graph.Facts), HintCount: len(state.Graph.Hints), OpenCount: state.Graph.OpenCount(), StepCount: len(state.Steps)}
 	var exists bool
-	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_input_snapshots WHERE project_id=? AND id=?)", ref.ProjectID, ref.ID).Scan(&exists); err != nil {
+	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?)", ref.ProjectID, ref.ID).Scan(&exists); err != nil {
 		return nil, err
 	}
 	if exists {
@@ -46,28 +46,28 @@ func (t *Tx) FreezeInput(state State) (out *InputSnapshot, err error) {
 	}
 	// Chunks and their manifest have one lifetime even if a caller handles an
 	// insertion failure without rolling back its surrounding transaction.
-	if _, err = t.Exec("SAVEPOINT xloom_input_snapshot"); err != nil {
+	if _, err = t.Exec("SAVEPOINT pwnmesh_input_snapshot"); err != nil {
 		return nil, err
 	}
 	defer func() {
 		if err != nil {
-			_, rollbackErr := t.Exec("ROLLBACK TO xloom_input_snapshot")
+			_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_input_snapshot")
 			err = errors.Join(err, rollbackErr)
 		}
-		_, releaseErr := t.Exec("RELEASE xloom_input_snapshot")
+		_, releaseErr := t.Exec("RELEASE pwnmesh_input_snapshot")
 		err = errors.Join(err, releaseErr)
 	}()
 	stored, err := t.encodeInputSnapshot(ref.ProjectID, raw)
 	if err != nil {
 		return nil, err
 	}
-	_, err = t.Exec("INSERT OR IGNORE INTO xloom_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", ref.ProjectID, ref.ID, metadata, stored)
+	_, err = t.Exec("INSERT OR IGNORE INTO pwnmesh_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", ref.ProjectID, ref.ID, metadata, stored)
 	return ref, err
 }
 
 func (t *Tx) InputSnapshotMetadata(project, id string) (*InputSnapshot, error) {
 	var raw []byte
-	err := t.QueryRow("SELECT metadata FROM xloom_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
+	err := t.QueryRow("SELECT metadata FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Err(404, "Input snapshot not found")
 	}
@@ -91,7 +91,7 @@ func (t *Tx) ReadInputSnapshot(project, id string) (State, error) {
 
 func (t *Tx) readInputSnapshotBytes(project, id string) ([]byte, error) {
 	var raw []byte
-	err := t.QueryRow("SELECT state FROM xloom_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
+	err := t.QueryRow("SELECT state FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?", project, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Err(404, "Input snapshot not found")
 	}

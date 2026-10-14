@@ -141,7 +141,7 @@ func TestUploadedInputsRoundTripDedupeIsolationAndDeletion(t *testing.T) {
 	f.request("DELETE", f.base(), nil, false, 204, nil)
 	err := store.Do(context.Background(), func(tx *board.Tx) error {
 		var count int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM xloom_input_files").Scan(&count); err != nil {
+		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_input_files").Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 {

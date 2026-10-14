@@ -47,7 +47,7 @@ func scanExecution(s scanner) (Execution, error) {
 	return e, err
 }
 func (t *Tx) Execution(project, id string) (Execution, error) {
-	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM xloom_executions WHERE project_id=? AND id=?", project, id))
+	e, err := scanExecution(t.QueryRow("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? AND id=?", project, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Execution not found")
 	}
@@ -170,7 +170,7 @@ func (t *Tx) RegisterExecution(e Execution) error {
 		grant = &previous
 	}
 	var blocked bool
-	err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE project_id=? AND namespace=? AND retry_key=? AND status IN ('prepared','running','retryable','result_pending','failed','rejected','cancelled','succeeded','retry_requested','retried'))`, e.ProjectID, e.Namespace, e.RetryKey).Scan(&blocked)
+	err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE project_id=? AND namespace=? AND retry_key=? AND status IN ('prepared','running','retryable','result_pending','failed','rejected','cancelled','succeeded','retry_requested','retried'))`, e.ProjectID, e.Namespace, e.RetryKey).Scan(&blocked)
 	if err != nil {
 		return err
 	}
@@ -180,13 +180,13 @@ func (t *Tx) RegisterExecution(e Execution) error {
 	if grant != nil {
 		// Consume the one-use authorization in the same transaction as the new
 		// registration. A competing attempt cannot reuse this parent afterward.
-		if _, err = t.Exec("UPDATE xloom_executions SET status='retried',updated_at=? WHERE project_id=? AND id=? AND status='retry_requested'", t.Now, grant.ProjectID, grant.ID); err != nil {
+		if _, err = t.Exec("UPDATE pwnmesh_executions SET status='retried',updated_at=? WHERE project_id=? AND id=? AND status='retry_requested'", t.Now, grant.ProjectID, grant.ID); err != nil {
 			return err
 		}
 	}
 	args := []any{e.ProjectID, e.ID, e.Namespace, e.Backend, e.Kind, e.Intent, e.Lease, []byte(e.Job), e.RetryKey, t.Now, t.Now}
 	args = append(args, executionMetadataValues(metadata)...)
-	_, err = t.Exec(`INSERT INTO xloom_executions(`+executionColumns+`,`+executionMetadataColumns+`,metadata_version) VALUES(?,?,?,?,?,?,?,?,?,'prepared',NULL,0,?,?,?,?,?,?,?,?,?,?,1)`, args...)
+	_, err = t.Exec(`INSERT INTO pwnmesh_executions(`+executionColumns+`,`+executionMetadataColumns+`,metadata_version) VALUES(?,?,?,?,?,?,?,?,?,'prepared',NULL,0,?,?,?,?,?,?,?,?,?,?,1)`, args...)
 	if err == nil && !controlKind(e.Kind) {
 		err = t.reviewExecutionTransition(e, "prepared")
 	}
@@ -242,9 +242,9 @@ func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage)
 			return err
 		}
 	}
-	_, err = t.Exec(`UPDATE xloom_executions SET status=?,result=?,updated_at=? WHERE project_id=? AND id=?`, status, []byte(result), t.Now, e.ProjectID, e.ID)
+	_, err = t.Exec(`UPDATE pwnmesh_executions SET status=?,result=?,updated_at=? WHERE project_id=? AND id=?`, status, []byte(result), t.Now, e.ProjectID, e.ID)
 	if err == nil && slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status) {
-		_, err = t.Exec("INSERT OR IGNORE INTO xloom_revoked_runs(project_id,worker) VALUES(?,?)", e.ProjectID, current.Lease)
+		_, err = t.Exec("INSERT OR IGNORE INTO pwnmesh_revoked_runs(project_id,worker) VALUES(?,?)", e.ProjectID, current.Lease)
 	}
 	if err == nil && !controlKind(current.Kind) && slices.Contains([]string{"failed", "rejected", "cancelled"}, status) {
 		err = t.recordExecutionFailure(current, status, failure)
@@ -345,7 +345,7 @@ func (t *Tx) ResumeExecution(e Execution) error {
 	if err = t.Save(g); err != nil {
 		return err
 	}
-	_, err = t.Exec(`UPDATE xloom_executions SET resumes=resumes+?,updated_at=? WHERE project_id=? AND id=?`, resume, t.Now, e.ProjectID, e.ID)
+	_, err = t.Exec(`UPDATE pwnmesh_executions SET resumes=resumes+?,updated_at=? WHERE project_id=? AND id=?`, resume, t.Now, e.ProjectID, e.ID)
 	return err
 }
 
@@ -354,7 +354,7 @@ func (t *Tx) ResumeExecution(e Execution) error {
 // structured result share one registered budget.
 func (t *Tx) CheckNewStepLimit(project, run string) error {
 	var raw []byte
-	err := t.QueryRow("SELECT job FROM xloom_executions WHERE project_id=? AND lease=? AND kind='reason' ORDER BY rowid DESC LIMIT 1", project, run).Scan(&raw)
+	err := t.QueryRow("SELECT job FROM pwnmesh_executions WHERE project_id=? AND lease=? AND kind='reason' ORDER BY rowid DESC LIMIT 1", project, run).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // Legacy clients may use leases without execution registration.
 	}

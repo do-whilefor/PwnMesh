@@ -18,12 +18,12 @@ func (t *Tx) archiveRound(project string) error {
 		return err
 	}
 	generation := state.Graph.Project.Generation
-	if _, err = t.Exec("INSERT INTO xloom_round_history(project_id,generation,archived_at) VALUES(?,?,?)", project, generation, t.Now); err != nil {
+	if _, err = t.Exec("INSERT INTO pwnmesh_round_history(project_id,generation,archived_at) VALUES(?,?,?)", project, generation, t.Now); err != nil {
 		return err
 	}
 	save := func(kind, id string, raw []byte) error {
 		sum := sha256.Sum256(raw)
-		_, err := t.Exec("INSERT INTO xloom_round_entries(project_id,generation,kind,id,data,sha256) VALUES(?,?,?,?,?,?)", project, generation, kind, id, raw, hex.EncodeToString(sum[:]))
+		_, err := t.Exec("INSERT INTO pwnmesh_round_entries(project_id,generation,kind,id,data,sha256) VALUES(?,?,?,?,?,?)", project, generation, kind, id, raw, hex.EncodeToString(sum[:]))
 		return err
 	}
 	raw, err := json.Marshal(state)
@@ -48,7 +48,7 @@ func (t *Tx) archiveRound(project string) error {
 	}
 	// Stream records one by one rather than materializing every historical Job
 	// or all evidence-bearing events in an archive-sized in-memory slice.
-	rows, err := t.Query("SELECT revision,event FROM xloom_state_events WHERE project_id=? ORDER BY revision", project)
+	rows, err := t.Query("SELECT revision,event FROM pwnmesh_state_events WHERE project_id=? ORDER BY revision", project)
 	if err != nil {
 		return err
 	}
@@ -68,7 +68,7 @@ func (t *Tx) archiveRound(project string) error {
 	if err != nil {
 		return err
 	}
-	rows, err = t.Query("SELECT idempotency_key,request,response FROM xloom_state_actions WHERE project_id=? ORDER BY rowid", project)
+	rows, err = t.Query("SELECT idempotency_key,request,response FROM pwnmesh_state_actions WHERE project_id=? ORDER BY rowid", project)
 	if err != nil {
 		return err
 	}
@@ -92,7 +92,7 @@ func (t *Tx) archiveRound(project string) error {
 	if err != nil {
 		return err
 	}
-	rows, err = t.Query("SELECT "+executionColumns+" FROM xloom_executions WHERE project_id=? ORDER BY rowid", project)
+	rows, err = t.Query("SELECT "+executionColumns+" FROM pwnmesh_executions WHERE project_id=? ORDER BY rowid", project)
 	if err != nil {
 		return err
 	}
@@ -135,7 +135,7 @@ func (t *Tx) RoundHistory(project string, after int64, limit int) (RoundPage, er
 	if !exists {
 		return out, Err(404, "Project not found")
 	}
-	rows, err := t.Query("SELECT generation,archived_at FROM xloom_round_history WHERE project_id=? AND generation>? ORDER BY generation LIMIT ?", project, after, limit+1)
+	rows, err := t.Query("SELECT generation,archived_at FROM pwnmesh_round_history WHERE project_id=? AND generation>? ORDER BY generation LIMIT ?", project, after, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -170,7 +170,7 @@ type RoundEntryPage struct {
 
 func (t *Tx) requireRound(project string, generation int64) error {
 	var exists bool
-	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM xloom_round_history WHERE project_id=? AND generation=?)", project, generation).Scan(&exists); err != nil {
+	if err := t.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_round_history WHERE project_id=? AND generation=?)", project, generation).Scan(&exists); err != nil {
 		return err
 	}
 	if !exists {
@@ -187,7 +187,7 @@ func (t *Tx) RoundEntries(project string, generation, after int64, limit int) (R
 	if err := t.requireRound(project, generation); err != nil {
 		return out, err
 	}
-	rows, err := t.Query("SELECT rowid,kind,id,length(data),sha256 FROM xloom_round_entries WHERE project_id=? AND generation=? AND rowid>? ORDER BY rowid LIMIT ?", project, generation, after, limit+1)
+	rows, err := t.Query("SELECT rowid,kind,id,length(data),sha256 FROM pwnmesh_round_entries WHERE project_id=? AND generation=? AND rowid>? ORDER BY rowid LIMIT ?", project, generation, after, limit+1)
 	if err != nil {
 		return out, err
 	}
@@ -221,7 +221,7 @@ func (t *Tx) ReadRoundEntry(project string, generation, entry, offset int64, lim
 	if generation < 0 || entry < 1 || offset < 0 || limit < 1 || limit > 32<<10 {
 		return out, Err(422, "invalid archive entry; byte limit must be between 1 and 32768")
 	}
-	err := t.QueryRow("SELECT substr(data,?,?),length(data),sha256 FROM xloom_round_entries WHERE project_id=? AND generation=? AND rowid=?", offset+1, limit, project, generation, entry).Scan(&out.Data, &out.TotalBytes, &out.SHA256)
+	err := t.QueryRow("SELECT substr(data,?,?),length(data),sha256 FROM pwnmesh_round_entries WHERE project_id=? AND generation=? AND rowid=?", offset+1, limit, project, generation, entry).Scan(&out.Data, &out.TotalBytes, &out.SHA256)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, Err(404, "Archived entry not found")
 	}

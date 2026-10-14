@@ -51,7 +51,7 @@ func (t *Tx) checkOrchestration(p Project) error {
 		return Err(422, "unsupported orchestration_version")
 	}
 	var version int
-	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN xloom_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, p.ID).Scan(&version)
+	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN pwnmesh_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, p.ID).Scan(&version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -66,7 +66,7 @@ func (t *Tx) checkOrchestration(p Project) error {
 
 func (t *Tx) loadOrchestration(p *Project) error {
 	var worker, trigger, started, heartbeat *string
-	err := t.QueryRow("SELECT version,curator_worker,curator_trigger,curator_started_at,curator_heartbeat FROM xloom_project_orchestration WHERE project_id=?", p.ID).Scan(&p.OrchestrationVersion, &worker, &trigger, &started, &heartbeat)
+	err := t.QueryRow("SELECT version,curator_worker,curator_trigger,curator_started_at,curator_heartbeat FROM pwnmesh_project_orchestration WHERE project_id=?", p.ID).Scan(&p.OrchestrationVersion, &worker, &trigger, &started, &heartbeat)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -90,7 +90,7 @@ func (t *Tx) saveOrchestration(p Project) error {
 		}
 		worker, trigger, started, heartbeat = &p.Curator.Worker, &p.Curator.Trigger, &p.Curator.StartedAt, &p.Curator.Heartbeat
 	}
-	_, err := t.Exec(`INSERT INTO xloom_project_orchestration(project_id,version,curator_worker,curator_trigger,curator_started_at,curator_heartbeat) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET curator_worker=excluded.curator_worker,curator_trigger=excluded.curator_trigger,curator_started_at=excluded.curator_started_at,curator_heartbeat=excluded.curator_heartbeat`, p.ID, p.OrchestrationVersion, worker, trigger, started, heartbeat)
+	_, err := t.Exec(`INSERT INTO pwnmesh_project_orchestration(project_id,version,curator_worker,curator_trigger,curator_started_at,curator_heartbeat) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET curator_worker=excluded.curator_worker,curator_trigger=excluded.curator_trigger,curator_started_at=excluded.curator_started_at,curator_heartbeat=excluded.curator_heartbeat`, p.ID, p.OrchestrationVersion, worker, trigger, started, heartbeat)
 	return err
 }
 
@@ -138,7 +138,7 @@ func (t *Tx) HeartbeatCurator(project, worker string) error {
 
 func (t *Tx) ReleaseCurator(project, worker string) error {
 	// Conditional release is safe after a successful execution revoked its run.
-	_, err := t.Exec(`UPDATE xloom_project_orchestration SET curator_worker=NULL,curator_trigger=NULL,curator_started_at=NULL,curator_heartbeat=NULL WHERE project_id=? AND curator_worker=?`, project, worker)
+	_, err := t.Exec(`UPDATE pwnmesh_project_orchestration SET curator_worker=NULL,curator_trigger=NULL,curator_started_at=NULL,curator_heartbeat=NULL WHERE project_id=? AND curator_worker=?`, project, worker)
 	return err
 }
 
@@ -193,7 +193,7 @@ func (t *Tx) curationNeeded(s State) (bool, error) {
 	// another scan solely because an unsupported conclusion remains retained.
 	rows, err := t.Query(`SELECT json_extract(event,'$.op'),json_extract(event,'$.id'),json_extract(event,'$.run_id'),
 		CASE WHEN json_extract(event,'$.op')='fact_relation' THEN json_extract(event,'$.result') ELSE '{}' END
-		FROM xloom_state_events WHERE project_id=? AND revision>? AND (
+		FROM pwnmesh_state_events WHERE project_id=? AND revision>? AND (
 		json_extract(event,'$.op') IN ('step_completed','fact_relation') OR
 		(json_extract(event,'$.op')='curate' AND json_array_length(event,'$.payload.relations')>0))`, s.Graph.Project.ID, s.Curation.ThroughRevision)
 	if err != nil {
@@ -265,7 +265,7 @@ func CurationRetryKey(s State) string { return "curate:" + DecisionStateVersion(
 // checks that the caller possesses the registered immutable run identity.
 func (t *Tx) CurationReceipt(project, run string) (StateActionResult, error) {
 	var response string
-	err := t.QueryRow(`SELECT a.response FROM xloom_state_actions a WHERE a.project_id=? AND json_extract(a.request,'$.Run')=? AND json_extract(a.request,'$.Op')='curate' LIMIT 1`, project, run).Scan(&response)
+	err := t.QueryRow(`SELECT a.response FROM pwnmesh_state_actions a WHERE a.project_id=? AND json_extract(a.request,'$.Run')=? AND json_extract(a.request,'$.Op')='curate' LIMIT 1`, project, run).Scan(&response)
 	if errors.Is(err, sql.ErrNoRows) {
 		return StateActionResult{}, Err(404, "Curation receipt not found")
 	}

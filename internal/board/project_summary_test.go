@@ -121,8 +121,8 @@ func TestProjectSummariesPreserveCountsMetadataAndOrder(t *testing.T) {
 			}
 		}
 		for _, query := range []string{
-			"INSERT INTO xloom_project_rounds(project_id,generation,restarted_at) VALUES('z-first-tie',3,'restarted')",
-			"INSERT INTO xloom_project_termination(project_id,terminated_at) VALUES('z-first-tie','terminated')",
+			"INSERT INTO pwnmesh_project_rounds(project_id,generation,restarted_at) VALUES('z-first-tie',3,'restarted')",
+			"INSERT INTO pwnmesh_project_termination(project_id,terminated_at) VALUES('z-first-tie','terminated')",
 			"UPDATE projects SET reason_worker='',reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE id='a-second-tie'",
 			"UPDATE projects SET reason_worker=NULL,reason_trigger='ignored',reason_started_at='ignored',reason_last_heartbeat_at='ignored' WHERE id='early'",
 		} {

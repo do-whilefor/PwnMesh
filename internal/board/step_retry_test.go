@@ -216,7 +216,7 @@ func TestMainRetryRequiresCurrentTerminalRunAndValidPrerequisites(t *testing.T) 
 				}
 				if mode == "wrong-generation" {
 					f.do(func(tx *Tx) error {
-						_, err := tx.Exec("UPDATE xloom_executions SET generation=generation+1 WHERE project_id=? AND id=?", "p", e.ID)
+						_, err := tx.Exec("UPDATE pwnmesh_executions SET generation=generation+1 WHERE project_id=? AND id=?", "p", e.ID)
 						return err
 					})
 				}
@@ -236,7 +236,7 @@ func TestMainRetryRequiresCurrentTerminalRunAndValidPrerequisites(t *testing.T) 
 							}
 						}
 						raw, _ := json.Marshal(d)
-						_, err = tx.Exec("UPDATE xloom_state SET data=? WHERE project_id=?", string(raw), "p")
+						_, err = tx.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id=?", string(raw), "p")
 						return err
 					})
 				}
@@ -388,7 +388,7 @@ func TestMainRetryWaitsForOtherPendingAttemptAcrossNamespaces(t *testing.T) {
 	// Reproduce pre-existing overlapping data left by an older dispatcher or
 	// manual lease release. A new grant must fail closed across namespaces.
 	f.do(func(tx *Tx) error {
-		_, err := tx.Exec("UPDATE xloom_executions SET status='running',namespace='other-dispatcher' WHERE project_id=? AND id=?", "p", old.ID)
+		_, err := tx.Exec("UPDATE pwnmesh_executions SET status='running',namespace='other-dispatcher' WHERE project_id=? AND id=?", "p", old.ID)
 		return err
 	})
 	err := f.store.Do(context.Background(), func(tx *Tx) error {

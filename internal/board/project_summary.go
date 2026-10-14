@@ -20,10 +20,10 @@ SELECT p.id,p.title,p.status,p.bootstrap_enabled,p.created_at,
  COALESCE(f.total,0),COALESCE(i.total,0),COALESCE(i.working,0),COALESCE(i.unclaimed,0),COALESCE(h.total,0),
  COALESCE(o.version,0),o.curator_worker,o.curator_trigger,o.curator_started_at,o.curator_heartbeat
 FROM projects p
-LEFT JOIN xloom_project_metadata m ON m.project_id=p.id
-LEFT JOIN xloom_project_rounds round ON round.project_id=p.id
-LEFT JOIN xloom_project_termination termination ON termination.project_id=p.id
-LEFT JOIN xloom_project_orchestration o ON o.project_id=p.id
+LEFT JOIN pwnmesh_project_metadata m ON m.project_id=p.id
+LEFT JOIN pwnmesh_project_rounds round ON round.project_id=p.id
+LEFT JOIN pwnmesh_project_termination termination ON termination.project_id=p.id
+LEFT JOIN pwnmesh_project_orchestration o ON o.project_id=p.id
 LEFT JOIN fact_counts f ON f.project_id=p.id
 LEFT JOIN intent_counts i ON i.project_id=p.id
 LEFT JOIN hint_counts h ON h.project_id=p.id

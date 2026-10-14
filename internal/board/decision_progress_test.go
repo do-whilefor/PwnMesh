@@ -56,7 +56,7 @@ func TestDecisionBatchRequiresProgressAfterNonemptyActions(t *testing.T) {
 			allowed := mode == "existing_work" || mode == "unchanged_existing" || mode == "queued_pipeline"
 			f.do(func(tx *Tx) error {
 				var writes int
-				if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM xloom_state_actions)+(SELECT COUNT(*) FROM xloom_state_events)").Scan(&writes); err != nil {
+				if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM pwnmesh_state_actions)+(SELECT COUNT(*) FROM pwnmesh_state_events)").Scan(&writes); err != nil {
 					return err
 				}
 				for _, commit := range []bool{false, true} {
@@ -77,7 +77,7 @@ func TestDecisionBatchRequiresProgressAfterNonemptyActions(t *testing.T) {
 						return err
 					}
 					var afterWrites int
-					if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM xloom_state_actions)+(SELECT COUNT(*) FROM xloom_state_events)").Scan(&afterWrites); err != nil {
+					if err := tx.QueryRow("SELECT (SELECT COUNT(*) FROM pwnmesh_state_actions)+(SELECT COUNT(*) FROM pwnmesh_state_events)").Scan(&afterWrites); err != nil {
 						return err
 					}
 					if receipt.Committed || !reflect.DeepEqual(current, before) || saved.Status != "prepared" || afterWrites != writes {
@@ -188,7 +188,7 @@ func TestDecisionPreservesRegisteredObservationAfterPremiseCorrection(t *testing
 						_, err := tx.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", id)
 						return err
 					}
-					_, err := tx.Exec("INSERT INTO xloom_revoked_runs(project_id,worker) VALUES('p',?)", run.Lease)
+					_, err := tx.Exec("INSERT INTO pwnmesh_revoked_runs(project_id,worker) VALUES('p',?)", run.Lease)
 					return err
 				})
 			}

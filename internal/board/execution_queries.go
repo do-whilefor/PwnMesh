@@ -105,7 +105,7 @@ func (t *Tx) PendingExecutions(namespace string, after int64, limit int) (Execut
 	if namespace == "" || after < 0 || limit < 1 || limit > 100 {
 		return page, Err(422, "namespace, nonnegative after and limit between 1 and 100 are required")
 	}
-	rows, err := t.Query("SELECT rowid,"+executionSummaryColumns+" FROM xloom_executions WHERE namespace=? AND rowid>? AND "+pendingExecutionSQL+" ORDER BY rowid LIMIT ?", namespace, after, limit+1)
+	rows, err := t.Query("SELECT rowid,"+executionSummaryColumns+" FROM pwnmesh_executions WHERE namespace=? AND rowid>? AND "+pendingExecutionSQL+" ORDER BY rowid LIMIT ?", namespace, after, limit+1)
 	if err != nil {
 		return page, err
 	}
@@ -128,7 +128,7 @@ func (t *Tx) PendingExecutions(namespace string, after int64, limit int) (Execut
 }
 
 func (t *Tx) GetExecutionSummary(namespace, project, id string) (ExecutionSummary, error) {
-	e, err := scanExecutionSummary(t.QueryRow("SELECT "+executionSummaryColumns+" FROM xloom_executions WHERE namespace=? AND project_id=? AND id=?", namespace, project, id))
+	e, err := scanExecutionSummary(t.QueryRow("SELECT "+executionSummaryColumns+" FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND id=?", namespace, project, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Execution not found")
 	}
@@ -139,16 +139,16 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 	var out ExecutionCheck
 	// Existing pending work and human grants remain visible across generations;
 	// recovery is responsible for cancelling stale pending work.
-	err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND (?='reason' OR intent=?) AND `+pendingExecutionSQL+`)`, q.Namespace, q.ProjectID, q.Kind, q.Kind, q.Intent).Scan(&out.Pending)
+	err := t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND (?='reason' OR intent=?) AND `+pendingExecutionSQL+`)`, q.Namespace, q.ProjectID, q.Kind, q.Kind, q.Intent).Scan(&out.Pending)
 	if err != nil {
 		return out, err
 	}
-	err = t.QueryRow(`SELECT id FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND intent=? AND status='retry_requested' AND (?!='curate' OR (retry_key=? AND generation=?)) ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Kind, q.Intent, q.Kind, q.RetryKey, q.Generation).Scan(&out.PreviousRunID)
+	err = t.QueryRow(`SELECT id FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND intent=? AND status='retry_requested' AND (?!='curate' OR (retry_key=? AND generation=?)) ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Kind, q.Intent, q.Kind, q.RetryKey, q.Generation).Scan(&out.PreviousRunID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return out, err
 	}
 	var tried bool
-	err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND retry_key=? AND status NOT IN ('retry_requested','retried'))`, q.Namespace, q.ProjectID, q.Kind, q.RetryKey).Scan(&tried)
+	err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND retry_key=? AND status NOT IN ('retry_requested','retried'))`, q.Namespace, q.ProjectID, q.Kind, q.RetryKey).Scan(&tried)
 	if err != nil {
 		return out, err
 	}
@@ -159,7 +159,7 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 			return out, err
 		}
 	}
-	err = t.QueryRow(`SELECT COUNT(*) FROM xloom_executions WHERE namespace=? AND project_id=? AND kind=? AND generation=? AND retry_key=?`, q.Namespace, q.ProjectID, q.Kind, q.Generation, q.RetryKey).Scan(&out.Attempts)
+	err = t.QueryRow(`SELECT COUNT(*) FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind=? AND generation=? AND retry_key=?`, q.Namespace, q.ProjectID, q.Kind, q.Generation, q.RetryKey).Scan(&out.Attempts)
 	if err != nil {
 		return out, err
 	}
@@ -167,13 +167,13 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 		// The state hash already binds its own generation. Old jobs without a
 		// Decision marker could carry a State whose graph differs from Job.Graph;
 		// repeated-input detection historically followed that State, not the job.
-		err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM xloom_executions WHERE namespace=? AND project_id=? AND kind='reason' AND state_version=?)`, q.Namespace, q.ProjectID, q.StateVersion).Scan(&out.Repeated)
+		err = t.QueryRow(`SELECT EXISTS(SELECT 1 FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND kind='reason' AND state_version=?)`, q.Namespace, q.ProjectID, q.StateVersion).Scan(&out.Repeated)
 		if err != nil {
 			return out, err
 		}
 	}
 	if q.Kind == "reason" {
-		latest, err := scanExecutionSummary(t.QueryRow(`SELECT `+executionSummaryColumns+` FROM xloom_executions WHERE namespace=? AND project_id=? AND generation=? AND kind='reason' AND status='succeeded' ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Generation))
+		latest, err := scanExecutionSummary(t.QueryRow(`SELECT `+executionSummaryColumns+` FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND generation=? AND kind='reason' AND status='succeeded' ORDER BY created_at DESC,rowid DESC LIMIT 1`, q.Namespace, q.ProjectID, q.Generation))
 		if err == nil {
 			out.LatestDecision = &latest
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -187,7 +187,7 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 	// or Job just to decide whether this one candidate merits a retry request.
 	var candidate Execution
 	var status, failureKind, failureCause string
-	err = t.QueryRow(`SELECT id,status,`+executionFailureColumns+` FROM xloom_executions WHERE namespace=? AND project_id=? AND generation=? AND kind=? AND retry_key=? LIMIT 1`, q.Namespace, q.ProjectID, q.Generation, q.Kind, q.RetryKey).Scan(&candidate.ID, &candidate.Status, &status, &failureKind, &failureCause)
+	err = t.QueryRow(`SELECT id,status,`+executionFailureColumns+` FROM pwnmesh_executions WHERE namespace=? AND project_id=? AND generation=? AND kind=? AND retry_key=? LIMIT 1`, q.Namespace, q.ProjectID, q.Generation, q.Kind, q.RetryKey).Scan(&candidate.ID, &candidate.Status, &status, &failureKind, &failureCause)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, nil
 	}
@@ -237,9 +237,9 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, steps []Schedule
 	args = append(args, namespace, project, namespace, project, namespace, project)
 	rows, err := t.Query(`WITH candidates(kind,intent,retry_key) AS (VALUES `+strings.Join(values, ",")+`)
 	SELECT c.retry_key,
-	EXISTS(SELECT 1 FROM xloom_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.intent=c.intent AND `+pendingExecutionSQL+`),
-	COALESCE((SELECT e.id FROM xloom_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.intent=c.intent AND e.status='retry_requested' ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1),''),
-	EXISTS(SELECT 1 FROM xloom_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.retry_key=c.retry_key AND e.status NOT IN ('retry_requested','retried'))
+	EXISTS(SELECT 1 FROM pwnmesh_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.intent=c.intent AND `+pendingExecutionSQL+`),
+	COALESCE((SELECT e.id FROM pwnmesh_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.intent=c.intent AND e.status='retry_requested' ORDER BY e.created_at DESC,e.rowid DESC LIMIT 1),''),
+	EXISTS(SELECT 1 FROM pwnmesh_executions e WHERE e.namespace=? AND e.project_id=? AND e.kind=c.kind AND e.retry_key=c.retry_key AND e.status NOT IN ('retry_requested','retried'))
 	FROM candidates c`, args...)
 	if err != nil {
 		return nil, err

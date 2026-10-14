@@ -63,7 +63,7 @@ func TestAutomaticRetryRouteDoesNotRestoreHistoricalJob(t *testing.T) {
 	f.register("reason")
 	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]any{"status": "failed", "result": map[string]string{"status": "failed", "failure_kind": "transport"}}, true, http.StatusOK, nil)
 	if err := store.Do(context.Background(), func(tx *board.Tx) error {
-		_, err := tx.Exec("UPDATE xloom_executions SET job='unavailable' WHERE project_id=? AND id=?", f.project, f.run)
+		_, err := tx.Exec("UPDATE pwnmesh_executions SET job='unavailable' WHERE project_id=? AND id=?", f.project, f.run)
 		return err
 	}); err != nil {
 		t.Fatal(err)
