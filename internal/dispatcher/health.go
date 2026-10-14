@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -11,6 +12,25 @@ import (
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/provider"
 )
+
+func (s *Scheduler) Health(ctx context.Context, force bool) error {
+	if err := s.refreshModelSettings(); err != nil {
+		return err
+	}
+	if s.Config.Runtime.HealthMode == "disabled" && !force {
+		return nil
+	}
+	var result error
+	for _, w := range s.Config.Workers {
+		err := s.health(ctx, w)
+		s.recordHealth(w.Name, err)
+		if err != nil {
+			result = errors.Join(result, fmt.Errorf("worker %s: %w", w.Name, err))
+			slog.Warn("worker health failed", "worker", w.Name, "error", err)
+		}
+	}
+	return result
+}
 
 // Readiness verifies a small tool round trip, not task quality or the model's
 // full context window. Each strategy gets two turns under one worker deadline;

@@ -7,14 +7,16 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/server"
 	"pwnmesh/internal/protocol"
+	"pwnmesh/internal/server"
 )
 
 var errTestOwnerChanged = errors.New("runner installation changed")
@@ -22,6 +24,7 @@ var errTestOwnerChanged = errors.New("runner installation changed")
 type ownershipRunner struct {
 	owner                    string
 	projects, cleanups, runs int
+	cleanupError             error
 }
 
 func (r *ownershipRunner) BindOwner(owner string) error {
@@ -39,7 +42,7 @@ func (r *ownershipRunner) Projects(context.Context) ([]string, error) {
 
 func (r *ownershipRunner) Cleanup(context.Context, string, string) error {
 	r.cleanups++
-	return nil
+	return r.cleanupError
 }
 
 func (r *ownershipRunner) Run(context.Context, config.Worker, protocol.Job) (protocol.Result, error) {
@@ -87,8 +90,8 @@ func TestDispatcherOwnershipRejectsConcurrentStartup(t *testing.T) {
 	secondRunner := &ownershipRunner{}
 	before := deployments.Load()
 	err = New(cfg, secondRunner).Run(ctx)
-	var protocol *ProtocolError
-	if !errors.As(err, &protocol) || protocol.Status != http.StatusConflict {
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) || protocolErr.Status != http.StatusConflict {
 		t.Fatalf("second dispatcher startup: got %v, want ownership conflict", err)
 	}
 	if reads := deployments.Load() - before; reads != 1 {
@@ -135,4 +138,62 @@ func TestDispatcherOwnershipRejectsInstallationChangeBeforeClaim(t *testing.T) {
 		t.Fatalf("runner changed installation from %q to %q", previous, runner.owner)
 	}
 	runner.assertUntouched(t)
+}
+
+func TestDispatcherStartupFailuresReleaseOwnershipBeforeScheduling(t *testing.T) {
+	cleanupError := errors.New("startup container cleanup failed")
+	for _, tc := range []struct {
+		name                       string
+		intentTimeout              int
+		reasonTimeout              int
+		cleanupError               error
+		wantProjects, wantCleanups int
+	}{
+		{name: "intent lease too short", intentTimeout: 1, reasonTimeout: 30},
+		{name: "reason lease too short", intentTimeout: 30, reasonTimeout: 1},
+		{name: "cleanup failed", intentTimeout: 30, reasonTimeout: 30, cleanupError: cleanupError, wantProjects: 1, wantCleanups: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const installation = "00000000000000000000000000000001"
+			var requests []string
+			var requestsMu sync.Mutex
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requestsMu.Lock()
+				requests = append(requests, r.Method+" "+r.URL.Path)
+				requestsMu.Unlock()
+				switch r.Method + " " + r.URL.Path {
+				case "GET /deployment":
+					fmt.Fprintf(w, `{"installation_id":%q}`, installation)
+				case "GET /settings":
+					fmt.Fprintf(w, `{"intent_timeout":%d,"reason_timeout":%d}`, tc.intentTimeout, tc.reasonTimeout)
+				case "POST /dispatchers/pwnmesh/claim", "POST /dispatchers/pwnmesh/release":
+					w.WriteHeader(http.StatusNoContent)
+				default:
+					http.Error(w, "startup failure reached scheduling", http.StatusInternalServerError)
+				}
+			}))
+			defer api.Close()
+			runner := &ownershipRunner{cleanupError: tc.cleanupError}
+			scheduler := New(config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, HealthMode: "disabled"}}, runner)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			err := scheduler.Run(ctx)
+			if tc.cleanupError != nil {
+				if !errors.Is(err, tc.cleanupError) {
+					t.Fatalf("startup returned %v, want cleanup error", err)
+				}
+			} else if err == nil || err.Error() != "heartbeat interval must be shorter than each server lease timeout" {
+				t.Fatalf("startup returned %v, want invalid lease interval", err)
+			}
+			wantRequests := []string{"GET /deployment", "POST /dispatchers/pwnmesh/claim", "GET /settings", "POST /dispatchers/pwnmesh/release"}
+			requestsMu.Lock()
+			defer requestsMu.Unlock()
+			if !slices.Equal(requests, wantRequests) {
+				t.Fatalf("startup requests = %v, want %v", requests, wantRequests)
+			}
+			if runner.owner != installation || runner.projects != tc.wantProjects || runner.cleanups != tc.wantCleanups || runner.runs != 0 {
+				t.Fatalf("startup runner state: owner=%q projects=%d cleanups=%d runs=%d", runner.owner, runner.projects, runner.cleanups, runner.runs)
+			}
+		})
+	}
 }
