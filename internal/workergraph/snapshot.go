@@ -3,8 +3,6 @@
 package workergraph
 
 import (
-	"cmp"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -13,11 +11,7 @@ import (
 // NodeDefinitionSHA256 binds one canonical node definition, using the same
 // dependency order as Run. It never invokes any callback.
 func NodeDefinitionSHA256(node Node) string {
-	// Match prepare's nil/empty normalization as well as dependency ordering.
-	node.Input = append(json.RawMessage(nil), node.Input...)
-	node.DependsOn = append([]Dependency(nil), node.DependsOn...)
-	slices.SortFunc(node.DependsOn, func(a, b Dependency) int { return cmp.Compare(a.ID, b.ID) })
-	return hash(describe(node))
+	return hash(describe(canonicalNode(node)))
 }
 
 // ValidateSnapshot checks a complete saved graph against its original definition

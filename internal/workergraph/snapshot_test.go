@@ -111,10 +111,20 @@ func TestNodeDefinitionSHA256MatchesRunWithoutMutatingDependencies(t *testing.T)
 	if err := ValidateSnapshot(definition, options, checkpoint); err != nil {
 		t.Fatalf("definition permutation invalidated saved snapshot: %v", err)
 	}
+	for i := range definition.Nodes {
+		definition.Nodes[i].Verify = verified
+		definition.Nodes[i].Run = func(context.Context, Input) (Output, error) {
+			return Output{}, errors.New("accepted nodes must not replay after definition permutation")
+		}
+	}
+	resumed, err := Run(context.Background(), definition, options)
+	if err != nil || resumed.Status != "succeeded" || resumed.DefinitionSHA256 != checkpoint.DefinitionSHA256 {
+		t.Fatalf("definition permutation changed persisted graph identity or replayed work: %+v %v", resumed, err)
+	}
 }
 
 func TestNodeDefinitionSHA256NormalizesEmptyInputsAndDependencies(t *testing.T) {
-	var canonical string
+	var canonical, canonicalGraph string
 	for _, input := range []struct {
 		name  string
 		value json.RawMessage
@@ -132,8 +142,12 @@ func TestNodeDefinitionSHA256NormalizesEmptyInputsAndDependencies(t *testing.T) 
 				}
 				if canonical == "" {
 					canonical = digest
+					canonicalGraph = checkpoint.DefinitionSHA256
 				} else if canonical != digest {
 					t.Fatal("nil and empty inputs/dependencies have different definition hashes")
+				}
+				if canonicalGraph != checkpoint.DefinitionSHA256 {
+					t.Fatal("nil and empty inputs/dependencies have different graph hashes")
 				}
 			})
 		}

@@ -140,6 +140,15 @@ func describe(node Node) nodeDefinition {
 	return nodeDefinition{node.ID, node.Kind, node.Input, node.DependsOn, node.Optional, node.When != nil}
 }
 
+// Canonical definitions own their slices and normalize empty values to nil so
+// execution and exported definition hashes retain the same durable identity.
+func canonicalNode(node Node) Node {
+	node.Input = append(json.RawMessage(nil), node.Input...)
+	node.DependsOn = append([]Dependency(nil), node.DependsOn...)
+	slices.SortFunc(node.DependsOn, func(a, b Dependency) int { return cmp.Compare(a.ID, b.ID) })
+	return node
+}
+
 func hash(v any) string {
 	raw, _ := json.Marshal(v)
 	digest := sha256.Sum256(raw)
@@ -166,9 +175,7 @@ func prepare(d Definition, o Options) ([]Node, string, error) {
 		if _, exists := byID[node.ID]; exists {
 			return nil, "", errors.New("duplicate graph node")
 		}
-		node.Input = append(json.RawMessage(nil), node.Input...)
-		node.DependsOn = append([]Dependency(nil), node.DependsOn...)
-		slices.SortFunc(node.DependsOn, func(a, b Dependency) int { return cmp.Compare(a.ID, b.ID) })
+		*node = canonicalNode(*node)
 		for i, dependency := range node.DependsOn {
 			if dependency.ID == node.ID || i > 0 && dependency.ID == node.DependsOn[i-1].ID {
 				return nil, "", errors.New("self or duplicate graph dependency")
