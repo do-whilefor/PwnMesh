@@ -1,6 +1,6 @@
 //go:build linux
 
-package worker
+package dag
 
 import (
 	"bytes"
@@ -18,8 +18,8 @@ import (
 // Exercise the failure observed in the real model run: JSON was on stdout,
 // while a Python diagnostic was correctly written to stderr.
 func TestCommandGraphSeparateStreamsPreserveJSONDependencies(t *testing.T) {
-	job, dir := graphWrapperJob(t), t.TempDir()
-	spec := commandGraphSpec{Key: "streams", Nodes: []commandGraphNode{
+	job, dir := graphScope(t), t.TempDir()
+	spec := Spec{Key: "streams", Nodes: []Node{
 		{ID: "source", Command: `python3 -c 'import json,sys; sys.stderr.write("debug input\n"); print(json.dumps([2,3,5]))'`, Resources: []string{}},
 		{ID: "sum", Command: `python3 -c 'import json,os,sys; deps={d["id"]:d for d in json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))}; path=deps["source"]["output"]["value"]["output_path"]; values=json.load(open(path)); sys.stderr.write("left stdout="+path+"\n"); print(json.dumps({"values":values,"sum":sum(values)}))'`, DependsOn: []workergraph.Dependency{{ID: "source"}}, Resources: []string{}},
 	}}
@@ -52,10 +52,10 @@ func TestCommandGraphSeparateStreamsPreserveJSONDependencies(t *testing.T) {
 }
 
 func TestCommandGraphStderrCannotSatisfyStdoutCondition(t *testing.T) {
-	job, dir := graphWrapperJob(t), t.TempDir()
-	spec := commandGraphSpec{Key: "stderr-condition", Nodes: []commandGraphNode{
+	job, dir := graphScope(t), t.TempDir()
+	spec := Spec{Key: "stderr-condition", Nodes: []Node{
 		{ID: "source", Command: `printf ordinary; printf authorize >&2`, Resources: []string{}},
-		{ID: "side-effect", Command: `touch "$PWNMESH_WORKSPACE/forbidden"`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source"}}, When: &commandGraphWhen{Node: "source", Contains: "authorize"}},
+		{ID: "side-effect", Command: `touch "$PWNMESH_WORKSPACE/forbidden"`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source"}}, When: &When{Node: "source", Contains: "authorize"}},
 	}}
 	cp, err := commandGraphCall(t, context.Background(), job, dir, spec)
 	if err != nil || cp.Status != "succeeded" {
@@ -71,8 +71,8 @@ func TestCommandGraphStderrCannotSatisfyStdoutCondition(t *testing.T) {
 }
 
 func TestCommandGraphDoesNotCleanRealStdoutNoise(t *testing.T) {
-	job, dir := graphWrapperJob(t), t.TempDir()
-	spec := commandGraphSpec{Key: "no-cleaning", Nodes: []commandGraphNode{{ID: "source", Command: `printf 'debug\n{"sum":10}\n'; printf diagnostic >&2`, Resources: []string{}}}}
+	job, dir := graphScope(t), t.TempDir()
+	spec := Spec{Key: "no-cleaning", Nodes: []Node{{ID: "source", Command: `printf 'debug\n{"sum":10}\n'; printf diagnostic >&2`, Resources: []string{}}}}
 	cp, err := commandGraphCall(t, context.Background(), job, dir, spec)
 	if err != nil {
 		t.Fatal(err)
@@ -95,8 +95,8 @@ func TestCommandGraphRetainsFailureDiagnosticsAndBoundsStderrPreview(t *testing.
 		{"truncated", `printf '{"ok":true}\n'; head -c 9001 /dev/zero | tr '\0' x >&2`, false, 9001},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			job, dir := graphWrapperJob(t), t.TempDir()
-			spec := commandGraphSpec{Key: test.name, Nodes: []commandGraphNode{{ID: "source", Command: test.command, Resources: []string{}}}}
+			job, dir := graphScope(t), t.TempDir()
+			spec := Spec{Key: test.name, Nodes: []Node{{ID: "source", Command: test.command, Resources: []string{}}}}
 			cp, err := commandGraphCall(t, context.Background(), job, dir, spec)
 			if (err != nil) != test.failed {
 				t.Fatalf("unexpected command result: %+v %v", cp, err)
@@ -138,20 +138,20 @@ func TestCommandGraphRetainsFailureDiagnosticsAndBoundsStderrPreview(t *testing.
 }
 
 func TestCommandGraphFailureRouteConsumesDiagnosticsWithoutAcceptedArtifacts(t *testing.T) {
-	job, dir := graphWrapperJob(t), t.TempDir()
-	spec := commandGraphSpec{Key: "failure-route", Nodes: []commandGraphNode{
+	job, dir := graphScope(t), t.TempDir()
+	spec := Spec{Key: "failure-route", Nodes: []Node{
 		{ID: "probe", Command: `printf once >> "$PWNMESH_WORKSPACE/effects"; printf partial; printf 'probe unavailable' >&2; exit 7`, Resources: []string{}, Optional: true},
-		{ID: "route", Command: `python3 -c 'import json,os; deps=json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); source=deps[0]; value=source["output"]["value"]; assert source["status"]=="failed" and value["exit_code"]==7 and value["stdout"]=="partial" and value["stderr"]=="probe unavailable"; assert not source["output"].get("artifacts") and not source["output"]["files"]; print("failure inspected")'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "probe", Optional: true}}, When: &commandGraphWhen{Node: "probe", Status: "failed"}},
+		{ID: "route", Command: `python3 -c 'import json,os; deps=json.load(open(os.environ["PWNMESH_DEPENDENCIES"])); source=deps[0]; value=source["output"]["value"]; assert source["status"]=="failed" and value["exit_code"]==7 and value["stdout"]=="partial" and value["stderr"]=="probe unavailable"; assert not source["output"].get("artifacts") and not source["output"]["files"]; print("failure inspected")'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "probe", Optional: true}}, When: &When{Node: "probe", Status: "failed"}},
 	}}
 	raw, err := marshalCommandGraphCall(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		reply, err := runCommandGraph(context.Background(), job, Options{RunDir: dir}, raw)
+		reply, err := runGraph(context.Background(), job, dir, raw)
 		var response struct {
 			Status   string                  `json:"status"`
-			Evidence []commandGraphEvidence  `json:"verified_evidence"`
+			Evidence []Evidence              `json:"verified_evidence"`
 			Nodes    []workergraph.NodeState `json:"nodes"`
 		}
 		if err != nil || json.Unmarshal([]byte(reply), &response) != nil || response.Status != "succeeded" {
@@ -169,7 +169,7 @@ func TestCommandGraphFailureRouteConsumesDiagnosticsWithoutAcceptedArtifacts(t *
 	if err != nil || string(effects) != "once" {
 		t.Fatalf("recovery replayed the failed command: %q %v", effects, err)
 	}
-	reuse := commandGraphSpec{Key: "reuse-failed", Nodes: []commandGraphNode{{ID: "imported", Kind: "reuse", Resources: []string{}, ReuseFrom: &commandGraphReuse{Key: spec.Key, Node: "probe"}}}}
+	reuse := Spec{Key: "reuse-failed", Nodes: []Node{{ID: "imported", Kind: "reuse", Resources: []string{}, ReuseFrom: &Reuse{Key: spec.Key, Node: "probe"}}}}
 	if _, err := commandGraphCall(t, context.Background(), job, dir, reuse); err == nil || !strings.Contains(err.Error(), "must have succeeded") {
 		t.Fatalf("failed diagnostics became a reusable result: %v", err)
 	}
@@ -179,8 +179,8 @@ func TestCommandGraphRejectsStderrTamperingOnRestoreAndReuse(t *testing.T) {
 	for _, mode := range []string{"restore", "reuse"} {
 		for _, mutation := range []string{"bytes", "missing", "preview", "path", "downgrade", "symlink"} {
 			t.Run(mode+"/"+mutation, func(t *testing.T) {
-				job, dir := graphWrapperJob(t), t.TempDir()
-				spec := commandGraphSpec{Key: "source", Nodes: []commandGraphNode{{ID: "original", Command: `printf 'once\n' >> "$PWNMESH_WORKSPACE/effects"; printf '{"ok":true}\n'; printf 'original diagnostic\n' >&2`, Resources: []string{}}}}
+				job, dir := graphScope(t), t.TempDir()
+				spec := Spec{Key: "source", Nodes: []Node{{ID: "original", Command: `printf 'once\n' >> "$PWNMESH_WORKSPACE/effects"; printf '{"ok":true}\n'; printf 'original diagnostic\n' >&2`, Resources: []string{}}}}
 				if _, err := commandGraphCall(t, context.Background(), job, dir, spec); err != nil {
 					t.Fatal(err)
 				}
@@ -190,7 +190,7 @@ func TestCommandGraphRejectsStderrTamperingOnRestoreAndReuse(t *testing.T) {
 				if err != nil || json.Unmarshal(raw, &cp) != nil || len(cp.Nodes) != 1 {
 					t.Fatal("missing durable source checkpoint")
 				}
-				var value commandGraphOutput
+				var value Output
 				if err := json.Unmarshal(cp.Nodes[0].Output.Value, &value); err != nil || value.StderrPath == "" {
 					t.Fatalf("missing stderr receipt: %+v %v", value, err)
 				}
@@ -223,8 +223,8 @@ func TestCommandGraphRejectsStderrTamperingOnRestoreAndReuse(t *testing.T) {
 				}
 				call := spec
 				if mode == "reuse" {
-					call = commandGraphSpec{Key: "reuse", Nodes: []commandGraphNode{
-						{ID: "imported", Kind: "reuse", ReuseFrom: &commandGraphReuse{Key: "source", Node: "original"}, Resources: []string{}},
+					call = Spec{Key: "reuse", Nodes: []Node{
+						{ID: "imported", Kind: "reuse", ReuseFrom: &Reuse{Key: "source", Node: "original"}, Resources: []string{}},
 						{ID: "new-effect", Command: `touch "$PWNMESH_WORKSPACE/forbidden"`, Resources: []string{}},
 					}}
 				}
@@ -246,8 +246,8 @@ func TestCommandGraphRejectsStderrTamperingOnRestoreAndReuse(t *testing.T) {
 func TestCommandGraphRejectsLegacyCombinedStreamsWithoutReplay(t *testing.T) {
 	for _, mode := range []string{"restore", "reuse"} {
 		t.Run(mode, func(t *testing.T) {
-			job, dir := graphWrapperJob(t), t.TempDir()
-			spec := commandGraphSpec{Key: "legacy", Nodes: []commandGraphNode{{ID: "source", Command: `printf 'once\n' >> "$PWNMESH_WORKSPACE/effects"; printf '{"ok":true}\n'; printf diagnostic >&2`, Resources: []string{}}}}
+			job, dir := graphScope(t), t.TempDir()
+			spec := Spec{Key: "legacy", Nodes: []Node{{ID: "source", Command: `printf 'once\n' >> "$PWNMESH_WORKSPACE/effects"; printf '{"ok":true}\n'; printf diagnostic >&2`, Resources: []string{}}}}
 			if _, err := commandGraphCall(t, context.Background(), job, dir, spec); err != nil {
 				t.Fatal(err)
 			}
@@ -267,7 +267,7 @@ func TestCommandGraphRejectsLegacyCombinedStreamsWithoutReplay(t *testing.T) {
 			}
 			call := spec
 			if mode == "reuse" {
-				call = commandGraphSpec{Key: "import-old", Nodes: []commandGraphNode{{ID: "old", Kind: "reuse", ReuseFrom: &commandGraphReuse{Key: "legacy", Node: "source"}, Resources: []string{}}}}
+				call = Spec{Key: "import-old", Nodes: []Node{{ID: "old", Kind: "reuse", ReuseFrom: &Reuse{Key: "legacy", Node: "source"}, Resources: []string{}}}}
 			}
 			if _, err := commandGraphCall(t, context.Background(), job, dir, call); err == nil || !strings.Contains(err.Error(), "mismatch") {
 				t.Fatalf("legacy stream semantics were silently accepted: %v", err)
@@ -287,15 +287,15 @@ func TestCommandGraphRejectsLegacyCombinedStreamsWithoutReplay(t *testing.T) {
 func TestCommandGraphReservedStderrDeclarationsFailBeforeExecution(t *testing.T) {
 	for _, declaration := range []string{"artifact", "input"} {
 		t.Run(declaration, func(t *testing.T) {
-			job, dir := graphWrapperJob(t), t.TempDir()
-			spec := commandGraphSpec{Key: "reserved-stderr", Nodes: []commandGraphNode{
+			job, dir := graphScope(t), t.TempDir()
+			spec := Spec{Key: "reserved-stderr", Nodes: []Node{
 				{ID: "producer", Command: `touch "$PWNMESH_WORKSPACE/producer-started"; printf diagnostic >&2`, Resources: []string{}},
 				{ID: "consumer", Command: `touch "$PWNMESH_WORKSPACE/consumer-started"`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "producer"}}},
 			}}
 			if declaration == "artifact" {
 				spec.Nodes[0].Artifacts = []string{"stderr.log"}
 			} else {
-				spec.Nodes[1].Inputs = []commandGraphInput{{Node: "producer", Artifact: "stderr.log"}}
+				spec.Nodes[1].Inputs = []Input{{Node: "producer", Artifact: "stderr.log"}}
 			}
 			if _, err := commandGraphCall(t, context.Background(), job, dir, spec); err == nil {
 				t.Fatal("reserved stderr log accepted as a declared file")
@@ -313,8 +313,8 @@ func TestCommandGraphReservedStderrDeclarationsFailBeforeExecution(t *testing.T)
 }
 
 func TestCommandGraphReusePreservesNonemptyStderrWithoutReplay(t *testing.T) {
-	job, dir := graphWrapperJob(t), t.TempDir()
-	source := commandGraphSpec{Key: "source-streams", Nodes: []commandGraphNode{{
+	job, dir := graphScope(t), t.TempDir()
+	source := Spec{Key: "source-streams", Nodes: []Node{{
 		ID: "source", Command: `printf 'once\n' >> "$PWNMESH_WORKSPACE/effects"; printf '{"ok":true}\n' > result.json; cat result.json; printf 'original diagnostic\n' >&2`, Resources: []string{}, Artifacts: []string{"result.json"},
 	}}}
 	cp, err := commandGraphCall(t, context.Background(), job, dir, source)
@@ -327,7 +327,7 @@ func TestCommandGraphReusePreservesNonemptyStderrWithoutReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reuse := commandGraphSpec{Key: "reuse-streams", Nodes: []commandGraphNode{{ID: "imported", Kind: "reuse", ReuseFrom: &commandGraphReuse{Key: source.Key, Node: "source"}, Resources: []string{}}}}
+	reuse := Spec{Key: "reuse-streams", Nodes: []Node{{ID: "imported", Kind: "reuse", ReuseFrom: &Reuse{Key: source.Key, Node: "source"}, Resources: []string{}}}}
 	// The second call recovers the completed import and reverifies its source.
 	for attempt := 0; attempt < 2; attempt++ {
 		cp, err := commandGraphCall(t, context.Background(), job, dir, reuse)

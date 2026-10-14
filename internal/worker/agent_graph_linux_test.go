@@ -20,10 +20,11 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker/dag"
 	"pwnmesh/internal/workergraph"
 )
 
-func mixedGraphCall(t *testing.T, ctx context.Context, j Job, o Options, spec commandGraphSpec) (workergraph.Checkpoint, error) {
+func mixedGraphCall(t *testing.T, ctx context.Context, j Job, o Options, spec dag.Spec) (workergraph.Checkpoint, error) {
 	t.Helper()
 	raw, err := json.Marshal(spec)
 	if err != nil {
@@ -81,7 +82,7 @@ func TestMixedGraphOwnsIndependentLoopsAndParentRemainsOnlyPublisher(t *testing.
 			return agent.Text("assistant", id+" observed; raw evidence: evidence.txt"), nil
 		}), nil
 	}}
-	spec := commandGraphSpec{Key: "mixed", Parallelism: 2, Nodes: []commandGraphNode{
+	spec := dag.Spec{Key: "mixed", Parallelism: 2, Nodes: []dag.Node{
 		{ID: "left", Kind: "agent", Task: "task-left", Resources: []string{}, Artifacts: []string{"evidence.txt"}},
 		{ID: "right", Kind: "agent", Task: "task-right", Resources: []string{}, Artifacts: []string{"evidence.txt"}},
 		{ID: "join", Command: `cat ../left/evidence.txt ../right/evidence.txt; cat "$PWNMESH_DEPENDENCIES"`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "left"}, {ID: "right"}}},
@@ -130,10 +131,10 @@ func TestAgentGraphRespectsParentDeadlineAndFailureRoute(t *testing.T) {
 			return agent.Message{}, errors.New("specific child failure")
 		}), nil
 	}}
-	spec := commandGraphSpec{Key: "route", Nodes: []commandGraphNode{
+	spec := dag.Spec{Key: "route", Nodes: []dag.Node{
 		{ID: "check", Kind: "agent", Task: "observe", Timeout: 600, Resources: []string{}, Optional: true},
-		{ID: "on-failure", Command: "printf 'parent must review failure'", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "check", Optional: true}}, When: &commandGraphWhen{Node: "check", Status: "failed"}},
-		{ID: "on-success", Command: "exit 99", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "check", Optional: true}}, When: &commandGraphWhen{Node: "check", Status: "succeeded"}},
+		{ID: "on-failure", Command: "printf 'parent must review failure'", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "check", Optional: true}}, When: &dag.When{Node: "check", Status: "failed"}},
+		{ID: "on-success", Command: "exit 99", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "check", Optional: true}}, When: &dag.When{Node: "check", Status: "succeeded"}},
 	}}
 	checkpoint, err := mixedGraphCall(t, context.Background(), j, o, spec)
 	if err != nil || checkpoint.Status != "succeeded" || !sawDeadline.Equal(parentDeadline) {
@@ -189,9 +190,9 @@ func TestAgentGraphFailureRetainsAccountWithoutAcceptedArtifacts(t *testing.T) {
 					return message, nil
 				}), nil
 			}}
-			spec := commandGraphSpec{Key: "agent-failure", Nodes: []commandGraphNode{
+			spec := dag.Spec{Key: "agent-failure", Nodes: []dag.Node{
 				{ID: "source", Kind: "agent", Task: "Inspect and write report.txt", Resources: []string{}, Artifacts: []string{"report.txt"}, Optional: true},
-				{ID: "route", Command: `python3 -c 'import json,os; source=json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))[0]; assert source["status"]=="failed"; output=source["output"]; assert not output.get("artifacts") and not output["files"]; print(output["value"]["stdout"])'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source", Optional: true}}, When: &commandGraphWhen{Node: "source", Status: "failed"}},
+				{ID: "route", Command: `python3 -c 'import json,os; source=json.load(open(os.environ["PWNMESH_DEPENDENCIES"]))[0]; assert source["status"]=="failed"; output=source["output"]; assert not output.get("artifacts") and not output["files"]; print(output["value"]["stdout"])'`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "source", Optional: true}}, When: &dag.When{Node: "source", Status: "failed"}},
 			}}
 			if failure == "timeout" {
 				spec.Nodes[0].Timeout = 1
@@ -221,20 +222,6 @@ func TestAgentGraphFailureRetainsAccountWithoutAcceptedArtifacts(t *testing.T) {
 	}
 }
 
-func TestMixedGraphRejectsAmbiguousCapabilitiesBeforeExecution(t *testing.T) {
-	for _, node := range []commandGraphNode{
-		{ID: "bad", Kind: "agent", Task: "task", Command: "touch outside", Resources: []string{}},
-		{ID: "bad", Kind: "command", Task: "task", Resources: []string{}},
-		{ID: "bad", Kind: "agent", Resources: []string{}},
-		{ID: "bad", Kind: "agent", Task: "task", Resources: []string{}, Artifacts: []string{"session.json"}},
-	} {
-		spec := commandGraphSpec{Key: "invalid", Nodes: []commandGraphNode{node}}
-		if err := validateCommandGraph(&spec); err == nil {
-			t.Fatalf("accepted ambiguous node: %+v", node)
-		}
-	}
-}
-
 func TestAgentReportsAreNotDirectEvidenceReceipts(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
 	o := Options{RunDir: dir, graphProvider: func(string) (agent.Provider, error) {
@@ -245,7 +232,7 @@ func TestAgentReportsAreNotDirectEvidenceReceipts(t *testing.T) {
 	raw := json.RawMessage(`{"key":"evidence-kinds","nodes":[{"id":"interpretation","kind":"agent","task":"assess","resources":[]},{"id":"observation","command":"printf 'observed byte'","resources":[]}]}`)
 	result, err := runCommandGraph(context.Background(), j, o, raw)
 	var receipt struct {
-		Evidence []commandGraphEvidence `json:"verified_evidence"`
+		Evidence []dag.Evidence `json:"verified_evidence"`
 	}
 	if err != nil || json.Unmarshal([]byte(result), &receipt) != nil || len(receipt.Evidence) != 1 || receipt.Evidence[0].NodeID != "observation" {
 		t.Fatalf("Agent prose was offered as direct raw evidence: %s %v", result, err)
@@ -322,8 +309,8 @@ func TestAgentGraphInheritsOnlyBoundParentConstraints(t *testing.T) {
 					return agent.Text("assistant", "Assessed retained evidence within the inherited limits."), nil
 				}), nil
 			}}
-			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Explain the retained result", Timeout: 10, Resources: []string{}}
-			if _, err := executeAgentNode(context.Background(), j, o, "bounded", t.TempDir(), spec, nil); err != nil || requests != 1 {
+			spec := dag.Node{ID: "assess", Kind: "agent", Task: "Explain the retained result", Timeout: 10, Resources: []string{}}
+			if _, err := mixedGraphCall(t, context.Background(), j, o, dag.Spec{Key: "bounded", Nodes: []dag.Node{spec}}); err != nil || requests != 1 {
 				t.Fatalf("inherited constraints failed: %v requests=%d", err, requests)
 			}
 		})
@@ -342,8 +329,8 @@ func TestAgentGraphRejectsMissingBoundStepBeforeModelRequest(t *testing.T) {
 		t.Fatal("incomplete immutable input started a model request")
 		return nil, nil
 	}}
-	spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Inspect", Timeout: 10, Resources: []string{}}
-	if _, err := executeAgentNode(context.Background(), j, o, "missing", t.TempDir(), spec, nil); err == nil || !strings.Contains(err.Error(), "immutable input") {
+	spec := dag.Node{ID: "assess", Kind: "agent", Task: "Inspect", Timeout: 10, Resources: []string{}}
+	if _, err := mixedGraphCall(t, context.Background(), j, o, dag.Spec{Key: "missing", Nodes: []dag.Node{spec}}); err == nil || !strings.Contains(err.Error(), "immutable input") {
 		t.Fatalf("missing bound Step silently used mutable intent text: %v", err)
 	}
 }
@@ -375,8 +362,8 @@ func TestAgentGraphRejectsIncompleteGoalConstraintsBeforeModelRequest(t *testing
 				t.Fatal("incomplete goal constraints started a model request")
 				return nil, nil
 			}}
-			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Inspect", Timeout: 10, Resources: []string{}}
-			if _, err := executeAgentNode(context.Background(), j, o, "missing-goal", t.TempDir(), spec, nil); err == nil || !strings.Contains(err.Error(), "goal") {
+			spec := dag.Node{ID: "assess", Kind: "agent", Task: "Inspect", Timeout: 10, Resources: []string{}}
+			if _, err := mixedGraphCall(t, context.Background(), j, o, dag.Spec{Key: "missing-goal", Nodes: []dag.Node{spec}}); err == nil || !strings.Contains(err.Error(), "goal") {
 				t.Fatalf("invalid bound goal constraints were accepted: %v", err)
 			}
 		})
@@ -431,12 +418,12 @@ func TestAgentGraphScopesScenarioPolicyAndTools(t *testing.T) {
 					return agent.Text("assistant", "Scenario constraints reviewed."), nil
 				}), nil
 			}}
-			spec := commandGraphNode{ID: "assess", Kind: "agent", Task: "Assess fixture", Timeout: 10, Resources: []string{}}
+			spec := dag.Node{ID: "assess", Kind: "agent", Task: "Assess fixture", Timeout: 10, Resources: []string{}}
 			wantRequests := 1
 			if tc.scenario == "pentest" || tc.scenario == "audit" {
 				wantRequests = 2
 			}
-			if _, err := executeAgentNode(context.Background(), j, o, "scenario", t.TempDir(), spec, nil); err != nil || requests != wantRequests {
+			if _, err := mixedGraphCall(t, context.Background(), j, o, dag.Spec{Key: "scenario", Nodes: []dag.Node{spec}}); err != nil || requests != wantRequests {
 				t.Fatalf("child scenario delivery failed: %v requests=%d", err, requests)
 			}
 		})
@@ -452,7 +439,7 @@ func TestAgentGraphCancellationKillsOwnedProcessesAndNeverReplays(t *testing.T) 
 			return draftModelCall("side-effect", "bash", `{"command":"printf start >> started; sleep 30; touch forbidden"}`), nil
 		}), nil
 	}}
-	spec := commandGraphSpec{Key: "interrupted-agent", Nodes: []commandGraphNode{{ID: "slow", Kind: "agent", Task: "inspect", Resources: []string{}}}}
+	spec := dag.Spec{Key: "interrupted-agent", Nodes: []dag.Node{{ID: "slow", Kind: "agent", Task: "inspect", Resources: []string{}}}}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
@@ -560,7 +547,7 @@ func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 			if !ok || json.Unmarshal([]byte(snapshot), &dependencies) != nil || len(dependencies) != 1 {
 				return agent.Message{}, fmt.Errorf("first request lacks a usable dependency snapshot: %s", firstPrompt)
 			}
-			var value commandGraphOutput
+			var value dag.Output
 			dep := dependencies[0]
 			if dep.ID != "observe" || dep.Kind != "function" || dep.Status != "succeeded" || json.Unmarshal(dep.Output.Value, &value) != nil || value.Stdout != "observed input" || len(dep.Output.Artifacts) != 2 || dep.Output.Artifacts[0].SHA256 == "" || dep.Output.Artifacts[1].Path != value.StderrPath {
 				return agent.Message{}, fmt.Errorf("wrong dependency snapshot: %+v", dep)
@@ -568,7 +555,7 @@ func TestAgentGraphSuppliesDependencyResultsInFirstRequest(t *testing.T) {
 			return agent.Text("assistant", "assessed "+value.Stdout), nil
 		}), nil
 	}}
-	spec := commandGraphSpec{Key: "inline-dependencies", Nodes: []commandGraphNode{
+	spec := dag.Spec{Key: "inline-dependencies", Nodes: []dag.Node{
 		{ID: "observe", Command: "printf 'observed input'", Resources: []string{}},
 		{ID: "assess", Kind: "agent", Task: task, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "observe"}}},
 	}}
@@ -601,7 +588,14 @@ func TestAgentDependencySnapshotIsBoundedAndPreservesResults(t *testing.T) {
 		{ID: "failed", Kind: "agent", Status: "failed", Error: "model unavailable", Attempt: 1, StartedAt: time.Now(), RunDurationMS: 100, InputSHA256: "internal-input"},
 		{ID: "skipped", Kind: "function", Status: "skipped", Reason: "condition unmatched", DefinitionSHA256: "internal-definition"},
 	}
-	snapshot := agentDependencySnapshot(commandGraphViews(dependencies))
+	render := func() string {
+		views := make([]dag.NodeView, 0, len(dependencies))
+		for _, state := range dependencies {
+			views = append(views, dag.NodeView{NodeState: state, Output: dag.OutputView{Output: state.Output, Files: map[string]workergraph.Artifact{}}})
+		}
+		return agentDependencySnapshot(views)
+	}
+	snapshot := render()
 	var decoded []workergraph.NodeState
 	if json.Unmarshal([]byte(snapshot), &decoded) != nil || len(decoded) != 2 || decoded[0].Error != dependencies[0].Error || decoded[1].Reason != dependencies[1].Reason {
 		t.Fatalf("failure or skip context was lost: %s", snapshot)
@@ -615,7 +609,7 @@ func TestAgentDependencySnapshotIsBoundedAndPreservesResults(t *testing.T) {
 	// the entire snapshot when it cannot fit rather than implying completeness.
 	for _, content := range []string{strings.Repeat("x", 16<<10), strings.Repeat("<", 4000)} {
 		dependencies[0].Output.Value, _ = json.Marshal(content)
-		if got := agentDependencySnapshot(commandGraphViews(dependencies)); got != "" {
+		if got := render(); got != "" {
 			t.Fatalf("oversized dependency snapshot reached the model: %d bytes", len(got))
 		}
 	}
@@ -634,7 +628,7 @@ func TestAgentGraphRejectsTruncatedFinalReportsWithoutReplay(t *testing.T) {
 					return message, nil
 				}), nil
 			}}
-			spec := commandGraphSpec{Key: "truncated-report", Nodes: []commandGraphNode{
+			spec := dag.Spec{Key: "truncated-report", Nodes: []dag.Node{
 				{ID: "assess", Kind: "agent", Task: "Assess", Resources: []string{}},
 				{ID: "publish", Command: "printf 'must not run'", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "assess"}}},
 			}}
@@ -692,7 +686,7 @@ func TestAgentGraphRetainsTruncatedToolRecovery(t *testing.T) {
 					}
 				}), nil
 			}}
-			spec := commandGraphSpec{Key: "truncated-tool", Nodes: []commandGraphNode{{ID: "work", Kind: "agent", Task: "Work", Resources: []string{}, Artifacts: []string{"effects"}}}}
+			spec := dag.Spec{Key: "truncated-tool", Nodes: []dag.Node{{ID: "work", Kind: "agent", Task: "Work", Resources: []string{}, Artifacts: []string{"effects"}}}}
 			checkpoint, err := mixedGraphCall(t, context.Background(), j, o, spec)
 			if err != nil || checkpoint.Status != "succeeded" || requests != 3 {
 				t.Fatalf("existing truncated tool recovery was broken: %+v %v requests=%d", checkpoint, err, requests)
@@ -728,7 +722,7 @@ func TestAgentGraphPassesDeclaredArtifactPathsToChild(t *testing.T) {
 			return agent.Text("assistant", "created the required output"), nil
 		}), nil
 	}}
-	spec := commandGraphSpec{Key: "declared-artifacts", Nodes: []commandGraphNode{{ID: "produce", Kind: "agent", Task: "Produce the requested result", Resources: []string{}, Artifacts: []string{artifactName}}}}
+	spec := dag.Spec{Key: "declared-artifacts", Nodes: []dag.Node{{ID: "produce", Kind: "agent", Task: "Produce the requested result", Resources: []string{}, Artifacts: []string{artifactName}}}}
 	checkpoint, err := mixedGraphCall(t, context.Background(), j, o, spec)
 	if err != nil || checkpoint.Status != "succeeded" || requests != 2 {
 		t.Fatalf("child could not honor the declared artifact contract: %+v %v requests=%d", checkpoint, err, requests)
@@ -753,7 +747,7 @@ func TestAgentGraphMissingDeclaredArtifactReportsPathAndBlocksDependents(t *test
 			return agent.Text("assistant", "claimed complete without producing the artifact"), nil
 		}), nil
 	}}
-	spec := commandGraphSpec{Key: "missing-artifact", Nodes: []commandGraphNode{
+	spec := dag.Spec{Key: "missing-artifact", Nodes: []dag.Node{
 		{ID: "produce", Kind: "agent", Task: "Produce a local result", Resources: []string{}, Artifacts: []string{"missing.json"}},
 		{ID: "consume", Command: "printf 'must not run'", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "produce"}}},
 	}}

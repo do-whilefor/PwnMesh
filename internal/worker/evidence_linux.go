@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/contract"
+	"pwnmesh/internal/worker/dag"
 )
 
 const maxEvidenceFileBytes = 32 << 20
@@ -251,7 +252,7 @@ func prepareEvidence(ctx context.Context, j Job, runDir string, action board.Sta
 		if err != nil {
 			return action, fmt.Errorf("read selected evidence: %w", err)
 		}
-		if err := verifyCommandEvidence(ctx, j, runDir, source, raw); err != nil {
+		if err := dag.VerifyEvidence(ctx, commandGraphScope(j, runDir), source, raw); err != nil {
 			return action, fmt.Errorf("verify selected DAG evidence: %w", err)
 		}
 		if !utf8.Valid(raw) {

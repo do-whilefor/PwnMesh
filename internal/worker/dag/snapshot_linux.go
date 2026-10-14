@@ -1,6 +1,6 @@
 //go:build linux
 
-package worker
+package dag
 
 import (
 	"bytes"
@@ -19,7 +19,7 @@ import (
 
 // Reuse and shared-evidence handoff must interpret the same durable definition
 // and input bindings. Reading a snapshot never replays work or changes a graph.
-func readCommandSnapshot(ctx context.Context, j Job, runDir, key, dir string) (workergraph.Checkpoint, map[string]commandGraphNode, error) {
+func readCommandSnapshot(ctx context.Context, scope Scope, key, dir string) (workergraph.Checkpoint, map[string]Node, error) {
 	var checkpoint workergraph.Checkpoint
 	raw, err := readCommandGraphFile(ctx, filepath.Join(dir, "graph.json"), 8<<20)
 	if err != nil {
@@ -31,7 +31,7 @@ func readCommandSnapshot(ctx context.Context, j Job, runDir, key, dir string) (w
 	if len(checkpoint.Nodes) == 0 || len(checkpoint.Nodes) > 64 {
 		return checkpoint, nil, errors.New("invalid command graph snapshot size")
 	}
-	spec := commandGraphSpec{Key: key}
+	spec := Spec{Key: key}
 	for _, node := range checkpoint.Nodes {
 		digest, err := hex.DecodeString(node.DefinitionSHA256)
 		if err != nil || len(digest) != sha256.Size {
@@ -41,7 +41,7 @@ func readCommandSnapshot(ctx context.Context, j Job, runDir, key, dir string) (w
 		if err != nil {
 			return checkpoint, nil, fmt.Errorf("command graph requires retained source definitions: %w", err)
 		}
-		var nodeSpec commandGraphNode
+		var nodeSpec Node
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
 		if err := decoder.Decode(&nodeSpec); err != nil {
@@ -57,7 +57,7 @@ func readCommandSnapshot(ctx context.Context, j Job, runDir, key, dir string) (w
 		return checkpoint, nil, err
 	}
 	definition := workergraph.Definition{Version: commandGraphVersion}
-	specs := make(map[string]commandGraphNode, len(spec.Nodes))
+	specs := make(map[string]Node, len(spec.Nodes))
 	states := make(map[string]workergraph.NodeState, len(checkpoint.Nodes))
 	for _, state := range checkpoint.Nodes {
 		states[state.ID] = state
@@ -72,7 +72,7 @@ func readCommandSnapshot(ctx context.Context, j Job, runDir, key, dir string) (w
 		definition.Nodes = append(definition.Nodes, node)
 		specs[nodeSpec.ID] = nodeSpec
 	}
-	identity, err := identityFor(j, runDir)
+	identity, err := scope.identity(scope.RunDir)
 	if err != nil {
 		return checkpoint, nil, err
 	}
@@ -80,7 +80,7 @@ func readCommandSnapshot(ctx context.Context, j Job, runDir, key, dir string) (w
 	if err != nil {
 		return checkpoint, nil, err
 	}
-	if err := workergraph.ValidateSnapshot(definition, workergraph.Options{RunID: j.RunID, Input: input, Dir: dir, Parallelism: 1}, checkpoint); err != nil {
+	if err := workergraph.ValidateSnapshot(definition, workergraph.Options{RunID: scope.RunID, Input: input, Dir: dir, Parallelism: 1}, checkpoint); err != nil {
 		return checkpoint, nil, err
 	}
 	return checkpoint, specs, nil
@@ -90,8 +90,8 @@ func readCommandSnapshot(ctx context.Context, j Job, runDir, key, dir string) (w
 // can silently be reinterpreted when the parent publishes a Fact. Bind the
 // exact bytes being frozen to that receipt. Other local files keep the ordinary
 // evidence-selection contract, including fresh observations made by the parent.
-func verifyCommandEvidence(ctx context.Context, j Job, runDir, source string, raw []byte) error {
-	runDir, err := filepath.Abs(runDir)
+func VerifyEvidence(ctx context.Context, scope Scope, source string, raw []byte) error {
+	runDir, err := filepath.Abs(scope.RunDir)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,8 @@ func verifyCommandEvidence(ctx context.Context, j Job, runDir, source string, ra
 	if err != nil {
 		return err
 	}
-	checkpoint, specs, err := readCommandSnapshot(ctx, j, runDir, parts[0], dir)
+	scope.RunDir = runDir
+	checkpoint, specs, err := readCommandSnapshot(ctx, scope, parts[0], dir)
 	if err != nil {
 		return err
 	}

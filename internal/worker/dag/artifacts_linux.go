@@ -1,6 +1,6 @@
 //go:build linux
 
-package worker
+package dag
 
 import (
 	"context"
@@ -15,34 +15,34 @@ import (
 	"pwnmesh/internal/workergraph"
 )
 
-type commandGraphInput struct {
+type Input struct {
 	Node     string `json:"node"`
 	Artifact string `json:"artifact"`
 }
 
 // Keep durable outputs unchanged: their exact JSON participates in checkpoint
 // input hashes. Views add named files only at model and dependency-file edges.
-type commandGraphOutputView struct {
+type OutputView struct {
 	workergraph.Output
 	Files map[string]workergraph.Artifact `json:"files"`
 }
 
-type commandGraphNodeView struct {
+type NodeView struct {
 	workergraph.NodeState
-	Output commandGraphOutputView `json:"output"`
+	Output OutputView `json:"output"`
 }
 
-func commandGraphViews(states []workergraph.NodeState) []commandGraphNodeView {
-	views := make([]commandGraphNodeView, 0, len(states))
+func commandGraphViews(states []workergraph.NodeState) []NodeView {
+	views := make([]NodeView, 0, len(states))
 	for _, state := range states {
-		views = append(views, commandGraphNodeView{state, commandGraphOutputView{state.Output, commandOutputFiles(state.Output)}})
+		views = append(views, NodeView{state, OutputView{state.Output, commandOutputFiles(state.Output)}})
 	}
 	return views
 }
 
 func commandOutputFiles(output workergraph.Output) map[string]workergraph.Artifact {
 	files := make(map[string]workergraph.Artifact)
-	var value commandGraphOutput
+	var value Output
 	if json.Unmarshal(output.Value, &value) != nil || !filepath.IsAbs(value.OutputPath) || filepath.Base(value.OutputPath) != "stdout.log" || filepath.Clean(value.OutputPath) != value.OutputPath {
 		return files
 	}
@@ -58,8 +58,8 @@ func commandOutputFiles(output workergraph.Output) map[string]workergraph.Artifa
 
 // A declaration is required only when a consumer explicitly requests that
 // file. Historical log-only nodes and graphs without inputs stay valid.
-func validateCommandInputs(spec *commandGraphSpec) error {
-	byID := make(map[string]commandGraphNode, len(spec.Nodes))
+func validateCommandInputs(spec *Spec) error {
+	byID := make(map[string]Node, len(spec.Nodes))
 	for _, node := range spec.Nodes {
 		byID[node.ID] = node
 	}
@@ -68,7 +68,7 @@ func validateCommandInputs(spec *commandGraphSpec) error {
 		if len(node.Inputs) > 64 {
 			return fmt.Errorf("node %s supports at most 64 artifact inputs", node.ID)
 		}
-		slices.SortFunc(node.Inputs, func(a, b commandGraphInput) int {
+		slices.SortFunc(node.Inputs, func(a, b Input) int {
 			if order := strings.Compare(a.Node, b.Node); order != 0 {
 				return order
 			}
@@ -96,7 +96,7 @@ func validateCommandInputs(spec *commandGraphSpec) error {
 // Freeze only declared inputs before starting a consumer. Hash the same bytes
 // that are copied, then expose their private paths through output.files. Raw
 // producer receipts remain unchanged for provenance and checkpoint binding.
-func freezeCommandInputs(ctx context.Context, dir string, spec commandGraphNode, dependencies []workergraph.NodeState) ([]commandGraphNodeView, error) {
+func freezeCommandInputs(ctx context.Context, dir string, spec Node, dependencies []workergraph.NodeState) ([]NodeView, error) {
 	views := commandGraphViews(dependencies)
 	byID := make(map[string]int, len(views))
 	for i := range views {
@@ -133,7 +133,7 @@ func freezeCommandInputs(ctx context.Context, dir string, spec commandGraphNode,
 		if !exists {
 			return nil, fmt.Errorf("node %s input %s/%s is missing from its producer receipt", spec.ID, input.Node, input.Artifact)
 		}
-		var value commandGraphOutput
+		var value Output
 		if err := json.Unmarshal(dependency.Output.Value, &value); err != nil {
 			return nil, err
 		}

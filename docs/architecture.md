@@ -34,6 +34,7 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/dispatcher/` | Ownership, reconciliation, scheduling, leases, delivery |
 | `internal/docker/` | Container ownership, transport, graph/model bridges |
 | `internal/worker/` | Session lifecycle, recovery, runtime tools, evidence acceptance |
+| `internal/worker/dag/` | Mixed-node execution, artifact inputs, snapshots and verified reuse |
 | `internal/agent/` | Provider-independent model/tool loop and context checkpoints |
 | `internal/provider/`, `internal/modelrpc/` | Anthropic-compatible model client and bridge wire contract |
 | `internal/tools/`, `internal/process/` | Workspace tools and Linux process lifecycle |
@@ -72,6 +73,12 @@ locking and cancellation, persisted state, recovery, Agent setup and phase
 transitions. `graph_run_linux.go` and `acceptance_linux.go` enforce the outer
 evidence receipt boundary. Journals/checkpoints precede side effects; durable
 receipts are checked before issuing more model or tool calls.
+
+`worker/dag` adapts command and Agent nodes to the existing `workergraph` scheduler.
+Worker supplies the canonical execution identity and an Agent callback; Agent
+sessions, scenario policy and publication stay in Worker. DAG owns dependency
+files and artifact receipts, including verification when Worker selects evidence.
+The child package never imports Worker or a model provider.
 
 Board's `Store.Do` keeps lease/generation validation, idempotency lookup, mutation,
 revisions and receipts in one `BEGIN IMMEDIATE` transaction. `Store.View` uses

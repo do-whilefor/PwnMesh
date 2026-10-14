@@ -14,6 +14,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/worker/dag"
 )
 
 type traceFixture struct {
@@ -614,7 +615,7 @@ func TestWorkerTraceCapabilityDoesNotReachChildAgents(t *testing.T) {
 			return agent.Text("assistant", "local observation"), nil
 		}), nil
 	}}
-	checkpoint, err := mixedGraphCall(t, context.Background(), j, o, commandGraphSpec{Key: "trace-isolation", Nodes: []commandGraphNode{{ID: "child", Kind: "agent", Task: "local inspection", Resources: []string{}}}})
+	checkpoint, err := mixedGraphCall(t, context.Background(), j, o, dag.Spec{Key: "trace-isolation", Nodes: []dag.Node{{ID: "child", Kind: "agent", Task: "local inspection", Resources: []string{}}}})
 	if err != nil || checkpoint.Status != "succeeded" {
 		t.Fatalf("child trace isolation: %+v %v", checkpoint, err)
 	}

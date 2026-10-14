@@ -15,6 +15,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/tools"
+	"pwnmesh/internal/worker/dag"
 	"pwnmesh/internal/workergraph"
 )
 
@@ -34,7 +35,8 @@ type graphAgentSession struct {
 	Error      string                   `json:"error,omitempty"`
 }
 
-func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, spec commandGraphNode, dependencies []workergraph.NodeState) (workergraph.Output, error) {
+func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode) (workergraph.Output, error) {
+	key, dir, spec := node.Key, node.Dir, node.Spec
 	parent := ctx
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(spec.Timeout)*time.Second)
 	defer cancel()
@@ -45,15 +47,8 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	if err != nil {
 		return workergraph.Output{}, err
 	}
-	views, err := freezeCommandInputs(ctx, dir, spec, dependencies)
+	views, deps, err := node.PrepareInputs(ctx)
 	if err != nil {
-		return workergraph.Output{}, err
-	}
-	deps, err := json.Marshal(views)
-	if err != nil {
-		return workergraph.Output{}, err
-	}
-	if err := commandNewFile(filepath.Join(dir, "dependencies.json"), deps); err != nil {
 		return workergraph.Output{}, err
 	}
 	var provider agent.Provider
@@ -98,7 +93,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 		}
 		return atomicSessionFile(dir, raw)
 	}
-	set := tools.Set{Dir: dir, RunDir: dir, ProcessDir: o.RunDir, Env: graphNodeEnvironment(j.Workspace, dir)}
+	set := tools.Set{Dir: dir, RunDir: dir, ProcessDir: o.RunDir, Env: node.Environment()}
 	childTools := scenarioTools(j, set.All())
 	o = contextOptions(o)
 	loop := &agent.Loop{
@@ -124,22 +119,14 @@ func executeAgentNode(ctx context.Context, j Job, o Options, key, dir string, sp
 	}
 	// stdout.log is the node's final local account, not its event stream and
 	// never a top-level Worker result. Reuse verifies these exact bytes.
-	var out workergraph.Output
-	if err := commandNewFile(filepath.Join(dir, "stdout.log"), []byte(text)); err != nil {
-		runErr = errors.Join(runErr, err)
-	} else {
-		paths := spec.Artifacts
-		outputContext := ctx
-		if runErr != nil {
-			paths = nil
-			// A node timeout ends its work, but the active parent can still
-			// receive bounded diagnostics. Parent cancellation stops this read.
-			outputContext = parent
-		}
-		var outputErr error
-		out, outputErr = commandNodeOutput(outputContext, dir, paths)
-		runErr = errors.Join(runErr, outputErr)
+	outputContext := ctx
+	if runErr != nil {
+		// A node timeout ends its work, but the active parent can still
+		// receive bounded diagnostics. Parent cancellation stops this read.
+		outputContext = parent
 	}
+	out, outputErr := node.RetainOutput(outputContext, text, runErr == nil)
+	runErr = errors.Join(runErr, outputErr)
 	state.Result = text
 	if runErr != nil {
 		state.Error = runErr.Error()
@@ -257,18 +244,18 @@ func agentAssignmentContext(j Job) (string, error) {
 // Small dependency results are already available to the runtime, so let a
 // child reason from them in its first request. Large fan-ins remain file-based;
 // never silently truncate an output or crowd out the child's task and tools.
-func agentDependencySnapshot(dependencies []commandGraphNodeView) string {
+func agentDependencySnapshot(dependencies []dag.NodeView) string {
 	const limit = 16 << 10
 	if len(dependencies) == 0 {
 		return ""
 	}
 	type dependency struct {
-		ID     string                 `json:"id"`
-		Kind   string                 `json:"kind"`
-		Status string                 `json:"status"`
-		Output commandGraphOutputView `json:"output"`
-		Error  string                 `json:"error,omitempty"`
-		Reason string                 `json:"reason,omitempty"`
+		ID     string         `json:"id"`
+		Kind   string         `json:"kind"`
+		Status string         `json:"status"`
+		Output dag.OutputView `json:"output"`
+		Error  string         `json:"error,omitempty"`
+		Reason string         `json:"reason,omitempty"`
 	}
 	snapshot := make([]dependency, 0, len(dependencies))
 	size := 0
@@ -289,21 +276,4 @@ func agentDependencySnapshot(dependencies []commandGraphNodeView) string {
 		return ""
 	}
 	return string(raw)
-}
-
-func commandNodeOutput(ctx context.Context, dir string, paths []string) (workergraph.Output, error) {
-	artifact, preview, err := commandFile(ctx, dir, "stdout.log", 8000)
-	if err != nil {
-		return workergraph.Output{}, err
-	}
-	value, _ := json.Marshal(commandGraphOutput{Stdout: preview, OutputPath: artifact.Path})
-	out := workergraph.Output{Value: value, Artifacts: []workergraph.Artifact{artifact}}
-	for _, name := range paths {
-		artifact, _, err := commandFile(ctx, dir, name, 0)
-		if err != nil {
-			return out, err
-		}
-		out.Artifacts = append(out.Artifacts, artifact)
-	}
-	return out, nil
 }

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/worker/dag"
 	"pwnmesh/internal/workergraph"
 )
 
@@ -59,7 +60,7 @@ func TestDynamicGraphParentLoopDelegatesFromObservedResults(t *testing.T) {
 			}
 			// Only discovery is known initially. The parent adds both specialists
 			// and their eventual integration task after observing prior results.
-			spec := commandGraphSpec{Key: "adaptive", Nodes: []commandGraphNode{{
+			spec := dag.Spec{Key: "adaptive", Nodes: []dag.Node{{
 				ID: "z-discover", Kind: "agent", Task: "Discover work items from work-items.json", Resources: []string{},
 			}}}
 			assignments := map[string]string{"z-discover": spec.Nodes[0].Task}
@@ -146,7 +147,7 @@ func TestDynamicGraphParentLoopDelegatesFromObservedResults(t *testing.T) {
 						assignments[id] = task
 						report, _ := json.Marshal(assignment{Role: item.Role, Input: "observed " + item.Input})
 						reports[id] = string(report)
-						spec.Nodes = append(spec.Nodes, commandGraphNode{ID: id, Kind: "agent", Task: task, Resources: []string{}, Artifacts: []string{"evidence.txt"}, DependsOn: []workergraph.Dependency{{ID: "z-discover"}}})
+						spec.Nodes = append(spec.Nodes, dag.Node{ID: id, Kind: "agent", Task: task, Resources: []string{}, Artifacts: []string{"evidence.txt"}, DependsOn: []workergraph.Dependency{{ID: "z-discover"}}})
 					}
 				case 3:
 					var findings []assignment
@@ -167,7 +168,7 @@ func TestDynamicGraphParentLoopDelegatesFromObservedResults(t *testing.T) {
 					// This newly appended ID sorts before every completed node.
 					assignments["a-integrate"] = "Integrate observed findings: " + string(merged)
 					reports["a-integrate"] = string(merged)
-					spec.Nodes = append(spec.Nodes, commandGraphNode{ID: "a-integrate", Kind: "agent", Task: assignments["a-integrate"], Resources: []string{}, Artifacts: []string{"evidence.txt"}, DependsOn: dependencies})
+					spec.Nodes = append(spec.Nodes, dag.Node{ID: "a-integrate", Kind: "agent", Task: assignments["a-integrate"], Resources: []string{}, Artifacts: []string{"evidence.txt"}, DependsOn: dependencies})
 				case 4:
 					// Retry the full cumulative definition: no child may restart.
 				case 5:
@@ -236,17 +237,17 @@ func TestDynamicGraphRejectsUnsafeExtensionBeforeStartingNewAgent(t *testing.T) 
 					return agent.Text("assistant", "reviewed old observation"), nil
 				}), nil
 			}}
-			original := commandGraphNode{ID: "z-observed", Command: "printf original > evidence.txt; printf observed", Resources: []string{"shared-report"}, Artifacts: []string{"evidence.txt"}}
-			spec := commandGraphSpec{Key: "extend", Nodes: []commandGraphNode{original}}
+			original := dag.Node{ID: "z-observed", Command: "printf original > evidence.txt; printf observed", Resources: []string{"shared-report"}, Artifacts: []string{"evidence.txt"}}
+			spec := dag.Spec{Key: "extend", Nodes: []dag.Node{original}}
 			checkpoint, err := mixedGraphCall(t, context.Background(), job, opts, spec)
 			if err != nil || checkpoint.Status != "succeeded" {
 				t.Fatalf("initial observation failed: %+v %v", checkpoint, err)
 			}
-			next := commandGraphNode{ID: "a-review", Kind: "agent", Task: "review observation", Resources: []string{"shared-report"}, DependsOn: []workergraph.Dependency{{ID: original.ID}}}
+			next := dag.Node{ID: "a-review", Kind: "agent", Task: "review observation", Resources: []string{"shared-report"}, DependsOn: []workergraph.Dependency{{ID: original.ID}}}
 			spec.Nodes = append(spec.Nodes, next)
 			switch variant {
 			case "remove old node":
-				spec.Nodes = []commandGraphNode{next}
+				spec.Nodes = []dag.Node{next}
 				spec.Nodes[0].DependsOn = nil
 			case "change old command":
 				spec.Nodes[0].Command = "printf replacement"
@@ -266,7 +267,7 @@ func TestDynamicGraphRejectsUnsafeExtensionBeforeStartingNewAgent(t *testing.T) 
 				return
 			}
 			// Rejected definitions must not consume the key or poison its history.
-			spec.Nodes = []commandGraphNode{original, next}
+			spec.Nodes = []dag.Node{original, next}
 			checkpoint, err = mixedGraphCall(t, context.Background(), job, opts, spec)
 			if err != nil || checkpoint.Status != "succeeded" || starts.Load() != 1 {
 				t.Fatalf("corrected extension failed: %+v %v starts=%d", checkpoint, err, starts.Load())

@@ -15,14 +15,15 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/worker/dag"
 	"pwnmesh/internal/workergraph"
 )
 
-func drainFailureSpec() commandGraphSpec {
-	return commandGraphSpec{Key: "original", Parallelism: 2, Nodes: []commandGraphNode{
+func drainFailureSpec() dag.Spec {
+	return dag.Spec{Key: "original", Parallelism: 2, Nodes: []dag.Node{
 		{ID: "download", Command: `printf 'download\n' >> "$PWNMESH_WORKSPACE/effects"; printf '{"version":1}' > download.json; printf downloaded`, Resources: []string{}, Artifacts: []string{"download.json"}},
-		{ID: "manifest", Kind: "agent", Task: "Inspect the download and retain manifest.json", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "download"}}, Inputs: []commandGraphInput{{Node: "download", Artifact: "download.json"}}, Artifacts: []string{"manifest.json"}},
-		{ID: "integrity", Command: `while [ ! -f "$PWNMESH_WORKSPACE/manifest-started" ]; do sleep .01; done; printf 'deterministic integrity failure\n'; exit 3`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "download"}}, Inputs: []commandGraphInput{{Node: "download", Artifact: "download.json"}}},
+		{ID: "manifest", Kind: "agent", Task: "Inspect the download and retain manifest.json", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "download"}}, Inputs: []dag.Input{{Node: "download", Artifact: "download.json"}}, Artifacts: []string{"manifest.json"}},
+		{ID: "integrity", Command: `while [ ! -f "$PWNMESH_WORKSPACE/manifest-started" ]; do sleep .01; done; printf 'deterministic integrity failure\n'; exit 3`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "download"}}, Inputs: []dag.Input{{Node: "download", Artifact: "download.json"}}},
 		{ID: "join", Command: `touch "$PWNMESH_WORKSPACE/old-join-started"`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "manifest"}, {ID: "integrity"}}},
 	}}
 }
@@ -92,10 +93,10 @@ func TestCommandGraphDrainsRunningAgentAfterFailureAndReusesCompletedBranches(t 
 	if _, err := os.Stat(filepath.Join(job.Workspace, "old-join-started")); !os.IsNotExist(err) {
 		t.Fatal("original join ran after its required input failed")
 	}
-	repair := commandGraphSpec{Key: "repair", Nodes: []commandGraphNode{
-		{ID: "downloaded", Kind: "reuse", Resources: []string{}, ReuseFrom: &commandGraphReuse{Key: "original", Node: "download"}},
-		{ID: "manifest", Kind: "reuse", Resources: []string{}, ReuseFrom: &commandGraphReuse{Key: "original", Node: "manifest"}},
-		{ID: "fixed", Command: `grep -q '"download.json"' "$PWNMESH_DEPENDENCIES" && grep -q '"manifest.json"' "$PWNMESH_DEPENDENCIES" && printf 'fixed\n' >> "$PWNMESH_WORKSPACE/effects" && printf '{"integrity":true}' > report.json`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "downloaded"}, {ID: "manifest"}}, Inputs: []commandGraphInput{{Node: "downloaded", Artifact: "download.json"}, {Node: "manifest", Artifact: "manifest.json"}}, Artifacts: []string{"report.json"}},
+	repair := dag.Spec{Key: "repair", Nodes: []dag.Node{
+		{ID: "downloaded", Kind: "reuse", Resources: []string{}, ReuseFrom: &dag.Reuse{Key: "original", Node: "download"}},
+		{ID: "manifest", Kind: "reuse", Resources: []string{}, ReuseFrom: &dag.Reuse{Key: "original", Node: "manifest"}},
+		{ID: "fixed", Command: `grep -q '"download.json"' "$PWNMESH_DEPENDENCIES" && grep -q '"manifest.json"' "$PWNMESH_DEPENDENCIES" && printf 'fixed\n' >> "$PWNMESH_WORKSPACE/effects" && printf '{"integrity":true}' > report.json`, Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "downloaded"}, {ID: "manifest"}}, Inputs: []dag.Input{{Node: "downloaded", Artifact: "download.json"}, {Node: "manifest", Artifact: "manifest.json"}}, Artifacts: []string{"report.json"}},
 	}}
 	for attempt := 0; attempt < 2; attempt++ {
 		result, err := mixedGraphCall(t, ctx, job, opts, repair)
@@ -137,7 +138,7 @@ func TestCommandGraphDrainStillHonorsParentDeadline(t *testing.T) {
 	if manifest.Status != "running" || !strings.Contains(manifest.Error, "interrupted") {
 		t.Fatalf("deadline was converted into reusable completed work: %+v", manifest)
 	}
-	repair := commandGraphSpec{Key: "repair", Nodes: []commandGraphNode{{ID: "downloaded", Kind: "reuse", Resources: []string{}, ReuseFrom: &commandGraphReuse{Key: "original", Node: "download"}}}}
+	repair := dag.Spec{Key: "repair", Nodes: []dag.Node{{ID: "downloaded", Kind: "reuse", Resources: []string{}, ReuseFrom: &dag.Reuse{Key: "original", Node: "download"}}}}
 	if _, err := commandGraphCall(t, ctx, job, dir, repair); err == nil || !strings.Contains(err.Error(), "unresolved") {
 		t.Fatalf("reused a source with an Agent interrupted by the deadline: %v", err)
 	}

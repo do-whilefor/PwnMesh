@@ -1,6 +1,6 @@
 //go:build linux
 
-package worker
+package dag
 
 import (
 	"bytes"
@@ -18,12 +18,12 @@ import (
 	"pwnmesh/internal/workergraph"
 )
 
-type commandGraphReuse struct {
+type Reuse struct {
 	Key  string `json:"key"`
 	Node string `json:"node"`
 }
 
-type commandReuseReceipt struct {
+type ReuseReceipt struct {
 	Key              string `json:"key"`
 	Node             string `json:"node"`
 	Kind             string `json:"kind"`
@@ -33,14 +33,14 @@ type commandReuseReceipt struct {
 
 type commandReuse struct {
 	SourceNode workergraph.NodeState
-	SourceSpec commandGraphNode
+	SourceSpec Node
 	SourceDir  string
-	receipt    commandReuseReceipt
+	receipt    ReuseReceipt
 }
 
 // A definition-only descriptor keeps persisted definition hashes identical to
 // actual execution. The caller replaces these inert callbacks before Run.
-func commandNodeDefinition(spec commandGraphNode) workergraph.Node {
+func commandNodeDefinition(spec Node) workergraph.Node {
 	input, _ := json.Marshal(spec)
 	node := workergraph.Node{ID: spec.ID, Kind: "function", Input: input, DependsOn: spec.DependsOn, Optional: spec.Optional}
 	if spec.Kind == "agent" {
@@ -60,7 +60,7 @@ func commandNodeDefinition(spec commandGraphNode) workergraph.Node {
 // Each definition is content-addressed and published atomically without
 // replacing an existing file. A crash during extension leaves old definitions
 // intact; graph.json alone chooses the committed set.
-func storeCommandDefinitions(dir string, spec commandGraphSpec, definition workergraph.Definition) error {
+func storeCommandDefinitions(dir string, spec Spec, definition workergraph.Definition) error {
 	definitionsDir, err := commandGraphDirectory(dir, "definitions")
 	if err != nil {
 		return err
@@ -173,17 +173,17 @@ func existingCommandGraphDirectory(root string, elements ...string) (string, err
 	return dir, nil
 }
 
-func commandGraphInitialInput(identity executionIdentity, key string) (json.RawMessage, error) {
+func commandGraphInitialInput(identity json.RawMessage, key string) (json.RawMessage, error) {
 	return json.Marshal(struct {
-		Identity executionIdentity `json:"identity"`
-		Key      string            `json:"key"`
+		Identity json.RawMessage `json:"identity"`
+		Key      string          `json:"key"`
 	}{identity, key})
 }
 
 // Preflight every import while holding all source graph locks. Callers retain
 // cleanup until execution and final verification finish. No new graph callback
 // may begin if any requested source fails this preflight.
-func prepareCommandReuses(ctx context.Context, j Job, o Options, spec commandGraphSpec) (map[string]*commandReuse, func(), error) {
+func prepareCommandReuses(ctx context.Context, scope Scope, spec Spec) (map[string]*commandReuse, func(), error) {
 	result := map[string]*commandReuse{}
 	var unlocks []func()
 	cleanup := func() {
@@ -214,11 +214,11 @@ func prepareCommandReuses(ctx context.Context, j Job, o Options, spec commandGra
 	type sourceGraph struct {
 		dir   string
 		nodes map[string]workergraph.NodeState
-		specs map[string]commandGraphNode
+		specs map[string]Node
 	}
 	sources := map[string]sourceGraph{}
 	for _, key := range keys {
-		dir, err := existingCommandGraphDirectory(o.RunDir, "graph-tools", key)
+		dir, err := existingCommandGraphDirectory(scope.RunDir, "graph-tools", key)
 		if err != nil {
 			return fail(err)
 		}
@@ -231,7 +231,7 @@ func prepareCommandReuses(ctx context.Context, j Job, o Options, spec commandGra
 			return fail(err)
 		}
 		unlocks = append(unlocks, unlock)
-		checkpoint, specs, err := readCommandSnapshot(ctx, j, o.RunDir, key, dir)
+		checkpoint, specs, err := readCommandSnapshot(ctx, scope, key, dir)
 		if err != nil {
 			return fail(err)
 		}
@@ -265,13 +265,13 @@ func prepareCommandReuses(ctx context.Context, j Job, o Options, spec commandGra
 		if !ok || state.Status != "succeeded" {
 			return fail(errors.New("reuse source node must have succeeded"))
 		}
-		result[node.ID] = &commandReuse{SourceNode: state, SourceSpec: source.specs[state.ID], SourceDir: filepath.Join(source.dir, "nodes", state.ID), receipt: commandReuseReceipt{Key: node.ReuseFrom.Key, Node: state.ID, Kind: state.Kind, DefinitionSHA256: state.DefinitionSHA256, InputSHA256: state.InputSHA256}}
+		result[node.ID] = &commandReuse{SourceNode: state, SourceSpec: source.specs[state.ID], SourceDir: filepath.Join(source.dir, "nodes", state.ID), receipt: ReuseReceipt{Key: node.ReuseFrom.Key, Node: state.ID, Kind: state.Kind, DefinitionSHA256: state.DefinitionSHA256, InputSHA256: state.InputSHA256}}
 	}
 	return result, cleanup, nil
 }
 
 func (r *commandReuse) Output() workergraph.Output {
-	var value commandGraphOutput
+	var value Output
 	_ = json.Unmarshal(r.SourceNode.Output.Value, &value)
 	receipt := r.receipt
 	value.ReusedFrom = &receipt

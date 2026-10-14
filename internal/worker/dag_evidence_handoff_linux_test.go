@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/worker/dag"
 	"pwnmesh/internal/workergraph"
 )
 
@@ -21,7 +22,7 @@ func TestDAGEvidenceHandoffRejectsChangedVerifiedOutput(t *testing.T) {
 	if err := ConfigureRuntimeTools(j, &o); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := marshalCommandGraphCall(commandGraphSpec{Key: "handoff", Nodes: []commandGraphNode{{
+	raw, err := marshalCommandGraphCall(dag.Spec{Key: "handoff", Nodes: []dag.Node{{
 		ID: "observe", Command: `printf 'original observation\n'`, Resources: []string{},
 	}}})
 	if err != nil {
@@ -32,7 +33,7 @@ func TestDAGEvidenceHandoffRejectsChangedVerifiedOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	var receipt struct {
-		Evidence []commandGraphEvidence `json:"verified_evidence"`
+		Evidence []dag.Evidence `json:"verified_evidence"`
 	}
 	if err := json.Unmarshal([]byte(reply), &receipt); err != nil || len(receipt.Evidence) != 1 {
 		t.Fatalf("missing verified observation: %+v %v", receipt, err)
@@ -58,7 +59,7 @@ func TestDAGEvidenceHandoffArtifactBinding(t *testing.T) {
 				j.ResultContractVersion = 2
 				o := Options{RunDir: dir}
 				command := `mkdir -p reports; printf 'original\n' > reports/result.txt; printf 'observed\n'`
-				node := commandGraphNode{ID: "observe", Kind: kind, Resources: []string{}, Artifacts: []string{"reports/result.txt"}}
+				node := dag.Node{ID: "observe", Kind: kind, Resources: []string{}, Artifacts: []string{"reports/result.txt"}}
 				if kind == "command" {
 					node.Command = command
 				} else {
@@ -75,7 +76,7 @@ func TestDAGEvidenceHandoffArtifactBinding(t *testing.T) {
 						}), nil
 					}
 				}
-				raw, _ := marshalCommandGraphCall(commandGraphSpec{Key: "artifact", Nodes: []commandGraphNode{node}})
+				raw, _ := marshalCommandGraphCall(dag.Spec{Key: "artifact", Nodes: []dag.Node{node}})
 				if _, err := commandGraphTool(j, o).Execute(context.Background(), raw); err != nil {
 					t.Fatal(err)
 				}
@@ -123,7 +124,7 @@ func TestDAGEvidenceHandoffValidatesSnapshotBindings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := verifyCommandEvidence(context.Background(), j, dir, path, content); err == nil {
+			if err := dag.VerifyEvidence(context.Background(), commandGraphScope(j, dir), path, content); err == nil {
 				t.Fatal("invalid DAG receipt authorized shared evidence")
 			}
 		})
@@ -132,8 +133,8 @@ func TestDAGEvidenceHandoffValidatesSnapshotBindings(t *testing.T) {
 
 func TestDAGEvidenceHandoffSupportsRepairGraphsAndOriginalReusePaths(t *testing.T) {
 	j, dir, _ := reuseSource(t, false)
-	spec := commandGraphSpec{Key: "repair", Nodes: []commandGraphNode{
-		{ID: "imported", Kind: "reuse", ReuseFrom: &commandGraphReuse{Key: "original", Node: "download"}, Resources: []string{}},
+	spec := dag.Spec{Key: "repair", Nodes: []dag.Node{
+		{ID: "imported", Kind: "reuse", ReuseFrom: &dag.Reuse{Key: "original", Node: "download"}, Resources: []string{}},
 		{ID: "new", Command: "printf 'fresh observation\n'", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "imported"}}},
 	}}
 	checkpoint, err := commandGraphCall(t, context.Background(), j, dir, spec)
@@ -146,10 +147,10 @@ func TestDAGEvidenceHandoffSupportsRepairGraphsAndOriginalReusePaths(t *testing.
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := verifyCommandEvidence(context.Background(), j, dir, output.OutputPath, raw); err != nil {
+		if err := dag.VerifyEvidence(context.Background(), commandGraphScope(j, dir), output.OutputPath, raw); err != nil {
 			t.Fatalf("valid repair evidence rejected: %v", err)
 		}
-		if err := verifyCommandEvidence(context.Background(), j, dir, output.OutputPath, []byte("replacement")); err == nil {
+		if err := dag.VerifyEvidence(context.Background(), commandGraphScope(j, dir), output.OutputPath, []byte("replacement")); err == nil {
 			t.Fatal("changed repaired or reused evidence accepted")
 		}
 	}
@@ -157,7 +158,7 @@ func TestDAGEvidenceHandoffSupportsRepairGraphsAndOriginalReusePaths(t *testing.
 
 func TestDAGEvidenceHandoffPreservesFreshFilesAndFailureDiagnostics(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
-	spec := commandGraphSpec{Key: "diagnostics", Nodes: []commandGraphNode{{ID: "failed", Command: "printf failure; printf partial > result.txt; exit 3", Resources: []string{}, Artifacts: []string{"result.txt"}}}}
+	spec := dag.Spec{Key: "diagnostics", Nodes: []dag.Node{{ID: "failed", Command: "printf failure; printf partial > result.txt; exit 3", Resources: []string{}, Artifacts: []string{"result.txt"}}}}
 	if _, err := commandGraphCall(t, context.Background(), j, dir, spec); err == nil {
 		t.Fatal("failure fixture unexpectedly succeeded")
 	}
@@ -172,13 +173,13 @@ func TestDAGEvidenceHandoffPreservesFreshFilesAndFailureDiagnostics(t *testing.T
 		if err != nil {
 			t.Fatal(err)
 		}
-		err = verifyCommandEvidence(context.Background(), j, dir, path, raw)
+		err = dag.VerifyEvidence(context.Background(), commandGraphScope(j, dir), path, raw)
 		if (err != nil) != (name == "result.txt") {
 			t.Fatalf("diagnostics/fresh observation contract changed for %s: %v", name, err)
 		}
 	}
 	// Ordinary selections also work when the caller supplies a relative run root.
-	if err := verifyCommandEvidence(context.Background(), j, "relative-run", filepath.Join(j.Workspace, "fresh.txt"), []byte("fresh")); err != nil {
+	if err := dag.VerifyEvidence(context.Background(), commandGraphScope(j, "relative-run"), filepath.Join(j.Workspace, "fresh.txt"), []byte("fresh")); err != nil {
 		t.Fatalf("relative run root rejected an unrelated observation: %v", err)
 	}
 }

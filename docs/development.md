@@ -34,6 +34,7 @@ For a focused change, run its package and test names first. For example:
 ```sh
 go test ./internal/board -run 'TestStore' -count=1
 go test ./internal/worker -run '^TestAcceptance' -count=1
+go test ./internal/worker/dag -count=1
 go test ./internal/protocol -count=1
 ```
 
