@@ -8,7 +8,6 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -265,27 +264,9 @@ func (r *request) text(key string) string {
 	return v
 }
 func (r *request) integer(key string) int {
-	var str string
-	switch v := r.fields[key].(type) {
-	case json.Number:
-		str = string(v)
-	case string:
-		str = strings.TrimSpace(v)
-		if strings.ContainsAny(str, "eE/xXbBoO") {
-			r.invalid(key, "must be an integer")
-		}
-	default:
-		r.invalid(key, "must be an integer")
-	}
-	// Pydantic accepts integral JSON floats and decimal strings such as 15.0.
-	// Parse exactly so large inputs cannot silently round to another timeout.
-	number, ok := new(big.Rat).SetString(str)
-	if !ok || !number.IsInt() {
-		r.invalid(key, "must be an integer greater than or equal to 5")
-		return 0
-	}
-	n, err := strconv.Atoi(number.Num().String())
-	if err != nil || n < 5 {
+	number, ok := r.fields[key].(json.Number)
+	n, err := strconv.Atoi(string(number))
+	if !ok || err != nil || n < 5 {
 		r.invalid(key, "must be an integer greater than or equal to 5")
 	}
 	return n

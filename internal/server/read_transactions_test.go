@@ -109,3 +109,42 @@ func TestSettingsWriteRetainsLeaseMaintenance(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSettingsRejectsCoercedTimeoutsWithoutChangingStorage(t *testing.T) {
+	f, store := newSnapshotHTTPFixture(t)
+	var before board.Settings
+	if err := store.View(context.Background(), func(tx *board.Tx) error {
+		var err error
+		before, err = tx.Settings()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"intent_timeout", "reason_timeout"} {
+		for _, value := range []string{`"15"`, `"15.0"`, `15.0`, `1.5e1`, `true`, `null`, `4`, `9223372036854775808`} {
+			t.Run(field+"/"+value, func(t *testing.T) {
+				body := `{"intent_timeout":120,"reason_timeout":180}`
+				if field == "intent_timeout" {
+					body = strings.Replace(body, "120", value, 1)
+				} else {
+					body = strings.Replace(body, "180", value, 1)
+				}
+				request := httptest.NewRequest(http.MethodPut, "/settings", strings.NewReader(body))
+				response := httptest.NewRecorder()
+				f.handler.ServeHTTP(response, request)
+				if response.Code != http.StatusUnprocessableEntity {
+					t.Fatalf("coerced timeout accepted: %d %s", response.Code, response.Body.String())
+				}
+				if err := store.View(context.Background(), func(tx *board.Tx) error {
+					after, err := tx.Settings()
+					if err == nil && after != before {
+						t.Fatalf("invalid settings changed storage: before=%+v after=%+v", before, after)
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}

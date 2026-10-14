@@ -8,7 +8,7 @@ formats are rejected without conversion, replay or workspace migration.
 | Boundary | Requirement |
 | --- | --- |
 | Database | Empty database for initialization, or a complete schema `2` database with a valid migration ledger and execution metadata `1` |
-| Configuration | `PWNMESH_*` settings; no `XLOOM_*` alias lookup or normalization |
+| Configuration | `PWNMESH_*` settings; no `XLOOM_*` alias lookup or normalization; retired `runtime.execution` and `runtime.prompt_group` selectors are rejected |
 | Server project | Orchestration version `1`; older project endpoints are rejected |
 | Execution | Current registered Job: live graph bridge, result contract `2`, Decide context `2`; lease roles `reason`, `explore`, `curate` only |
 | Worker session | Bound session schema `1` with matching run, input, workspace and budget identity |
@@ -20,6 +20,11 @@ Both inline state and immutable input snapshots are supported current Job forms.
 Server preparation creates immutable snapshots for new runs; retained current
 inline jobs remain readable and recoverable. Optional timing fields may be absent;
 they do not authorize reconstruction of missing execution identity or evidence.
+
+Registered planners publish only through version `2` decision batches. Retained
+version `1` decision jobs remain stored, but cannot use live decision reads or
+direct writes. HTTP timeout settings require JSON integers of at least `5`;
+numeric strings, decimal and exponent notation are no longer coerced.
 
 Existing current acceptance receipts take precedence over leftover old graph
 files. They still pass identity and evidence checks. Unsupported files remain
