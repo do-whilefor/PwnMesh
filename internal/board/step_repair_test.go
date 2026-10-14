@@ -20,8 +20,12 @@ func TestRepairStepPersistenceIdentityAndInputBinding(t *testing.T) {
 	}
 	changed := *spec
 	changed.SHA256 = strings.Repeat("b", 64)
-	if add("changed", &changed).ID == first.ID {
+	second := add("changed", &changed)
+	if second.ID == first.ID {
 		t.Fatal("changed target version was silently deduplicated")
+	}
+	if repeated := add("changed-again", &changed); repeated.ID != second.ID || !repeated.Unchanged {
+		t.Fatal("matching repair after a different target version was not deduplicated")
 	}
 	step := dependencyStepState(t, f.state(), first.ID)
 	if step.Repair == nil || step.Repair.SHA256 != spec.SHA256 {

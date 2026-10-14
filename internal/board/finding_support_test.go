@@ -180,6 +180,9 @@ func TestFindingSupportReplacementRejectsInvalidRequestsAtomically(t *testing.T)
 func TestRepeatedFindingPreservesTimeVersionAndEventsAcrossRuns(t *testing.T) {
 	f := newFindingFixture(t)
 	first := f.action("finding", "initial", findingInput(f.first, f.second))
+	if first.ID != "finding_c2005a6a88cab90ba74c6828" {
+		t.Fatalf("persisted finding identity changed: %s", first.ID)
+	}
 	for _, anotherRun := range []bool{false, true} {
 		if anotherRun {
 			f.executor("evidence-two")
@@ -187,6 +190,8 @@ func TestRepeatedFindingPreservesTimeVersionAndEventsAcrossRuns(t *testing.T) {
 		before, events := f.state(), stateEvents(f.planFixture)
 		f.store.Now = func() time.Time { return time.Date(2026, 9, 22, 10, 2, 0, 0, time.UTC) }
 		input := findingInput(f.second, f.first)
+		input["claim"] = "  The\tfixture\nrequires\u2003authentication  "
+		input["scope"] = "\tGET /private\n"
 		if anotherRun {
 			input["replace_support"] = false
 		}

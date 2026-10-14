@@ -2,9 +2,7 @@ package board
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -889,9 +887,7 @@ func (t *Tx) upsertFinding(s State, d *stateData, fence ExecutionFence, raw json
 		return "", nil, false, Err(422, "verified or refuted findings require retained evidence excerpts")
 	}
 	claim, scope := strings.Join(strings.Fields(input.Claim), " "), strings.TrimSpace(input.Scope)
-	key, _ := json.Marshal([]string{claim, scope})
-	digest := sha256.Sum256(key)
-	id := "finding_" + hex.EncodeToString(digest[:12])
+	id := findingIdentity(claim, scope)
 	finding := Finding{ID: id, Claim: claim, Scope: scope, Status: input.Status, Sources: []string{}, Evidence: []EvidenceRef{}, CreatedAt: t.Now, UpdatedAt: t.Now, Reason: input.Reason}
 	index := -1
 	for n, old := range d.Findings {

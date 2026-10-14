@@ -28,6 +28,7 @@ func (s State) matchingRepairStep(goal string, from []string, description string
 	if err != nil {
 		return Step{}, false
 	}
+	wanted, _ := json.Marshal(repair)
 	for _, step := range s.Steps {
 		if !sameSupportSet(s.AssetIDs("step", step.ID), assets) {
 			continue
@@ -36,7 +37,6 @@ func (s State) matchingRepairStep(goal string, from []string, description string
 		if err != nil || !slices.Equal(writePaths, existingWrites) {
 			continue
 		}
-		wanted, _ := json.Marshal(repair)
 		existingRepair, _ := json.Marshal(step.Repair)
 		if string(wanted) != string(existingRepair) {
 			continue
