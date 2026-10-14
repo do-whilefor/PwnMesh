@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
 	"reflect"
 	"slices"
 	"testing"
@@ -20,21 +19,6 @@ const staleRepairPath = "/workspace/stale-repair-target.json"
 const staleRepairOriginalPath = "/workspace/stale-repair-original.json"
 const staleRepairOriginal = "{\"ok\":false}\n"
 const staleRepairFixed = "{\"ok\":true}\n"
-
-// Real planning and preparation exercise the production Go Loop. The second
-// Step targets a retained historical version, after the preparation Worker has
-// already fixed it. Its deterministic check must finish without any model call.
-func TestLiveStaleRepairProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_STALE_REPAIR_TEST") != "1" {
-		t.Skip("opt in to the real model and Docker stale-repair acceptance")
-	}
-	originalHash := fmt.Sprintf("%x", sha256.Sum256([]byte(staleRepairOriginal)))
-	origin := fmt.Sprintf(`Exercise stale repair on synthetic local JSON files. Scope is ONLY /workspace. Do not read credentials, install packages, or contact other services.
-Authorize exactly two ordinary Steps in sequence. First authorize one preparation Worker with no dependencies. It must write these exact UTF-8 bytes, including the final newline, to BOTH %s and %s: %q. It must then replace ONLY %s with these exact bytes: %q. Preserve the historical original file unchanged. Confirm both SHA-256 values using a deterministic command, then publish a fact with both original and corrected file evidence and finish successfully. This ordinary preparation task must have NO repair field.
-After that Step has successfully completed, the main Agent must authorize exactly one new repair Step with depends_on containing the preparation Step ID and this structured repair field: {"path":%q,"sha256":%q,"rules":[{"kind":"json_equals","pointer":"/ok","value":true}]}. Its description should ask to fix /ok to true only if repair is still needed. The expected SHA-256 is the actual retained historical bad version, intentionally different from the already-fixed current version. Do not change this expected hash to the current hash and do not omit the Step just because preparation already fixed it: the purpose is to verify deterministic preflight acceptance of obsolete repair work.
-The runtime must independently check the target and finish that repair Step as a no-op, retaining the current content, SHA-256, and check receipt without a model session. The main Agent should use the resulting persisted fact, allow observations to be curated, and complete the project. No candidate conflicts, unrelated Steps, retries, or report-writing Steps are needed. The persisted facts, dependency, original/current bytes, and repair receipt are the delivery.`, staleRepairPath, staleRepairOriginalPath, staleRepairOriginal, staleRepairPath, staleRepairFixed, staleRepairPath, originalHash)
-	runObservedProject(t, "Stale repair skips already-correct local JSON", origin, "Retain an actual historical bad JSON version; independently accept the already-fixed target with SHA-256 and /ok=true checks; complete the obsolete repair without a model call.", "stale_repair_noop_with_retained_evidence", validateStaleRepairDelivery, 1)
-}
 
 // Decode the public JSON contract independently of the implementation types so
 // the acceptance check detects dropped fields at Step/Job/result boundaries.

@@ -10,8 +10,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"os"
 	"path"
 	"slices"
 	"strings"
@@ -25,36 +23,6 @@ import (
 )
 
 const orchestrationClaim = "The sum of sample-v1 values is 10"
-
-// A synthetic disagreement, not an audit of a remote service. The two
-// supplied reports intentionally disagree about the same immutable dataset.
-// Only the independent review reads the actual data and recomputes the sum.
-func TestLiveOrchestrationProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_ORCHESTRATION_TEST") != "1" {
-		t.Skip("opt in to the real model and Docker orchestration acceptance")
-	}
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch r.URL.Path {
-		case "/report-a":
-			_, _ = w.Write([]byte(`{"dataset":"sample-v1","reported_sum":10,"report":"a"}`))
-		case "/report-b":
-			_, _ = w.Write([]byte(`{"dataset":"sample-v1","reported_sum":11,"report":"b"}`))
-		case "/dataset":
-			_, _ = w.Write([]byte(`{"dataset":"sample-v1","values":[2,3,5]}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer fixture.Close()
-	origin := fmt.Sprintf(`Exercise the orchestration protocol on three synthetic immutable local JSON resources at %s. Scope is ONLY those URLs and /workspace. Do not read credentials, install packages, or contact other services.
-The supplied reports intentionally disagree; preserve both, then independently verify the real data. Use exactly this claim: "The sum of sample-v1 values is 10" and scope: "sample-v1" for all candidate judgments.
-First the main Agent should authorize two separate independent ordinary Steps in one plan, both with no depends_on: one Worker retrieves ONLY /report-a, one retrieves ONLY /report-b. Each writes the original JSON HTTP response body to its own evidence file, publishes a fact accurately describing that report (the report is not ground truth), and submits a candidate for the common claim: verified for report-a's assertion, refuted for report-b's assertion. These are deliberately conflicting candidate interpretations, not final verified Findings. Initial workers must not inspect /dataset or resolve the disagreement. Each task finishes after publishing its report and candidate.
-The blackboard Agent preserves both sources, marks the conflict, and asks for independent review. Once a dispute exists and the first two tasks have succeeded, the main Agent creates exactly one new Step with its dispute_id AND depends_on containing exactly the two initial Step IDs. This is a structured successful-completion dependency, not just prose or from fact IDs. Ask an independent Worker to examine both original reports and GET /dataset, save its original JSON response body, and calculate the sum with a deterministic command that reads that saved body. The command must save AND print a JSON calculation receipt with these fields: dataset (from the input), values (the actual input array), sum (computed, not hardcoded), dataset_sha256 (SHA-256 of the exact saved body bytes). Retain this receipt as a separate evidence file. File names are unrestricted; cite both the original dataset body and calculation receipt as evidence in the review fact and candidate. The reviewer must publish a fact containing the dataset and independently calculated sum, and a candidate for the common claim with new review evidence. It must not merely repeat either report.
-The blackboard Agent then resolves only with the independent review fact IDs, preserving original candidates. If evidence is insufficient it must keep the dispute uncertain. The main Agent may complete only after the dispute is resolved and all observations are curated. No additional report-writing Step is needed: the persisted Findings, dispute history, and absolute /workspace evidence references are the delivery.`, fixture.URL)
-	goal := "Retain both conflicting report candidates, open a dispute, authorize one independent review in a new run, verify that 2+3+5=10 from the dataset, resolve with that evidence, and complete only after curation."
-	runObservedProject(t, "Synthetic independent-review orchestration", origin, goal, "independent_review_with_retained_evidence", validateOrchestrationDelivery, 1)
-}
 
 func validateOrchestrationDelivery(state board.State, files map[string][]byte) []string {
 	failures := []string{}

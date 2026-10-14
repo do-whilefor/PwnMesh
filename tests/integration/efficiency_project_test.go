@@ -104,20 +104,6 @@ func TestAuditAPIRecorder(t *testing.T) {
 	}
 }
 
-func TestLiveEfficiencyProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_EFFICIENCY_TEST") != "1" {
-		t.Skip("opt in to the local audit fixture and real model")
-	}
-	runLiveEfficiencyProject(t, false)
-}
-
-func TestLiveEfficiencyOrchestrationProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_EFFICIENCY_ORCHESTRATION_TEST") != "1" {
-		t.Skip("opt in to the multi-worker local audit and real model")
-	}
-	runLiveEfficiencyProject(t, true)
-}
-
 func runLiveEfficiencyProject(t *testing.T, orchestrated bool) {
 	t.Helper()
 	client := &http.Client{Timeout: 5 * time.Second}

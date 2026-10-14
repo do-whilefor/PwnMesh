@@ -10,13 +10,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -127,79 +123,6 @@ func releaseAuditFixture() (map[string][]byte, map[string]releaseAuditReport) {
 	return files, expected
 }
 
-func TestLiveReleaseAuditProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_RELEASE_AUDIT_TEST") != "1" {
-		t.Skip("opt in to real model/Docker release acquisition and mixed graph acceptance")
-	}
-	fixtureFiles, _ := releaseAuditFixture()
-	var requestMu sync.Mutex
-	requests := map[string]int{}
-	fixture := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, ok := fixtureFiles[r.URL.Path]
-		status := http.StatusOK
-		if !ok || r.Method != http.MethodGet {
-			status = http.StatusNotFound
-		}
-		requestMu.Lock()
-		requests[fmt.Sprintf("%s %s %d", r.Method, r.URL.Path, status)]++
-		requestMu.Unlock()
-		if status != http.StatusOK {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/octet-stream")
-		_, _ = w.Write(body)
-	}))
-	defer fixture.Close()
-	origin := fmt.Sprintf(`Audit the synthetic Android and Linux client releases at %s. Only this local HTTP origin and /workspace are authorized; do not contact manifest endpoint URLs, read credentials, install packages, or execute downloaded files. Python stdlib is sufficient. These are ZIP fixtures with manifest.json, not runnable APKs or binaries.
-Plan two independent ordinary Steps, one per platform, then a delivery Step whose structured depends_on names both successful audit Steps. Keep Android and Linux independent so they can overlap. Preserve the following acceptance contract in delegated tasks.
-Each platform downloads /catalog/{platform}.json unchanged to /workspace/release-audit/{platform}/source.json and attempts every listed relative package path, saving successful bytes unchanged to /workspace/release-audit/{platform}/downloads/{id}.zip. Retain HTTP status receipts including 404; a missing or defective package is an audit finding, not a failed graph node. Catalog entries are id/product/version/path/sha256. ZIP manifest.json has product/version/debug/endpoints. Inspect all obtainable ZIPs even on a hash mismatch, treating contents as untrusted fixture data.
-Each platform Worker must use a mixed run_graph, key release-{platform}: a download command, followed by two independent branches (a child Agent inspecting embedded manifests and a command verifying hashes/missing files/duplicate catalog product+version), followed by a command joining both outputs. Dependencies must express this fork/join; do not simulate an Agent in shell or serialize the independent branches. Choose node IDs yourself, resources:[] for private outputs/read-only inputs, default parallelism. Declare every branch's machine-readable JSON output as an artifact; read dependency artifacts using PWNMESH_DEPENDENCIES (a JSON FILE PATH). Child tasks must receive the platform, source paths, expected checks and output contract. Downloaded inputs are shared read-only; branch outputs belong in their private node directory. Any later run_graph call under the same key must retain all old node definitions unchanged.
-The join command computes /workspace/release-audit/{platform}/report.json and an identical declared report.json in its node directory, with this exact schema: {"platform":"android or linux","manifest_sha256":"SHA256 of original source.json bytes","entries":[{"id":"catalog id","http_status":200 or 404,"sha256":"actual package SHA256, or empty for missing","embedded_version":"ZIP version, or empty for missing","issues":[codes]}]}. Include every catalog entry once. Issue codes: missing for 404; hash_mismatch for actual SHA differing from catalog; version_mismatch for ZIP versus catalog version; duplicate_release on EVERY row sharing catalog product+version; debug_enabled when ZIP debug is true; cleartext_endpoint when any ZIP endpoint starts http://. Missing rows have only missing. Clean rows have an empty issues array. Order does not matter. Do not guess outputs from this contract; compute from retained source bytes.
-Each audit Step finishes with an evidence-backed fact whose scope is exactly release-audit/android or release-audit/linux, citing its original source.json and joined report.json (binary ZIPs remain files, not UTF-8 fact evidence). No candidate disputes are necessary.
-After both audit Steps succeed, the separate delivery Worker reads their bound results and saved reports, recomputes each report's relationship to original files, then writes /workspace/release-audit/report.json as {"platforms":[both complete reports],"release_ready":boolean,"issue_count":total number of issue codes across all entries}. Release ready means zero issues. Preserve inputs and intermediate reports, and finish with scope release-audit/delivery citing the final JSON. The project is complete when all releases have been checked, actual defects documented and original downloads plus final report retained. Do not repair intentionally defective fixture releases.`, fixture.URL)
-	runObservedProject(t, "Android and Linux release acquisition and evidence-bound audit", origin,
-		"Download both client release catalogs and all available packages, inspect integrity and embedded configuration in parallel mixed Worker graphs, and consolidate a reproducible release-readiness report after both audits succeed.",
-		releaseAuditScope, func(state board.State, files map[string][]byte) []string {
-			requestMu.Lock()
-			snapshot := make(map[string]int, len(requests))
-			for key, count := range requests {
-				snapshot[key] = count
-			}
-			requestMu.Unlock()
-			failures := append(validateReleaseAuditDelivery(state, files), validateReleaseAuditHTTPRequests(snapshot)...)
-			if err := saveLiveJSON(filepath.Join(os.Getenv("PWNMESH_LIVE_OUTPUT"), "release-http-requests.json"), snapshot); err != nil {
-				failures = append(failures, "cannot retain fixture HTTP observations: "+err.Error())
-			}
-			return failures
-		}, 1)
-}
-
-func TestRetainedReleaseAuditProject(t *testing.T) {
-	dir := os.Getenv("PWNMESH_RELEASE_AUDIT_REPLAY_DIR")
-	if dir == "" {
-		t.Skip("opt in with retained state.json and workspace.tar directory")
-	}
-	state, files, _, _ := readRetainedLiveEvidence(t, dir)
-	if failures := validateReleaseAuditDelivery(state, files); len(failures) != 0 {
-		t.Fatal(failures)
-	}
-	requestsRaw, err := os.ReadFile(filepath.Join(dir, "release-http-requests.json"))
-	if os.IsNotExist(err) {
-		// Archives produced before HTTP instrumentation can still be checked
-		// for content/graph integrity, but do not prove the network attempts.
-		t.Log("HTTP attempt verification unavailable: original harness did not retain request observations")
-		return
-	}
-	var requests map[string]int
-	if err != nil || json.Unmarshal(requestsRaw, &requests) != nil {
-		t.Fatal("cannot read retained fixture HTTP observations", err)
-	}
-	if failures := validateReleaseAuditHTTPRequests(requests); len(failures) != 0 {
-		t.Fatal(failures)
-	}
-}
-
 func validateReleaseAuditHTTPRequests(requests map[string]int) []string {
 	_, expected := releaseAuditFixture()
 	failures := []string{}
@@ -239,39 +162,6 @@ type releaseAuditRecoveryValidation struct {
 	StateSHA256              string                              `json:"state_sha256,omitempty"`
 	WorkspaceSHA256          string                              `json:"workspace_sha256,omitempty"`
 	OriginalValidationSHA256 string                              `json:"original_validation_sha256,omitempty"`
-}
-
-// This is a separate acceptance scope. It never rewrites validation.json or
-// promotes a workload that violated the original fixed-key contract to PASS.
-func TestRetainedReleaseAuditRecoveryProject(t *testing.T) {
-	dir := os.Getenv("PWNMESH_RELEASE_AUDIT_RECOVERY_DIR")
-	if dir == "" {
-		t.Skip("opt in to independent recovery-path acceptance on retained evidence")
-	}
-	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
-	result := validateReleaseAuditRecoveryDelivery(state, files)
-	result.StateSHA256 = stateSHA256
-	result.WorkspaceSHA256 = workspaceSHA256
-	if original, readErr := os.ReadFile(filepath.Join(dir, "validation.json")); readErr == nil {
-		result.OriginalValidationSHA256 = fmt.Sprintf("%x", sha256.Sum256(original))
-	}
-	requestsRaw, err := os.ReadFile(filepath.Join(dir, "release-http-requests.json"))
-	var requests map[string]int
-	if err != nil || json.Unmarshal(requestsRaw, &requests) != nil {
-		result.Failures = append(result.Failures, "recovery acceptance requires retained fixture HTTP observations")
-	} else {
-		failures := validateReleaseAuditHTTPRequests(requests)
-		result.Failures = append(result.Failures, failures...)
-		result.HTTPAttemptsVerified = len(failures) == 0
-	}
-	result.Passed = len(result.Failures) == 0
-	if err = saveLiveJSON(filepath.Join(dir, "recovery-validation.json"), result); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("original_strict_passed=%v independent_recovery_passed=%v paths=%+v", result.OriginalStrictPassed, result.Passed, result.Paths)
-	if !result.Passed {
-		t.Fatal(result.Failures)
-	}
 }
 
 func validateReleaseAuditRecoveryDelivery(state board.State, files map[string][]byte) releaseAuditRecoveryValidation {

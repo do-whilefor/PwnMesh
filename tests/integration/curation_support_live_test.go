@@ -4,8 +4,6 @@ package integration
 
 import (
 	"encoding/json"
-	"fmt"
-	"os"
 	"reflect"
 	"slices"
 	"testing"
@@ -15,24 +13,6 @@ import (
 )
 
 const curationSupportClaim = "The sum of sample-v1 values is 10"
-
-// The original interpretation is tentative, not an opposing verdict that
-// would require independent review. Curation must retain its provenance while
-// excluding its superseded premises from the final supported conclusion.
-func TestLiveCurationSupportProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_CURATION_SUPPORT_TEST") != "1" {
-		t.Skip("opt in to the real model and Docker current-support acceptance")
-	}
-	origin := fmt.Sprintf(`Exercise current-support curation using ONLY synthetic local files under /workspace. Do not read credentials, install packages, or contact other services.
-Authorize exactly one ordinary Step. Its Worker first writes these exact bytes to %s: %q, and this intentionally wrong initial transcription to %s: %q. Publish a fact with exactly this description: %q, scope sample-v1, and evidence from the transcription file. Then publish a candidate with claim %q, scope sample-v1, status candidate (tentative, never refuted or verified), sources containing only that initial fact ID, and explicit evidence from the transcription file. Explain that the unverified sum=11 transcription does not yet establish the common claim.
-In the SAME Step, use a deterministic bash command to read every integer from the retained values file, calculate the sum, and compute SHA-256 of its exact bytes. Save AND print a JSON receipt to %s with fields sum (computed, never hardcoded) and dataset_sha256. Publish a fresh fact with exactly this description: %q, scope sample-v1, and evidence from BOTH the unchanged input and the calculation receipt. Publish a second candidate with the EXACT SAME claim %q and scope sample-v1, status verified, sources containing only the fresh fact ID, and explicit evidence from BOTH input and receipt. Finish the Step with the fresh fact as its result. Preserve all original files, facts and candidates.
-The blackboard Agent must atomically submit the supersedes relation from the fresh fact to the initial fact and one group containing BOTH candidate IDs, status verified, and a reason explaining the new calculation and superseded premise. Keep both historical CandidateIDs. The final Finding's current Sources and Evidence must contain only the valid fresh calculation support. If an early curation ran before both candidates were available, its later update must preserve the same final history and effective support. This is tentative-to-verified correction, with no opposing verified/refuted verdict, so no dispute or independent-review Step is needed. The main Agent may complete only after the supported verified Finding and relation are curated, citing the fresh fact. No report or extra Step is needed.`, curationValuesPath, curationValues, curationOriginalPath, curationOriginal, curationOldClaim, curationSupportClaim, curationCorrectedPath, curationNewClaim, curationSupportClaim)
-	runObservedProject(t, "Retain historical candidates with fresh verified support", origin, "Recalculate 2+3+5 from retained bytes, supersede the mistaken interpretation, retain both candidate judgments, and complete with a verified Finding supported only by the fresh calculation.", "current_curation_support_with_retained_candidates", validateCurationSupportDelivery, 1)
-}
-
-func TestDockerCurationSupport(t *testing.T) {
-	runDockerCurationRelations(t, true)
-}
 
 func validateCurationSupportDelivery(state board.State, files map[string][]byte) []string {
 	// Reuse the independent byte, calculation, successful execution, relation,

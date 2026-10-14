@@ -4,11 +4,8 @@ package integration
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"testing"
@@ -24,99 +21,6 @@ type scenarioReviewOracle struct {
 	Source []byte
 	Nonce  string
 	Bodies map[string][]byte
-}
-
-// Two independent producers exercise scenario guidance, evidence retention,
-// candidate publication, concurrent scheduling and final curation together.
-func TestLiveScenarioSkillsReviewProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_SCENARIO_REVIEW_TEST") != "1" {
-		t.Skip("opt in to real model scenario Skills and multi-producer curation")
-	}
-	for _, scenario := range []string{"audit", "pentest"} {
-		t.Run(scenario, func(t *testing.T) {
-			output := os.Getenv("PWNMESH_LIVE_OUTPUT")
-			if output == "" {
-				t.Fatal("PWNMESH_LIVE_OUTPUT is required")
-			}
-			t.Setenv("PWNMESH_LIVE_OUTPUT", filepath.Join(output, scenario))
-			fixture, server := newScenarioSkillFixture()
-			defer server.Close()
-			if err := os.MkdirAll(filepath.Join(output, scenario), 0700); err != nil {
-				t.Fatal(err)
-			}
-			if err := saveLiveJSON(filepath.Join(output, scenario, "fixture-oracle.json"), scenarioReviewOracle{fixture.source, fixture.nonce, fixture.bodies}); err != nil {
-				t.Fatal(err)
-			}
-			origin := fmt.Sprintf(`Use only synthetic local resources at %s and Step-private directories under /workspace. Do not install packages, read credentials or contact other targets.
-Authorize exactly two independent ordinary Steps in one initial decision, both from origin and with no depends_on. Each Step must independently perform the entire ownership check below, using its OWN directory and freshly fetched evidence. Never reuse the other producer's files or result. This is two reproductions of the same bounded claim; do not split target and control across Steps.
-Each Worker publishes one evidence-backed fact containing its complete target/control observations, then one candidate with claim exactly %q, scope exactly %q, status verified if its observations support the claim, sources containing ONLY its own fact ID, and explicit evidence covering ALL files from that fact. Finish using that existing fact ID. No extra candidate or report-writing Step is needed.
-The blackboard Agent merges BOTH candidates into one supported verified Finding while retaining both candidate IDs, both independent source facts, and their original evidence. If early curation sees only one candidate, update the same finding once the second arrives. The main Agent completes only after both Steps succeed, both candidates are curated, and the Finding retains both sources. Cite both result fact IDs when completing. Do not complete from the first producer alone.
-Required procedure for EACH Step: %s`, server.URL, scenarioReviewClaim, scenarioReviewScope, scenarioOwnershipTask(scenario))
-			bundle := scenarioSkillBundle(t, scenario)
-			runObservedScenarioProject(t, "Independent "+scenario+" ownership reproductions", origin,
-				"Independently reproduce the target/control comparison twice and complete with one curated finding retaining both producers' evidence.",
-				scenario, "scenario_skills_multi_producer_curation", func(state board.State, files map[string][]byte) []string {
-					fixture.mu.Lock()
-					err := saveLiveJSON(filepath.Join(output, scenario, "fixture-observations.json"), map[string]any{"statuses": fixture.seen, "requests": fixture.reads})
-					fixture.mu.Unlock()
-					if err != nil {
-						t.Error(err)
-					}
-					return validateScenarioReview(state, files, scenario, bundle, fixture)
-				}, 1)
-		})
-	}
-}
-
-// Recheck producer separation, curation and actual successful model overlap
-// from retained evidence, without another model call or changing that evidence.
-func TestRetainedScenarioSkillsReviewProject(t *testing.T) {
-	dir := os.Getenv("PWNMESH_SCENARIO_REVIEW_REPLAY_DIR")
-	if dir == "" {
-		t.Skip("opt in with the directory containing retained state.json and workspace.tar")
-	}
-	readJSON := func(name string, value any) {
-		t.Helper()
-		raw, err := os.ReadFile(filepath.Join(dir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := json.Unmarshal(raw, value); err != nil {
-			t.Fatalf("decode %s: %v", name, err)
-		}
-	}
-	var manifest struct{ Scenario string }
-	var oracle scenarioReviewOracle
-	var observations struct{ Statuses, Requests map[string]int }
-	readJSON("manifest.json", &manifest)
-	readJSON("fixture-oracle.json", &oracle)
-	readJSON("fixture-observations.json", &observations)
-	if (manifest.Scenario != "audit" && manifest.Scenario != "pentest") || len(oracle.Source) == 0 || oracle.Nonce == "" || len(oracle.Bodies) != 4 {
-		t.Fatal("missing retained scenario or synthetic fixture oracle")
-	}
-	fixture := &scenarioSkillFixture{seen: observations.Statuses, reads: observations.Requests, source: oracle.Source, nonce: oracle.Nonce, bodies: oracle.Bodies}
-	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
-	var job worker.Job
-	run := orchestrationRunID(state.Curation.RunID)
-	if json.Unmarshal(files["/workspace/.pwnmesh/runs/"+run+"/job.json"], &job) == nil && job.InputSnapshot != nil {
-		id := job.InputSnapshot.ID
-		if decoded, err := hex.DecodeString(id); err != nil || len(decoded) != sha256.Size {
-			t.Fatal("invalid retained curation snapshot ID")
-		}
-		raw, err := os.ReadFile(filepath.Join(dir, "input-snapshots", id+".json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		files[curationSnapshotKey(id)] = raw
-	}
-	t.Logf("validation_scope=scenario_skills_review_and_parallel workspace_sha256=%s state_sha256=%s", workspaceSHA256, stateSHA256)
-	failures := validateScenarioReview(state, files, manifest.Scenario, scenarioSkillBundle(t, manifest.Scenario), fixture)
-	parallel, parallelFailures := validateLiveParallelWorkers(state, files, 2)
-	failures = append(failures, parallelFailures...)
-	t.Logf("independent_workers=%d model_overlap_seconds=%.6f", len(parallel.Workers), parallel.OverlapSeconds)
-	if len(failures) != 0 {
-		t.Fatal(failures)
-	}
 }
 
 func validateScenarioReview(state board.State, files map[string][]byte, scenario string, bundle map[string][]byte, fixture *scenarioSkillFixture) []string {

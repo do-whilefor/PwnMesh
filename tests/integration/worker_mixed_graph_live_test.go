@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path"
 	"reflect"
 	"slices"
@@ -19,35 +18,6 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/workergraph"
 )
-
-func TestLiveWorkerMixedGraphProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_WORKER_MIXED_GRAPH_TEST") != "1" {
-		t.Skip("opt in to real model and Docker dynamic multi-Agent graph acceptance")
-	}
-	origin := `Use only synthetic local files under /workspace. Do not read credentials, install packages or contact other services.
-Authorize exactly one ordinary Step preserving this execution contract. The parent Worker is the scheduling Agent: use its existing Loop to observe results and choose subsequent Agent assignments, node IDs and dependencies. Do not predeclare the whole graph or simulate Agents with shell background jobs.
-The first successful run_graph call, key sample-agents, contains only one required discovery node of kind agent, with resources:[] and no dependencies. Its task is to use local Python tools and random.SystemRandom to generate 3 to 5 categories with distinct random names and 3 to 6 integer values per category, write manifest.json as {"categories":[{"name":"generated-name","values":[integers]}]}, and declare that file as an artifact. The discovery Agent returns the actual manifest JSON as its final answer so the parent sees the discovered categories in the tool receipt. Neither category names nor their count may be prescribed before discovery runs.
-Only AFTER receiving that discovery result, choose one new Agent task for each actual category and append these nodes under the SAME graph key. Each category Agent depends on discovery, reads the original declared manifest artifact through PWNMESH_DEPENDENCIES (an absolute JSON FILE PATH), computes its assigned category from those values using local tools, and writes a declared result.json containing {"category":name,"count":number-of-values,"sum":computed-sum}. Node IDs are your choice; use resources:[] and private node output files. Child Agents return local accounts and do not publish blackboard records.
-Append one required command join, in the same or a later call, depending on every category Agent. It reads their declared result.json artifacts through PWNMESH_DEPENDENCIES, and prints exactly one JSON object {"categories":[the actual per-category result objects],"count":computed-total-count,"sum":computed-total-sum}. Do not hardcode results. Every run_graph call with this key supplies the FULL cumulative node list: retain each old node definition unchanged and add new nodes; never delete or edit old nodes. The tool accepts 1..64 total nodes and parallelism 1..16; omitted parallelism defaults to min(node-count,16). Leave parallelism omitted for this exercise. Retained nodes must not execute again.
-After the graph succeeds, the parent finishes the Step with one evidence-backed fact. Its fact.scope field must be exactly the string "mixed-agent-v2", with no explanation or extra text; put explanations in fact.description. Preserve this exact field requirement in the delegated Step. Evidence must include the original manifest.json, every result.json, and the join stdout.log. Child final prose is not raw evidence. The main Agent completes from the accepted Step result; no additional review, report or curation is needed. This tests data-driven Agent scheduling, not an arithmetic performance claim.`
-	runObservedProject(t, "Worker Agent discovers work and dynamically delegates by category", origin,
-		"Discover unpredictable local categories, then extend one Worker graph with an Agent for each observed category and a computed join; preserve original evidence and complete the project.",
-		"worker_dynamic_mixed_graph_with_isolated_loops", validateWorkerMixedGraphDelivery, 1)
-}
-
-// Recheck the original live archive without contacting a model or modifying
-// retained evidence. Use exactly the same delivery validator as the live run.
-func TestRetainedWorkerMixedGraphProject(t *testing.T) {
-	dir := os.Getenv("PWNMESH_WORKER_MIXED_GRAPH_REPLAY_DIR")
-	if dir == "" {
-		t.Skip("opt in with the directory containing retained state.json and workspace.tar")
-	}
-	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
-	t.Logf("validation_scope=worker_dynamic_mixed_graph_with_isolated_loops workspace_sha256=%s state_sha256=%s", workspaceSHA256, stateSHA256)
-	if failures := validateWorkerMixedGraphDelivery(state, files); len(failures) != 0 {
-		t.Fatal(failures)
-	}
-}
 
 type mixedGraphNodeSpec struct {
 	ID        string

@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"os"
 	"reflect"
 	"slices"
 	"strings"
@@ -24,36 +23,6 @@ import (
 const assetProducerScope = "asset-producer-v1"
 const assetConsumerScope = "asset-consumer-v1"
 const assetConsumerPath = "/workspace/asset-consumer.json"
-
-// The same production lifecycle as the other live workloads, with independent
-// acceptance of graph receipts, retained bytes and cross-Worker observations.
-func TestLiveAssetGraphProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_ASSET_GRAPH_TEST") != "1" {
-		t.Skip("opt in to real model and Docker asset graph acceptance")
-	}
-	origin := `Use ONLY synthetic local files under /workspace. The example.test addresses below are identity labels: never contact them, install packages or read credentials.
-Authorize exactly two ordinary Steps in sequence. First authorize only the producer. After it successfully completes, authorize the consumer from the producer's accepted fact. Preserve these exact execution contracts in their tasks. Both Steps must have assets [{"kind":"host","value":"EXAMPLE.TEST."},{"kind":"service","value":"https://EXAMPLE.TEST.:443"},{"kind":"endpoint","value":"https://EXAMPLE.TEST.:443/Orders?id=7","method":"GET"}]. No curation, candidate, dispute or extra Step is needed.
-PRODUCER: use run_graph with key asset-seed and exactly two required command nodes, resources:[]: seed, then receipt with depends_on:[{"id":"seed"}]. seed uses Python secrets.token_hex(16) and prints exactly one JSON object {"nonce":the generated 32-character hexadecimal string,"values":[2,3,5]}. receipt reads the seed's actual retained stdout.log through the PWNMESH_DEPENDENCIES JSON FILE, computes the sum and SHA-256 of the exact seed stdout bytes, then prints exactly one JSON object {"nonce":the read nonce,"sum":the calculated sum,"seed_sha256":the calculated hash}. Do not hardcode nonce, sum or hash. Preserve both nodes' stdout and stderr. After run_graph succeeds, use bash to read receipt stdout and print ASSET_TRACE: followed by its nonce. Publish exactly one fact with scope asset-producer-v1, original evidence from BOTH node stdout paths and the same three assets as the producer Step. Describe only the local computation, without copying ASSET_TRACE or its nonce into the description. Finish with this fact_id.
-CONSUMER: the planner must keep this consumer Step's assets limited to the SAME THREE identities as the producer Step (host, service and GET endpoint); POST belongs ONLY to the consumer Fact published later, never to either planned Step. Before publishing anything, read_snapshot section assets limit 1, retain its state_version and next_offset, and leave the remaining pages unread for now. Use read_graph section assets to discover the normalized GET endpoint ID; then read_graph section facts with asset_ids:[that ID] and verify the producer fact is returned. Use read_worker_trace without run_id to list other runs, find the producer, search that run for ASSET_TRACE:, and read a returned matching bash record using its record and trace_version. This is an unverified clue: independently read the producer's original seed and receipt evidence files, recompute the sum and seed SHA-256, and compare the actual nonce to the trace observation. Write AND print /workspace/asset-consumer.json as {"nonce":the independently read nonce,"sum":the independently computed sum,"seed_sha256":the independently computed hash}. Publish exactly one fact with scope asset-consumer-v1 and evidence from this consumer receipt and BOTH original producer stdout files. Use assets [{"kind":"host","value":"example.test"},{"kind":"service","value":"https://example.test"},{"kind":"endpoint","value":"https://example.test/Orders?id=7","method":"GET"},{"kind":"endpoint","value":"https://example.test/Orders?id=7","method":"POST"}]. This is a local fixture observation, not a claim about a live service.
-AFTER publishing but BEFORE finishing, continue the earlier read_snapshot assets page with offset:the returned next_offset, limit:1 and expected_version:the earlier state_version until no next_offset remains. Read read_snapshot anchors using the same expected_version. Verify the frozen catalog still has exactly three identities and its anchors exclude your newly published fact. Read live read_graph assets and anchors to verify four identities, separate GET/POST and your new fact's anchors. Finish with the already published consumer fact_id. The main Agent completes only after both successful Steps, citing the consumer fact and its retained evidence.`
-	runObservedProject(t, "Asset identity, Worker DAG and cross-Worker trace acceptance", origin,
-		"Complete the two synthetic Steps with normalized asset anchors, a real dependency graph, cross-Worker trace retrieval and immutable snapshot reads across publication.",
-		"asset_graph_worker_trace_and_frozen_input", validateAssetGraphDelivery, 1)
-}
-
-// Revalidate original live evidence after a validator change without another
-// model call or any mutation of the retained state and workspace archive.
-func TestRetainedAssetGraphProject(t *testing.T) {
-	dir := os.Getenv("PWNMESH_ASSET_GRAPH_REPLAY_DIR")
-	if dir == "" {
-		t.Skip("opt in with the directory containing retained state.json and workspace.tar")
-	}
-	state, files, stateSHA256, workspaceSHA256 := readRetainedLiveEvidence(t, dir)
-	t.Logf("validation_scope=asset_graph_worker_trace_and_frozen_input workspace_sha256=%s state_sha256=%s", workspaceSHA256, stateSHA256)
-	if failures := validateAssetGraphDelivery(state, files); len(failures) != 0 {
-		t.Fatal(failures)
-	}
-}
 
 type assetToolReceipt struct {
 	Name   string

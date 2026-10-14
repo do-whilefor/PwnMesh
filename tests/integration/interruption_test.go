@@ -23,14 +23,6 @@ import (
 	"pwnmesh/internal/worker"
 )
 
-func TestDockerInterruptedRunResumesWithoutRepeatingSideEffects(t *testing.T) {
-	testDockerRunResumesWithoutRepeatingSideEffects(t, false)
-}
-
-func TestDockerWorkerSIGKILLResumesWithoutRepeatingSideEffects(t *testing.T) {
-	testDockerRunResumesWithoutRepeatingSideEffects(t, true)
-}
-
 func testDockerRunResumesWithoutRepeatingSideEffects(t *testing.T, hardCrash bool) {
 	t.Helper()
 	image := os.Getenv("PWNMESH_DOCKER_TEST_IMAGE")

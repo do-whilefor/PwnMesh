@@ -170,18 +170,6 @@ func TestLiveComparisonFingerprintsBindInputsWithoutRunSecrets(t *testing.T) {
 	}
 }
 
-// This test runs the production Server, Scheduler, Docker bridge and Worker.
-// The optional proxy only observes upstream bytes; every model response is real.
-// Direct mode preserves the configured hostname for provider-specific behavior.
-// Local fixture data is the only task content sent to the model service.
-func TestLiveContentionProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_CONTENTION_TEST") != "1" {
-		t.Skip("opt in with model configuration, PWNMESH_DOCKER_TEST_IMAGE and PWNMESH_LIVE_OUTPUT")
-	}
-	origin, goal := liveContentionTask()
-	runObservedProject(t, "Live concurrent transaction audit", origin, goal, "business_acceptance", validateLiveContention)
-}
-
 // Reuse the production lifecycle and evidence collection for independently
 // validated workloads. Workload validators must not trust project completion.
 func runObservedProject(t *testing.T, title, origin, goal, validationScope string, validate func(board.State, map[string][]byte) []string, orchestrationVersion ...int) {

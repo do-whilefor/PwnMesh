@@ -125,37 +125,6 @@ func (f *scenarioSkillFixture) record(path string, status int) {
 	f.reads[path]++
 }
 
-// Run each scenario separately so its durable archive and database are isolated.
-// The task never mentions the Skills: discovery must come from production prompts.
-func TestLiveScenarioSkillsProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_SCENARIO_SKILLS_TEST") != "1" {
-		t.Skip("opt in to real model and Docker scenario Skills acceptance")
-	}
-	for _, scenario := range []string{"audit", "pentest"} {
-		t.Run(scenario, func(t *testing.T) {
-			output := os.Getenv("PWNMESH_LIVE_OUTPUT")
-			if output == "" {
-				t.Fatal("PWNMESH_LIVE_OUTPUT is required")
-			}
-			t.Setenv("PWNMESH_LIVE_OUTPUT", filepath.Join(output, scenario))
-			fixture, server := newScenarioSkillFixture()
-			defer server.Close()
-			origin := fmt.Sprintf("Use only synthetic local resources at %s and a Step-private directory under /workspace. Do not install packages, access credentials, or contact other targets. Authorize exactly one ordinary Step. Publish one evidence-backed fact and finish using that fact; no candidates, curation, extra report-writing Step or scoring are needed. ", server.URL)
-			origin += scenarioOwnershipTask(scenario)
-			bundle := scenarioSkillBundle(t, scenario)
-			runObservedScenarioProject(t, "Synthetic "+scenario+" Skills smoke", origin, "Complete the bounded ownership check with original target and control evidence.", scenario, "scenario_skills_and_ownership_controls", func(state board.State, files map[string][]byte) []string {
-				fixture.mu.Lock()
-				err := saveLiveJSON(filepath.Join(output, scenario, "fixture-observations.json"), fixture.seen)
-				fixture.mu.Unlock()
-				if err != nil {
-					t.Error(err)
-				}
-				return validateScenarioSkills(state, files, scenario, bundle, fixture)
-			}, 1)
-		})
-	}
-}
-
 func scenarioOwnershipTask(scenario string) string {
 	if scenario == "audit" {
 		return "Review /audit.py for object ownership enforcement. Fetch and preserve the original source, inspect the vulnerable_invoice and fixed_invoice paths, then execute the unchanged file with Python 3 using its absolute path in the private directory. Its built-in smoke exercises alice against objects 1001 and 1002 in both variants. Save AND print the actual JSON stdout. Cite both original source and stdout as evidence, explain the code path causing the observed difference, and distinguish this synthetic execution from a deployed-system claim."

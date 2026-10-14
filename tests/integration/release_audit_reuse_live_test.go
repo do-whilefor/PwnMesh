@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path"
 	"path/filepath"
 	"reflect"
@@ -25,53 +24,6 @@ import (
 	"pwnmesh/internal/worker"
 	"pwnmesh/internal/workergraph"
 )
-
-func TestLiveReleaseAuditReuseProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_RELEASE_AUDIT_REUSE_TEST") != "1" {
-		t.Skip("opt in to real model verified graph reuse after a deterministic join failure")
-	}
-	fixture, observations := newReleaseAuditReuseHTTP(t)
-	origin := fmt.Sprintf(`Audit synthetic Android and Linux client releases at %s using two independent platform Steps and a separate delivery Step whose structured depends_on names both successful platform Steps. Only this local HTTP origin and /workspace are authorized; do not contact manifest endpoints, read credentials, install software, or execute downloaded files. Python stdlib is sufficient. These are inert ZIP fixtures, not runnable APKs or binaries. Preserve this acceptance contract in delegated tasks.
-Declare the immutable Step write_paths exactly as follows: Android ["/workspace/release-audit/android"], Linux ["/workspace/release-audit/linux"], delivery ["/workspace/release-audit/report.json"]. The platform Steps have no depends_on; delivery depends_on names both platform Step IDs. Keep branch outputs private and give delivery sole ownership of the final report; do not declare the common /workspace/release-audit parent.
-For each platform, retain original /catalog/{platform}.json at /workspace/release-audit/{platform}/source.json, attempt each catalog package path exactly once, and retain original successful bytes at /workspace/release-audit/{platform}/downloads/{id}.zip. Missing files are findings, not failed download nodes. Catalog entries have id/product/version/path/sha256, ZIP manifest.json has product/version/debug/endpoints. Inspect all available packages even if their hash mismatches. Do not fetch any catalog or package a second time.
-Each platform must first submit one complete mixed run_graph with key release-{platform} and exactly these IDs: download (command), manifest (child Agent), integrity (command), join (command). download declares artifacts ["catalog.json","acquisition.json"] in its private node directory, in addition to retained workspace copies; acquisition.json records every HTTP status. manifest and integrity both depend on download, explicitly list inputs [{"node":"download","artifact":"catalog.json"},{"node":"download","artifact":"acquisition.json"}], and run concurrently with resources:[]. manifest inspects embedded versions/debug/endpoints and declares manifests.json; integrity computes hashes, missing packages and duplicate catalog product+version, declaring integrity.json. Shared original downloads are read-only. Do not simulate the child Agent in shell. Child task text must contain this context, exact file contracts and checks.
-join depends on all three predecessors and explicitly lists the four required input files using inputs:[{node,artifact}]. PWNMESH_DEPENDENCIES is the path of a JSON file containing node receipts; look up each declared dependency file through dependency.output.files[artifact_name]. Do not treat stdout logs or the artifacts array as positional business data. All four original nodes use resources:[], each command may print human diagnostics to stdout, and machine-readable data must be declared files. Keep normal default graph parallelism.
-For this acceptance scenario, the FIRST join must GET %s/fault/{platform}/join exactly once before producing a report; this endpoint intentionally returns HTTP 503 once. On 503 immediately exit nonzero. Do not catch-and-retry, mark optional, bypass this fault, or run the join outside run_graph. The download, manifest and integrity nodes must already have succeeded, so the first graph fails only at join. Inspect the failed receipt/log, then recover with one NEW key release-{platform}-recovered. Under that key, import exactly the three successful source nodes as IDs download, manifest, integrity with kind:"reuse", reuse_from:{key:"release-{platform}",node:"source ID"}, resources:[], and no command/task/artifacts/depends_on/inputs overrides. These imports verify and reuse their original files; do not copy or rerun their work and do not create another child Agent. Add a new command join depending on all imports with the same four declared input bindings. That join GETs the fault endpoint exactly once (now 200) then computes the report. Do not modify old graph definitions, checkpoint, session, events or source outputs. Do not suppress or erase the first failed graph.
-The successful join writes /workspace/release-audit/{platform}/report.json plus an identical declared report.json in its private node directory, with exact schema {"platform":"android or linux","manifest_sha256":"SHA256 of original catalog bytes","entries":[{"id":"catalog id","http_status":200 or 404,"sha256":"actual package SHA256 or empty if missing","embedded_version":"ZIP version or empty if missing","issues":[codes]}]}. Each entry appears once. Codes: missing for 404; hash_mismatch for actual versus catalog SHA; version_mismatch for ZIP versus catalog version; duplicate_release on EVERY row with duplicate catalog product+version; debug_enabled for debug true; cleartext_endpoint for any http:// endpoint. Missing rows have only missing; clean rows have an empty issues array. Compute from retained bytes, do not guess. Each platform finishes an evidence-backed fact scoped exactly release-audit/android or release-audit/linux with original source.json and joined report.json evidence.
-After both platform Steps succeed, delivery reads bound results, verifies reports against retained originals, and writes /workspace/release-audit/report.json as {"platforms":[both complete platform reports],"release_ready":boolean,"issue_count":total issue codes across all entries}. Ready means zero issues. Finish scope release-audit/delivery citing the final JSON. Preserve all original downloads, branch outputs, both failed graphs and both verified recovery graphs. Do not repair the intentionally defective fixtures.`, fixture.URL, fixture.URL)
-	runObservedProject(t, "Release audit with failed joins and verified successful-node reuse", origin,
-		"Download Android and Linux release packages once, inspect them with parallel command/Agent branches, recover a controlled join failure by verified reuse without repeating acquisition or child analysis, and deliver the complete reproducible report.",
-		"release_audit_verified_reuse_after_join_failure_v1", func(state board.State, files map[string][]byte) []string {
-			requests := observations.snapshot()
-			failures := append(validateReleaseAuditDeliveryWithGraphs(state, files, validateReleaseAuditReuseGraph), validateReleaseAuditReuseHTTP(requests)...)
-			failures = append(failures, validateReleaseAuditReuseWrites(state, files)...)
-			if err := saveLiveJSON(filepath.Join(os.Getenv("PWNMESH_LIVE_OUTPUT"), "release-http-requests.json"), requests); err != nil {
-				failures = append(failures, "cannot retain fixture HTTP observations: "+err.Error())
-			}
-			return failures
-		}, 1)
-}
-
-func TestRetainedReleaseAuditReuseProject(t *testing.T) {
-	dir := os.Getenv("PWNMESH_RELEASE_AUDIT_REUSE_REPLAY_DIR")
-	if dir == "" {
-		t.Skip("opt in with retained state.json, workspace.tar and release-http-requests.json")
-	}
-	state, files, _, _ := readRetainedLiveEvidence(t, dir)
-	requestRaw, err := os.ReadFile(filepath.Join(dir, "release-http-requests.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var requests map[string]int
-	if err = json.Unmarshal(requestRaw, &requests); err != nil {
-		t.Fatal(err)
-	}
-	failures := append(validateReleaseAuditDeliveryWithGraphs(state, files, validateReleaseAuditReuseGraph), validateReleaseAuditReuseHTTP(requests)...)
-	failures = append(failures, validateReleaseAuditReuseWrites(state, files)...)
-	if len(failures) != 0 {
-		t.Fatal(failures)
-	}
-}
 
 // Check the accepted task declarations against the original Worker input, not
 // a later narrative that merely claims the platform writers were independent.

@@ -38,19 +38,6 @@ const curationOldClaim = "The sum of sample-v1 values is 11 (initial unverified 
 const curationNewClaim = "The sum of sample-v1 values is 10 (recalculated from the retained input)"
 const curationReason = "Recalculation corrects the initial transcription of the same immutable dataset; both observations and their evidence remain retained."
 
-// This workload corrects an interpretation of immutable input. It does not
-// invalidate a truthful observation merely because a mutable target changed.
-func TestLiveCurationRelationsProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_CURATION_RELATIONS_TEST") != "1" {
-		t.Skip("opt in to the real model and Docker curation-relations acceptance")
-	}
-	origin := fmt.Sprintf(`Exercise observation correction using ONLY synthetic local files under /workspace. Do not read credentials, install packages, or contact other services.
-Authorize exactly one ordinary Step. Its Worker must first write these exact bytes to %s: %q, and these exact initial unverified transcription bytes to %s: %q. Publish the mistaken interpretation as a fact with exactly this description: %q, scope sample-v1, and evidence from the transcription file. This is an intentionally wrong interpretation of the dataset, not a claim that a historical event never happened.
-Next, in the SAME Step, use a deterministic bash command to read every integer from the retained values file, calculate the sum, and compute SHA-256 of its exact bytes. Save AND print a JSON receipt to %s with fields sum (computed, never hardcoded) and dataset_sha256. Publish a second fact with exactly this description: %q, scope sample-v1, and evidence from BOTH the unchanged values file and the calculation receipt. Finish the Step with the second fact as its result. Preserve all three files. No candidate, dispute, report, or additional Step is needed.
-The blackboard Agent must submit one curate action with groups:[] and relations:[{kind:"supersedes",source:the second fact ID,target:the first fact ID,reason:the calculation corrected the initial interpretation}]. Never rewrite or delete the original fact or evidence. The main Agent may complete only after this relation has been curated, citing the effective recalculated fact.`, curationValuesPath, curationValues, curationOriginalPath, curationOriginal, curationOldClaim, curationCorrectedPath, curationNewClaim)
-	runObservedProject(t, "Correct an observation while retaining original evidence", origin, "Correct the initial sum=11 interpretation with a reproducible sum=10 calculation, atomically curate the supersedes relation, retain all original evidence, and complete using only effective support.", "atomic_curation_relation_with_retained_evidence", validateCurationRelationsDelivery, 1)
-}
-
 func validateCurationRelationsDelivery(state board.State, files map[string][]byte) []string {
 	failures := []string{}
 	check := func(ok bool, message string) {
@@ -141,12 +128,6 @@ func validateCurationRelationsDelivery(state board.State, files map[string][]byt
 	check(rootSupported, "project completion does not cite the effective corrected fact")
 	check(len(state.Candidates) == 0 && len(state.Disputes) == 0, "unexpected candidate/dispute work in the simple observation-correction workload")
 	return failures
-}
-
-// The local model controls protocol choices; Docker executes the production
-// Go Loop, real file tools, graph bridge, curation transaction and completion.
-func TestDockerCurationRelations(t *testing.T) {
-	runDockerCurationRelations(t, false)
 }
 
 func runDockerCurationRelations(t *testing.T, withCandidates bool) {

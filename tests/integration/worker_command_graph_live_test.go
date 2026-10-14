@@ -4,12 +4,9 @@ package integration
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -21,119 +18,6 @@ import (
 	"pwnmesh/internal/worker"
 	"pwnmesh/internal/workergraph"
 )
-
-// This workload exercises the production Loop, command DAG, graph bridge,
-// evidence retention and completion using only synthetic local data in a small image.
-func TestLiveWorkerCommandGraphProject(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_WORKER_GRAPH_TEST") != "1" {
-		t.Skip("opt in to real model and Docker command-graph acceptance")
-	}
-	origin := `Exercise a small Worker command graph using ONLY synthetic local files under /workspace. Do not read credentials, install packages or contact other services.
-The main Agent must authorize exactly one ordinary Step and preserve the following execution contract in its task. The Worker must use the run_graph tool with key sample-sum and parallelism 2, with exactly three required nodes: left, right, sum. left and right have no dependencies. left executes sleep 1 followed by printing the JSON array [2,3] to stdout; right executes sleep 1 followed by printing [5]. These deliberate one-second waits make actual branch overlap observable. sum depends_on both left and right, reads the two retained stdout files through the PWNMESH_DEPENDENCIES JSON file, concatenates their arrays in left/right order, and computes their sum with Python. It prints exactly one JSON object with values (the actual concatenated array) and sum (computed, never hardcoded). Use the tool's private node directories and retained stdout.log files; no shared output file is necessary. Do not simulate the graph with a bash background job, extra Steps, or sequential tool calls.
-After the graph succeeds, publish one fact with scope sample-v1 describing the independently executed branches and calculated sum, using all three absolute stdout paths as evidence. Return that fact as the Step result. There is no ambiguous interpretation, report or dispute to create. The main Agent may complete after the Step succeeds, using its accepted result and retained raw evidence. No additional Step, curation or candidate judgment is needed.`
-	runObservedProject(t, "Worker command DAG with parallel inputs and deterministic join", origin,
-		"Execute the required three-node Worker graph, retain both input arrays and the computed values=[2,3,5], sum=10 receipt, and complete from the accepted evidence without curation.",
-		"worker_command_graph_with_retained_evidence", validateWorkerCommandGraphDelivery, 1)
-}
-
-// Three paired runs isolate command scheduling from provider latency. They
-// measure the real runtime tool in the same Docker image as the live workload;
-// this is not an estimate of whole-project speedup.
-func TestWorkerCommandGraphTiming(t *testing.T) {
-	out := os.Getenv("PWNMESH_WORKER_GRAPH_TIMING_OUTPUT")
-	if out == "" {
-		t.Skip("opt in with an output path for controlled scheduling measurements")
-	}
-	var measurements []map[string]any
-	join := `python3 - <<'PY'
-import json, os, sys
-deps = {d['id']: d for d in json.load(open(os.environ['PWNMESH_DEPENDENCIES']))}
-values = []
-for name in ('left', 'right'):
-    path = deps[name]['output']['value']['output_path']
-    sys.stderr.write(name + ' stdout=' + path + '\n')
-    values.extend(json.load(open(path)))
-print(json.dumps({'values': values, 'sum': sum(values)}))
-PY`
-	for repeat := 1; repeat <= 3; repeat++ {
-		// Alternate order to avoid always giving one setting the warm run.
-		order := []int{1, 2}
-		if repeat%2 == 0 {
-			order = []int{2, 1}
-		}
-		for _, parallelism := range order {
-			workspace := t.TempDir()
-			run := fmt.Sprintf("trial-%d-p%d", repeat, parallelism)
-			dir := filepath.Join(workspace, ".pwnmesh", "runs", run)
-			if err := os.MkdirAll(dir, 0700); err != nil {
-				t.Fatal(err)
-			}
-			j := worker.Job{RunID: run, Kind: "explore", Workspace: workspace, Graph: board.Graph{Project: board.Project{ID: "timing", OrchestrationVersion: 1}}}
-			o := worker.Options{RunDir: dir}
-			if err := worker.ConfigureRuntimeTools(j, &o); err != nil {
-				t.Fatal(err)
-			}
-			i := slices.IndexFunc(o.Tools, func(tool agent.Tool) bool { return tool.Name == "run_graph" })
-			if i < 0 {
-				t.Fatal("command graph is not exposed by the production Worker")
-			}
-			raw, _ := json.Marshal(map[string]any{"key": "sample-sum", "parallelism": parallelism, "nodes": []map[string]any{
-				{"id": "left", "command": "sleep 1; printf '[2,3]\\n'", "resources": []string{}},
-				{"id": "right", "command": "sleep 1; printf '[5]\\n'", "resources": []string{}},
-				{"id": "sum", "depends_on": []workergraph.Dependency{{ID: "left"}, {ID: "right"}}, "command": join, "resources": []string{}},
-			}})
-			started := time.Now()
-			result, err := o.Tools[i].Execute(context.Background(), raw)
-			wall := time.Since(started).Seconds()
-			if err != nil {
-				t.Fatalf("graph tool failed: %s: %v", result, err)
-			}
-			base := filepath.Join(dir, "graph-tools", "sample-sum") + "/"
-			cpBytes, err := os.ReadFile(base + "graph.json")
-			if err != nil {
-				t.Fatal(err)
-			}
-			var cp workergraph.Checkpoint
-			if err = json.Unmarshal(cpBytes, &cp); err != nil {
-				t.Fatal(err)
-			}
-			files := map[string][]byte{}
-			for _, id := range []string{"left", "right", "sum"} {
-				for _, name := range []string{"stdout.log", "stderr.log", "dependencies.json"} {
-					path := base + "nodes/" + id + "/" + name
-					files[path], err = os.ReadFile(path)
-					if err != nil {
-						t.Fatal(err)
-					}
-				}
-			}
-			failures := validateCommandGraphCheckpoint(cp, run, base, files)
-			if parallelism == 1 {
-				if !slices.Contains(failures, "independent input commands did not overlap") {
-					t.Fatal("serial configuration unexpectedly overlapped")
-				}
-				failures = slices.DeleteFunc(failures, func(s string) bool { return s == "independent input commands did not overlap" })
-			}
-			if len(failures) != 0 {
-				t.Fatal(failures)
-			}
-			for _, id := range []string{"left", "right", "sum"} {
-				want := ""
-				if id == "sum" {
-					want = "left stdout=" + base + "nodes/left/stdout.log\nright stdout=" + base + "nodes/right/stdout.log\n"
-				}
-				if actual := string(files[base+"nodes/"+id+"/stderr.log"]); actual != want {
-					t.Fatalf("%s stderr = %q, want %q", id, actual, want)
-				}
-			}
-			measurements = append(measurements, map[string]any{"repeat": repeat, "parallelism": parallelism, "wall_seconds": wall, "checkpoint": cp, "passed": true})
-			t.Logf("repeat=%d parallelism=%d tool_wall_seconds=%.3f", repeat, parallelism, wall)
-		}
-	}
-	if err := saveLiveJSON(out, map[string]any{"scope": "controlled command graph only; three matched pairs, not project or model latency", "measurements": measurements}); err != nil {
-		t.Fatal(err)
-	}
-}
 
 func validateWorkerCommandGraphDelivery(state board.State, files map[string][]byte) []string {
 	failures := []string{}

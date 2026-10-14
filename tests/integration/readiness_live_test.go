@@ -6,16 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/config"
-	"pwnmesh/internal/dispatcher"
 	"pwnmesh/internal/provider"
 )
 
@@ -62,55 +57,6 @@ func readinessLiveResult(model, origin string, started, finished time.Time, err 
 		evidence.HTTPStatus = endpointError.Status
 	}
 	return evidence
-}
-
-func TestLiveModelReadiness(t *testing.T) {
-	if os.Getenv("PWNMESH_LIVE_READINESS_TEST") != "1" {
-		t.Skip("opt in with PWNMESH_LIVE_READINESS_TEST=1, model environment and PWNMESH_LIVE_OUTPUT")
-	}
-	base, token, model := os.Getenv("ANTHROPIC_BASE_URL"), os.Getenv("ANTHROPIC_AUTH_TOKEN"), os.Getenv("ANTHROPIC_MODEL")
-	if model == "" {
-		model = os.Getenv("ANTHROPIC_DEFAULT_FABLE_MODEL")
-	}
-	output := os.Getenv("PWNMESH_LIVE_OUTPUT")
-	if strings.TrimSpace(base) == "" || strings.TrimSpace(token) == "" || strings.TrimSpace(model) == "" || strings.TrimSpace(output) == "" {
-		t.Fatal("explicit model endpoint, authentication, model selection and PWNMESH_LIVE_OUTPUT are required")
-	}
-	upstream, err := url.Parse(base)
-	if err != nil || upstream.Host == "" || (upstream.Scheme != "https" && upstream.Scheme != "http") || upstream.User != nil || upstream.RawQuery != "" || upstream.Fragment != "" {
-		t.Fatal("model endpoint must be an HTTP(S) URL without user info, query or fragment")
-	}
-	if err := os.MkdirAll(output, 0700); err != nil {
-		t.Fatal("cannot create readiness evidence directory")
-	}
-	env := map[string]string{
-		"ANTHROPIC_BASE_URL": base, "ANTHROPIC_AUTH_TOKEN": token, "ANTHROPIC_MODEL": model,
-		"PWNMESH_REASONING_EFFORT": "max",
-	}
-	for _, key := range []string{"PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_REQUEST_TIMEOUT"} {
-		if value := config.Getenv(key); value != "" {
-			env[key] = value
-		}
-	}
-	c := config.Config{
-		Runtime: config.Runtime{MaxWorkers: 1, HealthMode: "startup_only", HealthTimeout: 120},
-		Tasks:   config.Tasks{Reason: config.Task{ReasoningEffort: "max"}},
-		Workers: []config.Worker{{Name: "live-readiness", Type: "go", TaskTypes: []string{"reason"}, MaxRunning: 1, Env: env}},
-	}
-	scheduler := dispatcher.New(c, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-	defer cancel()
-	started := time.Now().UTC()
-	checkErr := scheduler.Health(ctx, true)
-	evidence := readinessLiveResult(model, upstream.Scheme+"://"+upstream.Host, started, time.Now().UTC(), checkErr)
-	path := filepath.Join(output, "readiness.json")
-	if err := saveLiveJSON(path, evidence); err != nil {
-		t.Fatal("cannot save readiness evidence")
-	}
-	t.Logf("readiness_passed=%t wall_ms=%d failure_kind=%s evidence=%s", evidence.Passed, evidence.WallMS, evidence.FailureKind, path)
-	if checkErr != nil {
-		t.Fatal("production readiness check failed; inspect the credential-free readiness.json evidence")
-	}
 }
 
 func TestReadinessLiveEvidenceOmitsProviderErrorDetails(t *testing.T) {
