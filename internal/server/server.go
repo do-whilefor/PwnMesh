@@ -66,8 +66,10 @@ func NewWithModelSettings(store *b.Store, modelSettingsPath string) http.Handler
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write(data)
 	})
+	m.HandleFunc("GET /health", s.readOnly(s.health))
+	m.HandleFunc("GET /settings", s.readOnly(s.settings))
 	for pattern, fn := range map[string]action{
-		"GET /health": s.health, "GET /settings": s.settings, "PUT /settings": s.settings,
+		"PUT /settings": s.settings,
 		"GET /projects": s.projects, "POST /projects": s.projects,
 		"GET /projects/{pid}": s.project, "DELETE /projects/{pid}": s.project,
 		"PUT /projects/{pid}/title": s.title, "PUT /projects/{pid}/status": s.status,
