@@ -201,12 +201,12 @@ func (c *Config) Validate() error {
 			var missing string
 			env[k] = os.Expand(v, func(name string) string {
 				value, ok := os.LookupEnv(name)
-				if !ok {
+				if !ok && !strings.HasPrefix(name, "ANTHROPIC_") {
 					missing = name
 				}
 				return value
 			})
-			if missing != "" && !strings.HasPrefix(missing, "ANTHROPIC_") {
+			if missing != "" {
 				return fmt.Errorf("environment variable %s is required for worker %q", missing, w.Name)
 			}
 		}

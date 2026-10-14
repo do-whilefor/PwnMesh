@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,29 @@ func TestGetenvLegacyFallback(t *testing.T) {
 			}
 			if got := Getenv(tc.key); got != tc.want {
 				t.Errorf("Getenv returned %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestConfigRejectsMissingEnvironmentAlongsideOptionalModelVariables(t *testing.T) {
+	const required = "PWNMESH_CONFIG_TEST_REQUIRED"
+	const optional = "ANTHROPIC_CONFIG_TEST_OPTIONAL"
+	for _, key := range []string{required, optional} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, value := range []string{
+		"${" + required + "}${" + optional + "}",
+		"${" + optional + "}${" + required + "}",
+	} {
+		t.Run(value, func(t *testing.T) {
+			c := coldStartConfig()
+			c.CommonEnv["CONFIG_TEST_SETTING"] = value
+			if err := c.Validate(); err == nil || !strings.Contains(err.Error(), required) {
+				t.Fatalf("missing required variable was masked by an optional model variable: %v", err)
 			}
 		})
 	}
