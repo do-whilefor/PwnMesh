@@ -115,14 +115,6 @@ func configureGraphRequest(j Job, o Options, runtime *roleRuntime) func(context.
 				if json.Unmarshal([]byte(raw), &receipt) == nil && receipt.Committed && len(receipt.StateVersion) == 64 {
 					operation.Committed = true
 					operation.Actions = receipt.ChangedActions
-					if operation.Actions == 0 {
-						// Older full receipts can still supply their action results.
-						for _, result := range receipt.Results {
-							if !result.Unchanged {
-								operation.Actions++
-							}
-						}
-					}
 				}
 			}
 			runtime.emit(operation.event())

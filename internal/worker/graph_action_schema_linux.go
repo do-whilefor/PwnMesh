@@ -10,12 +10,8 @@ import (
 const evidenceSelectionDescription = "For new evidence, select a UTF-8 file at most 32 MiB and a nonempty excerpt at most 8192 bytes. Omit both line bounds for the whole file, or supply start_line and end_line together (1-based, inclusive)."
 const factScopeDescription = "For a fact, preserve any task-specified scope value exactly; put additional explanation in description."
 
-func graphReadSchema(orchestration bool) json.RawMessage {
-	sections := []string{"overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources"}
-	if orchestration {
-		sections = append(sections, "candidates", "disputes")
-	}
-	sections = append(sections, "assets", "anchors", "history")
+func graphReadSchema() json.RawMessage {
+	sections := []string{"overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources", "candidates", "disputes", "assets", "anchors", "history"}
 	raw, _ := json.Marshal(map[string]any{
 		"type": "object", "properties": map[string]any{
 			"section":   map[string]any{"type": "string", "description": "Record sections support listing. evidence and sources require exactly one ID to select its support.", "enum": sections},

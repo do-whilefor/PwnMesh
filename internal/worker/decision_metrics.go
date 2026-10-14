@@ -2,7 +2,6 @@ package worker
 
 import (
 	"encoding/json"
-	"strings"
 	"time"
 
 	"pwnmesh/internal/agent"
@@ -30,23 +29,6 @@ func (operation decisionOperation) event() agent.Event {
 
 func newDecisionMetrics() decisionMetrics {
 	return decisionMetrics{DecisionMetrics{Version: 1, UsageStatus: "unknown", CostStatus: "unknown", Outcome: "unknown"}}
-}
-
-// observeRecovered is the retained shadow-event adapter. It runs only while
-// loading the journal: historical calls count, but unavailable writes cannot
-// become current planner authority and shadow input is never initial input.
-func (m *decisionMetrics) observeRecovered(event agent.Event) {
-	if !strings.HasPrefix(event.Type, "replan_") {
-		m.observe(event)
-		return
-	}
-	event.Type = strings.TrimPrefix(event.Type, "replan_")
-	if event.Type == "decision_operation" || event.ToolName == "graph_action" {
-		return
-	}
-	initial := m.InitialInputBytes
-	m.observe(event)
-	m.InitialInputBytes = initial
 }
 
 func (m *decisionMetrics) observe(event agent.Event) {
@@ -167,7 +149,7 @@ func (m decisionMetrics) finish(j Job, r Result, started, ended time.Time) Decis
 			m.SelectedViewBytes += len(assessment)
 		}
 	}
-	if j.Decision != nil && j.Decision.Version == 2 {
+	if j.Kind == "reason" && j.Decision != nil && j.Decision.Version == 2 {
 		if m.Committed {
 			m.Outcome = "no_op_committed"
 			if m.CommittedActions > 0 {
@@ -178,19 +160,11 @@ func (m decisionMetrics) finish(j Job, r Result, started, ended time.Time) Decis
 		}
 		return m.DecisionMetrics
 	}
-	if m.GraphActionSuccesses > 0 {
-		m.Outcome = "actions_observed"
-		return m.DecisionMetrics
-	}
-	if r.Status != "success" || m.GraphActions > 0 {
+	if j.Kind != "curate" || r.Status != "success" || m.GraphActions > 0 {
 		return m.DecisionMetrics // An interrupted/failed action may have reached the server.
 	}
 	parsed, err := parseOutput(j, r.Conclude, r.Text)
-	if err != nil {
-		return m.DecisionMetrics
-	}
-	switch parsed.Kind {
-	case "rejected":
+	if err == nil && parsed.Kind == "rejected" {
 		m.Outcome = "rejected"
 	}
 	return m.DecisionMetrics

@@ -27,9 +27,10 @@ func TestRecoveryPreservesRawPrefixAndArchivesOnlyPartialTail(t *testing.T) {
 	// replay nor a later checkpoint may replace them with re-encoded JSON.
 	committed := []byte("{\"message\":{\"sequence\":2,\"role\":\"assistant\",\"content\":[]}, \"type\":\"message_end\"}\n" +
 		"{\"type\":\"replan_message_end\",\"message\":{\"sequence\":999,\"role\":\"assistant\"}}\n" +
-		"{\"type\":\"replan_compaction\",\"compaction\":{\"id\":999}}\n")
+		"{\"type\":\"replan_compaction\",\"compaction\":{\"id\":999}}\n" +
+		"{\"type\":\"unknown\",\"message\":{\"sequence\":1000},\"compaction\":{\"id\":1000}}\n")
 	tail := []byte("{\"type\":\"message_end\",\"message\":{\"sequence\":4,\"role\":\"assistant\"}}\n" +
-		"{\"type\":\"context_compaction\",\"compaction\":{\"id\":3}}\n")
+		"{\"type\":\"context_compacted\",\"compaction\":{\"id\":3}}\n")
 	partial := []byte("{\"type\":\"message_end\",\"message\":")
 	complete := append(append([]byte{}, committed...), tail...)
 	if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), append(append([]byte{}, complete...), partial...), 0600); err != nil {
@@ -46,7 +47,7 @@ func TestRecoveryPreservesRawPrefixAndArchivesOnlyPartialTail(t *testing.T) {
 	if recovery.LastSequence != 4 || recovery.LastCompaction != 3 || recovery.Uncommitted != int64(len(tail)) || recovery.PartialArchive == "" {
 		t.Fatalf("recovery mixed cursor spaces or lost the tail: %+v", recovery)
 	}
-	wantTypes := []string{"message_end", "replan_message_end", "replan_compaction", "message_end", "context_compaction"}
+	wantTypes := []string{"message_end", "replan_message_end", "replan_compaction", "unknown", "message_end", "context_compacted"}
 	if !reflect.DeepEqual(replayed, wantTypes) {
 		t.Fatalf("replay changed original records: got %v, want %v", replayed, wantTypes)
 	}
@@ -98,5 +99,38 @@ func TestClosedJournalCannotPublishCheckpoint(t *testing.T) {
 	}
 	if err := log.Append(agent.Event{Type: "recovery"}); err == nil {
 		t.Fatal("closed journal accepted another event")
+	}
+}
+
+func TestRecoveryCursorUsesCurrentEventKind(t *testing.T) {
+	for _, kind := range []string{"message_end", "context_compaction_failed", "context_compaction_prepared", "context_compacted", "replan_message_end", "replan_compaction", "unknown"} {
+		t.Run(kind, func(t *testing.T) {
+			dir := t.TempDir()
+			event := agent.Event{Type: kind, Message: &agent.Message{Sequence: 7}, Compaction: &agent.CompactionRecord{CompactionCheckpoint: agent.CompactionCheckpoint{ID: 9}}}
+			raw, err := json.Marshal(event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = append(raw, '\n')
+			if err := os.WriteFile(filepath.Join(dir, "events.jsonl"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			checkpoint := bytesCheckpoint(raw)
+			log, err := Open(dir, &checkpoint, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer log.Close()
+			var sequence, compaction uint64
+			switch kind {
+			case "message_end":
+				sequence = 7
+			case "context_compaction_failed", "context_compaction_prepared", "context_compacted":
+				compaction = 9
+			}
+			if got := log.Recovery(); got.LastSequence != sequence || got.LastCompaction != compaction {
+				t.Fatalf("event payload crossed recovery cursor boundaries: %+v", got)
+			}
+		})
 	}
 }

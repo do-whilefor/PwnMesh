@@ -73,7 +73,7 @@ func restoreSession(j Job, o Options) (*sessionRuntime, error) {
 		checkpoint = &state.Log
 	}
 	metrics := newDecisionMetrics()
-	journal, err := eventlog.Open(o.RunDir, checkpoint, metrics.observeRecovered)
+	journal, err := eventlog.Open(o.RunDir, checkpoint, metrics.observe)
 	if err != nil {
 		return nil, err
 	}

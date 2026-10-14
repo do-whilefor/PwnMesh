@@ -36,8 +36,9 @@ The private journal owner verifies the saved byte offset and checksum before
 recovery. Complete crash-tail records remain append-only; an incomplete final
 record is archived and synced before truncation. Session saves obtain a synced
 journal checkpoint before replacing the session file. Acceptance visits only the
-verified committed prefix. Historical `replan_*` metrics are adapted while
-replaying retained records; current event handling does not normalize them.
+verified committed prefix. Metrics replay consumes current events only. Retired
+`replan_*` and other unknown events remain byte-for-byte in the journal without
+contributing metrics or advancing transcript and compaction cursors.
 
 For Execute, an accepted receipt binds the run and input hash to retained session
 and artifact hashes. Evidence is verified again on read. A changed repair target

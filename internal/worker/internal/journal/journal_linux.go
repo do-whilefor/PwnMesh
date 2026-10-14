@@ -15,7 +15,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"pwnmesh/internal/agent"
 )
@@ -125,12 +124,17 @@ func Open(runDir string, saved *Checkpoint, replay func(agent.Event)) (*Log, err
 		if err = json.Unmarshal(line, &event); err != nil || event.Type == "" {
 			return nil, fmt.Errorf("invalid complete event record at byte %d", j.offset)
 		}
-		// Historical shadow transcripts used their own sequence space.
-		if !strings.HasPrefix(event.Type, "replan_") && event.Message != nil && event.Message.Sequence > j.lastSequence {
-			j.lastSequence = event.Message.Sequence
-		}
-		if !strings.HasPrefix(event.Type, "replan_") && event.Compaction != nil && event.Compaction.ID > j.lastCompaction {
-			j.lastCompaction = event.Compaction.ID
+		// Only current transcript events advance recovery cursors. Other
+		// complete records remain in the raw journal without interpretation.
+		switch event.Type {
+		case "message_end":
+			if event.Message != nil && event.Message.Sequence > j.lastSequence {
+				j.lastSequence = event.Message.Sequence
+			}
+		case "context_compaction_failed", "context_compaction_prepared", "context_compacted":
+			if event.Compaction != nil && event.Compaction.ID > j.lastCompaction {
+				j.lastCompaction = event.Compaction.ID
+			}
 		}
 		if replay != nil {
 			replay(event)

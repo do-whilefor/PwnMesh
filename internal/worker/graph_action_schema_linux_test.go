@@ -12,16 +12,15 @@ import (
 	"pwnmesh/internal/board"
 )
 
-func TestGraphReadSchemasPreserveModeSectionsAndSnapshotContract(t *testing.T) {
-	legacy := Job{Kind: "explore"}
-	orchestrated := legacy
+func TestGraphReadSchemasPreserveCurrentSectionsAndSnapshotContract(t *testing.T) {
+	orchestrated := Job{Kind: "explore"}
 	orchestrated.Graph.Project.OrchestrationVersion = 1
 	planner := orchestrated
 	planner.Kind = "reason"
 	snapshot, _ := snapshotRuntimeFixture(t, "explore")
 	snapshot.Graph.Project.OrchestrationVersion = 1
 	for name, job := range map[string]Job{
-		"legacy": legacy, "execute": orchestrated, "decide": planner, "curate": curationJob(t), "snapshot": snapshot,
+		"execute": orchestrated, "decide": planner, "curate": curationJob(t), "snapshot": snapshot,
 	} {
 		t.Run(name, func(t *testing.T) {
 			opts := Options{Tools: []agent.Tool{}}
@@ -43,9 +42,8 @@ func TestGraphReadSchemasPreserveModeSectionsAndSnapshotContract(t *testing.T) {
 			for tool, schema := range reads {
 				for _, section := range []string{"overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources", "assets", "anchors", "history", "candidates", "disputes"} {
 					raw := json.RawMessage(`{"section":"` + section + `"}`)
-					want := name != "legacy" || section != "candidates" && section != "disputes"
-					if err := agent.ValidateArguments(schema, raw); (err == nil) != want {
-						t.Errorf("%s section %s: allowed=%v, err=%v", tool, section, want, err)
+					if err := agent.ValidateArguments(schema, raw); err != nil {
+						t.Errorf("%s lost current section %s: %v", tool, section, err)
 					}
 				}
 				for _, raw := range []string{

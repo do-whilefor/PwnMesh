@@ -43,17 +43,20 @@ func TestDecisionMetricsSeparateDraftsFromCommittedReceipts(t *testing.T) {
 	}
 }
 
-func TestDecisionMetricsEmptyCommitAndLegacyOutcomes(t *testing.T) {
+func TestDecisionMetricsRequireCurrentReceiptAuthority(t *testing.T) {
 	m := newDecisionMetrics()
 	m.observe((decisionOperation{Op: "decision_commit", Committed: true, ElapsedMS: 4}).event())
 	batch := Job{Kind: "reason", Decision: &board.DecisionContext{Version: 2}}
 	if got := m.finish(batch, Result{Status: "success"}, time.Time{}, time.Time{}); got.Outcome != "no_op_committed" || !got.Committed || got.CommittedActions != 0 {
 		t.Fatalf("empty batch receipt: %+v", got)
 	}
-	legacy := newDecisionMetrics()
-	legacy.observe(agent.Event{Type: "tool_end", ToolName: "graph_action"})
-	if got := legacy.finish(Job{Kind: "reason", Decision: &board.DecisionContext{Version: 1}}, Result{}, time.Time{}, time.Time{}); got.Outcome != "actions_observed" || got.Version != 1 {
-		t.Fatalf("legacy meaning changed: %+v", got)
+	for _, decision := range []*board.DecisionContext{nil, {Version: 1}, {Version: 2}} {
+		uncommitted := newDecisionMetrics()
+		uncommitted.observe(agent.Event{Type: "tool_start", ToolName: "graph_action"})
+		uncommitted.observe(agent.Event{Type: "tool_end", ToolName: "graph_action"})
+		if got := uncommitted.finish(Job{Kind: "reason", Decision: decision}, Result{Status: "success"}, time.Time{}, time.Time{}); got.Outcome != "unknown" || got.Committed {
+			t.Fatalf("tool success or retired protocol inferred publication: %+v", got)
+		}
 	}
 	before := m
 	event := (decisionOperation{Op: "decision_commit", Committed: true, Actions: 9}).event()
@@ -62,6 +65,27 @@ func TestDecisionMetricsEmptyCommitAndLegacyOutcomes(t *testing.T) {
 	m.observe(agent.Event{Type: "decision_operation", Text: "bad JSON"})
 	if !reflect.DeepEqual(m, before) {
 		t.Fatalf("shadow or malformed operation changed decision metrics: %+v", m)
+	}
+}
+
+func TestDecisionMetricsPreserveCuratorRejection(t *testing.T) {
+	job := curationJob(t)
+	for _, status := range []string{"success", "failed"} {
+		for _, action := range []bool{false, true} {
+			metrics := newDecisionMetrics()
+			if action {
+				metrics.observe(agent.Event{Type: "tool_start", ToolName: "graph_action"})
+			}
+			result := Result{Status: status, Text: `{"accepted":false,"reason":"No supported curation"}`}
+			got := metrics.finish(job, result, time.Time{}, time.Time{})
+			want := "unknown"
+			if status == "success" && !action {
+				want = "rejected"
+			}
+			if got.Outcome != want || got.Committed {
+				t.Fatalf("curation status=%s action=%v: %+v", status, action, got)
+			}
+		}
 	}
 }
 
@@ -121,7 +145,7 @@ func TestDecisionMetricsReplayJournalReceipts(t *testing.T) {
 		t.Fatal(err)
 	}
 	metrics := newDecisionMetrics()
-	recovered, err := eventlog.Open(dir, &checkpoint, metrics.observeRecovered)
+	recovered, err := eventlog.Open(dir, &checkpoint, metrics.observe)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +155,7 @@ func TestDecisionMetricsReplayJournalReceipts(t *testing.T) {
 	}
 }
 
-func TestDecisionMetricsHistoricalAdapterRunsOnlyDuringRecovery(t *testing.T) {
+func TestDecisionMetricsIgnoreRetiredEventsDuringLiveExecutionAndRecovery(t *testing.T) {
 	shadow := []agent.Event{
 		{Type: "replan_model_call_start", Request: &agent.RequestObservation{Kind: "turn", InputBytes: 70, InputBasis: "fixture"}},
 		{Type: "replan_model_call_end", Request: &agent.RequestObservation{Usage: &agent.Usage{InputTokens: 9}}},
@@ -178,8 +202,8 @@ func TestDecisionMetricsHistoricalAdapterRunsOnlyDuringRecovery(t *testing.T) {
 	}
 	defer restored.journal.Close()
 	metrics := restored.metrics
-	if metrics.ModelCalls != 2 || metrics.CompletedCalls != 1 || metrics.InitialInputBytes != 25 || metrics.TotalInputBytes != 95 || metrics.Usage.InputTokens != 9 || metrics.GraphReads != 1 || metrics.GraphActions != 0 || metrics.Committed {
-		t.Fatalf("historical adapter changed accounting or authority: %+v", metrics)
+	if !reflect.DeepEqual(metrics, runtime.metrics) || metrics.ModelCalls != 1 || metrics.TotalInputBytes != 25 || metrics.Usage.InputTokens != 0 || metrics.GraphReads != 0 || metrics.GraphActions != 0 || metrics.Committed {
+		t.Fatalf("recovery interpreted retired events or changed live accounting: %+v", metrics)
 	}
 	after, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
 	if err != nil || string(before) != string(after) {
@@ -246,8 +270,9 @@ type decisionMetricsOutput func([]byte) (int, error)
 
 func (write decisionMetricsOutput) Write(raw []byte) (int, error) { return write(raw) }
 
-func TestDecisionMetricsRuntimeCompactCommit(t *testing.T) {
-	for _, changed := range []int{0, 2} {
+func TestDecisionMetricsRuntimeReceiptCounts(t *testing.T) {
+	for _, receipt := range []board.DecisionReceipt{{}, {ChangedActions: 2}, {Results: []board.StateActionResult{{ID: "retained-result"}}}} {
+		changed := receipt.ChangedActions
 		dir, version := t.TempDir(), strings.Repeat("a", 64)
 		m := newDecisionMetrics()
 		o := Options{RunDir: dir}
@@ -256,9 +281,9 @@ func TestDecisionMetricsRuntimeCompactCommit(t *testing.T) {
 			if err := json.Unmarshal(raw, &event); err != nil {
 				return 0, err
 			}
-			// The production dispatcher removes Results from successful commit
-			// and recovery responses to keep the graph bridge payload bounded.
-			receipt := board.DecisionReceipt{Committed: true, StateVersion: version, ChangedActions: changed}
+			// The current bridge supplies ChangedActions. Retained Results must
+			// never override that authoritative count, including an explicit zero.
+			receipt.Committed, receipt.StateVersion = true, version
 			result, _ := json.Marshal(receipt)
 			response, _ := json.Marshal(GraphResponse{RequestID: event.Request.RequestID, Result: result})
 			err := os.WriteFile(filepath.Join(dir, "graph-response-"+event.Request.RequestID+".json"), response, 0600)
