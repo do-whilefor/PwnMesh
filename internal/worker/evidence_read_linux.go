@@ -73,7 +73,7 @@ func rawEvidenceTool(j Job, o *Options, request func(context.Context, GraphReque
 		}
 		// This read uses the existing execution fence and role-specific snapshot
 		// boundary. A model-supplied file path can never become a capability.
-		raw, err := request(ctx, GraphRequest{Op: "read_graph", Section: "evidence", IDs: []string{r.ID}, Offset: *r.EvidenceIndex, Limit: 1, evidenceLookup: true})
+		raw, err := request(withInternalGraphRead(ctx), GraphRequest{Op: "read_graph", Section: "evidence", IDs: []string{r.ID}, Offset: *r.EvidenceIndex, Limit: 1})
 		if err != nil {
 			return "", err
 		}
@@ -134,7 +134,7 @@ func readEvidenceReference(ctx context.Context, id string, page graphPage, reque
 			return ref, errors.New("invalid or oversized evidence reference continuation")
 		}
 		var err error
-		raw, err = readGraphRecord(ctx, GraphRequest{Op: "read_graph", Section: "evidence", IDs: []string{id}, Offset: page.Offset, Limit: 1, ExpectedVersion: omitted.StateVersion, evidenceLookup: true}, omitted, MaxGraphRPCBytes*4, request)
+		raw, err = readGraphRecord(withInternalGraphRead(ctx), GraphRequest{Op: "read_graph", Section: "evidence", IDs: []string{id}, Offset: page.Offset, Limit: 1, ExpectedVersion: omitted.StateVersion}, omitted, MaxGraphRPCBytes*4, request)
 		if err != nil {
 			return ref, err
 		}

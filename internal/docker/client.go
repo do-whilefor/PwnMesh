@@ -25,7 +25,7 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelrpc"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 type Client struct {
@@ -33,8 +33,8 @@ type Client struct {
 	http            *http.Client
 	locks           sync.Map
 	graphMu         sync.RWMutex
-	graphHandler    func(context.Context, worker.Job, worker.GraphRequest) (any, error)
-	inputReader     func(context.Context, worker.Job, board.InputFile) (io.ReadCloser, error)
+	graphHandler    func(context.Context, protocol.Job, protocol.GraphRequest) (any, error)
+	inputReader     func(context.Context, protocol.Job, board.InputFile) (io.ReadCloser, error)
 	lookupProxyHost func(context.Context, string) ([]net.IPAddr, error)
 	ownerMu         sync.RWMutex
 	owner           string
@@ -406,9 +406,9 @@ func (c *Client) exec(ctx context.Context, name string, argv, env []string, out 
 
 type resultSink struct {
 	pending     []byte
-	result      worker.Result
+	result      protocol.Result
 	found       bool
-	graph       func(worker.GraphRequest) error
+	graph       func(protocol.GraphRequest) error
 	model       func(modelrpc.Request) error
 	cancelModel func(string) error
 }
@@ -455,10 +455,10 @@ func (s *resultSink) Write(p []byte) (int, error) {
 				return 0, err
 			}
 		case "graph_request":
-			if len(s.pending) > worker.MaxGraphRPCBytes {
+			if len(s.pending) > protocol.MaxGraphRPCBytes {
 				return 0, errors.New("graph request exceeds 128 KiB")
 			}
-			var event worker.GraphRequestEvent
+			var event protocol.GraphRequestEvent
 			if err := json.Unmarshal(s.pending, &event); err != nil {
 				return 0, err
 			}
@@ -472,7 +472,7 @@ func (s *resultSink) Write(p []byte) (int, error) {
 			if s.found {
 				return 0, errors.New("worker emitted multiple results")
 			}
-			var result worker.Result
+			var result protocol.Result
 			if err := json.Unmarshal(s.pending, &result); err != nil {
 				return 0, err
 			}
@@ -491,64 +491,64 @@ func (s *resultSink) Write(p []byte) (int, error) {
 	}
 	return n, nil
 }
-func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker.Result, error) {
+func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (protocol.Result, error) {
 	if j.RunID == "" || strings.ContainsAny(j.RunID, "/\\.") {
-		return worker.Result{}, errors.New("invalid run ID")
+		return protocol.Result{}, errors.New("invalid run ID")
 	}
 	for _, ch := range j.RunID {
 		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '-' || ch == '_') {
-			return worker.Result{}, errors.New("invalid run ID")
+			return protocol.Result{}, errors.New("invalid run ID")
 		}
 	}
 	p, err := configuredModel(w, j)
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	if p.Client != nil {
 		defer p.Client.CloseIdleConnections()
 	}
 	env, err := modelWorkerEnv(w, p.Token)
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	name, err := c.ensure(ctx, j.Graph.Project.ID, p.Token)
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
-	// A shared network's hosts file belongs to its owner, not this worker.
+	// A shared network's hosts file belongs to its owner, not this protocol.
 	if w.Env["PWNMESH_CONNECTION_MODE"] == "proxy" && !strings.HasPrefix(c.Config.Network, "container:") {
 		if err = c.ensureProxyHost(ctx, name, w.Env["PWNMESH_PROXY_URL"]); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 	}
 	if err = c.stageInputs(ctx, name, j); err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	target := "/workspace/.pwnmesh/runs/" + j.RunID + "/job.json"
 	raw, err := json.Marshal(j)
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	if jsonContainsModelCredential(raw, p.Token) {
-		return worker.Result{}, errors.New("model credential must not be included in a worker job")
+		return protocol.Result{}, errors.New("model credential must not be included in a worker job")
 	}
 	if err = c.archive(ctx, name, target, raw); err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	settings, err := json.Marshal(publicModelSettings(p))
 	if err != nil || jsonContainsModelCredential(settings, p.Token) {
-		return worker.Result{}, errors.New("invalid public model settings")
+		return protocol.Result{}, errors.New("invalid public model settings")
 	}
 	if err = c.archive(ctx, name, path.Join(path.Dir(target), "model-settings.json"), settings); err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	launch := make([]byte, 16)
 	if _, err = rand.Read(launch); err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	launchToken := hex.EncodeToString(launch)
 	if err = c.archive(ctx, name, path.Join(path.Dir(target), "launch-token"), []byte(launchToken)); err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	env = append(env, "PWNMESH_LAUNCH_TOKEN="+launchToken)
 	sort.Strings(env)
@@ -571,7 +571,7 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 	}
 	if err != nil || ctx.Err() != nil {
 		dir := path.Dir(target)
-		hard := ctx.Err() != nil && !errors.Is(context.Cause(ctx), worker.ErrInterrupted)
+		hard := ctx.Err() != nil && !errors.Is(context.Cause(ctx), protocol.ErrInterrupted)
 		c.pendingStops.Store(dir, pendingStop{project: j.Graph.Project.ID, hard: hard})
 		var stopErr error
 		if hard {
@@ -580,13 +580,13 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j worker.Job) (worker
 			stopErr = c.interrupt(name, dir)
 		}
 		if stopErr != nil {
-			return worker.Result{}, errors.Join(err, ctx.Err(), fmt.Errorf("execution stop is unconfirmed; project remains quarantined: %w", stopErr))
+			return protocol.Result{}, errors.Join(err, ctx.Err(), fmt.Errorf("execution stop is unconfirmed; project remains quarantined: %w", stopErr))
 		}
 		c.pendingStops.Delete(dir)
 		if ctx.Err() != nil {
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		}
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	return sink.result, nil
 }

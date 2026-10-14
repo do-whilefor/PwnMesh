@@ -10,7 +10,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestCurationCoalescingDrainsPromptlyAndCannotStarve(t *testing.T) {
@@ -35,15 +35,15 @@ func TestCurationCoalescingDrainsPromptlyAndCannotStarve(t *testing.T) {
 
 func TestOrchestrationReservesControlCapacity(t *testing.T) {
 	s := New(config.Config{Runtime: config.Runtime{MaxWorkers: 4, MaxProjectWorkers: 3}, Workers: []config.Worker{{Name: "all", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 3}}}, nil)
-	s.running["one"] = &task{Job: worker.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Worker: config.Worker{Name: "all"}}
-	s.running["two"] = &task{Job: worker.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Worker: config.Worker{Name: "all"}}
+	s.running["one"] = &task{Job: protocol.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Worker: config.Worker{Name: "all"}}
+	s.running["two"] = &task{Job: protocol.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Worker: config.Worker{Name: "all"}}
 	if s.executionCapacity("p") || s.backendExecutionCapacity("all", 3) {
 		t.Fatal("execution consumed reserved control capacity")
 	}
 	if !s.executionCapacity("q") {
 		t.Fatal("another project cannot use its execution capacity")
 	}
-	s.running["three"] = &task{Job: worker.Job{Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Worker: config.Worker{Name: "all"}}
+	s.running["three"] = &task{Job: protocol.Job{Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Worker: config.Worker{Name: "all"}}
 	if !s.executionCapacity("q") {
 		t.Fatal("control task counted as an execution branch")
 	}
@@ -86,7 +86,7 @@ func TestCurationReceiptLookupDistinguishesMissingFromTransportFailure(t *testin
 			}))
 			defer api.Close()
 			s := &Scheduler{Client: &Client{Base: api.URL}}
-			job := &task{Job: worker.Job{Graph: board.Graph{Project: board.Project{ID: "p"}}}, Lease: Lease{Run: "b@r", Kind: "curate"}}
+			job := &task{Job: protocol.Job{Graph: board.Graph{Project: board.Project{ID: "p"}}}, Lease: Lease{Run: "b@r", Kind: "curate"}}
 			committed, err := s.curationCommitted(context.Background(), job)
 			if committed != tc.committed || (err != nil) != tc.failed {
 				t.Fatalf("committed=%v err=%v", committed, err)
@@ -126,7 +126,7 @@ func TestLegacyCurationReceiptRequiresSuccessfulExplicitSettlement(t *testing.T)
 			}))
 			defer api.Close()
 			s := &Scheduler{Client: &Client{Base: api.URL}}
-			run := &task{Job: worker.Job{RunID: "r", Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Lease: Lease{Run: "b@r", Kind: "curate"}}
+			run := &task{Job: protocol.Job{RunID: "r", Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, Lease: Lease{Run: "b@r", Kind: "curate"}}
 			committed, err := s.controlCommitted(context.Background(), run)
 			if committed != tc.wantSuccess || (err == nil) != tc.wantSuccess || reads.Load() != 1 || applies.Load() != tc.wantApply {
 				t.Fatalf("legacy receipt bypassed settlement: committed=%v err=%v reads=%d applies=%d", committed, err, reads.Load(), applies.Load())

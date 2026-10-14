@@ -18,6 +18,7 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
 	"pwnmesh/internal/worker"
 )
@@ -31,16 +32,16 @@ func (p updateProvider) Generate(ctx context.Context, messages []agent.Message, 
 // Only the process launch is replaced. Worker, graph files, Dispatcher identity
 // lookup, HTTP permissions, snapshot preparation and SQLite remain real.
 type updateLocalRunner struct {
-	handler func(context.Context, worker.Job, worker.GraphRequest) (any, error)
+	handler func(context.Context, protocol.Job, protocol.GraphRequest) (any, error)
 	options worker.Options
 }
 
-func (r *updateLocalRunner) SetGraphHandler(fn func(context.Context, worker.Job, worker.GraphRequest) (any, error)) {
+func (r *updateLocalRunner) SetGraphHandler(fn func(context.Context, protocol.Job, protocol.GraphRequest) (any, error)) {
 	r.handler = fn
 }
 func (*updateLocalRunner) Cleanup(context.Context, string, string) error { return nil }
 func (*updateLocalRunner) Projects(context.Context) ([]string, error)    { return nil, nil }
-func (r *updateLocalRunner) Run(ctx context.Context, _ config.Worker, job worker.Job) (worker.Result, error) {
+func (r *updateLocalRunner) Run(ctx context.Context, _ config.Worker, job protocol.Job) (protocol.Result, error) {
 	opts := r.options
 	opts.Output = &updateFileBridge{ctx: ctx, dir: opts.RunDir, job: job, handler: r.handler}
 	return worker.Run(ctx, job, opts)
@@ -49,20 +50,20 @@ func (r *updateLocalRunner) Run(ctx context.Context, _ config.Worker, job worker
 type updateFileBridge struct {
 	ctx     context.Context
 	dir     string
-	job     worker.Job
-	handler func(context.Context, worker.Job, worker.GraphRequest) (any, error)
+	job     protocol.Job
+	handler func(context.Context, protocol.Job, protocol.GraphRequest) (any, error)
 }
 
 func (b *updateFileBridge) Write(raw []byte) (int, error) {
-	var event worker.GraphRequestEvent
+	var event protocol.GraphRequestEvent
 	if err := json.Unmarshal(raw, &event); err != nil {
 		return 0, err
 	}
 	if event.Type != "graph_request" {
 		return len(raw), nil
 	}
-	response := worker.GraphResponse{RequestID: event.Request.RequestID}
-	err := worker.ValidateGraphRequest(b.job, event.Request)
+	response := protocol.GraphResponse{RequestID: event.Request.RequestID}
+	err := protocol.ValidateGraphRequest(b.job, event.Request)
 	var result any
 	if err == nil {
 		result, err = b.handler(b.ctx, b.job, event.Request)
@@ -134,7 +135,7 @@ func (f *updateRequestFixture) prepare(kind string, from []string, description s
 		f.do("POST", base+"/intents/"+created.ID+"/heartbeat", map[string]string{"worker": lease.Run}, &created, nil)
 		intent = &created
 	}
-	job := worker.Job{RunID: id, Kind: kind, WorkerType: "go", Workspace: f.workspace, GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.project}, Intent: intent, Budget: config.Task{Timeout: 60, ConcludeTimeout: 10}}
+	job := protocol.Job{RunID: id, Kind: kind, WorkerType: "go", Workspace: f.workspace, GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.project}, Intent: intent, Budget: config.Task{Timeout: 60, ConcludeTimeout: 10}}
 	raw, err := json.Marshal(job)
 	if err != nil {
 		f.t.Fatal(err)
@@ -228,7 +229,7 @@ func updateHistoryText(messages []agent.Message) string {
 }
 
 type updateRunResult struct {
-	result worker.Result
+	result protocol.Result
 	err    error
 }
 
@@ -355,7 +356,7 @@ func TestExecuteCorrectionBeforeFirstRequestPreservesSnapshot(t *testing.T) {
 		t.Fatalf("first request failed: %+v %v", result, err)
 	}
 	assertUpdateDelivered(t, history, source, correction)
-	value, err := f.runner.handler(f.ctx, run.Job, worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "facts", IDs: []string{source, correction}, ExpectedVersion: run.Job.InputSnapshot.StateVersion})
+	value, err := f.runner.handler(f.ctx, run.Job, protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "facts", IDs: []string{source, correction}, ExpectedVersion: run.Job.InputSnapshot.StateVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -568,7 +569,7 @@ func TestExecuteExplicitAbandonCancelsWorkerAndKeepsIndependentObservation(t *te
 	done := make(chan updateRunResult, 1)
 	go func() {
 		status, err := f.scheduler.runTask(f.ctx, run)
-		done <- updateRunResult{worker.Result{Status: status}, err}
+		done <- updateRunResult{protocol.Result{Status: status}, err}
 	}()
 	f.awaitTool(started, done)
 	f.correct(source)
@@ -587,8 +588,8 @@ func TestExecuteExplicitAbandonCancelsWorkerAndKeepsIndependentObservation(t *te
 	}
 	for _, key := range []string{run.Job.RunID + ":observation", "late-observation"} {
 		err := f.scheduler.Client.Do(f.ctx, "POST", projectPath(f.project.ID)+"/state/actions", map[string]any{"op": "fact", "idempotency_key": key, "payload": map[string]any{"description": "Late result must be rejected"}}, nil, &run.Lease)
-		var protocol *ProtocolError
-		if !errors.As(err, &protocol) || protocol.Status != 409 {
+		var protocolErr *ProtocolError
+		if !errors.As(err, &protocolErr) || protocolErr.Status != 409 {
 			t.Fatalf("late observation was not fenced: %v", err)
 		}
 	}
@@ -716,7 +717,7 @@ func TestExecuteCorrectionSurvivesCompactionAndRecovery(t *testing.T) {
 	if !before.ExecutionDeadline.Equal(after.ExecutionDeadline) || before.RecoveryCount+1 != after.RecoveryCount {
 		t.Fatal("compacted recovery reset its deadline or allowance")
 	}
-	value, err := f.runner.handler(f.ctx, run.Job, worker.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "facts", IDs: []string{source, correction}, ExpectedVersion: run.Job.InputSnapshot.StateVersion})
+	value, err := f.runner.handler(f.ctx, run.Job, protocol.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "facts", IDs: []string{source, correction}, ExpectedVersion: run.Job.InputSnapshot.StateVersion})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -738,7 +739,7 @@ func TestExecuteUpdateReadCrossingDeadlineEntersConclusionBeforeProvider(t *test
 			now.Store(start.UnixNano())
 			production := f.runner.handler
 			reads := 0
-			f.runner.handler = func(ctx context.Context, job worker.Job, request worker.GraphRequest) (any, error) {
+			f.runner.handler = func(ctx context.Context, job protocol.Job, request protocol.GraphRequest) (any, error) {
 				if request.Op == "read_updates" {
 					reads++
 					if reads == 1 {

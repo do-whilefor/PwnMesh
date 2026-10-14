@@ -14,10 +14,10 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
-func (c *Client) SetInputReader(fn func(context.Context, worker.Job, board.InputFile) (io.ReadCloser, error)) {
+func (c *Client) SetInputReader(fn func(context.Context, protocol.Job, board.InputFile) (io.ReadCloser, error)) {
 	c.graphMu.Lock()
 	defer c.graphMu.Unlock()
 	c.inputReader = fn
@@ -25,7 +25,7 @@ func (c *Client) SetInputReader(fn func(context.Context, worker.Job, board.Input
 
 // Files are immutable project inputs. Serialize their installation across
 // concurrent runs; hash existing bytes instead of downloading large APKs again.
-func (c *Client) stageInputs(ctx context.Context, name string, j worker.Job) error {
+func (c *Client) stageInputs(ctx context.Context, name string, j protocol.Job) error {
 	if len(j.InputFiles) == 0 {
 		return nil
 	}

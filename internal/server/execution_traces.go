@@ -4,13 +4,13 @@ import (
 	"net/http"
 
 	b "pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 // Authorize retained process reads using the caller's current execution lease.
 // Paths and source identities come from registered Jobs, never model arguments.
 func (s *Server) executionTraces(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	var read worker.GraphRequest
+	var read protocol.GraphRequest
 	if err := decodeStrictFields(q, &read); err != nil || read.Op != "read_trace_runs" {
 		return 0, nil, b.Err(422, "expected a read_trace_runs request")
 	}
@@ -41,7 +41,7 @@ func (s *Server) executionTraces(t *b.Tx, q *request, r *http.Request) (int, any
 		return 0, nil, err
 	}
 	for i := range items {
-		items[i], err = worker.BindTraceRun(items[i])
+		items[i], err = protocol.BindTraceRun(items[i])
 		if err != nil {
 			return 0, nil, err
 		}

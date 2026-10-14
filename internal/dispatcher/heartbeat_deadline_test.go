@@ -11,7 +11,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestHeartbeatRenewsWithNarrowLeaseSlack(t *testing.T) {
@@ -28,7 +28,7 @@ func TestHeartbeatRenewsWithNarrowLeaseSlack(t *testing.T) {
 			}))
 			defer server.Close()
 			scheduler := &Scheduler{Config: config.Config{Runtime: config.Runtime{Interval: 1}}, Client: &Client{Base: server.URL}}
-			run := &task{Job: worker.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "fixture"}}}, Lease: Lease{Run: "fixture@run", Kind: "explore", Intent: "step"}, LeaseTimeout: timeout}
+			run := &task{Job: protocol.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "fixture"}}}, Lease: Lease{Run: "fixture@run", Kind: "explore", Intent: "step"}, LeaseTimeout: timeout}
 			ctx, cancel := context.WithCancelCause(context.Background())
 			done := make(chan struct{})
 			go func() { defer close(done); scheduler.heartbeat(ctx, run, cancel) }()
@@ -57,7 +57,7 @@ func TestHeartbeatFailedRenewalStopsBeforeLeaseExpiry(t *testing.T) {
 	}))
 	defer server.Close()
 	scheduler := &Scheduler{Config: config.Config{Runtime: config.Runtime{Interval: 1}}, Client: &Client{Base: server.URL}}
-	run := &task{Job: worker.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "fixture"}}}, Lease: Lease{Run: "fixture@run", Kind: "explore", Intent: "step"}, LeaseTimeout: 2 * time.Second}
+	run := &task{Job: protocol.Job{Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "fixture"}}}, Lease: Lease{Run: "fixture@run", Kind: "explore", Intent: "step"}, LeaseTimeout: 2 * time.Second}
 	ctx, cancel := context.WithCancelCause(context.Background())
 	done := make(chan struct{})
 	go func() { defer close(done); scheduler.heartbeat(ctx, run, cancel) }()

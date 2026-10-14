@@ -11,13 +11,13 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestGraphHandlerRoutesUpdatesWithRegisteredIdentity(t *testing.T) {
-	job := worker.Job{RunID: "run", Kind: "explore", GraphRPC: true, Graph: board.Graph{Project: board.Project{ID: "project", Generation: 2}}, Intent: &board.Intent{ID: "step"}}
+	job := protocol.Job{RunID: "run", Kind: "explore", GraphRPC: true, Graph: board.Graph{Project: board.Project{ID: "project", Generation: 2}}, Intent: &board.Intent{ID: "step"}}
 	cursor := &board.ExecuteUpdateCursor{ProjectID: "project", Generation: 2, StepID: "step", RunID: "run", Revision: 4}
-	request := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_updates", Updates: cursor}
+	request := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_updates", Updates: cursor}
 	reads := 0
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -28,7 +28,7 @@ func TestGraphHandlerRoutesUpdatesWithRegisteredIdentity(t *testing.T) {
 			if r.Method != "POST" || r.Header.Get("X-PwnMesh-Run") != "backend@run" || r.Header.Get("X-PwnMesh-Lease") != "explore" || r.Header.Get("X-PwnMesh-Intent") != "step" {
 				t.Error("update route lost registered lease")
 			}
-			var got worker.GraphRequest
+			var got protocol.GraphRequest
 			if json.NewDecoder(r.Body).Decode(&got) != nil || got.Op != request.Op || got.RequestID != request.RequestID || !reflect.DeepEqual(got.Updates, cursor) {
 				t.Errorf("cursor changed across dispatcher: %+v", got)
 			}

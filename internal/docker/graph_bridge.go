@@ -8,22 +8,22 @@ import (
 	"path"
 	"time"
 
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
-func (c *Client) SetGraphHandler(handler func(context.Context, worker.Job, worker.GraphRequest) (any, error)) {
+func (c *Client) SetGraphHandler(handler func(context.Context, protocol.Job, protocol.GraphRequest) (any, error)) {
 	c.graphMu.Lock()
 	defer c.graphMu.Unlock()
 	c.graphHandler = handler
 }
 
-func (c *Client) graphBridge(parent context.Context, name, runDir string, j worker.Job) func(worker.GraphRequest) error {
+func (c *Client) graphBridge(parent context.Context, name, runDir string, j protocol.Job) func(protocol.GraphRequest) error {
 	seen := map[string][32]byte{}
-	return func(request worker.GraphRequest) error {
+	return func(request protocol.GraphRequest) error {
 		if !j.GraphRPC {
 			return errors.New("graph bridge is disabled for this job")
 		}
-		if !worker.ValidGraphRequestID(request.RequestID) {
+		if !protocol.ValidGraphRequestID(request.RequestID) {
 			return errors.New("invalid graph request_id")
 		}
 		ctx, cancel := context.WithTimeout(parent, 20*time.Second)
@@ -31,11 +31,11 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j work
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		response := worker.GraphResponse{RequestID: request.RequestID}
+		response := protocol.GraphResponse{RequestID: request.RequestID}
 		raw, err := json.Marshal(request)
 		digest := sha256.Sum256(raw)
 		if err == nil {
-			err = worker.ValidateGraphRequest(j, request)
+			err = protocol.ValidateGraphRequest(j, request)
 		}
 		if previous, ok := seen[request.RequestID]; ok && previous != digest {
 			err = errors.New("graph request_id reused for different input")
@@ -56,7 +56,7 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j work
 				if err == nil {
 					response.Result, err = json.Marshal(result)
 					if err == nil && request.Op == "graph_action" {
-						response.Result, err = worker.CompactGraphActionResult(response.Result)
+						response.Result, err = protocol.CompactGraphActionResult(response.Result)
 					}
 				}
 			}
@@ -69,7 +69,7 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j work
 		if err != nil {
 			return err
 		}
-		if len(raw) > worker.MaxGraphRPCBytes {
+		if len(raw) > protocol.MaxGraphRPCBytes {
 			response.Result = nil
 			response.Error = "graph response exceeds 128 KiB; request a smaller page"
 			raw, _ = json.Marshal(response)

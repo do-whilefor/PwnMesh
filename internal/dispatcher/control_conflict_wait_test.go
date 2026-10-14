@@ -9,7 +9,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestControlConflictWaitDoesNotExtendOnObservationsOrPolling(t *testing.T) {
@@ -104,7 +104,7 @@ func TestControlConflictDeadlineUsesConfirmedFailureTime(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			s := New(config.Config{Runtime: config.Runtime{MaxWorkers: 1}}, nil)
 			failedAt := time.Now().Add(-20 * time.Second)
-			task := &task{Job: worker.Job{RunID: "run", Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, staleInputAt: failedAt}
+			task := &task{Job: protocol.Job{RunID: "run", Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, staleInputAt: failedAt}
 			outcome := "failed"
 			switch mode {
 			case "unconfirmed":
@@ -126,7 +126,7 @@ func TestControlConflictDeadlineUsesConfirmedFailureTime(t *testing.T) {
 	latest := time.Now()
 	for _, failure := range []time.Time{latest, latest.Add(-5 * time.Second)} {
 		// Lease release may delay an older failed task's arrival in done.
-		s.done <- finished{Task: &task{Job: worker.Job{Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, staleInputAt: failure}, Outcome: "failed"}
+		s.done <- finished{Task: &task{Job: protocol.Job{Kind: "curate", Graph: board.Graph{Project: board.Project{ID: "p"}}}, staleInputAt: failure}, Outcome: "failed"}
 		s.reap()
 	}
 	if !s.controlConflicts["p"].Equal(latest.Add(reasonMaxWait)) {
@@ -183,7 +183,7 @@ func TestConfirmedCuratorConflictDefersOnlyWhileProducersRun(t *testing.T) {
 	if ok, err := s.dispatch(ctx, graph.Project.ID); !ok || err != nil {
 		t.Fatalf("first curator did not start: %v %v", ok, err)
 	}
-	var curator worker.Job
+	var curator protocol.Job
 	select {
 	case curator = <-r.curateStarted:
 	case <-ctx.Done():
@@ -191,7 +191,7 @@ func TestConfirmedCuratorConflictDefersOnlyWhileProducersRun(t *testing.T) {
 	}
 	payload, _ := json.Marshal(map[string]any{"description": "A later observation", "scope": "left", "observed_at": time.Now().UTC().Format(time.RFC3339),
 		"evidence": []board.EvidenceRef{{RunID: left.RunID, Path: "/workspace/later.txt", Excerpt: "later"}}})
-	if _, err := r.graph(ctx, left, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: "later", Payload: payload}}); err != nil {
+	if _, err := r.graph(ctx, left, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: "later", Payload: payload}}); err != nil {
 		t.Fatal(err)
 	}
 	select {

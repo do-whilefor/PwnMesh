@@ -93,7 +93,7 @@ func modelGraphRead(ctx context.Context, r GraphRequest, request func(context.Co
 	if r.Limit == 0 {
 		r.Limit = 20
 	}
-	r.evidenceLookup = true
+	ctx = withInternalGraphRead(ctx)
 	raw, err := request(ctx, r)
 	if err != nil {
 		return "", err

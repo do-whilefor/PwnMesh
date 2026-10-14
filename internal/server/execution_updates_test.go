@@ -8,15 +8,15 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
-func prepareUpdateFixture(t *testing.T, input string) (*stepInvalidationFixture, worker.Job) {
+func prepareUpdateFixture(t *testing.T, input string) (*stepInvalidationFixture, protocol.Job) {
 	t.Helper()
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
 	e := f.registration()
-	var job worker.Job
+	var job protocol.Job
 	if err := json.Unmarshal(e.Job, &job); err != nil {
 		t.Fatal(err)
 	}
@@ -37,8 +37,8 @@ func prepareUpdateFixture(t *testing.T, input string) (*stepInvalidationFixture,
 	return f, job
 }
 
-func updateRead(cursor *board.ExecuteUpdateCursor) worker.GraphRequest {
-	return worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_updates", Updates: cursor}
+func updateRead(cursor *board.ExecuteUpdateCursor) protocol.GraphRequest {
+	return protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_updates", Updates: cursor}
 }
 
 func TestExecutionUpdatesUseOriginalInputAndBoundCurrentRevision(t *testing.T) {
@@ -72,7 +72,7 @@ func TestExecutionUpdatesUseOriginalInputAndBoundCurrentRevision(t *testing.T) {
 				var frozen struct {
 					Items []board.FactRecord `json:"items"`
 				}
-				f.request("POST", f.base()+"/executions/"+f.run+"/input/read", worker.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "facts", IDs: []string{f.source}}, true, http.StatusOK, &frozen)
+				f.request("POST", f.base()+"/executions/"+f.run+"/input/read", protocol.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "facts", IDs: []string{f.source}}, true, http.StatusOK, &frozen)
 				if len(frozen.Items) != 1 || frozen.Items[0].Status != "valid" {
 					t.Fatalf("updates rewrote the immutable snapshot: %+v", frozen)
 				}

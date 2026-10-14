@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func resultDeliveryFixture(t *testing.T) (*Scheduler, *staleCuratorRunner, *board.Store, *task) {
@@ -24,11 +24,11 @@ func resultDeliveryFixture(t *testing.T) (*Scheduler, *staleCuratorRunner, *boar
 
 func TestResultPublicationRejectsInvalidReceiptWithoutRecovery(t *testing.T) {
 	s, runner, store, run := resultDeliveryFixture(t)
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		result, err := runner.observe(ctx, job)
 		// The real Server rejects a repair receipt on an ordinary Step at the
 		// result_pending boundary, before its business apply is attempted.
-		result.RepairCheck = &worker.RepairCheck{}
+		result.RepairCheck = &protocol.RepairCheck{}
 		return result, err
 	}
 	outcome, err := s.runTask(context.Background(), run)
@@ -36,7 +36,7 @@ func TestResultPublicationRejectsInvalidReceiptWithoutRecovery(t *testing.T) {
 		t.Fatalf("invalid result did not fail at publication: outcome=%s err=%v", outcome, err)
 	}
 	execution := curationExecution(t, store, run)
-	var result worker.Result
+	var result protocol.Result
 	if err := json.Unmarshal(execution.Result, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +60,8 @@ func TestResultDeliveryTemporaryFailuresRecoverTheSameRun(t *testing.T) {
 		for _, status := range []int{http.StatusRequestTimeout, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 			t.Run(phase+"/"+http.StatusText(status), func(t *testing.T) {
 				s, runner, store, run := resultDeliveryFixture(t)
-				var saved worker.Result
-				runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+				var saved protocol.Result
+				runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 					if digest(job) != digest(run.Job) {
 						t.Error("delivery recovery changed the registered input")
 					}

@@ -11,7 +11,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 // The first planner observes a real concurrent business update, then reports
@@ -21,53 +21,53 @@ type conflictDecisionRunner struct {
 	batchProtocolRunner
 	client     *Client
 	conflictOp string
-	seen       []worker.Job
+	seen       []protocol.Job
 }
 
-func (r *conflictDecisionRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *conflictDecisionRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.seen = append(r.seen, job)
 	if job.Kind != "reason" || job.InputSnapshot == nil || job.Decision == nil {
-		return worker.Result{}, errors.New("conflict fixture requires a registered decision snapshot")
+		return protocol.Result{}, errors.New("conflict fixture requires a registered decision snapshot")
 	}
 	first := len(r.seen) == 1
 	if first {
 		if err := r.client.Do(ctx, "POST", projectPath(job.Graph.Project.ID)+"/hints", map[string]string{
 			"content": "A new observation requires reviewing the plan", "creator": "concurrent-fixture",
 		}, nil, nil); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 	}
 	for _, op := range []string{"read_snapshot", "read_graph"} {
-		result, err := r.graph(ctx, job, worker.GraphRequest{Op: op, Section: "hints", ExpectedVersion: job.Decision.StateVersion})
+		result, err := r.graph(ctx, job, protocol.GraphRequest{Op: op, Section: "hints", ExpectedVersion: job.Decision.StateVersion})
 		if err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		raw, err := json.Marshal(result)
 		if err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		var page struct {
 			StateVersion string       `json:"state_version"`
 			Items        []board.Hint `json:"items"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		wantHints := 1
 		if first {
 			wantHints = 0
 		}
 		if page.StateVersion != job.Decision.StateVersion || len(page.Items) != wantHints {
-			return worker.Result{}, fmt.Errorf("%s substituted another input: version=%s hints=%d, want version=%s hints=%d", op, page.StateVersion, len(page.Items), job.Decision.StateVersion, wantHints)
+			return protocol.Result{}, fmt.Errorf("%s substituted another input: version=%s hints=%d, want version=%s hints=%d", op, page.StateVersion, len(page.Items), job.Decision.StateVersion, wantHints)
 		}
 	}
 	if first {
-		_, err := r.graph(ctx, job, worker.GraphRequest{Op: r.conflictOp, Batch: fixtureDecisionBatch(job, nil)})
-		var protocol *ProtocolError
-		if !errors.As(err, &protocol) || protocol.Status != http.StatusConflict || !strings.Contains(err.Error(), "state_changed:") {
-			return worker.Result{}, fmt.Errorf("outdated decision did not receive a definitive conflict: %v", err)
+		_, err := r.graph(ctx, job, protocol.GraphRequest{Op: r.conflictOp, Batch: fixtureDecisionBatch(job, nil)})
+		var protocolErr *ProtocolError
+		if !errors.As(err, &protocolErr) || protocolErr.Status != http.StatusConflict || !strings.Contains(err.Error(), "state_changed:") {
+			return protocol.Result{}, fmt.Errorf("outdated decision did not receive a definitive conflict: %v", err)
 		}
-		return worker.Result{Status: "failed", FailureKind: "state_changed", Error: err.Error()}, nil
+		return protocol.Result{Status: "failed", FailureKind: "state_changed", Error: err.Error()}, nil
 	}
 	return r.batchProtocolRunner.Run(ctx, backend, job)
 }
@@ -83,7 +83,7 @@ func TestDecisionConflictSchedulesChangedInputWithoutRetryingOldSnapshot(t *test
 			scheduler := New(fixture.Config, runner)
 			retryTicks(t, scheduler, 1)
 			original := testExecutions(t, store)[0]
-			var failure worker.Result
+			var failure protocol.Result
 			if err := json.Unmarshal(original.Result, &failure); err != nil {
 				t.Fatal(err)
 			}
@@ -120,8 +120,8 @@ func TestDecisionConflictWithoutChangedInputDoesNotRenewRetryAllowance(t *testin
 		t.Fatal("unchanged input repeatedly reauthorized the conflicted decision")
 	}
 	err := scheduler.Client.Do(context.Background(), "POST", projectPath(graph.Project.ID)+"/executions/"+original.ID+"/retry", map[string]bool{"automatic": true}, nil, nil)
-	var protocol *ProtocolError
-	if !errors.As(err, &protocol) || protocol.Status != http.StatusConflict {
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) || protocolErr.Status != http.StatusConflict {
 		t.Fatalf("unchanged conflict received an automatic retry grant: %v", err)
 	}
 }

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestExecutionAssetsPublishFinishAndFrozenHTTPReads(t *testing.T) {
@@ -39,7 +39,7 @@ func TestExecutionAssetsPublishFinishAndFrozenHTTPReads(t *testing.T) {
 	reader := *publisher
 	reader.run, reader.lease = "asset-reader", "planner@asset-reader"
 	_, job := prepareSnapshot(t, &reader, snapshotTemplate(&reader, "explore"))
-	read := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "assets", Limit: 1, ExpectedVersion: job.InputSnapshot.StateVersion}
+	read := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "assets", Limit: 1, ExpectedVersion: job.InputSnapshot.StateVersion}
 	path := reader.base() + "/executions/" + reader.run + "/input/read"
 	var first decisionReadPage
 	reader.request("POST", path, read, true, http.StatusOK, &first)

@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func (s *Scheduler) configureInputReader() {
 	setter, ok := s.Runner.(interface {
-		SetInputReader(func(context.Context, worker.Job, board.InputFile) (io.ReadCloser, error))
+		SetInputReader(func(context.Context, protocol.Job, board.InputFile) (io.ReadCloser, error))
 	})
 	if !ok {
 		return
@@ -23,7 +23,7 @@ func (s *Scheduler) configureInputReader() {
 	setter.SetInputReader(s.Client.OpenInput)
 }
 
-func (c *Client) OpenInput(ctx context.Context, j worker.Job, f board.InputFile) (io.ReadCloser, error) {
+func (c *Client) OpenInput(ctx context.Context, j protocol.Job, f board.InputFile) (io.ReadCloser, error) {
 	if !f.Valid() {
 		return nil, fmt.Errorf("invalid input file metadata")
 	}

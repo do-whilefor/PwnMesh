@@ -9,7 +9,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestReadinessRecoveryBlocksModelWorkButSettlesStoredResults(t *testing.T) {
@@ -41,7 +41,7 @@ func TestReadinessRecoveryBlocksModelWorkButSettlesStoredResults(t *testing.T) {
 						}
 					} else {
 						s, runner, store, run = resultDeliveryFixture(t)
-						if err := s.status(context.Background(), run, "running", worker.Result{}); err != nil {
+						if err := s.status(context.Background(), run, "running", protocol.Result{}); err != nil {
 							t.Fatal(err)
 						}
 						if boundary == "result_pending" {

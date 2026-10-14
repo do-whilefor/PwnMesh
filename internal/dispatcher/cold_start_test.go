@@ -11,21 +11,21 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 // The scripted planner supplies the intended directions, not model quality.
 // Execute waits at a barrier so the real scheduler's limits can be checked.
 type coldStartRunner struct {
 	batchProtocolRunner
-	executeStarted chan worker.Job
+	executeStarted chan protocol.Job
 	release        chan struct{}
 	mu             sync.Mutex
 	kinds          []string
 }
 
-func (r *coldStartRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *coldStartRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.mu.Lock()
 	r.kinds = append(r.kinds, job.Kind)
 	r.mu.Unlock()
@@ -34,7 +34,7 @@ func (r *coldStartRunner) Run(ctx context.Context, backend config.Worker, job wo
 		select {
 		case <-r.release:
 		case <-ctx.Done():
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		}
 	}
 	return r.batchProtocolRunner.Run(ctx, backend, job)
@@ -52,7 +52,7 @@ func TestNewProjectsStartWithDecideAndRespectExecuteLimits(t *testing.T) {
 			defer store.Close()
 			httpServer := httptest.NewServer(server.New(store))
 			defer httpServer.Close()
-			runner := &coldStartRunner{batchProtocolRunner: batchProtocolRunner{directions: directions}, executeStarted: make(chan worker.Job, 8), release: make(chan struct{})}
+			runner := &coldStartRunner{batchProtocolRunner: batchProtocolRunner{directions: directions}, executeStarted: make(chan protocol.Job, 8), release: make(chan struct{})}
 			cfg := config.Config{
 				Server:    httpServer.URL,
 				Runtime:   config.Runtime{Interval: 1, MaxWorkers: 3, MaxProjects: 1, MaxProjectWorkers: 3, HealthTimeout: 5, HealthMode: "disabled"},

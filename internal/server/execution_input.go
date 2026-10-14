@@ -9,7 +9,7 @@ import (
 	"strconv"
 
 	b "pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func (s *Server) schedulingInput(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
@@ -64,17 +64,17 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	e.ProjectID = r.PathValue("pid")
 	// Inspect presence before decoding into Go scalar fields: an explicit null
 	// must not become false/0 and silently select a compatibility protocol.
-	var protocol struct {
+	var protocolFields struct {
 		GraphRPC              json.RawMessage `json:"graph_rpc"`
 		ResultContractVersion json.RawMessage `json:"result_contract_version"`
 	}
-	if err := json.Unmarshal(e.Job, &protocol); err != nil {
+	if err := json.Unmarshal(e.Job, &protocolFields); err != nil {
 		return 0, nil, b.Err(422, "invalid execution template")
 	}
-	if err := validateExecutionProtocol(protocol.GraphRPC, protocol.ResultContractVersion); err != nil {
+	if err := validateExecutionProtocol(protocolFields.GraphRPC, protocolFields.ResultContractVersion); err != nil {
 		return 0, nil, err
 	}
-	var j worker.Job
+	var j protocol.Job
 	if json.Unmarshal(e.Job, &j) != nil || j.Repair != nil || j.State != nil || j.InputSnapshot != nil || j.Decision != nil || len(j.InputView) != 0 || len(j.DependencyResults) != 0 || j.PreparationKey != "" || j.Graph.Project.ID != e.ProjectID || len(j.Graph.Facts)+len(j.Graph.Intents)+len(j.Graph.Hints) != 0 {
 		return 0, nil, b.Err(422, "prepare requires a small job template without graph data")
 	}
@@ -95,7 +95,7 @@ func (s *Server) prepareExecution(t *b.Tx, q *request, r *http.Request) (int, an
 	key := hex.EncodeToString(sum[:])
 	prior, err := t.Execution(e.ProjectID, e.ID)
 	if err == nil {
-		var old worker.Job
+		var old protocol.Job
 		if json.Unmarshal(prior.Job, &old) != nil || old.PreparationKey != key {
 			return 0, nil, b.Err(409, "Execution input is immutable")
 		}
@@ -248,11 +248,11 @@ func preparedDecisionTriggers(state b.State, previous *b.ExecutionSummary, trigg
 }
 
 func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	var read worker.GraphRequest
+	var read protocol.GraphRequest
 	if err := decodeStrictFields(q, &read); err != nil || read.Op != "read_snapshot" {
 		return 0, nil, b.Err(422, "expected a read_snapshot request")
 	}
-	if err := worker.ValidateGraphRequest(worker.Job{}, read); err != nil {
+	if err := protocol.ValidateGraphRequest(protocol.Job{}, read); err != nil {
 		return 0, nil, b.Err(422, err.Error())
 	}
 	e, err := t.Execution(r.PathValue("pid"), r.PathValue("rid"))
@@ -269,7 +269,7 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 	if err = t.CheckExecutionRead(current, decisionFence(r)); err != nil {
 		return 0, nil, err
 	}
-	var j worker.Job
+	var j protocol.Job
 	if err = json.Unmarshal(e.Job, &j); err != nil {
 		return 0, nil, err
 	}
@@ -280,7 +280,7 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 	if err != nil {
 		return 0, nil, err
 	}
-	page, err := worker.GraphPage(state, read)
+	page, err := protocol.GraphPage(state, read)
 	if err != nil {
 		return 0, nil, b.Err(422, err.Error())
 	}
@@ -289,13 +289,13 @@ func (s *Server) snapshotRead(t *b.Tx, q *request, r *http.Request) (int, any, e
 
 // Bind live execution reads to the registered input and current project round
 // before either endpoint selects updates or retained process traces.
-func executionReadState(t *b.Tx, e b.Execution, r *http.Request, read worker.GraphRequest, roundError string) (worker.Job, b.State, error) {
-	var job worker.Job
+func executionReadState(t *b.Tx, e b.Execution, r *http.Request, read protocol.GraphRequest, roundError string) (protocol.Job, b.State, error) {
+	var job protocol.Job
 	var current b.State
 	if err := json.Unmarshal(e.Job, &job); err != nil {
 		return job, current, err
 	}
-	if err := worker.ValidateGraphRequest(job, read); err != nil {
+	if err := protocol.ValidateGraphRequest(job, read); err != nil {
 		return job, current, b.Err(422, err.Error())
 	}
 	current, err := t.State(e.ProjectID)

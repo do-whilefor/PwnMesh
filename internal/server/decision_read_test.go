@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 type decisionReadPage struct {
@@ -24,7 +24,7 @@ type decisionReadPage struct {
 func decisionRead(t *testing.T, f *executionProtocolFixture, section, version string) decisionReadPage {
 	t.Helper()
 	var page decisionReadPage
-	f.request("POST", f.base()+"/state/read", worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_graph", Section: section, ExpectedVersion: version}, true, http.StatusOK, &page)
+	f.request("POST", f.base()+"/state/read", protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_graph", Section: section, ExpectedVersion: version}, true, http.StatusOK, &page)
 	return page
 }
 
@@ -60,7 +60,7 @@ func TestDecisionReadsSurviveConcurrentFactsAndKeepWritesCurrent(t *testing.T) {
 		}
 	}
 	var frozen decisionReadPage
-	f.request("POST", f.base()+"/executions/"+f.run+"/input/read", worker.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "facts", ExpectedVersion: initial.StateVersion}, true, http.StatusOK, &frozen)
+	f.request("POST", f.base()+"/executions/"+f.run+"/input/read", protocol.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "facts", ExpectedVersion: initial.StateVersion}, true, http.StatusOK, &frozen)
 	if !reflect.DeepEqual(frozen, initial) {
 		t.Fatal("refresh changed the original immutable input")
 	}
@@ -126,7 +126,7 @@ func TestDecisionReadPagesAndFragmentsKeepTheirView(t *testing.T) {
 	replaceHint(content)
 	hint.Content = content
 	version := decisionRead(t, f, "overview", "").StateVersion
-	read := worker.GraphRequest{RequestID: strings.Repeat("c", 32), Op: "read_graph", Section: "hints", ExpectedVersion: version, Limit: 1}
+	read := protocol.GraphRequest{RequestID: strings.Repeat("c", 32), Op: "read_graph", Section: "hints", ExpectedVersion: version, Limit: 1}
 	var page decisionReadPage
 	f.request("POST", f.base()+"/state/read", read, true, http.StatusOK, &page)
 	var ref struct {
@@ -194,7 +194,7 @@ func TestDecisionReadViewDoesNotBypassFences(t *testing.T) {
 			}); err != nil || count != 0 {
 				t.Fatalf("%s retained stale views: %d %v", operation, count, err)
 			}
-			f.request("POST", f.base()+"/state/read", worker.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_graph", Section: "facts", ExpectedVersion: view.StateVersion}, true, http.StatusConflict, nil)
+			f.request("POST", f.base()+"/state/read", protocol.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_graph", Section: "facts", ExpectedVersion: view.StateVersion}, true, http.StatusConflict, nil)
 		})
 	}
 }

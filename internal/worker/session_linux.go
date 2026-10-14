@@ -209,7 +209,7 @@ type eventJournal struct {
 	lastCompaction uint64
 	uncommitted    int64
 	partialArchive string
-	metrics        DecisionMetrics
+	metrics        decisionMetrics
 }
 
 // Complete raw records are append-only. Only an incomplete, uncommitted final

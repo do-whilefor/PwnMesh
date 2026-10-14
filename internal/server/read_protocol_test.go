@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestGraphReadRoutesShareStrictRequestDecoding(t *testing.T) {
@@ -22,7 +22,7 @@ func TestGraphReadRoutesShareStrictRequestDecoding(t *testing.T) {
 		t.Run(route.op, func(t *testing.T) {
 			// Send the same typed request the dispatcher's graph bridge sends,
 			// including any zero-value fields emitted by GraphRequest.
-			read := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: route.op}
+			read := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: route.op}
 			f.request("POST", route.path, read, true, http.StatusOK, nil)
 			for _, invalid := range []struct {
 				name, field string
@@ -49,9 +49,9 @@ func TestExecutionRoutesRequireEveryLeaseIdentityField(t *testing.T) {
 		path string
 		body any
 	}{
-		{base + "/input/read", worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot"}},
+		{base + "/input/read", protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot"}},
 		{base + "/updates", updateRead(nil)},
-		{base + "/traces/read", worker.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_trace_runs"}},
+		{base + "/traces/read", protocol.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_trace_runs"}},
 		{base + "/status", map[string]string{"status": "running"}},
 		{base + "/resume", map[string]any{}},
 	} {

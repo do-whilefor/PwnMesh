@@ -15,6 +15,7 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
 	"pwnmesh/internal/worker"
 )
@@ -95,7 +96,7 @@ func TestCompletionAssessmentProductionBridgeCompletesOrKeepsMissingCoverage(t *
 			}
 			lease := Lease{Run: "fixture@completion", Kind: "reason"}
 			f.do("POST", base+"/reason/claim", map[string]string{"worker": lease.Run, "trigger": "finished_intents"}, nil, nil)
-			job := worker.Job{RunID: "completion", Kind: "reason", WorkerType: "go", Graph: board.Graph{Project: graph.Project}, GraphRPC: true, ResultContractVersion: 2, Workspace: f.workspace, Budget: config.Task{Timeout: 60, MaxIntents: 2}}
+			job := protocol.Job{RunID: "completion", Kind: "reason", WorkerType: "go", Graph: board.Graph{Project: graph.Project}, GraphRPC: true, ResultContractVersion: 2, Workspace: f.workspace, Budget: config.Task{Timeout: 60, MaxIntents: 2}}
 			raw, _ := json.Marshal(job)
 			execution := board.Execution{ProjectID: graph.Project.ID, ID: job.RunID, Namespace: "pwnmesh", Backend: "fixture", Kind: "reason", Lease: lease.Run, Job: raw}
 			f.do("POST", base+"/executions/prepare", execution, &execution, &lease)
@@ -118,7 +119,7 @@ func TestCompletionAssessmentProductionBridgeCompletesOrKeepsMissingCoverage(t *
 				}
 			}
 			forward := runner.handler
-			runner.handler = func(ctx context.Context, j worker.Job, request worker.GraphRequest) (any, error) {
+			runner.handler = func(ctx context.Context, j protocol.Job, request protocol.GraphRequest) (any, error) {
 				if request.Op == "decision_preview" || request.Op == "decision_commit" {
 					if calls < 2 || request.Batch == nil || request.Batch.Assessment == nil {
 						t.Fatal("actions reached server before a separate root assessment turn")

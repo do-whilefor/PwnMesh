@@ -8,49 +8,8 @@ import (
 	"pwnmesh/internal/agent"
 )
 
-// DecisionMetrics reports observed work, not a bill or proof that proposed
-// changes were applied. The execution receipt and graph events remain the
-// authority for committed business actions.
-type DecisionMetrics struct {
-	Version              int         `json:"version"`
-	ModelCalls           int         `json:"model_calls"`
-	SummaryCalls         int         `json:"summary_calls"`
-	CompletedCalls       int         `json:"completed_calls"`
-	FailedCalls          int         `json:"failed_calls"`
-	UsageCalls           int         `json:"usage_calls"`
-	Usage                agent.Usage `json:"usage"`
-	UsageStatus          string      `json:"usage_status"`
-	CostStatus           string      `json:"cost_status"`
-	InitialInputBytes    int         `json:"initial_input_bytes"`
-	TotalInputBytes      int64       `json:"total_input_bytes"`
-	InputBytesBasis      string      `json:"input_bytes_basis,omitempty"`
-	ModelDurationMS      int64       `json:"model_duration_ms"`
-	ElapsedWallMS        int64       `json:"elapsed_wall_ms"`
-	GraphReads           int         `json:"graph_reads"`
-	GraphReadFailures    int         `json:"graph_read_failures"`
-	GraphActions         int         `json:"graph_actions"`
-	GraphActionSuccesses int         `json:"graph_action_successes"`
-	GraphActionFailures  int         `json:"graph_action_failures"`
-	DraftCalls           int         `json:"draft_calls,omitempty"`
-	DraftFailures        int         `json:"draft_failures,omitempty"`
-	DraftActions         int         `json:"draft_actions,omitempty"`
-	PreviewCalls         int         `json:"preview_calls,omitempty"`
-	PreviewFailures      int         `json:"preview_failures,omitempty"`
-	CommitCalls          int         `json:"commit_calls,omitempty"`
-	CommitFailures       int         `json:"commit_failures,omitempty"`
-	CommitDurationMS     int64       `json:"commit_duration_ms,omitempty"`
-	ReceiptCalls         int         `json:"receipt_calls,omitempty"`
-	ReceiptFailures      int         `json:"receipt_failures,omitempty"`
-	StateChanged         int         `json:"state_changed,omitempty"`
-	Committed            bool        `json:"committed,omitempty"`
-	CommittedActions     int         `json:"committed_actions,omitempty"`
-	Outcome              string      `json:"outcome"`
-	Trigger              string      `json:"trigger,omitempty"`
-	Repeated             bool        `json:"repeated"`
-	ViewMode             string      `json:"view_mode,omitempty"`
-	BaselineViewBytes    int         `json:"baseline_view_bytes,omitempty"`
-	SelectedViewBytes    int         `json:"selected_view_bytes,omitempty"`
-}
+// decisionMetrics owns runtime accumulation; the embedded data is the wire report.
+type decisionMetrics struct{ DecisionMetrics }
 
 // decisionOperation is emitted by the runtime, never inferred from a successful
 // graph_action tool call: a version 2 action may only have staged a local draft.
@@ -69,11 +28,11 @@ func (operation decisionOperation) event() agent.Event {
 	return agent.Event{Type: "decision_operation", Text: string(raw)}
 }
 
-func newDecisionMetrics() DecisionMetrics {
-	return DecisionMetrics{Version: 1, UsageStatus: "unknown", CostStatus: "unknown", Outcome: "unknown"}
+func newDecisionMetrics() decisionMetrics {
+	return decisionMetrics{DecisionMetrics{Version: 1, UsageStatus: "unknown", CostStatus: "unknown", Outcome: "unknown"}}
 }
 
-func (m *DecisionMetrics) observe(event agent.Event) {
+func (m *decisionMetrics) observe(event agent.Event) {
 	// Historical shadow events still contribute to recovered call totals.
 	// Their private transcript and unavailable writes are not planning actions.
 	shadow := strings.HasPrefix(event.Type, "replan_")
@@ -157,7 +116,7 @@ func (m *DecisionMetrics) observe(event agent.Event) {
 	}
 }
 
-func (m *DecisionMetrics) observeDecisionOperation(operation decisionOperation) {
+func (m *decisionMetrics) observeDecisionOperation(operation decisionOperation) {
 	failure := 0
 	if operation.Failed {
 		failure = 1
@@ -194,7 +153,7 @@ func (m *DecisionMetrics) observeDecisionOperation(operation decisionOperation) 
 	}
 }
 
-func (m DecisionMetrics) finish(j Job, r Result, started, ended time.Time) DecisionMetrics {
+func (m decisionMetrics) finish(j Job, r Result, started, ended time.Time) DecisionMetrics {
 	m.ElapsedWallMS = max(0, ended.Sub(started).Milliseconds())
 	m.Trigger, m.Repeated = j.DecisionTrigger, j.DecisionRepeated
 	if j.Decision != nil {
@@ -215,22 +174,22 @@ func (m DecisionMetrics) finish(j Job, r Result, started, ended time.Time) Decis
 		} else if m.DraftActions > 0 {
 			m.Outcome = "draft_only_observed"
 		}
-		return m
+		return m.DecisionMetrics
 	}
 	if m.GraphActionSuccesses > 0 {
 		m.Outcome = "actions_observed"
-		return m
+		return m.DecisionMetrics
 	}
 	if r.Status != "success" || m.GraphActions > 0 {
-		return m // An interrupted/failed action may have reached the server.
+		return m.DecisionMetrics // An interrupted/failed action may have reached the server.
 	}
 	parsed, err := parseOutput(j, r.Conclude, r.Text)
 	if err != nil {
-		return m
+		return m.DecisionMetrics
 	}
 	switch parsed.Kind {
 	case "rejected":
 		m.Outcome = "rejected"
 	}
-	return m
+	return m.DecisionMetrics
 }

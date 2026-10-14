@@ -9,12 +9,12 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 // Scripted planners read the same bounded input that the model receives.
 // They must not depend on a second, hidden full graph inside new Jobs.
-func fixturePlanInput(job worker.Job) (steps, open int, facts []board.FactRecord) {
+func fixturePlanInput(job protocol.Job) (steps, open int, facts []board.FactRecord) {
 	if ref := job.InputSnapshot; ref != nil {
 		var view struct {
 			Facts []board.FactRecord `json:"fact_records"`
@@ -39,7 +39,7 @@ func fixturePlanInput(job worker.Job) (steps, open int, facts []board.FactRecord
 
 // Scripted model fixtures explicitly supply the same root judgment required
 // from the production model. This helper never changes the server's policy.
-func fixtureDecisionBatch(job worker.Job, actions []board.DecisionAction) *board.DecisionBatch {
+func fixtureDecisionBatch(job protocol.Job, actions []board.DecisionAction) *board.DecisionBatch {
 	batch := &board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Actions: append([]board.DecisionAction{}, actions...)}
 	if job.Decision.ClosureProtocol != 1 {
 		return batch
@@ -78,7 +78,7 @@ func authorizeFixtureSteps(t *testing.T, scheduler *Scheduler, project string, p
 	if err := scheduler.Client.Do(ctx, "POST", projectPath(project)+"/reason/claim", map[string]string{"worker": lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	run := &task{Job: worker.Job{RunID: id, Kind: "reason", WorkerType: "go", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: config.Task{MaxIntents: len(payloads)}}, Worker: config.Worker{Name: "fixture", Type: "go"}, Lease: lease}
+	run := &task{Job: protocol.Job{RunID: id, Kind: "reason", WorkerType: "go", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: config.Task{MaxIntents: len(payloads)}}, Worker: config.Worker{Name: "fixture", Type: "go"}, Lease: lease}
 	if err := scheduler.register(ctx, run); err != nil {
 		t.Fatal(err)
 	}

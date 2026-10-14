@@ -11,20 +11,20 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 type dependencyRunner struct {
 	orchestrationLoopRunner
-	producerPublished chan worker.Job
-	consumerStarted   chan worker.Job
+	producerPublished chan protocol.Job
+	consumerStarted   chan protocol.Job
 	consumerStopped   chan error
 	allowProducer     chan struct{}
 	allowConsumer     chan struct{}
 }
 
-func (r *dependencyRunner) Run(ctx context.Context, _ config.Worker, j worker.Job) (worker.Result, error) {
+func (r *dependencyRunner) Run(ctx context.Context, _ config.Worker, j protocol.Job) (protocol.Result, error) {
 	if j.Kind == "curate" {
 		return r.curate(ctx, j)
 	}
@@ -37,17 +37,17 @@ func (r *dependencyRunner) Run(ctx context.Context, _ config.Worker, j worker.Jo
 				{Op: "step", Ref: "consume", Payload: json.RawMessage(`{"action":"add","from":["origin"],"description":"Consume checked data","priority":100,"depends_on":["$produce"]}`)},
 			}
 		}
-		_, err := r.graph(ctx, j, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(j, actions)})
-		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+		_, err := r.graph(ctx, j, protocol.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(j, actions)})
+		return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 	}
 	if j.Kind != "explore" || j.Intent == nil {
-		return worker.Result{}, errors.New("unexpected dependency role")
+		return protocol.Result{}, errors.New("unexpected dependency role")
 	}
 	payload, _ := json.Marshal(map[string]any{"description": "Fixture data retained by this run", "scope": j.Intent.Description,
 		"observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []board.EvidenceRef{{RunID: j.RunID, Path: "/workspace/" + j.RunID + ".txt", Excerpt: "fixture"}}})
-	value, err := r.graph(ctx, j, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: j.RunID + ":fact", Payload: payload}})
+	value, err := r.graph(ctx, j, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: j.RunID + ":fact", Payload: payload}})
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	fact := value.(board.StateActionResult)
 	gate := r.allowProducer
@@ -63,10 +63,10 @@ func (r *dependencyRunner) Run(ctx context.Context, _ config.Worker, j worker.Jo
 		if j.Intent.Description == "Consume checked data" {
 			r.consumerStopped <- context.Cause(ctx)
 		}
-		return worker.Result{}, ctx.Err()
+		return protocol.Result{}, ctx.Err()
 	}
 	final, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]string{"fact_id": fact.ID}})
-	return worker.Result{Status: "success", Text: string(final)}, nil
+	return protocol.Result{Status: "success", Text: string(final)}, nil
 }
 
 func TestSchedulerWaitsForAcceptedDependencyAndCancelsInvalidatedConsumer(t *testing.T) {
@@ -79,7 +79,7 @@ func TestSchedulerWaitsForAcceptedDependencyAndCancelsInvalidatedConsumer(t *tes
 			defer store.Close()
 			api := httptest.NewServer(server.New(store))
 			defer api.Close()
-			r := &dependencyRunner{producerPublished: make(chan worker.Job, 2), consumerStarted: make(chan worker.Job, 2), consumerStopped: make(chan error, 2), allowProducer: make(chan struct{}), allowConsumer: make(chan struct{})}
+			r := &dependencyRunner{producerPublished: make(chan protocol.Job, 2), consumerStarted: make(chan protocol.Job, 2), consumerStopped: make(chan error, 2), allowProducer: make(chan struct{}), allowConsumer: make(chan struct{})}
 			cfg := config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, MaxWorkers: 4, MaxProjects: 1, MaxProjectWorkers: 4, HealthMode: "disabled"},
 				Tasks:   config.Tasks{Reason: config.Task{MaxIntents: 3}, Explore: config.Task{ConcludeTimeout: 60}},
 				Workers: []config.Worker{{Name: "scripted", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 4}}}
@@ -154,7 +154,7 @@ func TestSchedulerWaitsForAcceptedDependencyAndCancelsInvalidatedConsumer(t *tes
 				}
 				if !current.Pending() {
 					if invalidate {
-						var result worker.Result
+						var result protocol.Result
 						if err := json.Unmarshal(current.Result, &result); err != nil {
 							t.Fatal(err)
 						}

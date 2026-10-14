@@ -23,8 +23,8 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/dispatcher"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 // Opt in with an existing worker image. This test never builds or deletes an
@@ -139,7 +139,7 @@ func TestDockerUploadedInputsRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := worker.Job{Graph: graph, InputFiles: []board.InputFile{input}}
+	job := protocol.Job{Graph: graph, InputFiles: []board.InputFile{input}}
 	readStaged := func() []byte {
 		t.Helper()
 		var output bytes.Buffer

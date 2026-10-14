@@ -11,7 +11,7 @@ import (
 	"pwnmesh/internal/artifactcheck"
 	b "pwnmesh/internal/board"
 	"pwnmesh/internal/contract"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 	"strings"
 )
 
@@ -333,9 +333,9 @@ func validateRepairResult(jobRaw, resultRaw json.RawMessage) error {
 		ResultContractVersion int                 `json:"result_contract_version"`
 	}
 	var result struct {
-		RepairCheck *worker.RepairCheck `json:"repair_check"`
-		Text        string              `json:"text"`
-		Conclude    bool                `json:"conclude"`
+		RepairCheck *protocol.RepairCheck `json:"repair_check"`
+		Text        string                `json:"text"`
+		Conclude    bool                  `json:"conclude"`
 	}
 	if json.Unmarshal(jobRaw, &job) != nil || json.Unmarshal(resultRaw, &result) != nil {
 		return b.Err(422, "invalid repair result")

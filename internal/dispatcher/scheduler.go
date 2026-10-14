@@ -19,11 +19,11 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelconfig"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 type Runner interface {
-	Run(context.Context, config.Worker, worker.Job) (worker.Result, error)
+	Run(context.Context, config.Worker, protocol.Job) (protocol.Result, error)
 	Cleanup(context.Context, string, string) error
 	Projects(context.Context) ([]string, error)
 }
@@ -38,7 +38,7 @@ const reasonQuietPeriod = 15 * time.Second
 const reasonMaxWait = time.Minute
 
 type task struct {
-	Job          worker.Job
+	Job          protocol.Job
 	Worker       config.Worker
 	Lease        Lease
 	Cancel       context.CancelFunc
@@ -839,7 +839,7 @@ func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, inte
 	// Worker owns its execution budget and the separate conclusion deadline.
 	// A dispatcher deadline measured from container startup could abort before
 	// a long current turn reaches the boundary where soft conclusion begins.
-	t := &task{Job: worker.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, EnvironmentID: s.environmentID(*w)}, Worker: *w, Lease: lease}
+	t := &task{Job: protocol.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, EnvironmentID: s.environmentID(*w)}, Worker: *w, Lease: lease}
 	if kind == "reason" {
 		t.Job.DecisionTrigger = trigger
 		t.urgentInput = s.reasonWaits[g.Project.ID].Urgent
@@ -873,7 +873,7 @@ func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runEr
 			// The same terminal boundary covers cancellation during model calls,
 			// health checks and infrastructure retry backoff. Recovery must not
 			// restart work after its accepted upstream result became invalid.
-			s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: "dependency_invalidated", Error: cause.Error()})
+			s.terminal(t, "cancelled", protocol.Result{Status: "failed", FailureKind: "dependency_invalidated", Error: cause.Error()})
 			outcome, runErr = "cancelled", cause
 		}
 		// Invalidation can interrupt startup, a model call, or recovery backoff.
@@ -886,7 +886,7 @@ func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runEr
 			case committed:
 				outcome, runErr = "success", nil
 			default:
-				s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "state_changed", Error: cause.Error()})
+				s.terminal(t, "failed", protocol.Result{Status: "failed", FailureKind: "state_changed", Error: cause.Error()})
 				outcome, runErr = "failed", cause
 			}
 		}

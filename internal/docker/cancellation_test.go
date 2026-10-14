@@ -13,7 +13,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestUnconfirmedStopBlocksNextRunUntilDockerConfirms(t *testing.T) {
@@ -81,7 +81,7 @@ func TestUnconfirmedStopBlocksNextRunUntilDockerConfirms(t *testing.T) {
 			}))
 			defer engine.Close()
 			c := boundaryClient(engine.URL)
-			j := worker.Job{RunID: "run-1", Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}
+			j := protocol.Job{RunID: "run-1", Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}
 			backend := config.Worker{Env: map[string]string{"ANTHROPIC_AUTH_TOKEN": "fixture-model-auth", "ANTHROPIC_MODEL": "fixture-model"}}
 			if _, err := c.Run(ctx, backend, j); err == nil || !strings.Contains(err.Error(), "unconfirmed") {
 				t.Fatalf("unconfirmed stop was accepted: %v", err)

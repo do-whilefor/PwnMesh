@@ -5,12 +5,12 @@ import (
 	"strings"
 	"testing"
 
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestResultSinkKeepsOnlyFramedRPCAndFinalResult(t *testing.T) {
-	request := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_graph"}
-	rpc, err := json.Marshal(worker.GraphRequestEvent{Type: "graph_request", Request: request})
+	request := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_graph"}
+	rpc, err := json.Marshal(protocol.GraphRequestEvent{Type: "graph_request", Request: request})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,7 +19,7 @@ func TestResultSinkKeepsOnlyFramedRPCAndFinalResult(t *testing.T) {
 		string(rpc) + "\n" + `{"type":"result","status":"success","text":"final"}` + "\n"
 	for _, size := range []int{1, 7, len(stream)} {
 		calls := 0
-		sink := &resultSink{graph: func(got worker.GraphRequest) error {
+		sink := &resultSink{graph: func(got protocol.GraphRequest) error {
 			calls++
 			if got.RequestID != request.RequestID || got.Op != request.Op {
 				t.Fatalf("graph request changed: %+v", got)
@@ -43,10 +43,10 @@ func TestResultSinkKeepsOnlyFramedRPCAndFinalResult(t *testing.T) {
 
 func TestResultSinkRejectsOversizedRequestAndEvent(t *testing.T) {
 	for _, input := range []string{
-		`{"type":"graph_request","padding":"` + strings.Repeat("x", worker.MaxGraphRPCBytes) + `"}` + "\n",
+		`{"type":"graph_request","padding":"` + strings.Repeat("x", protocol.MaxGraphRPCBytes) + `"}` + "\n",
 		strings.Repeat("x", 32<<20) + "x",
 	} {
-		sink := &resultSink{graph: func(worker.GraphRequest) error {
+		sink := &resultSink{graph: func(protocol.GraphRequest) error {
 			t.Fatal("oversized graph request reached the bridge")
 			return nil
 		}}

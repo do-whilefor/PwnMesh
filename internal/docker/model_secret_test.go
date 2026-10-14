@@ -17,8 +17,8 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelrpc"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/provider"
-	"pwnmesh/internal/worker"
 )
 
 func TestModelCredentialJSONChecksDecodedStringsAndDuplicateKeys(t *testing.T) {
@@ -86,7 +86,7 @@ func TestModelBridgeRejectsEscapedCredentialEcho(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(agent.Message{Role: "assistant", Content: []agent.Block{block}, StopReason: "end_turn"})
 			}))
 			defer upstream.Close()
-			bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: secret, BaseURL: upstream.URL, Model: "fixture", MaxTokens: 32, Timeout: time.Second}, worker.Job{RunID: "run"}, nil, nil)
+			bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: secret, BaseURL: upstream.URL, Model: "fixture", MaxTokens: 32, Timeout: time.Second}, protocol.Job{RunID: "run"}, nil, nil)
 			defer bridge.close()
 			response := bridge.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("a", 32), SessionID: "run", Messages: []agent.Message{agent.Text("user", "fixture")}})
 			if response.Error == nil || len(response.Message.Content) != 0 || len(response.Events) != 0 {
@@ -119,7 +119,7 @@ func TestModelRunRejectsCredentialAliasesInImageAndContainer(t *testing.T) {
 				}
 			}))
 			defer engine.Close()
-			job := worker.Job{RunID: "run", Graph: board.Graph{Project: board.Project{ID: "p"}}}
+			job := protocol.Job{RunID: "run", Graph: board.Graph{Project: board.Project{ID: "p"}}}
 			_, err := boundaryClient(engine.URL).Run(context.Background(), config.Worker{Env: map[string]string{"ANTHROPIC_AUTH_TOKEN": secret, "ANTHROPIC_MODEL": "fixture"}}, job)
 			if err == nil || !strings.Contains(err.Error(), "model provider environment") || strings.Contains(err.Error(), secret) {
 				t.Fatalf("credential alias was accepted or exposed: %v", err)
@@ -164,7 +164,7 @@ func TestModelRunRejectsEscapedCredentialBeforePublishingSensitiveFiles(t *testi
 				}
 			}))
 			defer engine.Close()
-			job := worker.Job{RunID: "run", Graph: board.Graph{Project: board.Project{ID: "p"}}}
+			job := protocol.Job{RunID: "run", Graph: board.Graph{Project: board.Project{ID: "p"}}}
 			backend := config.Worker{Env: map[string]string{"ANTHROPIC_AUTH_TOKEN": secret, "ANTHROPIC_MODEL": "fixture"}}
 			wantError := "model credential must not be included in a worker job"
 			if source == "job" {
@@ -190,7 +190,7 @@ func TestModelBridgeCloseRacingAdmissionJoinsAllCalls(t *testing.T) {
 		return nil, r.Context().Err()
 	})}
 	for i := 0; i < 256; i++ {
-		bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: "fixture-token", Model: "fixture", MaxTokens: 32, Timeout: time.Second, Client: client}, worker.Job{RunID: "run"}, func(context.Context, modelrpc.Response) error { return nil }, func(err error) { t.Error(err) })
+		bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: "fixture-token", Model: "fixture", MaxTokens: 32, Timeout: time.Second, Client: client}, protocol.Job{RunID: "run"}, func(context.Context, modelrpc.Response) error { return nil }, func(err error) { t.Error(err) })
 		start := make(chan struct{})
 		admitted := make(chan error, 1)
 		closed := make(chan struct{})

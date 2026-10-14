@@ -5,17 +5,17 @@ import (
 	"strings"
 
 	b "pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 // Apply continuation boundaries before sending the current FGS over HTTP.
 // This keeps one oversized Fact from preventing all live graph reads.
 func (s *Server) graphRead(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	var read worker.GraphRequest
+	var read protocol.GraphRequest
 	if err := decodeStrictFields(q, &read); err != nil || read.Op != "read_graph" {
 		return 0, nil, b.Err(422, "expected a read_graph request")
 	}
-	if err := worker.ValidateGraphRequest(worker.Job{}, read); err != nil {
+	if err := protocol.ValidateGraphRequest(protocol.Job{}, read); err != nil {
 		return 0, nil, b.Err(422, err.Error())
 	}
 	state, err := t.State(r.PathValue("pid"))
@@ -33,7 +33,7 @@ func (s *Server) graphRead(t *b.Tx, q *request, r *http.Request) (int, any, erro
 	if err != nil {
 		return 0, nil, err
 	}
-	page, err := worker.GraphPage(state, read)
+	page, err := protocol.GraphPage(state, read)
 	if err != nil {
 		status := http.StatusUnprocessableEntity
 		if strings.HasPrefix(err.Error(), "state_changed:") {

@@ -14,7 +14,7 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 var errTestOwnerChanged = errors.New("runner installation changed")
@@ -42,9 +42,9 @@ func (r *ownershipRunner) Cleanup(context.Context, string, string) error {
 	return nil
 }
 
-func (r *ownershipRunner) Run(context.Context, config.Worker, worker.Job) (worker.Result, error) {
+func (r *ownershipRunner) Run(context.Context, config.Worker, protocol.Job) (protocol.Result, error) {
 	r.runs++
-	return worker.Result{}, nil
+	return protocol.Result{}, nil
 }
 
 func (r *ownershipRunner) assertUntouched(t *testing.T) {

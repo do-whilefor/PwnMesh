@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func recoverPendingResult(t *testing.T, s *Scheduler, project board.Project) {
@@ -39,7 +39,7 @@ func TestPendingResultDeliveryRetriesWithoutRestartingWorker(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+			runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 				return runner.observe(ctx, job)
 			}
 			var applies atomic.Int32
@@ -105,7 +105,7 @@ func pendingResultFixture(t *testing.T) (*Scheduler, *staleCuratorRunner, *board
 	t.Helper()
 	s, runner, store, run := resultDeliveryFixture(t)
 	ctx := context.Background()
-	if err := s.status(ctx, run, "running", worker.Result{}); err != nil {
+	if err := s.status(ctx, run, "running", protocol.Result{}); err != nil {
 		t.Fatal(err)
 	}
 	result, err := runner.observe(ctx, run.Job)
@@ -134,7 +134,7 @@ func TestPendingResultSettlementDoesNotRequireOriginalBackend(t *testing.T) {
 				s.Config.Workers[0].TaskTypes = []string{"reason", "curate"}
 			case "backend_at_capacity":
 				s.Config.Workers[0].MaxRunning = 1
-				s.running["other-project"] = &task{Job: worker.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "other-project"}}}, Worker: s.Config.Workers[0]}
+				s.running["other-project"] = &task{Job: protocol.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "other-project"}}}, Worker: s.Config.Workers[0]}
 			}
 			recoverPendingResult(t, s, run.Job.Graph.Project)
 			settled := curationExecution(t, store, run)
@@ -149,7 +149,7 @@ func TestCommittedCurationNeedsNoSeparateResultDelivery(t *testing.T) {
 	s, runner, store, graph := pendingCurationFixture(t)
 	ctx := context.Background()
 	run := prepareCurationTestTask(t, s, graph, "curate", "committed-curation-delivery", nil)
-	if err := s.status(ctx, run, "running", worker.Result{}); err != nil {
+	if err := s.status(ctx, run, "running", protocol.Result{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := runner.curate(ctx, run.Job); err != nil {
@@ -199,7 +199,7 @@ func TestLegacyCommittedCurationSettlesBeforeBackendAndRecoveryChecks(t *testing
 				s.Config.Container.Image = "replacement-image"
 			case "backend_at_capacity":
 				s.Config.Workers[0].MaxRunning = 1
-				s.running["other-project"] = &task{Job: worker.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "other"}}}, Worker: s.Config.Workers[0]}
+				s.running["other-project"] = &task{Job: protocol.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "other"}}}, Worker: s.Config.Workers[0]}
 			}
 			var resumes, applies atomic.Int32
 			s.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(request *http.Request) (*http.Response, error) {
@@ -263,7 +263,7 @@ func TestPendingResultSettlementHonorsHumanLifecycle(t *testing.T) {
 				return
 			}
 			e := curationExecution(t, store, run)
-			var retained worker.Result
+			var retained protocol.Result
 			if err := json.Unmarshal(e.Result, &retained); err != nil {
 				t.Fatal(err)
 			}

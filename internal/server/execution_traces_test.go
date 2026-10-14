@@ -8,13 +8,13 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestTraceReadHTTPRequiresCurrentExecutionFence(t *testing.T) {
 	f, job := prepareUpdateFixture(t, "snapshot")
 	path := f.base() + "/executions/" + f.run + "/traces/read"
-	read := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_trace_runs", Limit: 1}
+	read := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_trace_runs", Limit: 1}
 	var page struct {
 		Items      []board.TraceRun `json:"items"`
 		NextOffset *int             `json:"next_offset"`
@@ -62,7 +62,7 @@ func TestExecutionReadsRejectForeignRegisteredJob(t *testing.T) {
 				}); err != nil {
 					t.Fatal(err)
 				}
-				read := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: endpoint.op}
+				read := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: endpoint.op}
 				body := f.request("POST", f.base()+"/executions/"+f.run+"/"+endpoint.path, read, true, http.StatusConflict, nil)
 				if !strings.Contains(body, endpoint.detail) {
 					t.Fatalf("identity rejection changed: %s", body)

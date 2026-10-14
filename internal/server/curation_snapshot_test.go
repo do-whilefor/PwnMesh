@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"testing"
 )
@@ -28,7 +28,7 @@ func TestLargeCurationUsesLosslessSnapshotAndRetainsCommitFence(t *testing.T) {
 			f.apply(http.StatusOK)
 			full, _ := json.Marshal(f.state())
 			// The old envelope repeated Graph and the complete State.
-			legacy, _ := json.Marshal(worker.Job{Graph: f.state().Graph, State: func() *board.State { s := f.state(); return &s }()})
+			legacy, _ := json.Marshal(protocol.Job{Graph: f.state().Graph, State: func() *board.State { s := f.state(); return &s }()})
 			if len(legacy) <= board.MaxCurationInputBytes {
 				t.Fatal("fixture does not exceed the old immutable input limit")
 			}
@@ -47,7 +47,7 @@ func TestLargeCurationUsesLosslessSnapshotAndRetainsCommitFence(t *testing.T) {
 					NextOffset   int                `json:"next_offset"`
 					StateVersion string             `json:"state_version"`
 				}
-				f.request("POST", f.base()+"/executions/"+f.run+"/input/read", worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "facts", Offset: offset, Limit: 2, ExpectedVersion: job.InputSnapshot.StateVersion}, true, http.StatusOK, &page)
+				f.request("POST", f.base()+"/executions/"+f.run+"/input/read", protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "facts", Offset: offset, Limit: 2, ExpectedVersion: job.InputSnapshot.StateVersion}, true, http.StatusOK, &page)
 				if page.StateVersion != job.InputSnapshot.StateVersion {
 					t.Fatal("snapshot read refreshed the input boundary")
 				}

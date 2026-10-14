@@ -4,12 +4,12 @@ import (
 	"net/http"
 	"testing"
 
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestGraphReadValidatesRequestsAndFencesContinuations(t *testing.T) {
 	f := newDecisionBatchFixture(t)
-	read := worker.GraphRequest{RequestID: "00000000000000000000000000000001", Op: "read_graph", Section: "facts", IDs: []string{"origin"}, Limit: 1}
+	read := protocol.GraphRequest{RequestID: "00000000000000000000000000000001", Op: "read_graph", Section: "facts", IDs: []string{"origin"}, Limit: 1}
 	var page struct {
 		StateVersion string                `json:"state_version"`
 		Items        []struct{ ID string } `json:"items"`
@@ -20,11 +20,11 @@ func TestGraphReadValidatesRequestsAndFencesContinuations(t *testing.T) {
 	}
 	for _, body := range []any{
 		map[string]any{"request_id": read.RequestID, "op": read.Op, "unknown": true},
-		worker.GraphRequest{RequestID: read.RequestID, Op: "graph_action"},
-		worker.GraphRequest{RequestID: read.RequestID, Op: "read_graph", Section: "unknown"},
-		worker.GraphRequest{RequestID: read.RequestID, Op: "read_graph", Offset: -1},
-		worker.GraphRequest{RequestID: read.RequestID, Op: "read_graph", Section: "evidence"},
-		worker.GraphRequest{Op: "read_graph"},
+		protocol.GraphRequest{RequestID: read.RequestID, Op: "graph_action"},
+		protocol.GraphRequest{RequestID: read.RequestID, Op: "read_graph", Section: "unknown"},
+		protocol.GraphRequest{RequestID: read.RequestID, Op: "read_graph", Offset: -1},
+		protocol.GraphRequest{RequestID: read.RequestID, Op: "read_graph", Section: "evidence"},
+		protocol.GraphRequest{Op: "read_graph"},
 	} {
 		f.request("POST", f.base()+"/state/read", body, true, http.StatusUnprocessableEntity, nil)
 	}
@@ -33,7 +33,7 @@ func TestGraphReadValidatesRequestsAndFencesContinuations(t *testing.T) {
 	f.request("POST", f.base()+"/state/read", read, true, http.StatusOK, nil)
 	// The registered legacy inline decision input is also stable until an
 	// explicit overview refresh replaces its read view.
-	f.request("POST", f.base()+"/state/read", worker.GraphRequest{RequestID: read.RequestID, Op: read.Op, Section: "overview"}, true, http.StatusOK, nil)
+	f.request("POST", f.base()+"/state/read", protocol.GraphRequest{RequestID: read.RequestID, Op: read.Op, Section: "overview"}, true, http.StatusOK, nil)
 	f.request("POST", f.base()+"/state/read", read, true, http.StatusConflict, nil)
 	read.ExpectedVersion = ""
 	f.request("PUT", f.base()+"/status", map[string]string{"status": "stopped"}, false, http.StatusOK, nil)

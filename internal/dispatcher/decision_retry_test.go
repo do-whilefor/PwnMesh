@@ -11,21 +11,21 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 type automaticRetryRunner struct {
 	batchProtocolRunner
 	failures int
 	failure  string
-	seen     []worker.Job
+	seen     []protocol.Job
 }
 
-func (r *automaticRetryRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *automaticRetryRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.seen = append(r.seen, job)
 	if len(r.seen) <= r.failures {
-		return worker.Result{Status: "failed", FailureKind: r.failure, Error: "synthetic terminal failure"}, nil
+		return protocol.Result{Status: "failed", FailureKind: r.failure, Error: "synthetic terminal failure"}, nil
 	}
 	return r.batchProtocolRunner.Run(ctx, backend, job)
 }
@@ -104,8 +104,8 @@ func TestAutomaticDecisionRetryBoundSurvivesDispatcherRestart(t *testing.T) {
 	runs := testExecutions(t, store)
 	path := projectPath(graph.Project.ID) + "/executions/" + runs[1].ID + "/retry"
 	err := s.Client.Do(context.Background(), "POST", path, map[string]bool{"automatic": true}, nil, nil)
-	var protocol *ProtocolError
-	if !errors.As(err, &protocol) || protocol.Status != 409 {
+	var protocolErr *ProtocolError
+	if !errors.As(err, &protocolErr) || protocolErr.Status != 409 {
 		t.Fatalf("third automatic attempt was not rejected: %v", err)
 	}
 	if err := s.Client.Do(context.Background(), "POST", path, map[string]any{}, nil, nil); err != nil {
@@ -222,8 +222,8 @@ func TestAutomaticDecisionRetryValidatesManagementAndProjectFence(t *testing.T) 
 	path := projectPath(graph.Project.ID) + "/executions/" + original.ID + "/retry"
 	for _, value := range []any{nil, "true", 1} {
 		err := s.Client.Do(context.Background(), "POST", path, map[string]any{"automatic": value}, nil, nil)
-		var protocol *ProtocolError
-		if !errors.As(err, &protocol) || protocol.Status != 422 {
+		var protocolErr *ProtocolError
+		if !errors.As(err, &protocolErr) || protocolErr.Status != 422 {
 			t.Fatalf("invalid automatic field accepted: %v", err)
 		}
 	}
@@ -286,7 +286,7 @@ func TestDispatcherRecoveryExhaustionReleasesLeaseBeforeSuccessor(t *testing.T) 
 	s = New(s.Config, runner)
 	retryTicks(t, s, 1)
 	failed := testExecutions(t, store)[0]
-	var result worker.Result
+	var result protocol.Result
 	if err := json.Unmarshal(failed.Result, &result); err != nil {
 		t.Fatal(err)
 	}

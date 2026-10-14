@@ -10,7 +10,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
@@ -57,7 +57,7 @@ func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
 	if err := board.ValidateContextCapacity(state); err != nil {
 		t.Fatalf("large but legitimate Steps exceeded admission: %v", err)
 	}
-	job := worker.Job{RunID: "completion-review", Kind: "reason", Graph: state.Graph, State: &state, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: config.Task{MaxIntents: 3}, Decision: &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}}
+	job := protocol.Job{RunID: "completion-review", Kind: "reason", Graph: state.Graph, State: &state, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: config.Task{MaxIntents: 3}, Decision: &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}}
 	raw, _ := json.Marshal(job)
 	execution := board.Execution{ProjectID: graph.Project.ID, ID: job.RunID, Namespace: "pwnmesh", Backend: "retry-fixture", Kind: "reason", Lease: lease.Run, Job: raw, RetryKey: "reason:completion-review"}
 	registerLegacyExecution(t, store, execution)
@@ -71,25 +71,25 @@ func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
 	if err := s.Client.Do(ctx, "POST", base+"/state/decisions/preview", batch, &full, &lease); err != nil {
 		t.Fatal(err)
 	}
-	request := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "decision_preview", Batch: &batch}
+	request := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "decision_preview", Batch: &batch}
 	frameSize := func(receipt board.DecisionReceipt) int {
 		t.Helper()
 		result, err := json.Marshal(receipt)
 		if err != nil {
 			t.Fatal(err)
 		}
-		frame, err := json.Marshal(worker.GraphResponse{RequestID: request.RequestID, Result: result})
+		frame, err := json.Marshal(protocol.GraphResponse{RequestID: request.RequestID, Result: result})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return len(frame)
 	}
-	if frameSize(full) <= worker.MaxGraphRPCBytes {
+	if frameSize(full) <= protocol.MaxGraphRPCBytes {
 		t.Fatal("fixture did not expose the oversized projected abandon results")
 	}
 	withoutReview := full
 	withoutReview.CompletionReview = nil
-	if frameSize(withoutReview) > worker.MaxGraphRPCBytes {
+	if frameSize(withoutReview) > protocol.MaxGraphRPCBytes {
 		t.Fatal("fixture should fit before adding completion review")
 	}
 	result, err := runner.handler(ctx, job, request)
@@ -100,7 +100,7 @@ func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
 	if compact.Results != nil || compact.Committed || compact.Completed || compact.ValidationScope != "protocol_only" || compact.ChangedActions != len(batch.Actions) || !reflect.DeepEqual(compact.IDs, full.IDs) || !reflect.DeepEqual(compact.CompletionReview, full.CompletionReview) || len(compact.CompletionReview.FactRecords) != 1 || !reflect.DeepEqual(compact.CompletionReview.FactRecords[0], fact) {
 		t.Fatalf("bridge discarded review data or claimed acceptance: %+v", compact)
 	}
-	if size := frameSize(compact); size > worker.MaxGraphRPCBytes {
+	if size := frameSize(compact); size > protocol.MaxGraphRPCBytes {
 		t.Fatalf("completion preview remains undeliverable: %d bytes", size)
 	}
 	var after board.State

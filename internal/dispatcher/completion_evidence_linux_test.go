@@ -16,6 +16,7 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
 	"pwnmesh/internal/worker"
 )
@@ -70,7 +71,7 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 			}
 			lease := Lease{Run: "fixture@completion", Kind: "reason"}
 			f.do("POST", projectPath(f.project.ID)+"/reason/claim", map[string]string{"worker": lease.Run, "trigger": "initial"}, nil, nil)
-			job := worker.Job{RunID: "completion", Kind: "reason", WorkerType: "go", Workspace: f.workspace, GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.project}, Budget: config.Task{Timeout: 60, ConcludeTimeout: 10, MaxIntents: 2}}
+			job := protocol.Job{RunID: "completion", Kind: "reason", WorkerType: "go", Workspace: f.workspace, GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.project}, Budget: config.Task{Timeout: 60, ConcludeTimeout: 10, MaxIntents: 2}}
 			raw, err := json.Marshal(job)
 			if err != nil {
 				t.Fatal(err)
@@ -88,7 +89,7 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 			calls, previews, commits, factReads, fragments := 0, 0, 0, 0, 0
 			evidenceDelivered := false
 			forward := runner.handler
-			runner.handler = func(ctx context.Context, job worker.Job, request worker.GraphRequest) (any, error) {
+			runner.handler = func(ctx context.Context, job protocol.Job, request protocol.GraphRequest) (any, error) {
 				if request.Op == "read_graph" && request.Section == "facts" && reflect.DeepEqual(request.IDs, []string{fact.ID}) {
 					if request.ByteOffset == nil {
 						factReads++

@@ -15,7 +15,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
@@ -43,9 +43,9 @@ func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
 	}); err != nil || retainedBytes <= 32<<20 {
 		t.Fatalf("fixture did not retain more than 32 MiB: bytes=%d err=%v", retainedBytes, err)
 	}
-	var protocol *ProtocolError
+	var protocolErr *ProtocolError
 	err = s.Client.Do(context.Background(), "GET", "/executions?namespace=pwnmesh", nil, nil, nil)
-	if !errors.As(err, &protocol) || protocol.Status != http.StatusNotFound {
+	if !errors.As(err, &protocolErr) || protocolErr.Status != http.StatusNotFound {
 		t.Fatalf("whole-history endpoint was not retired: %v", err)
 	}
 	var pending board.ExecutionPage
@@ -139,7 +139,7 @@ func TestRecoveryFetchesOnlyTheSelectedImmutableJob(t *testing.T) {
 	s, runner, _, graph := automaticRetryFixture(t, 0, "")
 	ctx := context.Background()
 	backend := s.Config.Workers[0]
-	run := &task{Job: worker.Job{RunID: "interrupted", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: s.environmentID(backend), Budget: s.Config.Task("reason")}, Worker: backend, Lease: Lease{Run: backend.Name + "@interrupted", Kind: "reason"}}
+	run := &task{Job: protocol.Job{RunID: "interrupted", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: s.environmentID(backend), Budget: s.Config.Task("reason")}, Worker: backend, Lease: Lease{Run: backend.Name + "@interrupted", Kind: "reason"}}
 	if err := s.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/reason/claim", map[string]string{"worker": run.Lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +175,7 @@ func TestRecoveryLeavesRetiredJobsUnreadied(t *testing.T) {
 		graphRPC      bool
 	}{{"legacy_project", 0, 2, true}, {"legacy_result", 1, 1, true}, {"no_graph_bridge", 1, 2, false}} {
 		t.Run(tc.name, func(t *testing.T) {
-			job := worker.Job{RunID: "retained", Kind: "reason", WorkerType: "go", Graph: board.Graph{Project: board.Project{ID: "p", OrchestrationVersion: tc.orchestration}}, GraphRPC: tc.graphRPC, ResultContractVersion: tc.protocol}
+			job := protocol.Job{RunID: "retained", Kind: "reason", WorkerType: "go", Graph: board.Graph{Project: board.Project{ID: "p", OrchestrationVersion: tc.orchestration}}, GraphRPC: tc.graphRPC, ResultContractVersion: tc.protocol}
 			raw, err := json.Marshal(job)
 			if err != nil {
 				t.Fatal(err)
@@ -215,7 +215,7 @@ func TestGraphHandlerRejectsMismatchedRegisteredIdentity(t *testing.T) {
 	defer api.Close()
 	runner := &batchProtocolRunner{}
 	New(config.Config{Server: api.URL}, runner)
-	_, err := runner.handler(context.Background(), worker.Job{RunID: "r", Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p"}}}, worker.GraphRequest{Op: "decision_receipt"})
+	_, err := runner.handler(context.Background(), protocol.Job{RunID: "r", Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p"}}}, protocol.GraphRequest{Op: "decision_receipt"})
 	if err == nil || requests.Load() != 1 {
 		t.Fatal("graph operation accepted an identity from another namespace")
 	}
@@ -230,7 +230,7 @@ func TestGraphHandlerRejectsIdentityFromAnotherGeneration(t *testing.T) {
 	defer api.Close()
 	runner := &batchProtocolRunner{}
 	New(config.Config{Server: api.URL}, runner)
-	_, err := runner.handler(context.Background(), worker.Job{RunID: "r", Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p", Generation: 1}}}, worker.GraphRequest{Op: "read_graph"})
+	_, err := runner.handler(context.Background(), protocol.Job{RunID: "r", Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p", Generation: 1}}}, protocol.GraphRequest{Op: "read_graph"})
 	if err == nil || requests.Load() != 1 {
 		t.Fatal("graph operation accepted a different registered input generation")
 	}
@@ -251,7 +251,7 @@ func TestLiveGraphReadPagesBeforeDispatcherResponseLimit(t *testing.T) {
 	if err := s.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/reason/claim", map[string]string{"worker": lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	run := &task{Job: worker.Job{RunID: "large-graph", Kind: "reason", WorkerType: "go", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: s.Config.Task("reason")}, Worker: s.Config.Workers[0], Lease: lease}
+	run := &task{Job: protocol.Job{RunID: "large-graph", Kind: "reason", WorkerType: "go", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: s.Config.Task("reason")}, Worker: s.Config.Workers[0], Lease: lease}
 	if err := s.register(ctx, run); err != nil {
 		t.Fatal(err)
 	}
@@ -283,16 +283,16 @@ func TestLiveGraphReadPagesBeforeDispatcherResponseLimit(t *testing.T) {
 		t.Fatalf("current-state fixture did not reach the response limit: %v", err)
 	}
 	// A current planner refreshes its pinned read view before following details.
-	if _, err := runner.handler(ctx, job, worker.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_graph", Section: "overview"}); err != nil {
+	if _, err := runner.handler(ctx, job, protocol.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_graph", Section: "overview"}); err != nil {
 		t.Fatal(err)
 	}
-	read := worker.GraphRequest{RequestID: "00000000000000000000000000000001", Op: "read_graph", Section: "evidence", IDs: []string{"large"}, Limit: 1}
+	read := protocol.GraphRequest{RequestID: "00000000000000000000000000000001", Op: "read_graph", Section: "evidence", IDs: []string{"large"}, Limit: 1}
 	result, err := runner.handler(ctx, job, read)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pageBytes, err := json.Marshal(result)
-	if err != nil || len(pageBytes) >= worker.MaxGraphRPCBytes {
+	if err != nil || len(pageBytes) >= protocol.MaxGraphRPCBytes {
 		t.Fatalf("unbounded graph response: %d bytes, %v", len(pageBytes), err)
 	}
 	var page struct {
@@ -358,7 +358,7 @@ func TestCommittedDecisionFinishGraceHonorsProjectFence(t *testing.T) {
 			}))
 			defer api.Close()
 			s := New(config.Config{Server: api.URL}, &batchProtocolRunner{})
-			run := &task{Job: worker.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p", Generation: 3}}, Decision: &board.DecisionContext{Version: 2}}}
+			run := &task{Job: protocol.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p", Generation: 3}}, Decision: &board.DecisionContext{Version: 2}}}
 			if tc.expired {
 				run.committedAt.Store(time.Now().Add(-decisionFinishGrace).UnixNano())
 			}
@@ -371,7 +371,7 @@ func TestCommittedDecisionFinishGraceHonorsProjectFence(t *testing.T) {
 
 type finishingDecisionRunner struct {
 	batchProtocolRunner
-	committed chan worker.Job
+	committed chan protocol.Job
 	finish    chan struct{}
 	cancelled atomic.Bool
 	managed   string
@@ -390,7 +390,7 @@ func (r *finishingDecisionRunner) Cleanup(context.Context, string, string) error
 	return nil
 }
 
-func (r *finishingDecisionRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *finishingDecisionRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	result, err := r.batchProtocolRunner.Run(ctx, backend, job)
 	steps, open, _ := fixturePlanInput(job)
 	if err != nil || job.Kind != "reason" || steps == 0 || open != 0 {
@@ -400,16 +400,16 @@ func (r *finishingDecisionRunner) Run(ctx context.Context, backend config.Worker
 	select {
 	case <-ctx.Done():
 		r.cancelled.Store(true)
-		return worker.Result{}, ctx.Err()
+		return protocol.Result{}, ctx.Err()
 	case <-r.finish:
-		result.Metrics = &worker.DecisionMetrics{Version: 1, ModelCalls: 1, CompletedCalls: 1, Committed: true, CommittedActions: 1, Outcome: "success"}
+		result.Metrics = &protocol.DecisionMetrics{Version: 1, ModelCalls: 1, CompletedCalls: 1, Committed: true, CommittedActions: 1, Outcome: "success"}
 		return result, nil
 	}
 }
 
 func TestCompletedDecisionReturnsObservationBeforeCancellation(t *testing.T) {
 	s, _, transport, graph, _ := batchSchedulerFixture(t, 1)
-	runner := &finishingDecisionRunner{batchProtocolRunner: batchProtocolRunner{directions: 1}, committed: make(chan worker.Job, 1), finish: make(chan struct{}), managed: graph.Project.ID}
+	runner := &finishingDecisionRunner{batchProtocolRunner: batchProtocolRunner{directions: 1}, committed: make(chan protocol.Job, 1), finish: make(chan struct{}), managed: graph.Project.ID}
 	s.Runner = runner
 	s.configureGraphHandler()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -423,7 +423,7 @@ func TestCompletedDecisionReturnsObservationBeforeCancellation(t *testing.T) {
 	if err := s.Step(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var job worker.Job
+	var job protocol.Job
 	select {
 	case job = <-runner.committed:
 	case <-ctx.Done():
@@ -451,7 +451,7 @@ func TestCompletedDecisionReturnsObservationBeforeCancellation(t *testing.T) {
 	if err := s.Client.Do(ctx, "GET", projectPath(graph.Project.ID)+"/executions/"+job.RunID+"?namespace=pwnmesh", nil, &execution, nil); err != nil {
 		t.Fatal(err)
 	}
-	var result worker.Result
+	var result protocol.Result
 	if err := json.Unmarshal(execution.Result, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +478,7 @@ func (f executionQueryTransport) RoundTrip(r *http.Request) (*http.Response, err
 
 func TestObservationFailureNeverRetriesCommittedBusinessResult(t *testing.T) {
 	s, _, transport, graph, store := batchSchedulerFixture(t, 1)
-	runner := &finishingDecisionRunner{batchProtocolRunner: batchProtocolRunner{directions: 1}, committed: make(chan worker.Job, 1), finish: make(chan struct{})}
+	runner := &finishingDecisionRunner{batchProtocolRunner: batchProtocolRunner{directions: 1}, committed: make(chan protocol.Job, 1), finish: make(chan struct{})}
 	close(runner.finish)
 	s.Runner = runner
 	s.configureGraphHandler()

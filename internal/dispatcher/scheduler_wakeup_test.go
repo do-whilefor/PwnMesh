@@ -12,13 +12,13 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 type wakeupRunner struct {
 	batchProtocolRunner
-	started        chan worker.Job
-	completed      chan worker.Job
+	started        chan protocol.Job
+	completed      chan protocol.Job
 	executeRelease <-chan struct{}
 	waitAll        bool
 	cleanupStarted chan string
@@ -26,13 +26,13 @@ type wakeupRunner struct {
 	cleanupError   error
 }
 
-func (r *wakeupRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *wakeupRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.started <- job
 	if r.waitAll || job.Kind == "explore" && r.executeRelease != nil {
 		select {
 		case <-r.executeRelease:
 		case <-ctx.Done():
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		}
 	}
 	result, err := r.batchProtocolRunner.Run(ctx, backend, job)
@@ -70,8 +70,8 @@ func wakeupFixture(t *testing.T, directions int) (*Scheduler, *wakeupRunner, boa
 	}
 	runner := &wakeupRunner{
 		batchProtocolRunner: batchProtocolRunner{directions: directions},
-		started:             make(chan worker.Job, 16),
-		completed:           make(chan worker.Job, 16),
+		started:             make(chan protocol.Job, 16),
+		completed:           make(chan protocol.Job, 16),
 	}
 	return New(fixture.Config, runner), runner, graph, store
 }
@@ -99,14 +99,14 @@ func runWakeupScheduler(t *testing.T, scheduler *Scheduler) func() {
 	return stop
 }
 
-func nextWakeupJob(t *testing.T, jobs <-chan worker.Job) worker.Job {
+func nextWakeupJob(t *testing.T, jobs <-chan protocol.Job) protocol.Job {
 	t.Helper()
 	select {
 	case job := <-jobs:
 		return job
 	case <-time.After(5 * time.Second):
 		t.Fatal("task transition waited for the minute-long scheduler tick")
-		return worker.Job{}
+		return protocol.Job{}
 	}
 }
 
@@ -223,15 +223,15 @@ func TestCleanupFailureDoesNotCreateImmediateRetryLoop(t *testing.T) {
 
 type committedPlanRunner struct {
 	batchProtocolRunner
-	committed chan worker.Job
-	started   chan worker.Job
+	committed chan protocol.Job
+	started   chan protocol.Job
 }
 
-func (r *committedPlanRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *committedPlanRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	if job.Kind == "explore" {
 		r.started <- job
 		<-ctx.Done()
-		return worker.Result{}, ctx.Err()
+		return protocol.Result{}, ctx.Err()
 	}
 	result, err := r.batchProtocolRunner.Run(ctx, backend, job)
 	if err != nil {
@@ -244,7 +244,7 @@ func (r *committedPlanRunner) Run(ctx context.Context, backend config.Worker, jo
 
 func TestCommittedPlanWakesExecutionBeforeFinalDelivery(t *testing.T) {
 	fixture, _, _, _ := wakeupFixture(t, 1)
-	runner := &committedPlanRunner{batchProtocolRunner: batchProtocolRunner{directions: 1}, committed: make(chan worker.Job, 2), started: make(chan worker.Job, 2)}
+	runner := &committedPlanRunner{batchProtocolRunner: batchProtocolRunner{directions: 1}, committed: make(chan protocol.Job, 2), started: make(chan protocol.Job, 2)}
 	scheduler := New(fixture.Config, runner)
 	stop := runWakeupScheduler(t, scheduler)
 	if job := nextWakeupJob(t, runner.committed); job.Kind != "reason" {
@@ -283,8 +283,8 @@ func TestGraphWakeupRequiresSuccessfulChangedMutation(t *testing.T) {
 			defer api.Close()
 			runner := &batchProtocolRunner{}
 			scheduler := New(config.Config{Server: api.URL}, runner)
-			job := worker.Job{RunID: "run", Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p"}}}
-			_, err := runner.handler(context.Background(), job, worker.GraphRequest{Op: tc.op})
+			job := protocol.Job{RunID: "run", Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p"}}}
+			_, err := runner.handler(context.Background(), job, protocol.GraphRequest{Op: tc.op})
 			if (err != nil) != (tc.status != 200) {
 				t.Fatalf("unexpected response error: %v", err)
 			}

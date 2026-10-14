@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestRunWakesAtWorkerCooldownWithoutWaitingForTick(t *testing.T) {
@@ -15,9 +15,9 @@ func TestRunWakesAtWorkerCooldownWithoutWaitingForTick(t *testing.T) {
 			scheduler, runner, graph, _ := wakeupFixture(t, 1)
 			runner.waitAll = true
 			backend := scheduler.Config.Workers[0]
-			var original worker.Job
+			var original protocol.Job
 			if failure == "recovery" {
-				run := &task{Job: worker.Job{RunID: "interrupted", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: scheduler.environmentID(backend), Budget: scheduler.Config.Task("reason"), DecisionTrigger: "initial"}, Worker: backend, Lease: Lease{Run: backend.Name + "@interrupted", Kind: "reason"}}
+				run := &task{Job: protocol.Job{RunID: "interrupted", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: scheduler.environmentID(backend), Budget: scheduler.Config.Task("reason"), DecisionTrigger: "initial"}, Worker: backend, Lease: Lease{Run: backend.Name + "@interrupted", Kind: "reason"}}
 				if err := scheduler.Client.Do(context.Background(), "POST", projectPath(graph.Project.ID)+"/reason/claim", map[string]string{"worker": run.Lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 					t.Fatal(err)
 				}
@@ -59,7 +59,7 @@ func TestWorkerCooldownUsesLatestGateAndSkipsBusyBackends(t *testing.T) {
 	scheduler.nextWake = time.Time{}
 	for index := range backend.MaxRunning {
 		id := string(rune('a' + index))
-		scheduler.running[id] = &task{Worker: backend, Job: worker.Job{Kind: "reason", Graph: board.Graph{Project: graph.Project}}}
+		scheduler.running[id] = &task{Worker: backend, Job: protocol.Job{Kind: "reason", Graph: board.Graph{Project: graph.Project}}}
 	}
 	if scheduler.choose(graph.Project.ID, "reason") != nil || !scheduler.nextWake.IsZero() {
 		t.Fatal("capacity-bound work should wait for completion, not a cooldown timer")

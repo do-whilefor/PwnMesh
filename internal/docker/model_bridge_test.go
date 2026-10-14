@@ -15,8 +15,8 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelrpc"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/provider"
-	"pwnmesh/internal/worker"
 )
 
 func TestModelBridgeBindsPolicyAndKeepsCredentialsOutOfWorker(t *testing.T) {
@@ -26,7 +26,7 @@ func TestModelBridgeBindsPolicyAndKeepsCredentialsOutOfWorker(t *testing.T) {
 		"ANTHROPIC_BASE_URL":       "https://openrouter.ai/api/v1?key=private-endpoint",
 		"PWNMESH_REASONING_EFFORT": "low", "PWNMESH_MAX_OUTPUT_TOKENS": "2048", "PWNMESH_REQUEST_TIMEOUT": "45", "TOOL_SETTING": "kept",
 	}}
-	j := worker.Job{RunID: "run", Kind: "explore", Budget: config.Task{ReasoningEffort: "high"}}
+	j := protocol.Job{RunID: "run", Kind: "explore", Budget: config.Task{ReasoningEffort: "high"}}
 	p, err := configuredModel(backend, j)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +112,7 @@ func TestModelBridgeRejectsSecretEchoIncludingSplitDeltas(t *testing.T) {
 				}
 			}))
 			defer model.Close()
-			b := newModelBridge(context.Background(), &provider.Anthropic{BaseURL: model.URL, Token: secret}, worker.Job{}, nil, nil)
+			b := newModelBridge(context.Background(), &provider.Anthropic{BaseURL: model.URL, Token: secret}, protocol.Job{}, nil, nil)
 			defer b.close()
 			out := b.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("b", 32), SessionID: "run"})
 			raw, _ := json.Marshal(out)
@@ -133,7 +133,7 @@ func TestModelBridgeConcurrentCancellationAndRunBinding(t *testing.T) {
 	defer model.Close()
 	p := &provider.Anthropic{BaseURL: model.URL, Token: "safe-private-key", MaxTokens: 1024, Timeout: time.Minute}
 	responses := make(chan modelrpc.Response, 16)
-	b := newModelBridge(context.Background(), p, worker.Job{RunID: "run", Kind: "explore"}, func(_ context.Context, response modelrpc.Response) error { responses <- response; return nil }, func(error) { t.Error("unexpected delivery error") })
+	b := newModelBridge(context.Background(), p, protocol.Job{RunID: "run", Kind: "explore"}, func(_ context.Context, response modelrpc.Response) error { responses <- response; return nil }, func(error) { t.Error("unexpected delivery error") })
 	defer b.close()
 	requests := []modelrpc.Request{{RequestID: strings.Repeat("a", 32), SessionID: "run:g:left"}, {RequestID: strings.Repeat("b", 32), SessionID: "run:g:right"}}
 	for _, request := range requests {
@@ -187,7 +187,7 @@ func TestResultSinkRoutesModelFramesWithoutBlockingGraph(t *testing.T) {
 	sink := resultSink{
 		model:       func(modelrpc.Request) error { order = append(order, "model"); return nil },
 		cancelModel: func(string) error { order = append(order, "cancel"); return nil },
-		graph:       func(worker.GraphRequest) error { order = append(order, "graph"); return nil },
+		graph:       func(protocol.GraphRequest) error { order = append(order, "graph"); return nil },
 	}
 	input := "{\"type\":\"model_request\",\"request\":{}}\n{\"type\":\"graph_request\",\"request\":{}}\n{\"type\":\"model_cancel\",\"request_id\":\"a\"}\n"
 	for _, ch := range []byte(input) {

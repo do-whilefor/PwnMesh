@@ -10,13 +10,13 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestDecisionObservationIsIndependentOfImmutableBusinessResult(t *testing.T) {
 	f := newDecisionBatchFixture(t)
 	path := f.base() + "/executions/" + f.run + "/observation"
-	body := map[string]any{"metrics": worker.DecisionMetrics{Version: 1, ModelCalls: 2, Committed: true, Outcome: "actions_committed"}}
+	body := map[string]any{"metrics": protocol.DecisionMetrics{Version: 1, ModelCalls: 2, Committed: true, Outcome: "actions_committed"}}
 	f.request("POST", path, body, true, http.StatusConflict, nil)
 	f.decision("commit", f.batch(batchAction("step", "next", `{"action":"add","from":["origin"],"description":"A fixture check"}`)), http.StatusOK)
 	before := f.state()
@@ -26,14 +26,14 @@ func TestDecisionObservationIsIndependentOfImmutableBusinessResult(t *testing.T)
 	f.request("POST", path, body, false, http.StatusForbidden, nil)
 	f.request("POST", path, body, true, http.StatusOK, nil)
 	f.request("POST", path, body, true, http.StatusOK, nil)
-	f.request("POST", path, map[string]any{"metrics": worker.DecisionMetrics{Version: 1, ModelCalls: 99}}, true, http.StatusConflict, nil)
+	f.request("POST", path, map[string]any{"metrics": protocol.DecisionMetrics{Version: 1, ModelCalls: 99}}, true, http.StatusConflict, nil)
 	f.request("POST", path, map[string]any{"metrics": body["metrics"], "status": "failed"}, true, http.StatusUnprocessableEntity, nil)
 	runs = f.executionRecords()
 	var oldResult, newResult map[string]json.RawMessage
 	if json.Unmarshal(original.Result, &oldResult) != nil || json.Unmarshal(runs[0].Result, &newResult) != nil {
 		t.Fatal("invalid stored result")
 	}
-	var metrics worker.DecisionMetrics
+	var metrics protocol.DecisionMetrics
 	if json.Unmarshal(newResult["metrics"], &metrics) != nil || metrics.ModelCalls != 2 {
 		t.Fatal("observation was not persisted")
 	}

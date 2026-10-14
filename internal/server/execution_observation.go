@@ -6,7 +6,7 @@ import (
 	"net/http"
 
 	b "pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func (s *Server) registerObservationRoutes(m *http.ServeMux) {
@@ -21,7 +21,7 @@ func (s *Server) executionObservation(t *b.Tx, q *request, r *http.Request) (int
 	if err != nil || len(raw) > 16<<10 || bytes.Equal(raw, []byte("null")) {
 		return 0, nil, b.Err(422, "invalid metrics")
 	}
-	var metrics worker.DecisionMetrics
+	var metrics protocol.DecisionMetrics
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if decoder.Decode(&metrics) != nil || metrics.Version != 1 {

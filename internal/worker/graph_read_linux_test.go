@@ -13,11 +13,11 @@ import (
 	"pwnmesh/internal/board"
 )
 
-func modelReadFixture(t *testing.T, state board.State, inspect func(GraphRequest)) func(context.Context, GraphRequest) (string, error) {
+func modelReadFixture(t *testing.T, state board.State, inspect func(context.Context, GraphRequest)) func(context.Context, GraphRequest) (string, error) {
 	t.Helper()
-	return func(_ context.Context, r GraphRequest) (string, error) {
+	return func(ctx context.Context, r GraphRequest) (string, error) {
 		if inspect != nil {
-			inspect(r)
+			inspect(ctx, r)
 		}
 		page, err := GraphPage(state, r)
 		if err != nil {
@@ -38,9 +38,9 @@ func TestModelGraphReadAssemblesPagesAndOriginalSupport(t *testing.T) {
 	}
 	ids := []string{"f0", "f1", "f2", "f3", "f4"}
 	calls, fragments := 0, 0
-	request := modelReadFixture(t, state, func(r GraphRequest) {
+	request := modelReadFixture(t, state, func(ctx context.Context, r GraphRequest) {
 		calls++
-		if r.Op != "read_snapshot" || !reflect.DeepEqual(r.IDs, ids) || !r.evidenceLookup {
+		if r.Op != "read_snapshot" || !reflect.DeepEqual(r.IDs, ids) || !internalGraphRead(ctx) {
 			t.Fatalf("logical read changed its capability or selection: %+v", r)
 		}
 		if calls > 1 && r.ExpectedVersion != board.DecisionStateVersion(state) {

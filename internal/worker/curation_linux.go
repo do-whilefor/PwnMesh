@@ -69,11 +69,11 @@ func (c *curationCommit) action(ctx context.Context, input json.RawMessage) (str
 	payload["groups"], _ = json.Marshal(groups)
 	if raw, exists := payload["through_revision"]; exists {
 		var revision int64
-		if json.Unmarshal(raw, &revision) != nil || revision != c.job.curationRevision() {
+		if json.Unmarshal(raw, &revision) != nil || revision != c.job.CurationRevision() {
 			return "", errors.New("through_revision must match the immutable curation input")
 		}
 	}
-	payload["through_revision"], _ = json.Marshal(c.job.curationRevision())
+	payload["through_revision"], _ = json.Marshal(c.job.CurationRevision())
 	rawPayload, _ := json.Marshal(payload)
 	a := board.StateAction{Op: "curate", Payload: rawPayload, IdempotencyKey: c.job.RunID + ":curate"}
 	c.uncertain = true

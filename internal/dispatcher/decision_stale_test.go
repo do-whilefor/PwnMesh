@@ -11,16 +11,16 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 type staleDecisionRunner struct {
 	batchProtocolRunner
-	first func(context.Context, worker.Job) (worker.Result, error)
-	seen  []worker.Job
+	first func(context.Context, protocol.Job) (protocol.Result, error)
+	seen  []protocol.Job
 }
 
-func (r *staleDecisionRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *staleDecisionRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.mu.Lock()
 	r.seen = append(r.seen, job)
 	first := len(r.seen) == 1
@@ -37,7 +37,7 @@ func staleDecisionFailure(t *testing.T, store *board.Store) board.Execution {
 	if len(runs) != 1 {
 		t.Fatalf("stale run was retried before a fresh scheduling pass: %+v", runs)
 	}
-	var result worker.Result
+	var result protocol.Result
 	if err := json.Unmarshal(runs[0].Result, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -71,15 +71,15 @@ func assertFreshDecisionReplacement(t *testing.T, scheduler *Scheduler, runner *
 
 func TestDecisionHeartbeatRetainsSessionOnNewFactsButHonorsStopWithoutSchedulerTick(t *testing.T) {
 	fixture, _, store, graph := automaticRetryFixture(t, 0, "")
-	started := make(chan worker.Job, 1)
+	started := make(chan protocol.Job, 1)
 	stopped := make(chan error, 1)
 	renewed := make(chan struct{}, 1)
-	runner := &staleDecisionRunner{first: func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner := &staleDecisionRunner{first: func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		started <- job
 		// Represent a model request which cannot return until it is cancelled.
 		<-ctx.Done()
 		stopped <- context.Cause(ctx)
-		return worker.Result{}, ctx.Err()
+		return protocol.Result{}, ctx.Err()
 	}}
 	scheduler := New(fixture.Config, runner)
 	scheduler.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(request *http.Request) (*http.Response, error) {
@@ -103,7 +103,7 @@ func TestDecisionHeartbeatRetainsSessionOnNewFactsButHonorsStopWithoutSchedulerT
 	if err := scheduler.Step(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var originalJob worker.Job
+	var originalJob protocol.Job
 	select {
 	case originalJob = <-started:
 		if originalJob.Kind != "reason" || scheduler.Config.Runtime.MaxWorkers != 1 || len(scheduler.running) != 1 {
@@ -131,7 +131,7 @@ func TestDecisionHeartbeatRetainsSessionOnNewFactsButHonorsStopWithoutSchedulerT
 	case <-ctx.Done():
 		t.Fatal("periodic heartbeat did not renew the live planner")
 	}
-	if _, err := runner.graph(ctx, originalJob, worker.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: originalJob.Decision.StateVersion, Actions: []board.DecisionAction{}}}); !decisionStateChanged(err) {
+	if _, err := runner.graph(ctx, originalJob, protocol.GraphRequest{Op: "decision_commit", Batch: &board.DecisionBatch{ExpectedVersion: originalJob.Decision.StateVersion, Actions: []board.DecisionAction{}}}); !decisionStateChanged(err) {
 		t.Fatalf("lease renewal authorized a stale decision: %v", err)
 	}
 	if err := scheduler.Client.Do(ctx, "PUT", projectPath(graph.Project.ID)+"/status", map[string]string{"status": "stopped"}, nil, nil); err != nil {
@@ -158,11 +158,11 @@ func TestDecisionRetryChecksVersionBeforeStartingAnotherRunner(t *testing.T) {
 	// Keep the periodic heartbeat out of this test: the same-run recovery
 	// preflight must discover the change itself before restarting the Worker.
 	fixture.Config.Runtime.Interval = 10
-	runner := &staleDecisionRunner{first: func(ctx context.Context, _ worker.Job) (worker.Result, error) {
+	runner := &staleDecisionRunner{first: func(ctx context.Context, _ protocol.Job) (protocol.Result, error) {
 		if err := fixture.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/hints", map[string]string{"content": "Input changed before transport recovery", "creator": "fixture"}, nil, nil); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
-		return worker.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic connection loss"}, nil
+		return protocol.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic connection loss"}, nil
 	}}
 	scheduler := New(fixture.Config, runner)
 	retryTicks(t, scheduler, 1)
@@ -179,17 +179,17 @@ func TestDecisionRetryChecksVersionBeforeStartingAnotherRunner(t *testing.T) {
 func TestDecisionTerminalFailureSurvivesConcurrentStaleCancellation(t *testing.T) {
 	fixture, _, store, graph := automaticRetryFixture(t, 0, "")
 	fixture.Config.Runtime.Interval = 30
-	runner := &staleDecisionRunner{first: func(ctx context.Context, _ worker.Job) (worker.Result, error) {
+	runner := &staleDecisionRunner{first: func(ctx context.Context, _ protocol.Job) (protocol.Result, error) {
 		if err := fixture.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/hints", map[string]string{"content": "Input changed before recovery", "creator": "fixture"}, nil, nil); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
-		return worker.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic connection loss"}, nil
+		return protocol.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic connection loss"}, nil
 	}}
 	scheduler := New(fixture.Config, runner)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	backend := scheduler.Config.Workers[0]
-	run := &task{Job: worker.Job{RunID: "failure-cancel-race", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: scheduler.environmentID(backend), Budget: scheduler.Config.Task("reason")}, Worker: backend, Lease: Lease{Run: backend.Name + "@failure-cancel-race", Kind: "reason"}}
+	run := &task{Job: protocol.Job{RunID: "failure-cancel-race", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: scheduler.environmentID(backend), Budget: scheduler.Config.Task("reason")}, Worker: backend, Lease: Lease{Run: backend.Name + "@failure-cancel-race", Kind: "reason"}}
 	if err := scheduler.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/reason/claim", map[string]string{"worker": run.Lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +198,11 @@ func TestDecisionTerminalFailureSurvivesConcurrentStaleCancellation(t *testing.T
 		t.Fatal(err)
 	}
 	lateConflict := &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: late heartbeat signal"}`}
-	var failures []worker.Result
+	var failures []protocol.Result
 	scheduler.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(request *http.Request) (*http.Response, error) {
 		var update struct {
-			Status string        `json:"status"`
-			Result worker.Result `json:"result"`
+			Status string          `json:"status"`
+			Result protocol.Result `json:"result"`
 		}
 		if request.Method == "POST" && request.URL.Path == executionPath(run)+"/status" {
 			body, err := request.GetBody()
@@ -229,7 +229,7 @@ func TestDecisionTerminalFailureSurvivesConcurrentStaleCancellation(t *testing.T
 		t.Fatalf("settled stale failure changed after late cancellation: outcome=%q err=%v cause=%v writes=%d", outcome, err, context.Cause(ctx), len(failures))
 	}
 	terminal := staleDecisionFailure(t, store)
-	var result worker.Result
+	var result protocol.Result
 	if err := json.Unmarshal(terminal.Result, &result); err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestDecisionCommittedReceiptWinsStaleCancellation(t *testing.T) {
 		cancel(&ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: decision input is no longer current"}`})
 	}
 	backend := scheduler.Config.Workers[0]
-	run := &task{Job: worker.Job{RunID: "commit-cancel-race", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: scheduler.environmentID(backend), Budget: scheduler.Config.Task("reason")}, Worker: backend, Lease: Lease{Run: backend.Name + "@commit-cancel-race", Kind: "reason"}}
+	run := &task{Job: protocol.Job{RunID: "commit-cancel-race", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: scheduler.environmentID(backend), Budget: scheduler.Config.Task("reason")}, Worker: backend, Lease: Lease{Run: backend.Name + "@commit-cancel-race", Kind: "reason"}}
 	if err := scheduler.Client.Do(ctx, "POST", projectPath(graph.Project.ID)+"/reason/claim", map[string]string{"worker": run.Lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -314,7 +314,7 @@ func TestDecisionPreflightRejectsChangedInputAfterHealthBeforeRunnerStarts(t *te
 func TestDecisionLeaseVersionCheckPreservesLegacyHeartbeat(t *testing.T) {
 	scheduler, _, _, graph := automaticRetryFixture(t, 0, "")
 	ctx := context.Background()
-	run := &task{Job: worker.Job{Kind: "reason", Graph: graph}, Lease: Lease{Run: "legacy@heartbeat", Kind: "reason"}}
+	run := &task{Job: protocol.Job{Kind: "reason", Graph: graph}, Lease: Lease{Run: "legacy@heartbeat", Kind: "reason"}}
 	base := projectPath(graph.Project.ID)
 	if err := scheduler.Client.Do(ctx, "POST", base+"/reason/claim", map[string]string{"worker": run.Lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)

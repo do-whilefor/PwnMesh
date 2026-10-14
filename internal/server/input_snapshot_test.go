@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func newSnapshotHTTPFixture(t *testing.T, databasePath ...string) (*executionProtocolFixture, *board.Store) {
@@ -60,7 +60,7 @@ func snapshotTemplate(f *executionProtocolFixture, kind string) board.Execution 
 	return board.Execution{ProjectID: f.project, ID: f.run, Namespace: "protocol-test", Backend: "planner", Kind: kind, Intent: f.intent, Lease: f.lease, Job: job}
 }
 
-func prepareSnapshot(t *testing.T, f *executionProtocolFixture, template board.Execution) (board.Execution, worker.Job) {
+func prepareSnapshot(t *testing.T, f *executionProtocolFixture, template board.Execution) (board.Execution, protocol.Job) {
 	t.Helper()
 	raw, err := json.Marshal(template)
 	if err != nil || len(raw) > 8192 {
@@ -68,7 +68,7 @@ func prepareSnapshot(t *testing.T, f *executionProtocolFixture, template board.E
 	}
 	var saved board.Execution
 	f.request("POST", f.base()+"/executions/prepare", template, true, http.StatusCreated, &saved)
-	var job worker.Job
+	var job protocol.Job
 	if err := json.Unmarshal(saved.Job, &job); err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestSnapshotReadRejectsExpiredLeaseWithoutMutatingState(t *testing.T) {
 			} else {
 				prepareSnapshot(t, f, snapshotTemplate(f, kind))
 			}
-			read := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "overview"}
+			read := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "overview"}
 			endpoint := f.base() + "/executions/" + f.run + "/input/read"
 			f.request("POST", endpoint, read, true, http.StatusOK, nil)
 			later := store.Now().Add(time.Hour)
@@ -156,7 +156,7 @@ func TestSnapshotReadRemainsFrozenWhileLiveFactsAdvance(t *testing.T) {
 	f, _ := newSnapshotHTTPFixture(t)
 	_, job := prepareSnapshot(t, f, snapshotTemplate(f, "explore"))
 	added := f.action("fact", "after-snapshot", map[string]any{"description": "ONLY_IN_LIVE_GRAPH", "scope": "fixture", "observed_at": "2026-09-22T10:00:00Z", "evidence": []board.EvidenceRef{{RunID: f.run, Path: "new.txt", Excerpt: "NEW_EVIDENCE"}}})
-	read := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "facts", IDs: []string{"origin", added.ID}, ExpectedVersion: job.InputSnapshot.StateVersion}
+	read := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_snapshot", Section: "facts", IDs: []string{"origin", added.ID}, ExpectedVersion: job.InputSnapshot.StateVersion}
 	var page struct {
 		Items        []board.FactRecord `json:"items"`
 		MissingIDs   []string           `json:"missing_ids"`
@@ -193,7 +193,7 @@ func TestSnapshotReadFailsClosedWhenStoredInputIsMissingOrCorrupt(t *testing.T) 
 			}); err != nil {
 				t.Fatal(err)
 			}
-			f.request("POST", f.base()+"/executions/"+f.run+"/input/read", worker.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "overview"}, true, tc.status, nil)
+			f.request("POST", f.base()+"/executions/"+f.run+"/input/read", protocol.GraphRequest{RequestID: strings.Repeat("b", 32), Op: "read_snapshot", Section: "overview"}, true, tc.status, nil)
 		})
 	}
 }
@@ -228,13 +228,13 @@ func TestPrepareSnapshotRejectsClientSuppliedInputAndCrossRoundTemplates(t *test
 	oldRun := f.run
 	f.run, f.lease = "new-round-run", "planner@new-round-run"
 	f.request("POST", f.base()+"/reason/claim", map[string]string{"worker": f.lease, "trigger": "initial"}, false, http.StatusOK, nil)
-	var stale worker.Job
+	var stale protocol.Job
 	_ = json.Unmarshal(template.Job, &stale)
 	stale.RunID = f.run
 	template.ID, template.Lease = f.run, f.lease
 	template.Job, _ = json.Marshal(stale)
 	f.request("POST", f.base()+"/executions/prepare", template, true, http.StatusConflict, nil)
-	f.request("POST", f.base()+"/executions/"+oldRun+"/input/read", worker.GraphRequest{RequestID: strings.Repeat("c", 32), Op: "read_snapshot", Section: "overview"}, true, http.StatusNotFound, nil)
+	f.request("POST", f.base()+"/executions/"+oldRun+"/input/read", protocol.GraphRequest{RequestID: strings.Repeat("c", 32), Op: "read_snapshot", Section: "overview"}, true, http.StatusNotFound, nil)
 }
 
 func TestPrepareSnapshotKeepsRegistrationSmallBeyondEightMiBEvidence(t *testing.T) {
@@ -250,12 +250,12 @@ func TestPrepareSnapshotKeepsRegistrationSmallBeyondEightMiBEvidence(t *testing.
 		}
 		payload, _ := json.Marshal(map[string]any{"description": fmt.Sprintf("Observation %d", n), "scope": "fixture", "observed_at": "2026-09-22T10:00:00Z", "evidence": evidence})
 		action := board.StateAction{Op: "fact", IdempotencyKey: fmt.Sprintf("large-fact-%d", n), Payload: payload}
-		request := worker.GraphRequest{RequestID: fmt.Sprintf("%032x", n+1), Op: "graph_action", Action: action}
-		if err := worker.ValidateGraphRequest(worker.Job{Kind: "explore", GraphRPC: true, ResultContractVersion: 2}, request); err != nil {
+		request := protocol.GraphRequest{RequestID: fmt.Sprintf("%032x", n+1), Op: "graph_action", Action: action}
+		if err := protocol.ValidateGraphRequest(protocol.Job{Kind: "explore", GraphRPC: true, ResultContractVersion: 2}, request); err != nil {
 			t.Fatal(err)
 		}
-		frame, _ := json.Marshal(worker.GraphRequestEvent{Type: "graph_request", Request: request})
-		if len(frame) > worker.MaxGraphRPCBytes {
+		frame, _ := json.Marshal(protocol.GraphRequestEvent{Type: "graph_request", Request: request})
+		if len(frame) > protocol.MaxGraphRPCBytes {
 			t.Fatalf("fixture exceeds real Worker RPC boundary: %d", len(frame))
 		}
 		var receipt board.StateActionResult
@@ -280,8 +280,8 @@ func TestPrepareSnapshotKeepsRegistrationSmallBeyondEightMiBEvidence(t *testing.
 		Items []board.EvidenceRef `json:"items"`
 		Total int                 `json:"total"`
 	}
-	response := f.request("POST", f.base()+"/executions/"+f.run+"/input/read", worker.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_snapshot", Section: "evidence", IDs: []string{lastFact}, Limit: 1, ExpectedVersion: job.InputSnapshot.StateVersion}, true, http.StatusOK, &page)
-	if len(response) > worker.MaxGraphRPCBytes || page.Total != refs || len(page.Items) != 1 || page.Items[0].Excerpt != excerpt {
+	response := f.request("POST", f.base()+"/executions/"+f.run+"/input/read", protocol.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_snapshot", Section: "evidence", IDs: []string{lastFact}, Limit: 1, ExpectedVersion: job.InputSnapshot.StateVersion}, true, http.StatusOK, &page)
+	if len(response) > protocol.MaxGraphRPCBytes || page.Total != refs || len(page.Items) != 1 || page.Items[0].Excerpt != excerpt {
 		t.Fatal("large snapshot evidence was not readable through bounded pages")
 	}
 	t.Logf("state_bytes=%d prepared_job_bytes=%d evidence_page_bytes=%d", len(stateBytes), len(saved.Job), len(response))

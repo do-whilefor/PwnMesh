@@ -16,47 +16,47 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 // Use the production graph bridge and HTTP boundary with a scripted runner.
 // Type go selects protocol 2; this runner never starts a process or model.
 type batchProtocolRunner struct {
-	handler     func(context.Context, worker.Job, worker.GraphRequest) (any, error)
+	handler     func(context.Context, protocol.Job, protocol.GraphRequest) (any, error)
 	directions  int
 	lateError   bool
 	afterCommit func()
 	mu          sync.Mutex
-	jobs        []worker.Job
+	jobs        []protocol.Job
 	requests    int
 }
 
-func (r *batchProtocolRunner) SetGraphHandler(fn func(context.Context, worker.Job, worker.GraphRequest) (any, error)) {
+func (r *batchProtocolRunner) SetGraphHandler(fn func(context.Context, protocol.Job, protocol.GraphRequest) (any, error)) {
 	r.handler = fn
 }
 func (*batchProtocolRunner) Cleanup(context.Context, string, string) error { return nil }
 func (*batchProtocolRunner) Projects(context.Context) ([]string, error)    { return nil, nil }
-func (r *batchProtocolRunner) graph(ctx context.Context, job worker.Job, request worker.GraphRequest) (any, error) {
+func (r *batchProtocolRunner) graph(ctx context.Context, job protocol.Job, request protocol.GraphRequest) (any, error) {
 	r.mu.Lock()
 	r.requests++
 	request.RequestID = fmt.Sprintf("%032x", r.requests)
 	r.mu.Unlock()
-	if err := worker.ValidateGraphRequest(job, request); err != nil {
+	if err := protocol.ValidateGraphRequest(job, request); err != nil {
 		return nil, err
 	}
 	return r.handler(ctx, job, request)
 }
-func (r *batchProtocolRunner) Run(ctx context.Context, _ config.Worker, job worker.Job) (worker.Result, error) {
+func (r *batchProtocolRunner) Run(ctx context.Context, _ config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.mu.Lock()
 	r.jobs = append(r.jobs, job)
 	r.mu.Unlock()
 	if !job.GraphRPC || job.ResultContractVersion != 2 {
-		return worker.Result{}, errors.New("new run did not bind the version 2 graph protocol")
+		return protocol.Result{}, errors.New("new run did not bind the version 2 graph protocol")
 	}
 	if job.Kind == "reason" {
 		if job.Decision == nil || job.Decision.Version != 2 {
-			return worker.Result{}, errors.New("planner was not registered with decision version 2")
+			return protocol.Result{}, errors.New("planner was not registered with decision version 2")
 		}
 		actions := []board.DecisionAction{}
 		steps, open, facts := fixturePlanInput(job)
@@ -76,68 +76,68 @@ func (r *batchProtocolRunner) Run(ctx context.Context, _ config.Worker, job work
 			actions = append(actions, board.DecisionAction{Op: "complete", Payload: payload})
 		}
 		batch := fixtureDecisionBatch(job, actions)
-		preview, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_preview", Batch: batch})
+		preview, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_preview", Batch: batch})
 		if err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		previewReceipt := preview.(board.DecisionReceipt)
 		if previewReceipt.Committed || previewReceipt.Completed || previewReceipt.ValidationScope != "protocol_only" {
-			return worker.Result{}, errors.New("preview published the plan")
+			return protocol.Result{}, errors.New("preview published the plan")
 		}
 		if len(actions) != 0 && actions[len(actions)-1].Op == "complete" {
 			review := previewReceipt.CompletionReview
 			if review == nil || review.Acceptance != "not_checked" || review.StateVersion != batch.ExpectedVersion || len(review.UserInputs) != 2 || len(review.FactRecords) != len(review.From) || len(review.FactRecords) == 0 {
-				return worker.Result{}, fmt.Errorf("completion preview lost authoritative review at the graph bridge: %+v", review)
+				return protocol.Result{}, fmt.Errorf("completion preview lost authoritative review at the graph bridge: %+v", review)
 			}
 		} else if previewReceipt.CompletionReview != nil {
-			return worker.Result{}, errors.New("ordinary planning preview unexpectedly added completion review")
+			return protocol.Result{}, errors.New("ordinary planning preview unexpectedly added completion review")
 		} else if len(previewReceipt.Results) != len(actions) {
-			return worker.Result{}, errors.New("ordinary planning preview lost its projected results")
+			return protocol.Result{}, errors.New("ordinary planning preview lost its projected results")
 		}
-		committed, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: batch})
+		committed, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: batch})
 		if err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		if !committed.(board.DecisionReceipt).Committed {
-			return worker.Result{}, errors.New("commit did not return a durable receipt")
+			return protocol.Result{}, errors.New("commit did not return a durable receipt")
 		}
 		compact := committed.(board.DecisionReceipt)
 		if compact.Results != nil || compact.ChangedActions != len(actions) || compact.CompletionReview != nil || compact.ValidationScope != "" {
-			return worker.Result{}, fmt.Errorf("compact commit lost changed-action count: got %+v; want %d", compact, len(actions))
+			return protocol.Result{}, fmt.Errorf("compact commit lost changed-action count: got %+v; want %d", compact, len(actions))
 		}
-		saved, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_receipt"})
+		saved, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_receipt"})
 		if err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		receipt := saved.(board.DecisionReceipt)
 		if !receipt.Committed || receipt.Results != nil || receipt.ChangedActions != compact.ChangedActions || receipt.CompletionReview != nil || receipt.ValidationScope != "" {
-			return worker.Result{}, fmt.Errorf("compact recovery receipt differs from commit: %+v", receipt)
+			return protocol.Result{}, fmt.Errorf("compact recovery receipt differs from commit: %+v", receipt)
 		}
 		if r.afterCommit != nil {
 			r.afterCommit()
 			<-ctx.Done()
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		}
 		if r.lateError {
-			return worker.Result{}, errors.New("synthetic process error after durable commit")
+			return protocol.Result{}, errors.New("synthetic process error after durable commit")
 		}
-		return worker.Result{Status: "success", Type: "result", Text: `{"accepted":true,"data":{"decided":true}}`}, nil
+		return protocol.Result{Status: "success", Type: "result", Text: `{"accepted":true,"data":{"decided":true}}`}, nil
 	}
 	if job.Kind != "explore" || job.Intent == nil {
-		return worker.Result{}, errors.New("unexpected bootstrap or missing Step")
+		return protocol.Result{}, errors.New("unexpected bootstrap or missing Step")
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"description": "The requested fixture rejected unauthenticated access",
 		"scope":       job.Intent.Description, "observed_at": time.Now().UTC().Format(time.RFC3339),
 		"evidence": []board.EvidenceRef{{RunID: job.RunID, Path: "retained/fixture-response.txt", Excerpt: "HTTP 401"}},
 	})
-	response, err := r.graph(ctx, job, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: job.RunID + ":fixture-observation", Payload: payload}})
+	response, err := r.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: job.RunID + ":fixture-observation", Payload: payload}})
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	receipt := response.(board.StateActionResult)
 	raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact_id": receipt.ID}})
-	return worker.Result{Status: "success", Type: "result", Text: string(raw)}, nil
+	return protocol.Result{Status: "success", Type: "result", Text: string(raw)}, nil
 }
 
 // Drop only successful commit response bodies, after the real server already

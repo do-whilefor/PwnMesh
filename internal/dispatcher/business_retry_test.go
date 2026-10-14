@@ -11,25 +11,25 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 type businessRetryRunner struct {
 	orchestrationLoopRunner
-	attempts      chan worker.Job
+	attempts      chan protocol.Job
 	planningRetry chan struct{}
 	authorize     chan struct{}
 }
 
-func (r *businessRetryRunner) Run(ctx context.Context, _ config.Worker, j worker.Job) (worker.Result, error) {
+func (r *businessRetryRunner) Run(ctx context.Context, _ config.Worker, j protocol.Job) (protocol.Result, error) {
 	switch j.Kind {
 	case "curate":
 		return r.curate(ctx, j)
 	case "reason":
 		var steps []board.Step
 		if err := r.page(ctx, j, "steps", &steps); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		actions := []board.DecisionAction{}
 		if len(steps) == 0 {
@@ -42,25 +42,25 @@ func (r *businessRetryRunner) Run(ctx context.Context, _ config.Worker, j worker
 			select {
 			case <-r.authorize:
 			case <-ctx.Done():
-				return worker.Result{}, ctx.Err()
+				return protocol.Result{}, ctx.Err()
 			}
 			payload, _ := json.Marshal(map[string]any{"action": "retry", "id": steps[0].ID, "latest_run_id": steps[0].LatestRunID, "reason": "Authorize one new attempt after the fixture's transient failure"})
 			actions = append(actions, board.DecisionAction{Op: "step", Payload: payload})
 		}
 		batch := fixtureDecisionBatch(j, actions)
-		if _, err := r.graph(ctx, j, worker.GraphRequest{Op: "decision_preview", Batch: batch}); err != nil {
-			return worker.Result{}, err
+		if _, err := r.graph(ctx, j, protocol.GraphRequest{Op: "decision_preview", Batch: batch}); err != nil {
+			return protocol.Result{}, err
 		}
-		_, err := r.graph(ctx, j, worker.GraphRequest{Op: "decision_commit", Batch: batch})
-		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+		_, err := r.graph(ctx, j, protocol.GraphRequest{Op: "decision_commit", Batch: batch})
+		return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 	case "explore":
 		r.attempts <- j
 		if j.PreviousRunID == "" {
-			return worker.Result{Status: "failed", FailureKind: "fixture_failure", Error: "First attempt deliberately fails"}, nil
+			return protocol.Result{Status: "failed", FailureKind: "fixture_failure", Error: "First attempt deliberately fails"}, nil
 		}
 		return r.observe(ctx, j)
 	default:
-		return worker.Result{}, errors.New("unexpected fixture role")
+		return protocol.Result{}, errors.New("unexpected fixture role")
 	}
 }
 
@@ -72,7 +72,7 @@ func TestSchedulerBusinessRetryRequiresDecisionAndConsumesOneGrant(t *testing.T)
 	defer store.Close()
 	api := httptest.NewServer(server.New(store))
 	defer api.Close()
-	r := &businessRetryRunner{attempts: make(chan worker.Job, 8), planningRetry: make(chan struct{}, 1), authorize: make(chan struct{})}
+	r := &businessRetryRunner{attempts: make(chan protocol.Job, 8), planningRetry: make(chan struct{}, 1), authorize: make(chan struct{})}
 	cfg := config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, MaxWorkers: 4, MaxProjects: 1, MaxProjectWorkers: 4, HealthMode: "disabled"},
 		Tasks:   config.Tasks{Reason: config.Task{MaxIntents: 1}, Explore: config.Task{ConcludeTimeout: 60}},
 		Workers: []config.Worker{{Name: "scripted", Type: "go", TaskTypes: []string{"reason", "curate", "explore"}, MaxRunning: 4}}}
@@ -129,7 +129,7 @@ func TestSchedulerBusinessRetryRequiresDecisionAndConsumesOneGrant(t *testing.T)
 	if current.Status != "succeeded" || previous.Status != "retried" {
 		t.Fatalf("retry not consumed successfully: %s / %s", previous.Status, current.Status)
 	}
-	var firstResult worker.Result
+	var firstResult protocol.Result
 	if json.Unmarshal(previous.Result, &firstResult) != nil || firstResult.FailureKind != "fixture_failure" {
 		t.Fatal("retry lost the original failure record")
 	}

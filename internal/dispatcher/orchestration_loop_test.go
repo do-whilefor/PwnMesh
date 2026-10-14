@@ -16,8 +16,8 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 // Every scripted role sees the same immutable input and graph bridge as a real
@@ -27,12 +27,12 @@ type orchestrationLoopRunner struct {
 	loseFinal bool
 }
 
-func (r *orchestrationLoopRunner) Run(ctx context.Context, _ config.Worker, job worker.Job) (worker.Result, error) {
+func (r *orchestrationLoopRunner) Run(ctx context.Context, _ config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.mu.Lock()
 	r.jobs = append(r.jobs, job)
 	r.mu.Unlock()
 	if !job.GraphRPC || job.ResultContractVersion != 2 || job.Graph.Project.OrchestrationVersion != 1 {
-		return worker.Result{}, errors.New("orchestration did not retain the registered protocol")
+		return protocol.Result{}, errors.New("orchestration did not retain the registered protocol")
 	}
 	switch job.Kind {
 	case "reason":
@@ -42,11 +42,11 @@ func (r *orchestrationLoopRunner) Run(ctx context.Context, _ config.Worker, job 
 	case "explore":
 		return r.observe(ctx, job)
 	default:
-		return worker.Result{}, fmt.Errorf("unexpected role %q", job.Kind)
+		return protocol.Result{}, fmt.Errorf("unexpected role %q", job.Kind)
 	}
 }
 
-func (r *orchestrationLoopRunner) page(ctx context.Context, job worker.Job, section string, out any) error {
+func (r *orchestrationLoopRunner) page(ctx context.Context, job protocol.Job, section string, out any) error {
 	version := ""
 	if job.Decision != nil {
 		version = job.Decision.StateVersion
@@ -55,7 +55,7 @@ func (r *orchestrationLoopRunner) page(ctx context.Context, job worker.Job, sect
 	if job.Kind == "curate" && job.InputSnapshot != nil {
 		op, version = "read_snapshot", job.InputSnapshot.StateVersion
 	}
-	value, err := r.graph(ctx, job, worker.GraphRequest{Op: op, Section: section, ExpectedVersion: version, Limit: 50})
+	value, err := r.graph(ctx, job, protocol.GraphRequest{Op: op, Section: section, ExpectedVersion: version, Limit: 50})
 	if err != nil {
 		return err
 	}
@@ -72,9 +72,9 @@ func (r *orchestrationLoopRunner) page(ctx context.Context, job worker.Job, sect
 	return json.Unmarshal(page.Items, out)
 }
 
-func (r *orchestrationLoopRunner) plan(ctx context.Context, job worker.Job) (worker.Result, error) {
+func (r *orchestrationLoopRunner) plan(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 	if job.Decision == nil || job.Decision.Version != 2 {
-		return worker.Result{}, errors.New("missing current decision input")
+		return protocol.Result{}, errors.New("missing current decision input")
 	}
 	var steps []board.Step
 	var disputes []board.Dispute
@@ -84,7 +84,7 @@ func (r *orchestrationLoopRunner) plan(ctx context.Context, job worker.Job) (wor
 		out     any
 	}{{"steps", &steps}, {"disputes", &disputes}, {"candidates", &candidates}} {
 		if err := r.page(ctx, job, query.section, query.out); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 	}
 	actions := []board.DecisionAction{}
@@ -122,18 +122,18 @@ func (r *orchestrationLoopRunner) plan(ctx context.Context, job worker.Job) (wor
 		}
 	}
 	batch := fixtureDecisionBatch(job, actions)
-	if _, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_preview", Batch: batch}); err != nil {
-		return worker.Result{}, err
+	if _, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_preview", Batch: batch}); err != nil {
+		return protocol.Result{}, err
 	}
-	if _, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: batch}); err != nil {
-		return worker.Result{}, err
+	if _, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: batch}); err != nil {
+		return protocol.Result{}, err
 	}
-	return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, nil
+	return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, nil
 }
 
-func (r *orchestrationLoopRunner) observe(ctx context.Context, job worker.Job) (worker.Result, error) {
+func (r *orchestrationLoopRunner) observe(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 	if job.Intent == nil {
-		return worker.Result{}, errors.New("observation has no authorized Step")
+		return protocol.Result{}, errors.New("observation has no authorized Step")
 	}
 	status, observation := "verified", "HTTP/1.1 401 Unauthorized"
 	if strings.Contains(job.Intent.Description, "producer B") {
@@ -146,34 +146,34 @@ func (r *orchestrationLoopRunner) observe(ctx context.Context, job worker.Job) (
 			Steps []board.Step `json:"steps"`
 		}
 		if json.Unmarshal(job.InputView, &view) != nil {
-			return worker.Result{}, errors.New("review has no bounded input view")
+			return protocol.Result{}, errors.New("review has no bounded input view")
 		}
 		bound := false
 		for _, step := range view.Steps {
 			bound = bound || (step.ID == job.Intent.ID && step.DisputeID != "")
 		}
 		if !bound {
-			return worker.Result{}, errors.New("review input omitted its dispute binding")
+			return protocol.Result{}, errors.New("review input omitted its dispute binding")
 		}
 		observation = "Independent replay: unauthenticated request 401; authenticated control 200"
 	}
 	payload, _ := json.Marshal(map[string]any{"description": observation, "scope": "local fixture", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []board.EvidenceRef{{RunID: job.RunID, Path: "/workspace/evidence/" + job.RunID + ".txt", Excerpt: observation}}})
-	value, err := r.graph(ctx, job, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: job.RunID + ":fact", Payload: payload}})
+	value, err := r.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: job.RunID + ":fact", Payload: payload}})
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	fact := value.(board.StateActionResult)
 	payload, _ = json.Marshal(map[string]any{"claim": "Anonymous access is denied", "scope": "local fixture", "status": status, "sources": []string{fact.ID}, "reason": "Candidate interpretation of this run's recorded response"})
-	if _, err = r.graph(ctx, job, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "candidate", IdempotencyKey: job.RunID + ":candidate", Payload: payload}}); err != nil {
-		return worker.Result{}, err
+	if _, err = r.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "candidate", IdempotencyKey: job.RunID + ":candidate", Payload: payload}}); err != nil {
+		return protocol.Result{}, err
 	}
 	final, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact_id": fact.ID}})
-	return worker.Result{Status: "success", Text: string(final)}, nil
+	return protocol.Result{Status: "success", Text: string(final)}, nil
 }
 
-func (r *orchestrationLoopRunner) curate(ctx context.Context, job worker.Job) (worker.Result, error) {
+func (r *orchestrationLoopRunner) curate(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 	if job.State != nil || job.Intent != nil || job.InputSnapshot == nil || len(job.InputView) == 0 {
-		return worker.Result{}, errors.New("curator lost its frozen snapshot input")
+		return protocol.Result{}, errors.New("curator lost its frozen snapshot input")
 	}
 	state := &board.State{Revision: job.InputSnapshot.Revision}
 	for _, query := range []struct {
@@ -181,7 +181,7 @@ func (r *orchestrationLoopRunner) curate(ctx context.Context, job worker.Job) (w
 		out     any
 	}{{"candidates", &state.Candidates}, {"disputes", &state.Disputes}, {"facts", &state.FactRecords}, {"steps", &state.Steps}} {
 		if err := r.page(ctx, job, query.section, query.out); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 	}
 	groups := []board.CurateGroup{}
@@ -208,17 +208,17 @@ func (r *orchestrationLoopRunner) curate(ctx context.Context, job worker.Job) (w
 		groups = append(groups, group)
 	}
 	payload, _ := json.Marshal(board.CuratePayload{ThroughRevision: state.Revision, Groups: groups})
-	value, err := r.graph(ctx, job, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "curate", IdempotencyKey: job.RunID + ":curate", ExpectedVersion: job.InputSnapshot.StateVersion, Payload: payload}})
+	value, err := r.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "curate", IdempotencyKey: job.RunID + ":curate", ExpectedVersion: job.InputSnapshot.StateVersion, Payload: payload}})
 	if err != nil {
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
 	if !value.(board.StateActionResult).Committed {
-		return worker.Result{}, errors.New("curation had no durable receipt")
+		return protocol.Result{}, errors.New("curation had no durable receipt")
 	}
 	if r.loseFinal {
-		return worker.Result{}, errors.New("synthetic curator crash after persisted curation")
+		return protocol.Result{}, errors.New("synthetic curator crash after persisted curation")
 	}
-	return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`}, nil
+	return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`}, nil
 }
 
 type curationLostResponseTransport struct {

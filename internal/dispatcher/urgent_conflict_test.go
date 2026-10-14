@@ -7,7 +7,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestUrgentReasonConflictRestoresUnconsumedDependencyCorrection(t *testing.T) {
@@ -74,7 +74,7 @@ func TestFailedReasonUrgencyDoesNotCrossGenerationOrInventUrgency(t *testing.T) 
 	for _, mode := range []string{"urgent_failure", "ordinary_failure", "new_generation", "success"} {
 		t.Run(mode, func(t *testing.T) {
 			s := New(config.Config{Runtime: config.Runtime{MaxWorkers: 1}}, nil)
-			task := &task{Job: worker.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p"}}}, urgentInput: true}
+			task := &task{Job: protocol.Job{Kind: "reason", Graph: board.Graph{Project: board.Project{ID: "p"}}}, urgentInput: true}
 			outcome := "failed"
 			switch mode {
 			case "ordinary_failure":

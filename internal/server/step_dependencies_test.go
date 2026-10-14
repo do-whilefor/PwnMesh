@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func dependencyHTTPPlan(t *testing.T) (*executionProtocolFixture, string, string) {
@@ -32,7 +32,7 @@ func dependencyHTTPTemplate(f *executionProtocolFixture, step, run string) board
 	f.kind, f.intent, f.run, f.lease = "explore", step, run, "planner@"+run
 	var intent board.Intent
 	f.request("POST", f.base()+"/intents/"+step+"/heartbeat", map[string]string{"worker": f.lease}, false, http.StatusOK, &intent)
-	job, _ := json.Marshal(worker.Job{RunID: run, Kind: "explore", Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.state().Graph.Project}, Intent: &intent})
+	job, _ := json.Marshal(protocol.Job{RunID: run, Kind: "explore", Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.state().Graph.Project}, Intent: &intent})
 	return board.Execution{ProjectID: f.project, ID: run, Namespace: "protocol-test", Backend: "planner", Kind: "explore", Intent: step, Lease: f.lease, Job: job}
 }
 

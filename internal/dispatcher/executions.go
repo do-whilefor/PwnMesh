@@ -18,7 +18,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func digest(v any) string {
@@ -146,7 +146,7 @@ func (s *Scheduler) start(ctx context.Context, t *task) {
 	runCtx, cancelCause := context.WithCancelCause(context.WithoutCancel(ctx))
 	cancel := func() {
 		if ctx.Err() != nil {
-			cancelCause(worker.ErrInterrupted)
+			cancelCause(protocol.ErrInterrupted)
 		} else {
 			cancelCause(context.Canceled)
 		}
@@ -157,7 +157,7 @@ func (s *Scheduler) start(ctx context.Context, t *task) {
 	go func() {
 		select {
 		case <-ctx.Done():
-			cancelCause(worker.ErrInterrupted)
+			cancelCause(protocol.ErrInterrupted)
 		case <-runCtx.Done():
 		}
 	}()
@@ -175,14 +175,14 @@ func (s *Scheduler) start(ctx context.Context, t *task) {
 func executionPath(t *task) string {
 	return projectPath(t.Job.Graph.Project.ID) + "/executions/" + url.PathEscape(t.Job.RunID)
 }
-func (s *Scheduler) status(ctx context.Context, t *task, status string, result worker.Result) error {
+func (s *Scheduler) status(ctx context.Context, t *task, status string, result protocol.Result) error {
 	err := s.Client.Do(ctx, "POST", executionPath(t)+"/status", map[string]any{"status": status, "result": result}, nil, &t.Lease)
 	if err == nil && status == "result_pending" {
 		t.Execution.Status = status
 	}
 	return err
 }
-func (s *Scheduler) terminal(t *task, status string, result worker.Result) {
+func (s *Scheduler) terminal(t *task, status string, result protocol.Result) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.status(ctx, t, status, result); err == nil && status == "failed" && result.FailureKind == "state_changed" && immutableInputVersion(t) != "" {
@@ -206,9 +206,9 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 			continue
 		}
 		project := board.Project{ID: e.ProjectID, Generation: e.Generation}
-		t := &task{Job: worker.Job{RunID: e.ID, Graph: board.Graph{Project: project}}, Lease: Lease{Run: e.Lease, Kind: e.Kind, Intent: e.Intent}}
+		t := &task{Job: protocol.Job{RunID: e.ID, Graph: board.Graph{Project: project}}, Lease: Lease{Run: e.Lease, Kind: e.Kind, Intent: e.Intent}}
 		if states[e.ProjectID] != "active" || e.Generation != s.generations[e.ProjectID] {
-			s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: "hard_cancelled", Error: "project is not active"})
+			s.terminal(t, "cancelled", protocol.Result{Status: "failed", FailureKind: "hard_cancelled", Error: "project is not active"})
 			continue
 		}
 		if s.modelSettingsErr != nil && e.Status != "result_pending" {
@@ -279,7 +279,7 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 				}
 			}
 			if t.Worker.Type != "go" || !slices.Contains(t.Worker.TaskTypes, e.Kind) || t.Job.EnvironmentID != s.environmentID(t.Worker) {
-				s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
+				s.terminal(t, "failed", protocol.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
 				continue
 			}
 			if backendCount >= t.Worker.MaxRunning || e.Kind == "explore" && (!s.executionCapacity(e.ProjectID) || !s.backendExecutionCapacity(t.Worker.Name, t.Worker.MaxRunning)) {
@@ -303,7 +303,7 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 				if pe.Status == 409 && strings.Contains(pe.Detail, "Dispatcher recovery allowance exhausted") {
 					failure = "recovery_exhausted"
 				}
-				s.terminal(t, "failed", worker.Result{Status: "failed", FailureKind: failure, Error: err.Error()})
+				s.terminal(t, "failed", protocol.Result{Status: "failed", FailureKind: failure, Error: err.Error()})
 				continue
 			}
 			return err
@@ -319,7 +319,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 		}
 		return "interrupted", err
 	}
-	var result worker.Result
+	var result protocol.Result
 	if t.Execution.Status == "result_pending" {
 		if err := json.Unmarshal(t.Execution.Result, &result); err != nil {
 			return "failed", err
@@ -335,10 +335,10 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			}
 		}
 		for attempt := 0; attempt <= 2; attempt++ {
-			if err := s.status(ctx, t, "running", worker.Result{}); err != nil {
+			if err := s.status(ctx, t, "running", protocol.Result{}); err != nil {
 				var pe *ProtocolError
 				if errors.As(err, &pe) && (pe.Status == 403 || pe.Status == 404 || pe.Status == 409) {
-					s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: "invalidated_before_start", Error: err.Error()})
+					s.terminal(t, "cancelled", protocol.Result{Status: "failed", FailureKind: "invalidated_before_start", Error: err.Error()})
 					return "cancelled", err
 				}
 				return "interrupted", err
@@ -375,11 +375,11 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 				if cause := context.Cause(ctx); dependencyInvalidated(cause) {
 					failure, detail = "dependency_invalidated", cause.Error()
 				}
-				s.terminal(t, "cancelled", worker.Result{Status: "failed", FailureKind: failure, Error: detail})
+				s.terminal(t, "cancelled", protocol.Result{Status: "failed", FailureKind: failure, Error: detail})
 				return "cancelled", ctx.Err()
 			}
 			if err != nil {
-				result = worker.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: err.Error()}
+				result = protocol.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: err.Error()}
 				if decisionStateChanged(err) {
 					result.FailureKind, result.Retryable = "state_changed", false
 				}
@@ -428,7 +428,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 // Publishing and applying a result share the same failure boundary. Invalid
 // output cannot become valid by replaying the saved Worker result; temporary
 // delivery failures must leave that result available for same-run recovery.
-func (s *Scheduler) resultDeliveryFailure(ctx context.Context, t *task, result worker.Result, err error) (string, error) {
+func (s *Scheduler) resultDeliveryFailure(ctx context.Context, t *task, result protocol.Result, err error) (string, error) {
 	if decisionStateChanged(context.Cause(ctx)) {
 		// A cancelled HTTP call may wrap its heartbeat ProtocolError. Reconcile
 		// the receipt after joining the heartbeat before recording a failure.
@@ -519,7 +519,7 @@ func (s *Scheduler) decisionFinishAllowed(ctx context.Context, t *task) bool {
 	return err == nil && input.Project.Generation == t.Job.Graph.Project.Generation && (input.Project.Status == "active" || input.Project.Status == "completed")
 }
 
-func (s *Scheduler) observeDecision(ctx context.Context, t *task, metrics *worker.DecisionMetrics) {
+func (s *Scheduler) observeDecision(ctx context.Context, t *task, metrics *protocol.DecisionMetrics) {
 	if metrics == nil {
 		return
 	}
@@ -532,12 +532,12 @@ func (s *Scheduler) observeDecision(ctx context.Context, t *task, metrics *worke
 
 func (s *Scheduler) configureGraphHandler() {
 	setter, ok := s.Runner.(interface {
-		SetGraphHandler(func(context.Context, worker.Job, worker.GraphRequest) (any, error))
+		SetGraphHandler(func(context.Context, protocol.Job, protocol.GraphRequest) (any, error))
 	})
 	if !ok {
 		return
 	}
-	setter.SetGraphHandler(func(ctx context.Context, j worker.Job, request worker.GraphRequest) (any, error) {
+	setter.SetGraphHandler(func(ctx context.Context, j protocol.Job, request protocol.GraphRequest) (any, error) {
 		// The job, not model-generated fields, supplies project and lease identity.
 		// Worker identity is registered on the Server; avoid reading Scheduler maps
 		// from Runner goroutines, which would race with dispatch/reaping.

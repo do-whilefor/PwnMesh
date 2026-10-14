@@ -11,7 +11,7 @@ import (
 
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelconfig"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestSettingsReloadReleasesHealthGateAndKeepsRunningEnvironment(t *testing.T) {
@@ -72,7 +72,7 @@ func TestInvalidModelSettingsDoNotBlockProjectStopAndContainerCleanup(t *testing
 	runner := &settingsCleanupRunner{project: graph.Project.ID, cleaned: make(chan string, 1)}
 	s.Runner = runner
 	cancelled := false
-	s.running["fixture"] = &task{Job: worker.Job{Graph: graph}, Cancel: func() { cancelled = true }}
+	s.running["fixture"] = &task{Job: protocol.Job{Graph: graph}, Cancel: func() { cancelled = true }}
 	if err := s.Client.Do(context.Background(), "PUT", projectPath(graph.Project.ID)+"/status", map[string]string{"status": "stopped"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}

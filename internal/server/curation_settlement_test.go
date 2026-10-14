@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestLegacyCurationReceiptReadIsPureAndApplySettlesWithoutRecovery(t *testing.T) {
@@ -19,7 +19,7 @@ func TestLegacyCurationReceiptReadIsPureAndApplySettlesWithoutRecovery(t *testin
 			f.action("curate", "committed", board.CuratePayload{ThroughRevision: job.InputSnapshot.Revision, Groups: []board.CurateGroup{}})
 			var retained json.RawMessage
 			if status == "result_pending" {
-				retained, _ = json.Marshal(worker.Result{Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`, Metrics: &worker.DecisionMetrics{Version: 1}})
+				retained, _ = json.Marshal(protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`, Metrics: &protocol.DecisionMetrics{Version: 1}})
 			}
 			if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
 				if _, err := tx.Exec("UPDATE xloom_executions SET status=?,result=?,resumes=2 WHERE project_id=? AND id=?", status, []byte(retained), f.project, f.run); err != nil {
@@ -62,11 +62,11 @@ func TestCurationMetricsAreRecordedAfterAtomicSuccess(t *testing.T) {
 	_, job := prepareCurator(f)
 	f.action("curate", "committed", board.CuratePayload{ThroughRevision: job.InputSnapshot.Revision, Groups: []board.CurateGroup{}})
 	before := f.state()
-	metrics := &worker.DecisionMetrics{Version: 1}
+	metrics := &protocol.DecisionMetrics{Version: 1}
 	for range 2 {
 		f.request("POST", f.base()+"/executions/"+f.run+"/observation", map[string]any{"metrics": metrics}, true, http.StatusOK, nil)
 	}
-	var result worker.Result
+	var result protocol.Result
 	if json.Unmarshal(f.executionRecords()[0].Result, &result) != nil || !reflect.DeepEqual(result.Metrics, metrics) || !reflect.DeepEqual(before, f.state()) {
 		t.Fatal("post-commit metrics changed curation or were lost")
 	}

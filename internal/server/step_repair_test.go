@@ -11,7 +11,7 @@ import (
 
 	"pwnmesh/internal/artifactcheck"
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestRepairPreparationBindsServerContractAndRejectsClientInjection(t *testing.T) {
@@ -22,7 +22,7 @@ func TestRepairPreparationBindsServerContractAndRejectsClientInjection(t *testin
 	var plan board.DecisionReceipt
 	f.request("POST", f.base()+"/state/decisions/commit", board.DecisionBatch{ExpectedVersion: planner.Decision.StateVersion, Actions: []board.DecisionAction{{Op: "step", Ref: "repair", Payload: raw}}}, true, http.StatusOK, &plan)
 	template := dependencyHTTPTemplate(f, plan.IDs["repair"], "repair")
-	var injected worker.Job
+	var injected protocol.Job
 	json.Unmarshal(template.Job, &injected)
 	injected.Repair = spec
 	bad := template
@@ -32,8 +32,8 @@ func TestRepairPreparationBindsServerContractAndRejectsClientInjection(t *testin
 	if job.Repair == nil || job.Repair.Path != spec.Path || job.Repair.SHA256 != spec.SHA256 {
 		t.Fatal("server dropped repair contract")
 	}
-	f.request("POST", f.base()+"/executions/repair/status", map[string]any{"status": "result_pending", "result": worker.Result{Status: "success", Text: `{"accepted":true}`}}, true, http.StatusUnprocessableEntity, nil)
-	f.request("POST", f.base()+"/executions/repair/status", map[string]any{"status": "failed", "result": worker.Result{Status: "failed", FailureKind: "repair_stale"}}, true, http.StatusOK, nil)
+	f.request("POST", f.base()+"/executions/repair/status", map[string]any{"status": "result_pending", "result": protocol.Result{Status: "success", Text: `{"accepted":true}`}}, true, http.StatusUnprocessableEntity, nil)
+	f.request("POST", f.base()+"/executions/repair/status", map[string]any{"status": "failed", "result": protocol.Result{Status: "failed", FailureKind: "repair_stale"}}, true, http.StatusOK, nil)
 	response := f.request("POST", f.base()+"/executions/repair/retry", map[string]any{}, false, http.StatusConflict, nil)
 	if !strings.Contains(response, "stale repair requires a new assessed Step") {
 		t.Fatalf("management retry was not rejected by the stale-contract guard: %s", response)
@@ -42,8 +42,8 @@ func TestRepairPreparationBindsServerContractAndRejectsClientInjection(t *testin
 
 func TestRepairSuccessRequiresBoundRuntimeReceipt(t *testing.T) {
 	spec := &artifactcheck.Spec{Path: "/workspace/a", SHA256: strings.Repeat("a", 64), Rules: []artifactcheck.Rule{{Kind: "json_valid"}}}
-	job, _ := json.Marshal(worker.Job{Repair: spec, RunID: "repair-run", Workspace: "/workspace", Kind: "explore", GraphRPC: true, ResultContractVersion: 2})
-	valid := worker.RepairCheck{Result: artifactcheck.Result{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("{}\n"))), Satisfied: true, FailedRules: []int{}}, Path: spec.Path, ExpectedSHA256: spec.SHA256, Outcome: "noop"}
+	job, _ := json.Marshal(protocol.Job{Repair: spec, RunID: "repair-run", Workspace: "/workspace", Kind: "explore", GraphRPC: true, ResultContractVersion: 2})
+	valid := protocol.RepairCheck{Result: artifactcheck.Result{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("{}\n"))), Satisfied: true, FailedRules: []int{}}, Path: spec.Path, ExpectedSHA256: spec.SHA256, Outcome: "noop"}
 	for _, name := range []string{"valid", "missing", "wrong path", "wrong binding", "failed check", "failed rule indexes", "invalid hash", "stale"} {
 		t.Run(name, func(t *testing.T) {
 			check := valid
@@ -73,7 +73,7 @@ func TestRepairSuccessRequiresBoundRuntimeReceipt(t *testing.T) {
 	}
 }
 
-func repairResultWithEvidence(check worker.RepairCheck, run, workspace string, includeContent bool) worker.Result {
+func repairResultWithEvidence(check protocol.RepairCheck, run, workspace string, includeContent bool) protocol.Result {
 	dir := path.Join(workspace, ".pwnmesh", "runs", run, "evidence")
 	receipt, _ := json.Marshal(check)
 	refs := []board.EvidenceRef{{RunID: run, Path: path.Join(dir, fmt.Sprintf("%x.raw", sha256.Sum256(receipt))), Excerpt: string(receipt)}}
@@ -82,15 +82,15 @@ func repairResultWithEvidence(check worker.RepairCheck, run, workspace string, i
 	}
 	fact := map[string]any{"description": "Deterministic repair accepted", "scope": check.Path, "observed_at": "2026-09-28T00:00:00Z", "evidence": refs}
 	text, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact": fact}})
-	return worker.Result{Type: "result", Status: "success", Text: string(text), RepairCheck: &check}
+	return protocol.Result{Type: "result", Status: "success", Text: string(text), RepairCheck: &check}
 }
 
 func TestRepairReceiptMustBeBoundToCurrentRunEvidence(t *testing.T) {
 	for _, name := range []string{"valid", "execute", "fact id", "missing evidence", "missing content", "missing receipt", "foreign run", "foreign directory", "traversal", "bad hash name", "uppercase hash", "receipt excerpt changed", "receipt hash changed", "blank excerpt", "invalid line selection", "missing run", "invalid run", "missing workspace", "noncanonical workspace", "target outside workspace", "wrong result contract", "wrong role"} {
 		t.Run(name, func(t *testing.T) {
 			spec := &artifactcheck.Spec{Path: "/workspace/a", SHA256: strings.Repeat("a", 64), Rules: []artifactcheck.Rule{{Kind: "json_valid"}}}
-			job := worker.Job{Repair: spec, RunID: "repair-run", Workspace: "/workspace", Kind: "explore", GraphRPC: true, ResultContractVersion: 2}
-			check := worker.RepairCheck{Result: artifactcheck.Result{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("{}\n"))), Satisfied: true, FailedRules: []int{}}, Path: spec.Path, ExpectedSHA256: spec.SHA256, Outcome: "noop"}
+			job := protocol.Job{Repair: spec, RunID: "repair-run", Workspace: "/workspace", Kind: "explore", GraphRPC: true, ResultContractVersion: 2}
+			check := protocol.RepairCheck{Result: artifactcheck.Result{SHA256: fmt.Sprintf("%x", sha256.Sum256([]byte("{}\n"))), Satisfied: true, FailedRules: []int{}}, Path: spec.Path, ExpectedSHA256: spec.SHA256, Outcome: "noop"}
 			if name == "execute" {
 				check.Outcome = "execute"
 			}
@@ -157,8 +157,8 @@ func TestRepairReceiptMustBeBoundToCurrentRunEvidence(t *testing.T) {
 
 func TestRepairEmptyTargetRequiresReceiptButNoEmptyExcerpt(t *testing.T) {
 	spec := &artifactcheck.Spec{Path: "/workspace/a", SHA256: strings.Repeat("a", 64), Rules: []artifactcheck.Rule{{Kind: "text_not_contains", Text: "bad"}}}
-	job, _ := json.Marshal(worker.Job{Repair: spec, RunID: "repair-run", Workspace: "/workspace", Kind: "explore", GraphRPC: true, ResultContractVersion: 2})
-	check := worker.RepairCheck{Result: artifactcheck.Result{SHA256: fmt.Sprintf("%x", sha256.Sum256(nil)), Satisfied: true, FailedRules: []int{}}, Path: spec.Path, ExpectedSHA256: spec.SHA256, Outcome: "noop"}
+	job, _ := json.Marshal(protocol.Job{Repair: spec, RunID: "repair-run", Workspace: "/workspace", Kind: "explore", GraphRPC: true, ResultContractVersion: 2})
+	check := protocol.RepairCheck{Result: artifactcheck.Result{SHA256: fmt.Sprintf("%x", sha256.Sum256(nil)), Satisfied: true, FailedRules: []int{}}, Path: spec.Path, ExpectedSHA256: spec.SHA256, Outcome: "noop"}
 	raw, _ := json.Marshal(repairResultWithEvidence(check, "repair-run", "/workspace", false))
 	if err := validateRepairResult(job, raw); err != nil {
 		t.Fatal(err)

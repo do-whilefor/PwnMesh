@@ -11,8 +11,8 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 // Block each role independently. Ordering assertions then prove that an
@@ -24,19 +24,19 @@ type pipelineGateRunner struct {
 	reconcile      bool
 	requestCurator bool
 	rejectCurator  bool
-	started        chan worker.Job
-	reasonStarted  chan worker.Job
-	curateStarted  chan worker.Job
+	started        chan protocol.Job
+	reasonStarted  chan protocol.Job
+	curateStarted  chan protocol.Job
 	release        map[string]chan struct{}
 	allowCurator   chan struct{}
 }
 
-func (r *pipelineGateRunner) Run(ctx context.Context, _ config.Worker, job worker.Job) (worker.Result, error) {
+func (r *pipelineGateRunner) Run(ctx context.Context, _ config.Worker, job protocol.Job) (protocol.Result, error) {
 	switch job.Kind {
 	case "reason":
 		var steps []board.Step
 		if err := r.page(ctx, job, "steps", &steps); err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		if len(steps) > 0 {
 			r.reasonStarted <- job
@@ -55,8 +55,8 @@ func (r *pipelineGateRunner) Run(ctx context.Context, _ config.Worker, job worke
 				payload, _ := json.Marshal(map[string]any{"sources": sources, "reason": "Reconcile the retained observation before continuing the authorized pipeline"})
 				actions = append(actions, board.DecisionAction{Op: "curation_request", Payload: payload})
 			}
-			_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
-			return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+			_, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
+			return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 		}
 		actions := []board.DecisionAction{
 			{Op: "step", Ref: "left", Payload: json.RawMessage(`{"action":"add","from":["origin"],"description":"left","priority":30}`)},
@@ -66,42 +66,42 @@ func (r *pipelineGateRunner) Run(ctx context.Context, _ config.Worker, job worke
 		if r.extra {
 			actions = append(actions, board.DecisionAction{Op: "step", Payload: json.RawMessage(`{"action":"add","from":["origin"],"description":"independent","priority":10}`)})
 		}
-		_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
-		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+		_, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
+		return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 	case "curate":
 		r.curateStarted <- job
 		select {
 		case <-ctx.Done():
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		case <-r.allowCurator:
 			if r.rejectCurator {
-				return worker.Result{Status: "success", Text: `{"accepted":false,"reason":"The retained response needs another observation before reconciliation"}`}, nil
+				return protocol.Result{Status: "success", Text: `{"accepted":false,"reason":"The retained response needs another observation before reconciliation"}`}, nil
 			}
 			return r.curate(ctx, job)
 		}
 	case "explore":
 		payload, _ := json.Marshal(map[string]any{"description": "Accepted pipeline observation", "scope": job.Intent.Description, "observed_at": time.Now().UTC().Format(time.RFC3339),
 			"evidence": []board.EvidenceRef{{RunID: job.RunID, Path: "/workspace/" + job.RunID + ".txt", Excerpt: "fixture"}}})
-		value, err := r.graph(ctx, job, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: job.RunID + ":fact", Payload: payload}})
+		value, err := r.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: job.RunID + ":fact", Payload: payload}})
 		if err != nil {
-			return worker.Result{}, err
+			return protocol.Result{}, err
 		}
 		if r.reconcile {
 			candidate, _ := json.Marshal(map[string]any{"claim": "The pipeline retained the expected response", "scope": "pipeline", "status": "verified", "sources": []string{value.(board.StateActionResult).ID}, "reason": "Recorded response from this independent producer"})
-			if _, err := r.graph(ctx, job, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "candidate", IdempotencyKey: job.RunID + ":candidate", Payload: candidate}}); err != nil {
-				return worker.Result{}, err
+			if _, err := r.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "candidate", IdempotencyKey: job.RunID + ":candidate", Payload: candidate}}); err != nil {
+				return protocol.Result{}, err
 			}
 		}
 		r.started <- job
 		select {
 		case <-ctx.Done():
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		case <-r.release[job.Intent.Description]:
 		}
 		final, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]string{"fact_id": value.(board.StateActionResult).ID}})
-		return worker.Result{Status: "success", Text: string(final)}, nil
+		return protocol.Result{Status: "success", Text: string(final)}, nil
 	default:
-		return worker.Result{}, fmt.Errorf("unexpected pipeline role %s", job.Kind)
+		return protocol.Result{}, fmt.Errorf("unexpected pipeline role %s", job.Kind)
 	}
 }
 
@@ -114,7 +114,7 @@ func pipelineFixture(t *testing.T, slots int, extra bool) (*Scheduler, *pipeline
 	t.Cleanup(func() { _ = store.Close() })
 	api := httptest.NewServer(server.New(store))
 	t.Cleanup(api.Close)
-	r := &pipelineGateRunner{extra: extra, started: make(chan worker.Job, 4), reasonStarted: make(chan worker.Job, 4), curateStarted: make(chan worker.Job, 4),
+	r := &pipelineGateRunner{extra: extra, started: make(chan protocol.Job, 4), reasonStarted: make(chan protocol.Job, 4), curateStarted: make(chan protocol.Job, 4),
 		release: map[string]chan struct{}{}, allowCurator: make(chan struct{})}
 	for _, name := range []string{"left", "right", "join", "independent"} {
 		r.release[name] = make(chan struct{})
@@ -138,7 +138,7 @@ func pipelineFixture(t *testing.T, slots int, extra bool) (*Scheduler, *pipeline
 	return s, r, store, graph, ctx
 }
 
-func pipelineStarted(t *testing.T, ctx context.Context, r *pipelineGateRunner) worker.Job {
+func pipelineStarted(t *testing.T, ctx context.Context, r *pipelineGateRunner) protocol.Job {
 	t.Helper()
 	select {
 	case job := <-r.started:
@@ -148,7 +148,7 @@ func pipelineStarted(t *testing.T, ctx context.Context, r *pipelineGateRunner) w
 	case <-ctx.Done():
 		t.Fatal("pipeline did not launch the authorized execution", ctx.Err())
 	}
-	return worker.Job{}
+	return protocol.Job{}
 }
 
 func TestAuthorizedPipelineDoesNotWaitForCuration(t *testing.T) {
@@ -159,7 +159,7 @@ func TestAuthorizedPipelineDoesNotWaitForCuration(t *testing.T) {
 				t.Fatal(err)
 			}
 			left := pipelineStarted(t, ctx, r)
-			var right worker.Job
+			var right protocol.Job
 			if slots > 1 {
 				// Neither producer is allowed to finish yet: both arrivals prove
 				// outer Worker overlap rather than merely two queued executions.

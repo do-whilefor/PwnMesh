@@ -8,7 +8,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func coalescingFixture() (*Scheduler, board.Graph, board.SchedulePage, time.Time) {
@@ -177,11 +177,11 @@ func TestReasonUsesSchedulingRevisionWithoutCountChanges(t *testing.T) {
 
 type publishingExecuteRunner struct {
 	batchProtocolRunner
-	published chan worker.Job
+	published chan protocol.Job
 	release   chan struct{}
 }
 
-func (r *publishingExecuteRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *publishingExecuteRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	result, err := r.batchProtocolRunner.Run(ctx, backend, job)
 	if err != nil || job.Kind != "explore" {
 		return result, err
@@ -191,13 +191,13 @@ func (r *publishingExecuteRunner) Run(ctx context.Context, backend config.Worker
 	case <-r.release:
 		return result, nil
 	case <-ctx.Done():
-		return worker.Result{}, ctx.Err()
+		return protocol.Result{}, ctx.Err()
 	}
 }
 
 func TestDispatchUsesFreeSlotsForExecuteDuringFactBurst(t *testing.T) {
 	fixture, _, _, graph, store := batchSchedulerFixture(t, 2)
-	runner := &publishingExecuteRunner{batchProtocolRunner: batchProtocolRunner{directions: 2}, published: make(chan worker.Job, 2), release: make(chan struct{})}
+	runner := &publishingExecuteRunner{batchProtocolRunner: batchProtocolRunner{directions: 2}, published: make(chan protocol.Job, 2), release: make(chan struct{})}
 	fixture.Config.Runtime.MaxWorkers = 3
 	s := New(fixture.Config, runner)
 	s.Config.Runtime.MaxWorkers = 1

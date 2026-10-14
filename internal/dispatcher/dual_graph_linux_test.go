@@ -18,6 +18,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/worker"
 	"pwnmesh/internal/workergraph"
 )
@@ -129,7 +130,7 @@ func TestDualGraphSeparatesAssetDiscoveryCorrectionAndStepAcceptance(t *testing.
 			if change == "same_asset" && (len(before.AssetIDs("fact", source)) != 1 || !slices.Equal(before.AssetIDs("fact", source), before.AssetIDs("fact", changedFact))) {
 				t.Fatal("fixture did not associate both observations with the same asset")
 			}
-			frozen, err := f.runner.handler(f.ctx, run.Job, worker.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_snapshot", Section: "facts", IDs: []string{source, changedFact}, ExpectedVersion: run.Job.InputSnapshot.StateVersion})
+			frozen, err := f.runner.handler(f.ctx, run.Job, protocol.GraphRequest{RequestID: strings.Repeat("d", 32), Op: "read_snapshot", Section: "facts", IDs: []string{source, changedFact}, ExpectedVersion: run.Job.InputSnapshot.StateVersion})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -147,8 +148,8 @@ func TestDualGraphSeparatesAssetDiscoveryCorrectionAndStepAcceptance(t *testing.
 				t.Fatalf("unrelated asset observation blocked acceptance: %v", err)
 			}
 			if change == "refuted_source" {
-				var protocol *ProtocolError
-				if !errors.As(err, &protocol) || protocol.Status != 409 || !strings.Contains(err.Error(), "not effective evidence") {
+				var protocolErr *ProtocolError
+				if !errors.As(err, &protocolErr) || protocolErr.Status != 409 || !strings.Contains(err.Error(), "not effective evidence") {
 					t.Fatalf("successful DAG bypassed exploration dependency validation: %v", err)
 				}
 			}
@@ -246,7 +247,7 @@ func testDualGraphCancellation(t *testing.T, dependency bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		f.do("POST", executionPath(producer)+"/status", map[string]any{"status": "result_pending", "result": worker.Result{Status: "success", Text: string(final)}}, nil, &producer.Lease)
+		f.do("POST", executionPath(producer)+"/status", map[string]any{"status": "result_pending", "result": protocol.Result{Status: "success", Text: string(final)}}, nil, &producer.Lease)
 		f.do("POST", executionPath(producer)+"/apply", map[string]any{}, nil, &producer.Lease)
 		run = f.prepare("explore", []string{"origin"}, "Compute from the accepted prerequisite", producer.Job.Intent.ID)
 		if len(run.Job.DependencyResults) != 1 || run.Job.DependencyResults[0] != (board.DependencyResult{StepID: producer.Job.Intent.ID, FactID: source, RunID: producer.Job.RunID}) {
@@ -266,7 +267,7 @@ func testDualGraphCancellation(t *testing.T, dependency bool) {
 	})}
 	done := startDualGraphRun(t, f.ctx, func(ctx context.Context) updateRunResult {
 		status, err := f.scheduler.runTask(ctx, run)
-		return updateRunResult{worker.Result{Status: status}, err}
+		return updateRunResult{protocol.Result{Status: status}, err}
 	})
 	pid := awaitDualGraphProcess(t, f, done)
 	f.correct(source)
@@ -307,7 +308,7 @@ func testDualGraphCancellation(t *testing.T, dependency bool) {
 	}
 	var execution board.Execution
 	f.do("GET", executionPath(run)+"?namespace="+f.scheduler.namespace(), nil, &execution, nil)
-	var failure worker.Result
+	var failure protocol.Result
 	if err := json.Unmarshal(execution.Result, &failure); err != nil {
 		t.Fatal(err)
 	}

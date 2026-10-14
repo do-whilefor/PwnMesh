@@ -9,7 +9,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 type stepOrderRunner struct {
@@ -17,14 +17,14 @@ type stepOrderRunner struct {
 	newPriority int
 }
 
-func (r *stepOrderRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *stepOrderRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	steps, _, _ := fixturePlanInput(job)
 	if job.Kind != "reason" || steps != 2 {
 		return r.batchProtocolRunner.Run(ctx, backend, job)
 	}
 	payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": "Newly authorized fixture", "priority": r.newPriority})
-	_, err := r.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, []board.DecisionAction{{Op: "step", Payload: payload}})})
-	return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+	_, err := r.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, []board.DecisionAction{{Op: "step", Payload: payload}})})
+	return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 }
 
 func TestReadyStepOrderPreservesPriorityAndFIFO(t *testing.T) {

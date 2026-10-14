@@ -8,30 +8,30 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestRejectedGoalOnlyDecisionCanCommitExecutableCorrection(t *testing.T) {
 	s, runner, store, graph := staleCuratorFixture(t)
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		if job.Kind == "explore" {
 			return runner.observe(ctx, job)
 		}
 		if job.Kind != "reason" {
-			return worker.Result{}, fmt.Errorf("unexpected role %s", job.Kind)
+			return protocol.Result{}, fmt.Errorf("unexpected role %s", job.Kind)
 		}
 		batch := fixtureDecisionBatch(job, []board.DecisionAction{{Op: "goal", Ref: "investigate", Payload: json.RawMessage(`{"action":"add","condition":"Investigate the requested target"}`)}})
 		for _, op := range []string{"decision_preview", "decision_commit"} {
-			if _, err := runner.graph(ctx, job, worker.GraphRequest{Op: op, Batch: batch}); err == nil || !strings.Contains(err.Error(), "decision would leave the project idle") {
-				return worker.Result{}, fmt.Errorf("goal-only %s was not rejected: %v", op, err)
+			if _, err := runner.graph(ctx, job, protocol.GraphRequest{Op: op, Batch: batch}); err == nil || !strings.Contains(err.Error(), "decision would leave the project idle") {
+				return protocol.Result{}, fmt.Errorf("goal-only %s was not rejected: %v", op, err)
 			}
 		}
 		// The rejected draft must leave this same run able to authorize work.
 		batch = fixtureDecisionBatch(job, []board.DecisionAction{{Op: "step", Payload: json.RawMessage(`{"action":"add","from":["origin"],"description":"Observe the requested target"}`)}})
-		if _, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: batch}); err != nil {
-			return worker.Result{}, err
+		if _, err := runner.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: batch}); err != nil {
+			return protocol.Result{}, err
 		}
-		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, nil
+		return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, nil
 	}
 	retryTicks(t, s, 2)
 	var state board.State

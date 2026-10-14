@@ -10,21 +10,21 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestReviewStartupDoesNotLaunchRedundantReasonAfterQuietPeriod(t *testing.T) {
 	s, runner, _, graph := staleCuratorFixture(t)
-	reviewStarted := make(chan worker.Job, 1)
+	reviewStarted := make(chan protocol.Job, 1)
 	var decisions atomic.Int32
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		if job.Kind == "reason" {
 			decisions.Add(1)
 		}
 		if job.Kind == "explore" && strings.Contains(job.Intent.Description, "Independently") {
 			reviewStarted <- job
 			<-ctx.Done() // No observation has been added since its authorization.
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		}
 		return runner.orchestrationLoopRunner.Run(ctx, s.Config.Workers[0], job)
 	}
@@ -99,18 +99,18 @@ func TestReviewStartupReplacesInvalidatedPlannerWithoutBlockingWorker(t *testing
 			}
 			before := readState()
 			planner := prepareCurationTestTask(t, s, before.Graph, "reason", "hint-planner", nil)
-			planned, reviewing := make(chan worker.Job, 2), make(chan worker.Job, 1)
+			planned, reviewing := make(chan protocol.Job, 2), make(chan protocol.Job, 1)
 			reviewEntered := make(chan struct{})
 			var calls atomic.Int32
-			runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+			runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 				if job.Kind == "explore" {
 					reviewing <- job
 					close(reviewEntered)
 					<-ctx.Done() // No new review evidence can rescue a lost signal.
-					return worker.Result{}, ctx.Err()
+					return protocol.Result{}, ctx.Err()
 				}
 				if job.Kind != "reason" {
-					return worker.Result{}, fmt.Errorf("unexpected role %s", job.Kind)
+					return protocol.Result{}, fmt.Errorf("unexpected role %s", job.Kind)
 				}
 				attempt := calls.Add(1)
 				planned <- job
@@ -118,17 +118,17 @@ func TestReviewStartupReplacesInvalidatedPlannerWithoutBlockingWorker(t *testing
 					select {
 					case <-reviewEntered:
 					case <-ctx.Done():
-						return worker.Result{}, ctx.Err()
+						return protocol.Result{}, ctx.Err()
 					}
 				}
-				_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, nil)})
+				_, err := runner.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, nil)})
 				if attempt == 1 {
 					if !decisionStateChanged(err) {
-						return worker.Result{}, fmt.Errorf("review startup did not reject the old CAS: %v", err)
+						return protocol.Result{}, fmt.Errorf("review startup did not reject the old CAS: %v", err)
 					}
-					return worker.Result{Status: "failed", FailureKind: "state_changed", Error: err.Error()}, nil
+					return protocol.Result{Status: "failed", FailureKind: "state_changed", Error: err.Error()}, nil
 				}
-				return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+				return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 			}
 			s.start(ctx, planner)
 			select {
@@ -141,7 +141,7 @@ func TestReviewStartupReplacesInvalidatedPlannerWithoutBlockingWorker(t *testing
 			if ok, err := s.dispatch(ctx, graph.Project.ID); !ok || err != nil {
 				t.Fatalf("live planner blocked its authorized review: %v %v", ok, err)
 			}
-			var review worker.Job
+			var review protocol.Job
 			select {
 			case review = <-reviewing:
 			case <-ctx.Done():
@@ -165,7 +165,7 @@ func TestReviewStartupReplacesInvalidatedPlannerWithoutBlockingWorker(t *testing
 				}
 			}
 			old := waitTerminal(s, planner, "failed")
-			var failure worker.Result
+			var failure protocol.Result
 			if json.Unmarshal(old.Result, &failure) != nil || failure.FailureKind != "state_changed" || failure.Retryable {
 				t.Fatalf("original planner was not a terminal stale snapshot: %s", old.Result)
 			}
@@ -182,7 +182,7 @@ func TestReviewStartupReplacesInvalidatedPlannerWithoutBlockingWorker(t *testing
 				// including a still-live independently owned review lease.
 				replacement = New(s.Config, runner)
 			}
-			var next worker.Job
+			var next protocol.Job
 			for next.RunID == "" {
 				replacement.reap()
 				if _, err := replacement.dispatch(ctx, graph.Project.ID); err != nil {

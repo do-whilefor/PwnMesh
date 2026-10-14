@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestInputUploadOutlivesOrdinaryRequestDeadlines(t *testing.T) {
@@ -265,7 +265,7 @@ func TestCreatePausedAndFreezeInputManifest(t *testing.T) {
 	if !bytes.Equal(saved.Job, repeated.Job) {
 		t.Fatal("upload changed an existing execution's input")
 	}
-	var forged worker.Job
+	var forged protocol.Job
 	_ = json.Unmarshal(template.Job, &forged)
 	forged.InputFiles = []board.InputFile{first}
 	template.Job, _ = json.Marshal(forged)

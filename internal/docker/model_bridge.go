@@ -14,8 +14,8 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelrpc"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/provider"
-	"pwnmesh/internal/worker"
 )
 
 // Each bridge is bound to one launch. Only the dispatcher sees the upstream
@@ -23,7 +23,7 @@ import (
 type modelBridge struct {
 	ctx     context.Context
 	cancel  context.CancelFunc
-	job     worker.Job
+	job     protocol.Job
 	model   *provider.Anthropic
 	deliver func(context.Context, modelrpc.Response) error
 	fail    func(error)
@@ -34,7 +34,7 @@ type modelBridge struct {
 	slots   chan struct{}
 }
 
-func configuredModel(w config.Worker, j worker.Job) (*provider.Anthropic, error) {
+func configuredModel(w config.Worker, j protocol.Job) (*provider.Anthropic, error) {
 	return provider.FromEnvironment(func(key string) string {
 		if value, ok := w.Env[key]; ok {
 			return value
@@ -131,7 +131,7 @@ func jsonContainsModelCredential(raw []byte, secrets ...string) bool {
 	}
 }
 
-func newModelBridge(parent context.Context, p *provider.Anthropic, j worker.Job, deliver func(context.Context, modelrpc.Response) error, fail func(error)) *modelBridge {
+func newModelBridge(parent context.Context, p *provider.Anthropic, j protocol.Job, deliver func(context.Context, modelrpc.Response) error, fail func(error)) *modelBridge {
 	ctx, cancel := context.WithCancel(parent)
 	return &modelBridge{ctx: ctx, cancel: cancel, model: p, job: j, deliver: deliver, fail: fail, active: map[string]context.CancelFunc{}, seen: map[string]bool{}, slots: make(chan struct{}, 32)}
 }
@@ -146,7 +146,7 @@ func (b *modelBridge) close() {
 }
 
 func (b *modelBridge) stop(id string) error {
-	if !worker.ValidGraphRequestID(id) {
+	if !protocol.ValidGraphRequestID(id) {
 		return errors.New("invalid model cancellation ID")
 	}
 	b.mu.Lock()
@@ -158,7 +158,7 @@ func (b *modelBridge) stop(id string) error {
 }
 
 func (b *modelBridge) start(r modelrpc.Request) error {
-	if !worker.ValidGraphRequestID(r.RequestID) {
+	if !protocol.ValidGraphRequestID(r.RequestID) {
 		return errors.New("invalid model request ID")
 	}
 	if r.SessionID != b.job.RunID {

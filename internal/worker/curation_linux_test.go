@@ -313,10 +313,10 @@ func TestCuratorUncertainReceiptRecoversBeforeAnotherMutation(t *testing.T) {
 					if request.Action.Op != "curate" || request.Action.IdempotencyKey != j.RunID+":curate" {
 						t.Fatalf("curator changed its mutation identity: %+v", request)
 					}
-					return json.RawMessage(strings.ReplaceAll(firstReceipt, "VERSION", j.curationVersion())), nil
+					return json.RawMessage(strings.ReplaceAll(firstReceipt, "VERSION", j.CurationVersion())), nil
 				case "curate_receipt":
 					reads++
-					return board.StateActionResult{Committed: true, StateVersion: j.curationVersion()}, nil
+					return board.StateActionResult{Committed: true, StateVersion: j.CurationVersion()}, nil
 				default:
 					t.Fatalf("unexpected curator request: %+v", request)
 					return nil, nil

@@ -15,7 +15,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestRunCrashConfirmsInterruptionBeforeSameRunRecovery(t *testing.T) {
@@ -98,7 +98,7 @@ func TestRunCrashConfirmsInterruptionBeforeSameRunRecovery(t *testing.T) {
 			}))
 			defer engine.Close()
 			client := &Client{Config: config.Container{Namespace: "test", Image: "worker"}, http: &http.Client{Transport: graphBridgeTestTransport{base: http.DefaultTransport, endpoint: engine.URL}}}
-			job := worker.Job{RunID: "same-run", Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}
+			job := protocol.Job{RunID: "same-run", Kind: "explore", Graph: board.Graph{Project: board.Project{ID: "p"}}}
 			backend := config.Worker{Env: map[string]string{"ANTHROPIC_AUTH_TOKEN": "fixture-model-auth", "ANTHROPIC_MODEL": "fixture-model"}}
 			result, err := client.Run(context.Background(), backend, job)
 			if err == nil || result.Status != "" || !reflect.DeepEqual(order, []string{"worker", "interrupt"}) {

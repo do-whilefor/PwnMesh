@@ -13,16 +13,16 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 type staleCuratorRunner struct {
 	orchestrationLoopRunner
-	run   func(context.Context, worker.Job) (worker.Result, error)
+	run   func(context.Context, protocol.Job) (protocol.Result, error)
 	calls atomic.Int32
 }
 
-func (r *staleCuratorRunner) Run(ctx context.Context, backend config.Worker, job worker.Job) (worker.Result, error) {
+func (r *staleCuratorRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.calls.Add(1)
 	if r.run != nil {
 		return r.run(ctx, job)
@@ -53,7 +53,7 @@ func prepareCurationTestTask(t *testing.T, s *Scheduler, graph board.Graph, kind
 	t.Helper()
 	backend := s.Config.Workers[0]
 	// Tests also call runTask directly, bypassing start's lease initialization.
-	run := &task{Job: worker.Job{RunID: id, Kind: kind, Graph: graph, Intent: intent, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: s.environmentID(backend), Budget: s.Config.Task(kind)}, Worker: backend, Lease: Lease{Run: backend.Name + "@" + id, Kind: kind}, LeaseTimeout: s.leaseTimeout}
+	run := &task{Job: protocol.Job{RunID: id, Kind: kind, Graph: graph, Intent: intent, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: s.environmentID(backend), Budget: s.Config.Task(kind)}, Worker: backend, Lease: Lease{Run: backend.Name + "@" + id, Kind: kind}, LeaseTimeout: s.leaseTimeout}
 	if intent != nil {
 		run.Lease.Intent = intent.ID
 	}
@@ -92,7 +92,7 @@ func curationExecution(t *testing.T, store *board.Store, run *task) board.Execut
 func assertStaleCuration(t *testing.T, store *board.Store, run *task) board.Execution {
 	t.Helper()
 	e := curationExecution(t, store, run)
-	var result worker.Result
+	var result protocol.Result
 	if json.Unmarshal(e.Result, &result) != nil || e.Status != "failed" || result.FailureKind != "state_changed" || result.Retryable {
 		t.Fatalf("stale curator did not finish as one terminal state_changed failure: run=%s status=%s result=%+v", e.ID, e.Status, result)
 	}
@@ -112,11 +112,11 @@ func TestCuratorPreflightSkipsStaleQueuedAndRetryRequests(t *testing.T) {
 				}
 			} else {
 				wantCalls = 1
-				runner.run = func(ctx context.Context, _ worker.Job) (worker.Result, error) {
+				runner.run = func(ctx context.Context, _ protocol.Job) (protocol.Result, error) {
 					if err := changeCurationInput(ctx, s, graph); err != nil {
-						return worker.Result{}, err
+						return protocol.Result{}, err
 					}
-					return worker.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic transport failure"}, nil
+					return protocol.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic transport failure"}, nil
 				}
 			}
 			outcome, err := s.runTask(context.Background(), run)
@@ -152,7 +152,9 @@ func TestCuratorHeartbeatCancelsBlockedModelAndHealth(t *testing.T) {
 				return ctx.Err()
 			}
 			if mode == "model" {
-				runner.run = func(ctx context.Context, _ worker.Job) (worker.Result, error) { return worker.Result{}, block(ctx) }
+				runner.run = func(ctx context.Context, _ protocol.Job) (protocol.Result, error) {
+					return protocol.Result{}, block(ctx)
+				}
 			} else {
 				s.Config.Runtime.HealthMode = "startup_and_task"
 				s.CheckHealth = func(ctx context.Context, _ config.Worker) error { return block(ctx) }
@@ -195,10 +197,10 @@ func TestCuratorCommitWinsStaleCancellationWithoutSeparateResultDelivery(t *test
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			stale := &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: late in-flight heartbeat"}`}
-			runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+			runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 				_, err := runner.curate(ctx, job)
 				cancel(stale)
-				return worker.Result{}, errors.Join(err, errors.New("synthetic lost final response"))
+				return protocol.Result{}, errors.Join(err, errors.New("synthetic lost final response"))
 			}
 			var receiptReads atomic.Int32
 			var resultDeliveries atomic.Int32
@@ -249,7 +251,7 @@ func TestCuratorHeartbeatCancellationLeavesIndependentExecutionRunning(t *testin
 	execute := prepareCurationTestTask(t, s, state.Graph, "explore", "independent-worker", &state.Graph.Intents[0])
 	curator := prepareCurationTestTask(t, s, state.Graph, "curate", "stale-curator", nil)
 	started, stopExecute, stopped := make(chan string, 2), make(chan struct{}), make(chan string, 2)
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		started <- job.Kind
 		if job.Kind == "explore" {
 			select {
@@ -257,12 +259,12 @@ func TestCuratorHeartbeatCancellationLeavesIndependentExecutionRunning(t *testin
 				return runner.observe(ctx, job)
 			case <-ctx.Done():
 				stopped <- job.Kind
-				return worker.Result{}, ctx.Err()
+				return protocol.Result{}, ctx.Err()
 			}
 		}
 		<-ctx.Done()
 		stopped <- job.Kind
-		return worker.Result{}, ctx.Err()
+		return protocol.Result{}, ctx.Err()
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer func() { cancel(); s.wg.Wait() }()
@@ -300,14 +302,14 @@ func TestCuratorHeartbeatCancellationLeavesIndependentExecutionRunning(t *testin
 func pendingCurationFixture(t *testing.T) (*Scheduler, *staleCuratorRunner, *board.Store, board.Graph) {
 	t.Helper()
 	s, runner, store, graph := staleCuratorFixture(t)
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		actions := []board.DecisionAction{}
 		for _, description := range []string{"Observe the fixture: producer A", "Observe the fixture: producer B", "Observe the fixture: matching producer"} {
 			payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": description})
 			actions = append(actions, board.DecisionAction{Op: "step", Payload: payload})
 		}
-		_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
-		return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+		_, err := runner.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, actions)})
+		return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 	}
 	planner := prepareCurationTestTask(t, s, graph, "reason", "seed-plan", nil)
 	if outcome, err := s.runTask(context.Background(), planner); outcome != "success" || err != nil {
@@ -338,17 +340,17 @@ func TestTerminalCuratorAllowsMainAgentWithoutRetryingUnchangedInput(t *testing.
 		t.Run(terminal, func(t *testing.T) {
 			s, runner, store, graph := pendingCurationFixture(t)
 			run := prepareCurationTestTask(t, s, graph, "curate", "terminal-curator", nil)
-			runner.run = func(context.Context, worker.Job) (worker.Result, error) {
+			runner.run = func(context.Context, protocol.Job) (protocol.Result, error) {
 				if terminal == "rejected" {
-					return worker.Result{Status: "success", Text: `{"accepted":false,"reason":"Synthetic curator refusal"}`}, nil
+					return protocol.Result{Status: "success", Text: `{"accepted":false,"reason":"Synthetic curator refusal"}`}, nil
 				}
-				return worker.Result{Status: "failed", FailureKind: "fixture_failure", Error: "Synthetic terminal curator failure"}, nil
+				return protocol.Result{Status: "failed", FailureKind: "fixture_failure", Error: "Synthetic terminal curator failure"}, nil
 			}
 			if outcome, err := s.runTask(context.Background(), run); outcome != terminal || terminal == "rejected" && err != nil {
 				t.Fatalf("curator did not enter expected terminal state: %s %v", outcome, err)
 			}
 			var mainCalls, curatorCalls atomic.Int32
-			runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+			runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 				if job.Kind == "curate" {
 					curatorCalls.Add(1)
 					return runner.curate(ctx, job)
@@ -365,13 +367,13 @@ func TestTerminalCuratorAllowsMainAgentWithoutRetryingUnchangedInput(t *testing.
 					completionErr = tx.ValidateStateCompletion(graph.Project.ID, state.Candidates[0].Sources)
 					return nil
 				}); err != nil {
-					return worker.Result{}, err
+					return protocol.Result{}, err
 				}
 				if completionErr != nil {
-					return worker.Result{}, fmt.Errorf("optional agreement merging blocked supported completion: %w", completionErr)
+					return protocol.Result{}, fmt.Errorf("optional agreement merging blocked supported completion: %w", completionErr)
 				}
-				_, err := runner.graph(ctx, job, worker.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, nil)})
-				return worker.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
+				_, err := runner.graph(ctx, job, protocol.GraphRequest{Op: "decision_commit", Batch: fixtureDecisionBatch(job, nil)})
+				return protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"decided":true}}`}, err
 			}
 			retryTicks(t, s, 3)
 			if mainCalls.Load() != 1 || curatorCalls.Load() != 0 {
@@ -426,7 +428,7 @@ func TestCommittedCuratorHistorySurvivesLaterHumanStopOrRestart(t *testing.T) {
 			run := prepareCurationTestTask(t, s, graph, "curate", "management-race", nil)
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
-			runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+			runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 				result, err := runner.curate(ctx, job)
 				if err != nil {
 					return result, err

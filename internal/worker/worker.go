@@ -190,7 +190,7 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 		state.GraphVersion = j.Decision.StateVersion
 	}
 	if j.Kind == "curate" {
-		state.GraphVersion = j.curationVersion()
+		state.GraphVersion = j.CurationVersion()
 	}
 	if j.Budget.Timeout > 0 {
 		state.ExecutionDeadline = state.StartedAt.Add(time.Duration(j.Budget.Timeout) * time.Second)

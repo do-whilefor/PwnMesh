@@ -8,18 +8,18 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestCuratorInfrastructureSuccessorRunsBeforeMainAgent(t *testing.T) {
 	s, runner, store, graph := pendingCurationFixture(t)
-	jobs := make(chan worker.Job, 8)
+	jobs := make(chan protocol.Job, 8)
 	var attempts atomic.Int32
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		jobs <- job
 		if job.Kind == "curate" {
 			if attempts.Add(1) == 1 {
-				return worker.Result{Status: "failed", FailureKind: "budget_exhausted", FailureCause: "transport", Error: "typed model request interruption at the original deadline"}, nil
+				return protocol.Result{Status: "failed", FailureKind: "budget_exhausted", FailureCause: "transport", Error: "typed model request interruption at the original deadline"}, nil
 			}
 			return runner.curate(ctx, job)
 		}
@@ -73,10 +73,10 @@ func TestCuratorInfrastructureSuccessorRunsBeforeMainAgent(t *testing.T) {
 func TestCuratorInfrastructureAllowanceSurvivesDispatcherRestart(t *testing.T) {
 	s, runner, store, graph := pendingCurationFixture(t)
 	var attempts atomic.Int32
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		if job.Kind == "curate" {
 			attempts.Add(1)
-			return worker.Result{Status: "failed", FailureKind: "recovery_exhausted", FailureCause: "transport", Error: "model stream interrupted"}, nil
+			return protocol.Result{Status: "failed", FailureKind: "recovery_exhausted", FailureCause: "transport", Error: "model stream interrupted"}, nil
 		}
 		return runner.plan(ctx, job)
 	}
@@ -106,10 +106,10 @@ func TestCuratorInfrastructureAllowanceSurvivesDispatcherRestart(t *testing.T) {
 func TestCuratorAutomaticRetryGrantSurvivesLostAcknowledgement(t *testing.T) {
 	s, runner, store, graph := pendingCurationFixture(t)
 	var attempts atomic.Int32
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		if job.Kind == "curate" {
 			if attempts.Add(1) == 1 {
-				return worker.Result{Status: "failed", FailureKind: "transport", Error: "connection reset"}, nil
+				return protocol.Result{Status: "failed", FailureKind: "transport", Error: "connection reset"}, nil
 			}
 			return runner.curate(ctx, job)
 		}
@@ -135,7 +135,7 @@ func TestCuratorAutomaticRetryGrantSurvivesLostAcknowledgement(t *testing.T) {
 	}
 	for _, e := range testExecutions(t, store) {
 		if e.ProjectID == graph.Project.ID && e.Kind == "curate" && e.ID != first.ID {
-			var job worker.Job
+			var job protocol.Job
 			if json.Unmarshal(e.Job, &job) != nil || job.PreviousRunID != first.ID || e.Status != "succeeded" {
 				t.Fatal("restart did not consume the same durable grant")
 			}
@@ -151,10 +151,10 @@ func TestCuratorAutomaticRetryGrantSurvivesLostAcknowledgement(t *testing.T) {
 func TestCuratorInfrastructureRetryReleasesOnlyItsInterruptedTerminalLease(t *testing.T) {
 	s, runner, store, graph := pendingCurationFixture(t)
 	var attempts atomic.Int32
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		if job.Kind == "curate" {
 			if attempts.Add(1) == 1 {
-				return worker.Result{Status: "failed", FailureKind: "transport", Error: "connection reset"}, nil
+				return protocol.Result{Status: "failed", FailureKind: "transport", Error: "connection reset"}, nil
 			}
 			return runner.curate(ctx, job)
 		}

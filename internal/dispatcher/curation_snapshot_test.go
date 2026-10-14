@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"testing"
 	"time"
@@ -40,24 +40,24 @@ func TestLargeProducerHistoryStillSchedulesAndCommitsCuration(t *testing.T) {
 		}
 		return response, err
 	})}
-	runner.run = func(ctx context.Context, job worker.Job) (worker.Result, error) {
+	runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 		// Cross a real heartbeat before growing the state so the lease path is
 		// covered even when ordinary builds finish faster than the first tick.
 		select {
 		case <-heartbeat:
 		case <-ctx.Done():
-			return worker.Result{}, ctx.Err()
+			return protocol.Result{}, ctx.Err()
 		}
 		last := ""
 		for n := 0; n < 12; n++ {
 			payload, _ := json.Marshal(map[string]any{"description": fmt.Sprintf("observation %d: ", n) + strings.Repeat("x", 8192), "scope": "local fixture", "observed_at": time.Now().UTC().Format(time.RFC3339), "evidence": []board.EvidenceRef{{RunID: job.RunID, Path: "/workspace/evidence/" + job.RunID + ".txt", Excerpt: "retained synthetic observation"}}})
-			value, err := runner.graph(ctx, job, worker.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: fmt.Sprintf("large-%d", n), Payload: payload}})
+			value, err := runner.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "fact", IdempotencyKey: fmt.Sprintf("large-%d", n), Payload: payload}})
 			if err != nil {
-				return worker.Result{}, err
+				return protocol.Result{}, err
 			}
 			last = value.(board.StateActionResult).ID
 		}
-		return worker.Result{Status: "success", Text: fmt.Sprintf(`{"accepted":true,"outcome":"completed","data":{"fact_id":%q}}`, last)}, nil
+		return protocol.Result{Status: "success", Text: fmt.Sprintf(`{"accepted":true,"outcome":"completed","data":{"fact_id":%q}}`, last)}, nil
 	}
 	if outcome, err := s.runTask(ctx, producer); outcome != "success" || err != nil {
 		t.Fatalf("producer: %s %v", outcome, err)
@@ -67,7 +67,7 @@ func TestLargeProducerHistoryStillSchedulesAndCommitsCuration(t *testing.T) {
 	if err := s.Client.Do(ctx, "GET", projectPath(graph.Project.ID)+"/state", nil, &state, nil); err != nil {
 		t.Fatal(err)
 	}
-	legacy, _ := json.Marshal(worker.Job{Graph: state.Graph, State: &state})
+	legacy, _ := json.Marshal(protocol.Job{Graph: state.Graph, State: &state})
 	if len(legacy) <= board.MaxCurationInputBytes {
 		t.Fatal("history does not exercise the old size barrier")
 	}

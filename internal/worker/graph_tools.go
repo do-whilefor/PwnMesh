@@ -41,7 +41,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 	if versioned && o.GraphVersion == nil {
 		version := ""
 		if j.Kind == "curate" {
-			version = j.curationVersion()
+			version = j.CurationVersion()
 		} else {
 			version = j.Decision.StateVersion
 		}
@@ -81,7 +81,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 			if r.Op == "graph_action" {
 				r.Action.ExpectedVersion = *o.GraphVersion
 				if j.Kind == "curate" {
-					r.Action.ExpectedVersion = j.curationVersion()
+					r.Action.ExpectedVersion = j.CurationVersion()
 				}
 			} else if (r.ByteOffset != nil || (r.Section != "" && r.Section != "overview")) && (j.Kind != "curate" || r.ExpectedVersion == "") {
 				r.ExpectedVersion = *o.GraphVersion
@@ -163,7 +163,7 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 			}
 		}
 		raw, err = track(raw, err)
-		if err == nil && r.Op == "read_graph" && !r.evidenceLookup && o.decision != nil {
+		if err == nil && r.Op == "read_graph" && !internalGraphRead(ctx) && o.decision != nil {
 			o.decision.observeRead(r.Section, raw)
 		}
 		return raw, err

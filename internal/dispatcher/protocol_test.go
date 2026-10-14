@@ -8,16 +8,16 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 // This runner records the immutable job and stops immediately. It never starts
 // a process, calls a model, or touches a container.
-type protocolRunner struct{ jobs chan worker.Job }
+type protocolRunner struct{ jobs chan protocol.Job }
 
-func (r *protocolRunner) Run(_ context.Context, _ config.Worker, job worker.Job) (worker.Result, error) {
+func (r *protocolRunner) Run(_ context.Context, _ config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.jobs <- job
-	return worker.Result{Status: "failed", Error: "fixture finished"}, nil
+	return protocol.Result{Status: "failed", Error: "fixture finished"}, nil
 }
 func (*protocolRunner) Cleanup(context.Context, string, string) error { return nil }
 func (*protocolRunner) Projects(context.Context) ([]string, error)    { return nil, nil }
@@ -38,7 +38,7 @@ func TestNewJobsRegisterTheCurrentResultProtocol(t *testing.T) {
 				}
 				intent = &graph.Intents[0]
 			}
-			runner := &protocolRunner{jobs: make(chan worker.Job, 1)}
+			runner := &protocolRunner{jobs: make(chan protocol.Job, 1)}
 			scheduler.Runner = runner
 			var current board.State
 			if err := scheduler.Client.Do(ctx, "GET", projectPath(graph.Project.ID)+"/state", nil, &current, nil); err != nil {
@@ -52,7 +52,7 @@ func TestNewJobsRegisterTheCurrentResultProtocol(t *testing.T) {
 			if err != nil || !started {
 				t.Fatalf("launch: started=%v, err=%v", started, err)
 			}
-			var job worker.Job
+			var job protocol.Job
 			select {
 			case job = <-runner.jobs:
 			case <-ctx.Done():
@@ -72,7 +72,7 @@ func TestNewJobsRegisterTheCurrentResultProtocol(t *testing.T) {
 			if got := executions[len(executions)-1].RetryKey; got != expectedRetry {
 				t.Fatalf("registration lost its server-owned retry boundary: %s", got)
 			}
-			var persisted worker.Job
+			var persisted protocol.Job
 			if err = json.Unmarshal(executions[len(executions)-1].Job, &persisted); err != nil {
 				t.Fatal(err)
 			}

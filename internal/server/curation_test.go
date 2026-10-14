@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func newCurationHTTPFixture(t *testing.T) *executionProtocolFixture {
@@ -25,18 +25,18 @@ func curatorTemplate(f *executionProtocolFixture) board.Execution {
 	f.t.Helper()
 	f.kind, f.intent = "curate", ""
 	f.request("POST", f.base()+"/curate/claim", map[string]string{"worker": f.lease, "trigger": "new_observations"}, false, http.StatusOK, nil)
-	job, err := json.Marshal(worker.Job{RunID: f.run, Kind: "curate", Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.state().Graph.Project}})
+	job, err := json.Marshal(protocol.Job{RunID: f.run, Kind: "curate", Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.state().Graph.Project}})
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	return board.Execution{ProjectID: f.project, ID: f.run, Namespace: "protocol-test", Backend: "planner", Kind: "curate", Lease: f.lease, Job: job}
 }
 
-func prepareCurator(f *executionProtocolFixture) (board.Execution, worker.Job) {
+func prepareCurator(f *executionProtocolFixture) (board.Execution, protocol.Job) {
 	f.t.Helper()
 	var execution board.Execution
 	f.request("POST", f.base()+"/executions/prepare", curatorTemplate(f), true, http.StatusCreated, &execution)
-	var job worker.Job
+	var job protocol.Job
 	if err := json.Unmarshal(execution.Job, &job); err != nil {
 		f.t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func prepareOrchestratedExecute(f *executionProtocolFixture) {
 	f.kind, f.run, f.lease, f.intent = "explore", "producer-run", "planner@producer-run", plan.IDs["producer"]
 	var intent board.Intent
 	f.request("POST", f.base()+"/intents/"+f.intent+"/heartbeat", map[string]string{"worker": f.lease}, false, http.StatusOK, &intent)
-	raw, err := json.Marshal(worker.Job{RunID: f.run, Kind: f.kind, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.state().Graph.Project}, Intent: &intent})
+	raw, err := json.Marshal(protocol.Job{RunID: f.run, Kind: f.kind, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, Graph: board.Graph{Project: f.state().Graph.Project}, Intent: &intent})
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestCuratorPreparationIsImmutableAndHasNoStep(t *testing.T) {
 	template := curatorTemplate(f)
 	var saved board.Execution
 	f.request("POST", f.base()+"/executions/prepare", template, true, http.StatusCreated, &saved)
-	var job worker.Job
+	var job protocol.Job
 	if err := json.Unmarshal(saved.Job, &job); err != nil {
 		t.Fatal(err)
 	}

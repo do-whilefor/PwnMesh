@@ -27,7 +27,7 @@ func TestCuratorNormalizesOnlyOptionalDisputeNullsThroughLoop(t *testing.T) {
 			ThroughRevision int64                        `json:"through_revision"`
 			Groups          []map[string]json.RawMessage `json:"groups"`
 		}
-		if err := json.Unmarshal(request.Action.Payload, &payload); err != nil || len(payload.Groups) != 2 || payload.ThroughRevision != j.curationRevision() {
+		if err := json.Unmarshal(request.Action.Payload, &payload); err != nil || len(payload.Groups) != 2 || payload.ThroughRevision != j.CurationRevision() {
 			t.Fatalf("invalid normalized payload: %s, %v", request.Action.Payload, err)
 		}
 		for _, field := range []string{"dispute_id", "review_fact_ids", "resolution"} {

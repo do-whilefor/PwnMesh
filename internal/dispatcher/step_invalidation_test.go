@@ -11,8 +11,8 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
-	"pwnmesh/internal/worker"
 )
 
 type invalidatingRetryRunner struct {
@@ -22,10 +22,10 @@ type invalidatingRetryRunner struct {
 	correctionErr error
 }
 
-func (r *invalidatingRetryRunner) Run(ctx context.Context, _ config.Worker, job worker.Job) (worker.Result, error) {
+func (r *invalidatingRetryRunner) Run(ctx context.Context, _ config.Worker, job protocol.Job) (protocol.Result, error) {
 	r.calls++
 	if r.calls > 1 {
-		return worker.Result{Status: "failed", Error: "invalid source reached a second process"}, nil
+		return protocol.Result{Status: "failed", Error: "invalid source reached a second process"}, nil
 	}
 	// A curator corrects the premise while the first process is active.
 	// The transient result then attempts the normal retry path.
@@ -35,9 +35,9 @@ func (r *invalidatingRetryRunner) Run(ctx context.Context, _ config.Worker, job 
 	}, nil, &r.planner.Lease)
 	if err != nil {
 		r.correctionErr = err
-		return worker.Result{}, err
+		return protocol.Result{}, err
 	}
-	return worker.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic interrupted connection"}, nil
+	return protocol.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: "synthetic interrupted connection"}, nil
 }
 
 func (*invalidatingRetryRunner) Cleanup(context.Context, string, string) error { return nil }
@@ -85,12 +85,12 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 	runner := &invalidatingRetryRunner{}
 	scheduler := New(config.Config{Server: httpServer.URL, Runtime: config.Runtime{MaxWorkers: 1}}, runner)
 	runner.client = scheduler.Client
-	job := worker.Job{RunID: "execute-retry", Kind: "explore", WorkerType: "go", Workspace: "/workspace", Graph: state.Graph, Intent: &state.Graph.Intents[0], ResultContractVersion: 2, GraphRPC: true}
+	job := protocol.Job{RunID: "execute-retry", Kind: "explore", WorkerType: "go", Workspace: "/workspace", Graph: state.Graph, Intent: &state.Graph.Intents[0], ResultContractVersion: 2, GraphRPC: true}
 	active := &task{Job: job, Worker: config.Worker{Name: "fixture", Type: "go"}, Lease: Lease{Run: "fixture@execute-retry", Kind: "explore", Intent: job.Intent.ID}}
 	if err := scheduler.register(ctx, active); err != nil {
 		t.Fatal(err)
 	}
-	runner.planner = &task{Job: worker.Job{RunID: "correction", Kind: "curate", WorkerType: "go", Workspace: "/workspace", Graph: state.Graph, ResultContractVersion: 2, GraphRPC: true}, Worker: config.Worker{Name: "planner", Type: "go"}, Lease: Lease{Run: "planner@correction", Kind: "curate"}}
+	runner.planner = &task{Job: protocol.Job{RunID: "correction", Kind: "curate", WorkerType: "go", Workspace: "/workspace", Graph: state.Graph, ResultContractVersion: 2, GraphRPC: true}, Worker: config.Worker{Name: "planner", Type: "go"}, Lease: Lease{Run: "planner@correction", Kind: "curate"}}
 	if err := scheduler.register(ctx, runner.planner); err != nil {
 		t.Fatal(err)
 	}
@@ -105,7 +105,7 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 	if len(executions) != 2 || executions[0].Status != "cancelled" {
 		t.Fatalf("retry cancellation was not durable: %+v", executions)
 	}
-	var result worker.Result
+	var result protocol.Result
 	if err := json.Unmarshal(executions[0].Result, &result); err != nil {
 		t.Fatal(err)
 	}

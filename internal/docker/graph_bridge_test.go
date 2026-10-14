@@ -13,7 +13,7 @@ import (
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/modelrpc"
-	"pwnmesh/internal/worker"
+	"pwnmesh/internal/protocol"
 )
 
 func TestGraphBridgeDeliversOversizedSuccessfulActionAsAcknowledgement(t *testing.T) {
@@ -53,15 +53,15 @@ func TestGraphBridgeDeliversOversizedSuccessfulActionAsAcknowledgement(t *testin
 	client := &Client{http: &http.Client{Transport: graphBridgeTestTransport{base: http.DefaultTransport, endpoint: engine.URL}}}
 	version := strings.Repeat("b", 64)
 	handlerCalls := 0
-	client.SetGraphHandler(func(context.Context, worker.Job, worker.GraphRequest) (any, error) {
+	client.SetGraphHandler(func(context.Context, protocol.Job, protocol.GraphRequest) (any, error) {
 		handlerCalls++
-		return board.StateActionResult{Op: "candidate", ID: "candidate_many", Revision: 42, StateVersion: version, Result: json.RawMessage(`{"evidence":"` + strings.Repeat("x", worker.MaxGraphRPCBytes) + `"}`)}, nil
+		return board.StateActionResult{Op: "candidate", ID: "candidate_many", Revision: 42, StateVersion: version, Result: json.RawMessage(`{"evidence":"` + strings.Repeat("x", protocol.MaxGraphRPCBytes) + `"}`)}, nil
 	})
-	request := worker.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: "candidate", IdempotencyKey: "observed", Payload: json.RawMessage(`{}`)}}
-	if err := client.graphBridge(context.Background(), "fixture", "/workspace/.pwnmesh/runs/run", worker.Job{Kind: "explore", GraphRPC: true})(request); err != nil {
+	request := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: "candidate", IdempotencyKey: "observed", Payload: json.RawMessage(`{}`)}}
+	if err := client.graphBridge(context.Background(), "fixture", "/workspace/.pwnmesh/runs/run", protocol.Job{Kind: "explore", GraphRPC: true})(request); err != nil {
 		t.Fatal(err)
 	}
-	var response worker.GraphResponse
+	var response protocol.GraphResponse
 	if err := json.Unmarshal(published, &response); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestGraphBridgeDeliversOversizedSuccessfulActionAsAcknowledgement(t *testin
 	if err := json.Unmarshal(response.Result, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if len(published) > worker.MaxGraphRPCBytes || response.RequestID != request.RequestID || !receipt.ResultOmitted || receipt.Op != "candidate" || receipt.ID != "candidate_many" || receipt.StateVersion != version || receipt.Revision != 42 {
+	if len(published) > protocol.MaxGraphRPCBytes || response.RequestID != request.RequestID || !receipt.ResultOmitted || receipt.Op != "candidate" || receipt.ID != "candidate_many" || receipt.StateVersion != version || receipt.Revision != 42 {
 		t.Fatalf("successful mutation lost its acknowledgement: %s", published)
 	}
 }
@@ -142,8 +142,8 @@ func TestBridgeResponsesPublishOnlyAfterCompleteArchive(t *testing.T) {
 				})}}
 				var err error
 				if bridge == "graph" {
-					client.SetGraphHandler(func(context.Context, worker.Job, worker.GraphRequest) (any, error) { return map[string]any{}, nil })
-					err = client.graphBridge(context.Background(), "fixture", "/workspace/.pwnmesh/runs/run", worker.Job{Kind: "explore", GraphRPC: true})(worker.GraphRequest{RequestID: requestID, Op: "read_graph"})
+					client.SetGraphHandler(func(context.Context, protocol.Job, protocol.GraphRequest) (any, error) { return map[string]any{}, nil })
+					err = client.graphBridge(context.Background(), "fixture", "/workspace/.pwnmesh/runs/run", protocol.Job{Kind: "explore", GraphRPC: true})(protocol.GraphRequest{RequestID: requestID, Op: "read_graph"})
 				} else {
 					err = client.modelDelivery("fixture", "/workspace/.pwnmesh/runs/run")(context.Background(), modelrpc.Response{RequestID: requestID})
 				}
