@@ -51,6 +51,7 @@ when isolation from those inherited settings is needed.
 | `bash scripts/test-integration.sh offline` | Linux, Go/C toolchain, Python, ripgrep | Cross-component offline fixtures and acceptance-oracle regressions |
 | `bash scripts/test-integration.sh docker` | Existing worker image, Linux Docker daemon | Scripted-model Docker acceptance plus Docker input delivery |
 | `bash scripts/test-integration.sh live readiness` | Explicit model endpoint, authentication, model and evidence output directory | Real-model readiness probe |
+| `bash scripts/test-integration.sh live smoke` | Model settings/output plus a basic worker image and Docker daemon | One local calculation through scheduling, execution, evidence and completion |
 | `bash scripts/test-integration.sh live <scenario>` | Model settings/output plus worker image and Docker daemon | One selected real-model acceptance scenario |
 
 Docker example, after building an image deliberately:
@@ -98,9 +99,9 @@ Keep regression tests beside the owning Go package or in the existing integratio
 package. Preserve transaction, wire/hash and recovery boundaries described in
 [architecture](architecture.md) and [supported formats](formats.md). Before a
 schema change, test empty initialization, a current versioned reopen, unsupported
-input rejection and rollback. Namespace changes also need a populated schema `1`
-upgrade fixture that checks canonical object names, stored bytes, foreign keys,
-triggers and query behavior. Before a protocol move, retain exact wire fixtures.
+input rejection and rollback. Preserve canonical object names, stored bytes,
+foreign keys, triggers and query behavior for current databases; retired schema
+versions must be rejected without mutation. Before a protocol move, retain exact wire fixtures.
 Commit reviewable changes with their focused regressions, without generated
 evidence or local plans. The Docker context includes the five maintained guides
 because the release checks validate them, while excluding local archives.

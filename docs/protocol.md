@@ -24,14 +24,14 @@ inside Protocol.
 | Worker session | `schema_version: 1` with immutable session identity |
 | Acceptance receipt | `schema_version: 1` in `acceptance.json` |
 | Agent context checkpoint | Version `1`, separate from session and acceptance |
-| SQLite schema migration | Schema `2` with `pwnmesh_*` object names; supported schema `1` upgrades once on open |
+| SQLite schema | Schema `2` with `pwnmesh_*` object names; older schemas are rejected |
 
 These numbers are independent. Incrementing one does not authorize rewriting
 another. Server rejects unsupported project protocols, and
 `requireCurrentExecution` rejects historical execution protocols for
 resume/apply/retry. Worker recovery accepts current bound receipts and checkpoints.
-The database namespace migration changes SQL object names without changing Job,
-State, Result or checkpoint serialization; see [supported formats](formats.md).
+Current database and protocol validation preserve Job, State, Result and
+checkpoint serialization; see [supported formats](formats.md).
 
 ## Prepare, execute, settle
 

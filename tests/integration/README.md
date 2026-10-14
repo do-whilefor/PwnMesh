@@ -34,6 +34,8 @@ timeout; it is outside default CI.
 Available live scenarios:
 
 - `readiness`: production readiness handshake only; no Docker.
+- `smoke`: one Worker calculates a local sum and input hash, retains evidence,
+  publishes one Fact and completes the project; bash/coreutils are sufficient.
 - `contention`, `orchestration`: concurrent execution and orchestration.
 - `asset-graph`, `worker-command-graph`, `worker-mixed-graph`: graph execution and provenance.
 - `curation-relations`, `curation-support`: evidence correction and current support.

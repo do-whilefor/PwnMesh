@@ -21,6 +21,16 @@ import (
 	"pwnmesh/internal/dispatcher"
 )
 
+func TestLiveSmokeProject(t *testing.T) {
+	if os.Getenv("PWNMESH_LIVE_SMOKE_TEST") != "1" {
+		t.Skip("opt in to the real model and one simple Docker Worker task")
+	}
+	origin := `Use only local files under /workspace. Authorize exactly one ordinary Step. Its Worker writes exactly the bytes 2\n3\n5\n to /workspace/smoke-values.txt, then uses bash and coreutils to read every line, calculate the sum, and calculate SHA-256 of the exact file bytes. Do not hardcode the result. Save AND print /workspace/smoke-receipt.json as {"sum":the calculated integer,"dataset_sha256":the calculated hash}. Publish exactly one fact with scope smoke-v1 and evidence from BOTH the original values file and the receipt. Finish with that existing fact_id. No network calls, package installs, credentials, candidates, disputes, or extra Steps are needed. The main Agent completes only after that Step succeeds, citing its fact as root-goal support.`
+	runObservedProject(t, "Single Worker local arithmetic smoke", origin,
+		"Compute 2+3+5 from retained input bytes, retain the input and calculation receipt, and complete using the successful Worker's fact.",
+		"single_worker_retained_evidence", validateSmokeDelivery, 1)
+}
+
 // The same production lifecycle as the other live workloads, with independent
 // acceptance of graph receipts, retained bytes and cross-Worker observations.
 func TestLiveAssetGraphProject(t *testing.T) {

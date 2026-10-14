@@ -28,6 +28,7 @@ case "$suite" in
         scenario=$1
         # Match one external entrypoint, never all TestLive-prefixed offline oracles.
         case "$scenario" in
+            smoke) test_name=TestLiveSmokeProject; gate=PWNMESH_LIVE_SMOKE_TEST ;;
             readiness) test_name=TestLiveModelReadiness; gate=PWNMESH_LIVE_READINESS_TEST ;;
             contention) test_name=TestLiveContentionProject; gate=PWNMESH_LIVE_CONTENTION_TEST ;;
             orchestration) test_name=TestLiveOrchestrationProject; gate=PWNMESH_LIVE_ORCHESTRATION_TEST ;;
