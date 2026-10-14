@@ -1,4 +1,4 @@
-package board
+package sqlstore
 
 import (
 	"database/sql"

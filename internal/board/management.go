@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 // ProjectInput contains human input; Board owns initial identities and state.
@@ -16,8 +18,7 @@ type ProjectInput struct {
 type HintInput struct{ Content, Creator string }
 
 func (t *Tx) RequireCurrentProject(project string) error {
-	var version int
-	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN pwnmesh_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, project).Scan(&version)
+	version, err := sqlstore.ProjectVersion(t.transactionQueries, project)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Err(404, "Project not found")
 	}
@@ -34,8 +35,7 @@ func (t *Tx) UpdateSettings(settings Settings) error {
 	if settings.IntentTimeout < 5 || settings.ReasonTimeout < 5 {
 		return Err(422, "timeouts must be integers greater than or equal to 5")
 	}
-	_, err := t.Exec("UPDATE settings SET intent_timeout=?,reason_timeout=? WHERE rowid=1", settings.IntentTimeout, settings.ReasonTimeout)
-	return err
+	return sqlstore.WriteSettings(t.transactionQueries, settings)
 }
 
 func (t *Tx) CreateProject(input ProjectInput) (out Graph, err error) {
@@ -82,8 +82,7 @@ func (t *Tx) DeleteProject(project string) error {
 	if _, err := t.Load(project); err != nil {
 		return err
 	}
-	_, err := t.Exec("DELETE FROM projects WHERE id=?", project)
-	return err
+	return sqlstore.DeleteProject(t.transactionQueries, project)
 }
 
 func (t *Tx) SetProjectTitle(project, title string) (Project, error) {
@@ -98,7 +97,7 @@ func (t *Tx) SetProjectTitle(project, title string) (Project, error) {
 	if err = ValidateContextCapacity(state); err != nil {
 		return Project{}, err
 	}
-	_, err = t.Exec("UPDATE projects SET title=? WHERE id=?", title, project)
+	err = sqlstore.SetProjectTitle(t.transactionQueries, project, title)
 	return state.Graph.Project, err
 }
 

@@ -1,4 +1,4 @@
-package board
+package sqlstore
 
 import (
 	"database/sql"
@@ -158,7 +158,7 @@ func migratePwnMeshNamespace(tx *sql.Tx) error {
 	return checkStoreForeignKeys(tx)
 }
 
-func checkStoreForeignKeys(tx transactionQueries) error {
+func checkStoreForeignKeys(tx Queries) error {
 	rows, err := tx.Query("PRAGMA foreign_key_check")
 	if err != nil {
 		return err

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"pwnmesh/internal/board/internal/sqlstore"
 	"pwnmesh/internal/board/model"
 	"slices"
 	"strings"
@@ -24,7 +25,7 @@ type ExecutionCheck = model.ExecutionCheck
 
 const executionMetadataColumns = `generation,input_revision,decision_revision,state_version,has_state,fact_count,hint_count,open_count`
 const executionSummaryColumns = `project_id,id,namespace,backend,kind,intent,lease,retry_key,status,resumes,created_at,updated_at,` + executionMetadataColumns
-const pendingExecutionSQL = `status IN ('prepared','running','retryable','result_pending')`
+const pendingExecutionSQL = sqlstore.PendingExecutionSQL
 const executionFailureColumns = `COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.status') END,''),COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.failure_kind') END,''),COALESCE(CASE WHEN json_valid(result) THEN json_extract(result,'$.failure_cause') END,'')`
 
 func scanExecutionSummary(s scanner, prefix ...any) (ExecutionSummary, error) {

@@ -1,4 +1,4 @@
-package board
+package sqlstore
 
 // Schema definitions stay together so storage changes can be reviewed with the
 // migration order. These initialize the current schema on an empty database;
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS pwnmesh_paused_executions(
  PRIMARY KEY(project_id,execution_id),
  FOREIGN KEY(project_id,execution_id) REFERENCES pwnmesh_executions(project_id,id) ON DELETE CASCADE);` + executionIndexSchema + inputSnapshotSchema + decisionReadSchema
 
-const executionIndexSchema = `CREATE INDEX IF NOT EXISTS pwnmesh_execution_pending ON pwnmesh_executions(namespace) WHERE ` + pendingExecutionSQL + `;
+const executionIndexSchema = `CREATE INDEX IF NOT EXISTS pwnmesh_execution_pending ON pwnmesh_executions(namespace) WHERE ` + PendingExecutionSQL + `;
 CREATE INDEX IF NOT EXISTS pwnmesh_execution_task ON pwnmesh_executions(namespace,project_id,kind,intent,status,created_at);
 CREATE INDEX IF NOT EXISTS pwnmesh_execution_retry ON pwnmesh_executions(namespace,project_id,retry_key,generation);
 CREATE INDEX IF NOT EXISTS pwnmesh_execution_decision ON pwnmesh_executions(namespace,project_id,generation,kind,status,created_at);

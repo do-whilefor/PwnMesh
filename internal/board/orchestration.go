@@ -44,56 +44,6 @@ func CurationJobBoundary(raw json.RawMessage) (string, int64, error) {
 	return version, job.State.Revision, nil
 }
 
-// Protocol selection is a project creation decision. An old reader cannot
-// silently switch an existing project's evidence-writing authority.
-func (t *Tx) checkOrchestration(p Project) error {
-	if p.OrchestrationVersion < 0 || p.OrchestrationVersion > 1 {
-		return Err(422, "unsupported orchestration_version")
-	}
-	var version int
-	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN pwnmesh_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, p.ID).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if version != p.OrchestrationVersion {
-		return Err(409, "orchestration_version is immutable after project creation")
-	}
-	return nil
-}
-
-func (t *Tx) loadOrchestration(p *Project) error {
-	var worker, trigger, started, heartbeat *string
-	err := t.QueryRow("SELECT version,curator_worker,curator_trigger,curator_started_at,curator_heartbeat FROM pwnmesh_project_orchestration WHERE project_id=?", p.ID).Scan(&p.OrchestrationVersion, &worker, &trigger, &started, &heartbeat)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if p.OrchestrationVersion != 0 && p.OrchestrationVersion != 1 {
-		return Err(422, "unsupported orchestration_version")
-	}
-	if worker != nil {
-		p.Curator = &Reason{Worker: *worker, Trigger: Value(trigger), StartedAt: Value(started), Heartbeat: Value(heartbeat)}
-	}
-	return nil
-}
-
-func (t *Tx) saveOrchestration(p Project) error {
-	var worker, trigger, started, heartbeat *string
-	if p.Curator != nil {
-		if p.OrchestrationVersion != 1 {
-			return Err(422, "curator requires orchestration version 1")
-		}
-		worker, trigger, started, heartbeat = &p.Curator.Worker, &p.Curator.Trigger, &p.Curator.StartedAt, &p.Curator.Heartbeat
-	}
-	_, err := t.Exec(`INSERT INTO pwnmesh_project_orchestration(project_id,version,curator_worker,curator_trigger,curator_started_at,curator_heartbeat) VALUES(?,?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET curator_worker=excluded.curator_worker,curator_trigger=excluded.curator_trigger,curator_started_at=excluded.curator_started_at,curator_heartbeat=excluded.curator_heartbeat`, p.ID, p.OrchestrationVersion, worker, trigger, started, heartbeat)
-	return err
-}
-
 func (t *Tx) ClaimCurator(project, worker, trigger string) (Reason, error) {
 	g, err := t.Load(project)
 	if err != nil {

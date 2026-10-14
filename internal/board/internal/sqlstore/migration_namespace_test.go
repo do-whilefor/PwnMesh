@@ -1,4 +1,4 @@
-package board
+package sqlstore
 
 import (
 	"context"
@@ -207,7 +207,7 @@ func TestPwnMeshNamespaceMigrationPreservesV1DataAndSchema(t *testing.T) {
 
 func checkNamespaceTriggerBehavior(t *testing.T, store *Store) {
 	t.Helper()
-	err := store.Do(context.Background(), func(tx *Tx) error {
+	err := store.Do(context.Background(), func(tx Queries) error {
 		var previous int
 		if err := tx.QueryRow("SELECT revision FROM pwnmesh_ui_execution_revisions WHERE project_id='proj_041'").Scan(&previous); err != nil {
 			return err
@@ -224,7 +224,10 @@ func checkNamespaceTriggerBehavior(t *testing.T, store *Store) {
 			}
 			previous = current
 		}
-		putQueryExecution(t, tx, Execution{ProjectID: "proj_041", ID: "new", Status: "running"}, 2, "")
+		if _, err := tx.Exec(`INSERT INTO pwnmesh_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at,generation,metadata_version)
+ VALUES('proj_041','new','ns','planner','reason','','planner@new','{"graph":{}}','reason:key','running','now','now',2,1)`); err != nil {
+			return err
+		}
 		assertRevision(0)
 		if _, err := tx.Exec("INSERT INTO pwnmesh_decision_read_views VALUES('proj_041','new','v','{}'); UPDATE pwnmesh_executions SET status='succeeded' WHERE id='new'"); err != nil {
 			return err
