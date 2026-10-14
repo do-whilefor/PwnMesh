@@ -2,7 +2,6 @@ package server
 
 import (
 	"bytes"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -197,7 +196,7 @@ func (s *Server) wrapAction(fn action, readOnly bool) http.HandlerFunc {
 		err := transaction(r.Context(), func(t *b.Tx) error {
 			project := r.PathValue("pid")
 			if project != "" {
-				if err := requireCurrentProject(t, project); err != nil {
+				if err := t.RequireCurrentProject(project); err != nil {
 					return err
 				}
 				if !readOnly {
@@ -237,21 +236,6 @@ func (s *Server) wrapAction(fn action, readOnly bool) http.HandlerFunc {
 			slog.Warn("response write failed", "error", err, "method", r.Method, "path", r.URL.Path, "context_error", r.Context().Err())
 		}
 	}
-}
-
-func requireCurrentProject(t *b.Tx, project string) error {
-	var version int
-	err := t.QueryRow(`SELECT COALESCE(o.version,0) FROM projects p LEFT JOIN pwnmesh_project_orchestration o ON o.project_id=p.id WHERE p.id=?`, project).Scan(&version)
-	if errors.Is(err, sql.ErrNoRows) {
-		return b.Err(404, "Project not found")
-	}
-	if err != nil {
-		return err
-	}
-	if version != 1 {
-		return b.Err(409, "Unsupported project protocol; create a new project to continue")
-	}
-	return nil
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, err error) {
@@ -306,19 +290,18 @@ func (r *request) integer(key string) int {
 	}
 	return n
 }
-func (r *request) bootstrap() bool {
+func (r *request) validateBootstrap() {
 	if value, exists := r.fields["bootstrap_enabled"]; exists {
 		if enabled, ok := value.(bool); !ok || enabled {
 			r.invalid("bootstrap_enabled", "legacy bootstrap is unsupported; omit this field or set false")
 		}
 	}
-	return false
 }
 
-func (r *request) orchestrationVersion() int {
+func (r *request) validateOrchestrationVersion() {
 	value, exists := r.fields["orchestration_version"]
 	if !exists {
-		return 1
+		return
 	}
 	// Refactor has one protocol. Never coerce an explicit old or malformed
 	// value into the current evidence-writing authority.
@@ -326,7 +309,6 @@ func (r *request) orchestrationVersion() int {
 	if !ok || number != "1" {
 		r.invalid("orchestration_version", "must be the integer 1; legacy execution is unsupported")
 	}
-	return 1
 }
 
 // Headers opt a dispatcher request into the board's transactional lease fence.
@@ -334,18 +316,6 @@ func guard(t *b.Tx, g b.Graph, r *http.Request) error {
 	return t.CheckExecution(g, decisionFence(r))
 }
 
-// A revoked identity cannot claim or renew a lease, including before execution
-// registration and when the request has no execution headers.
-func guardClaim(t *b.Tx, project, worker string) error {
-	revoked, err := t.RunRevoked(project, worker)
-	if err != nil {
-		return err
-	}
-	if revoked {
-		return b.Err(409, "Execution was revoked")
-	}
-	return nil
-}
 func (s *Server) health(t *b.Tx, _ *request, _ *http.Request) (int, any, error) {
 	_, err := t.Settings()
 	return 200, map[string]string{"status": "ok"}, err
@@ -359,7 +329,7 @@ func (s *Server) settings(t *b.Tx, q *request, r *http.Request) (int, any, error
 	if q.err != nil {
 		return 0, nil, q.err
 	}
-	_, err := t.Exec("UPDATE settings SET intent_timeout=?,reason_timeout=? WHERE rowid=1", v.IntentTimeout, v.ReasonTimeout)
+	err := t.UpdateSettings(v)
 	return 200, v, err
 }
 func (s *Server) projects(t *b.Tx, q *request, r *http.Request) (int, any, error) {
@@ -367,34 +337,24 @@ func (s *Server) projects(t *b.Tx, q *request, r *http.Request) (int, any, error
 		out, err := t.ProjectSummaries()
 		return 200, out, err
 	}
-	title, origin, goal, bootstrap := q.text("title"), q.text("origin"), q.text("goal"), q.bootstrap()
-	orchestrationVersion := q.orchestrationVersion()
-	scenario := ""
+	input := b.ProjectInput{Title: q.text("title"), Origin: q.text("origin"), Goal: q.text("goal")}
+	q.validateBootstrap()
+	q.validateOrchestrationVersion()
 	if _, exists := q.fields["scenario"]; exists {
-		scenario = q.text("scenario")
-		if !b.ValidScenario(scenario) {
+		input.Scenario = q.text("scenario")
+		if !b.ValidScenario(input.Scenario) {
 			q.invalid("scenario", "must be ctf, pentest or audit")
 		}
 	}
 	if q.err != nil {
 		return 0, nil, q.err
 	}
-	id, err := t.Next("", "project")
-	if err != nil {
-		return 0, nil, err
-	}
-	g := b.Graph{Project: b.Project{ID: id, Title: title, Status: "active", Bootstrap: bootstrap, CreatedAt: t.Now, Scenario: scenario, OrchestrationVersion: orchestrationVersion}, Facts: []b.Fact{{ID: "origin", Description: origin}, {ID: "goal", Description: goal}}, Intents: []b.Intent{}, Hints: []b.Hint{}}
 	if value, exists := q.fields["start_paused"]; exists {
 		paused, ok := value.(bool)
 		if !ok {
 			return 0, nil, b.Err(422, "start_paused must be a boolean")
 		}
-		if paused {
-			g.Project.Status = "stopped"
-		}
-	}
-	if err = t.Save(g); err != nil {
-		return 0, nil, err
+		input.StartPaused = paused
 	}
 	if raw := q.fields["hints"]; raw != nil {
 		list, ok := raw.([]any)
@@ -407,49 +367,34 @@ func (s *Server) projects(t *b.Tx, q *request, r *http.Request) (int, any, error
 				return 0, nil, b.Err(422, "hint must be an object")
 			}
 			h := &request{fields: fields}
-			content, creator := h.text("content"), h.text("creator")
+			hint := b.HintInput{Content: h.text("content"), Creator: h.text("creator")}
 			if h.err != nil {
 				return 0, nil, h.err
 			}
-			hid, err := t.Next(id, "hint")
-			if err != nil {
-				return 0, nil, err
-			}
-			g.Hints = append(g.Hints, b.Hint{ID: hid, Content: content, Creator: creator, CreatedAt: t.Now})
+			input.Hints = append(input.Hints, hint)
 		}
 	}
-	if err = t.Save(g); err != nil {
-		return 0, nil, err
-	}
-	return 201, g, t.CheckContextCapacity(g.Project.ID)
+	graph, err := t.CreateProject(input)
+	return http.StatusCreated, graph, err
 }
+
 func (s *Server) project(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
-	g, err := t.Load(r.PathValue("pid"))
-	if err != nil {
-		return 0, nil, err
-	}
 	if r.Method == "GET" {
-		return 200, g, nil
+		graph, err := t.Load(r.PathValue("pid"))
+		return http.StatusOK, graph, err
 	}
-	_, err = t.Exec("DELETE FROM projects WHERE id=?", g.Project.ID)
-	return 204, nil, err
+	return http.StatusNoContent, nil, t.DeleteProject(r.PathValue("pid"))
 }
+
 func (s *Server) title(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	title := q.text("title")
 	if q.err != nil {
 		return 0, nil, q.err
 	}
-	state, err := t.State(r.PathValue("pid"))
-	if err != nil {
-		return 0, nil, err
-	}
-	state.Graph.Project.Title = title
-	if err = b.ValidateContextCapacity(state); err != nil {
-		return 0, nil, err
-	}
-	_, err = t.Exec("UPDATE projects SET title=? WHERE id=?", title, state.Graph.Project.ID)
-	return 200, state.Graph.Project, err
+	project, err := t.SetProjectTitle(r.PathValue("pid"), title)
+	return http.StatusOK, project, err
 }
+
 func (s *Server) status(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	status, _ := q.fields["status"].(string)
 	if status != "active" && status != "stopped" {
@@ -462,172 +407,56 @@ func (s *Server) status(t *b.Tx, q *request, r *http.Request) (int, any, error) 
 	if err != nil {
 		return 0, nil, err
 	}
-	g, err := t.Load(r.PathValue("pid"))
-	if err != nil {
-		return 0, nil, err
-	}
-	if expected != nil && *expected != g.Project.Generation {
-		return 0, nil, b.Err(409, "Project round changed; refresh before changing status")
-	}
-	if err := t.SetStatus(&g, status); err != nil {
-		return 0, nil, err
-	}
-	return 200, g.Project, t.Save(g)
+	project, err := t.SetProjectStatus(r.PathValue("pid"), status, expected)
+	return http.StatusOK, project, err
 }
+
 func (s *Server) reason(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	op := r.PathValue("op")
-	if op != "claim" && op != "heartbeat" && op != "release" {
-		return 0, nil, b.Err(404, "Not Found")
+	input := leaseOperation(q, r)
+	if q.err != nil {
+		return 0, nil, q.err
 	}
-	worker := q.text("worker")
-	trigger := ""
-	if op == "claim" {
-		trigger = q.text("trigger")
+	project, err := t.ReasonLease(r.PathValue("pid"), input)
+	return http.StatusOK, project, err
+}
+
+func leaseOperation(q *request, r *http.Request) b.LeaseOperation {
+	input := b.LeaseOperation{Op: r.PathValue("op"), Worker: q.text("worker"), Fence: decisionFence(r)}
+	if input.Op == "claim" {
+		input.Trigger = q.text("trigger")
 	}
-	fence := decisionFence(r)
-	if fence.Run != "" && (fence.Run != worker || fence.Lease != "reason" || fence.Intent != "") {
-		return 0, nil, b.Err(403, "Planner lease identity mismatch")
-	}
-	g, err := t.Load(r.PathValue("pid"))
-	if err != nil {
-		return 0, nil, err
-	}
-	if err = g.RequireActive(); err != nil {
-		return 0, nil, err
-	}
-	if op == "claim" || op == "heartbeat" {
-		if err := guardClaim(t, g.Project.ID, worker); err != nil {
-			return 0, nil, err
-		}
-	}
-	lease := g.Project.Reason
-	if lease != nil && lease.Worker != worker {
-		return 0, nil, b.Err(409, "Project reason is currently claimed by "+lease.Worker)
-	}
-	switch op {
-	case "claim":
-		if lease == nil {
-			g.Project.Reason = &b.Reason{Worker: worker, Trigger: trigger, StartedAt: t.Now, Heartbeat: t.Now}
-		}
-	case "heartbeat":
-		if lease == nil {
-			return 0, nil, b.Err(409, "Project reason is not currently claimed")
-		}
-		if _, ok := q.fields["expected_version"]; ok {
+	if input.Op == "heartbeat" {
+		if _, present := q.fields["expected_version"]; present {
 			expected := q.text("expected_version")
 			if _, err := hex.DecodeString(expected); len(expected) != 64 || err != nil {
 				q.invalid("expected_version", "must be a 64-character hexadecimal state version")
 			}
-			if q.err != nil {
-				return 0, nil, q.err
-			}
-			state, err := t.State(g.Project.ID)
-			if err != nil {
-				return 0, nil, err
-			}
-			// Lease renewal observes the same shared-content boundary as commit.
-			// Claims and heartbeats alone must not interrupt a valid decision.
-			if expected != b.DecisionStateVersion(state) {
-				return 0, nil, b.Err(409, "state_changed: decision input is no longer current; read the graph before deciding again")
-			}
+			input.ExpectedVersion = &expected
 		}
-		lease.Heartbeat = t.Now
-	case "release":
-		g.Project.Reason = nil
 	}
-	if reason := g.Project.Reason; reason != nil {
-		_, err = t.Exec("UPDATE projects SET reason_worker=?,reason_trigger=?,reason_started_at=?,reason_last_heartbeat_at=? WHERE id=?", reason.Worker, reason.Trigger, reason.StartedAt, reason.Heartbeat, g.Project.ID)
-	} else {
-		_, err = t.Exec("UPDATE projects SET reason_worker=NULL,reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE id=?", g.Project.ID)
-	}
-	return 200, g.Project, err
+	return input
 }
+
 func (s *Server) hint(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	content, creator := q.text("content"), q.text("creator")
-	g, err := t.Load(r.PathValue("pid"))
-	if err != nil {
-		return 0, nil, err
+	input := b.HintInput{Content: q.text("content"), Creator: q.text("creator")}
+	if q.err != nil {
+		return 0, nil, q.err
 	}
-	if g.Project.Status != "active" && g.Project.Status != "stopped" && g.Project.Status != "completed" {
-		return 0, nil, b.Err(403, "Project is "+g.Project.Status)
-	}
-	id, err := t.Next(g.Project.ID, "hint")
-	if err != nil {
-		return 0, nil, err
-	}
-	h := b.Hint{ID: id, Content: content, Creator: creator, CreatedAt: t.Now}
-	g.Hints = append(g.Hints, h)
-	return 201, h, t.SaveUserInput(g, "hint", h.ID, r.Header.Get("X-PwnMesh-Run"), h, h)
+	hint, err := t.AddProjectHint(r.PathValue("pid"), input, r.Header.Get("X-PwnMesh-Run"))
+	return http.StatusCreated, hint, err
 }
+
 func (s *Server) intent(_ *b.Tx, _ *request, _ *http.Request) (int, any, error) {
 	return 0, nil, b.Err(403, "Steps require the primary agent's decision batch")
 }
 
 func (s *Server) intentAction(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	op := r.PathValue("op")
-	if op != "heartbeat" && op != "release" && op != "conclude" {
-		return 0, nil, b.Err(404, "Not Found")
-	}
-	worker := q.text("worker")
-	fence := decisionFence(r)
-	project, intent := r.PathValue("pid"), r.PathValue("iid")
-	if fence.Run != "" && (fence.Lease != "explore" || fence.Run != worker || fence.Intent != intent) {
-		return 0, nil, b.Err(403, "Step operations require the matching Execute identity")
-	}
+	input := b.LeaseOperation{Op: r.PathValue("op"), Worker: q.text("worker"), Fence: decisionFence(r)}
 	if q.err != nil {
 		return 0, nil, q.err
 	}
-	g, err := t.Load(project)
-	if err != nil {
-		return 0, nil, err
-	}
-	if err = g.RequireActive(); err != nil {
-		return 0, nil, err
-	}
-	if op == "conclude" {
-		return 0, nil, b.Err(409, "Step completion requires the registered evidence result protocol")
-	}
-	if err = t.StepAvailable(g.Project.ID, intent); err != nil {
-		return 0, nil, err
-	}
-	if op == "heartbeat" {
-		if err := guardClaim(t, g.Project.ID, worker); err != nil {
-			return 0, nil, err
-		}
-	}
-	if err = t.CheckExecution(g, fence); err != nil {
-		return 0, nil, err
-	}
-	for n := range g.Intents {
-		i := &g.Intents[n]
-		if i.ID != intent {
-			continue
-		}
-		if i.To != nil {
-			return 0, nil, b.Err(409, "Intent already concluded")
-		}
-		if i.Worker != nil && *i.Worker != worker {
-			return 0, nil, b.Err(409, "Intent is currently claimed by "+*i.Worker)
-		}
-		if op == "release" {
-			i.Worker = nil
-			_, err = t.Exec("UPDATE intents SET worker=NULL WHERE project_id=? AND id=?", g.Project.ID, i.ID)
-			return 200, *i, err
-		}
-		if op == "heartbeat" {
-			if err := t.StepHeartbeatReady(g.Project.ID, i.ID, fence.Run); err != nil {
-				if i.Worker != nil {
-					return 0, nil, b.Err(409, "dependency_invalidated: "+err.Error())
-				}
-				return 0, nil, err
-			}
-		}
-		i.Worker = b.Ptr(worker)
-		i.Heartbeat = b.Ptr(t.Now)
-		_, err = t.Exec("UPDATE intents SET worker=?,last_heartbeat_at=? WHERE project_id=? AND id=?", worker, t.Now, g.Project.ID, i.ID)
-		return 200, *i, err
-	}
-	return 0, nil, b.Err(404, "Intent not found")
+	intent, err := t.IntentLease(r.PathValue("pid"), r.PathValue("iid"), input)
+	return http.StatusOK, intent, err
 }
 
 func (s *Server) complete(_ *b.Tx, _ *request, _ *http.Request) (int, any, error) {
@@ -635,53 +464,12 @@ func (s *Server) complete(_ *b.Tx, _ *request, _ *http.Request) (int, any, error
 }
 
 func (s *Server) reopen(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	desc, creator := q.text("description"), q.text("creator")
-	g, err := t.Load(r.PathValue("pid"))
-	if err != nil {
-		return 0, nil, err
+	description, creator := q.text("description"), q.text("creator")
+	if q.err != nil {
+		return 0, nil, q.err
 	}
-	if g.Project.Status != "completed" {
-		return 0, nil, b.Err(403, "Project is "+g.Project.Status)
-	}
-	index := -1
-	for n, i := range g.Intents {
-		if b.Value(i.To) == "goal" {
-			if index != -1 {
-				return 0, nil, b.Err(409, "Completed project has multiple completion intents")
-			}
-			index = n
-		}
-	}
-	if index < 0 {
-		return 0, nil, b.Err(409, "Completed project is missing its completion intent")
-	}
-	old := g.Intents[index]
-	if len(old.From) == 0 {
-		return 0, nil, b.Err(409, "Completion intent is missing its source facts")
-	}
-	if err := t.RevokeRuns(g.Project.ID); err != nil {
-		return 0, nil, err
-	}
-	fid, err := t.Next(g.Project.ID, "fact")
-	if err != nil {
-		return 0, nil, err
-	}
-	iid, err := t.Next(g.Project.ID, "intent")
-	if err != nil {
-		return 0, nil, err
-	}
-	if _, err = t.Exec("DELETE FROM intents WHERE project_id=? AND id=?", g.Project.ID, old.ID); err != nil {
-		return 0, nil, err
-	}
-	f := b.Fact{ID: fid, Description: desc}
-	i := b.Intent{ID: iid, From: old.From, To: &fid, Description: "external_feedback", Creator: creator, Worker: &creator, Heartbeat: b.Ptr(t.Now), CreatedAt: t.Now, ConcludedAt: b.Ptr(t.Now)}
-	g.Intents = append(g.Intents[:index], g.Intents[index+1:]...)
-	g.Intents = append(g.Intents, i)
-	g.Facts = append(g.Facts, f)
-	g.Project.Status = "active"
-	g.Project.Reason = nil
-	result := b.Reopened{Project: g.Project, Fact: f, Intent: i}
-	return 200, result, t.SaveUserInput(g, "reopen", f.ID, r.Header.Get("X-PwnMesh-Run"), map[string]string{"description": desc, "creator": creator}, result)
+	result, err := t.ReopenProject(r.PathValue("pid"), description, creator, r.Header.Get("X-PwnMesh-Run"))
+	return http.StatusOK, result, err
 }
 
 type plain string
