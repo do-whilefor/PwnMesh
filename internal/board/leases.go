@@ -91,7 +91,7 @@ func (t *Tx) ReasonLease(project string, input LeaseOperation) (Project, error) 
 }
 
 func (t *Tx) IntentLease(project, intent string, input LeaseOperation) (Intent, error) {
-	if input.Op != "heartbeat" && input.Op != "release" && input.Op != "conclude" {
+	if input.Op != "heartbeat" && input.Op != "release" {
 		return Intent{}, Err(404, "Not Found")
 	}
 	if err := input.validate(); err != nil {
@@ -107,9 +107,6 @@ func (t *Tx) IntentLease(project, intent string, input LeaseOperation) (Intent, 
 	}
 	if err = g.RequireActive(); err != nil {
 		return Intent{}, err
-	}
-	if input.Op == "conclude" {
-		return Intent{}, Err(409, "Step completion requires the registered evidence result protocol")
 	}
 	if err = t.StepAvailable(project, intent); err != nil {
 		return Intent{}, err

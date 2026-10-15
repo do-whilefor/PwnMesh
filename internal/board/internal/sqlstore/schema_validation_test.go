@@ -1,10 +1,13 @@
 package sqlstore
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -71,6 +74,19 @@ func TestCurrentStoreReopenPreservesSchemaAndRecords(t *testing.T) {
 	store, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
+	}
+	var installation string
+	var intentTimeout, reasonTimeout, counter, versions int
+	if err := store.db.QueryRow(`SELECT intent_timeout,reason_timeout,
+ (SELECT identity FROM pwnmesh_installation WHERE singleton=1),
+ (SELECT value FROM counters WHERE name='project'),
+ (SELECT COUNT(*) FROM pwnmesh_schema_migrations) FROM settings WHERE rowid=1`).Scan(&intentTimeout, &reasonTimeout, &installation, &counter, &versions); err != nil {
+		store.Close()
+		t.Fatal(err)
+	}
+	if intentTimeout != 15 || reasonTimeout != 15 || len(installation) != 32 || counter != 0 || versions != len(storeSchemaHistory) {
+		store.Close()
+		t.Fatalf("initialization did not seed the current store: %d/%d %q %d/%d", intentTimeout, reasonTimeout, installation, counter, versions)
 	}
 	if _, err := store.db.Exec(currentStoreData); err != nil {
 		store.Close()
@@ -153,6 +169,7 @@ func TestCurrentStoreRejectsUnsupportedSchemaWithoutMutation(t *testing.T) {
 		{"case_collision", "CREATE TABLE XLOOM_state(id TEXT);", "namespace"},
 		{"unexpected", "CREATE TABLE pwnmesh_old(id TEXT);", "namespace"},
 		{"missing_table", "DROP TABLE pwnmesh_state;", "namespace"},
+		{"missing_settings", "DROP TABLE settings;", "no such table: settings"},
 		{"missing_records", "DROP TABLE pwnmesh_state_records;", "namespace"},
 		{"missing_step_index", "DROP INDEX pwnmesh_state_steps_id;", "namespace"},
 		{"missing_owner_index", "DROP INDEX pwnmesh_execution_write_owners;", "namespace"},
@@ -180,21 +197,80 @@ func TestCurrentStoreRejectsUnsupportedSchemaWithoutMutation(t *testing.T) {
 	}
 }
 
-func TestStoreRejectsRetiredNamespaceWithoutMutation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "retired.db")
-	db, err := sql.Open("sqlite", path)
+func TestStoreRejectsUnsupportedHistoryBeforeApplicationSchema(t *testing.T) {
+	for _, test := range []struct {
+		name, history, want string
+	}{
+		{"retired_v1", "(1,'unversioned-baseline')", "unsupported PwnMesh schema version 1"},
+		{"retired_v2", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace')", "unsupported PwnMesh schema version 2"},
+		{"retired_v3", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace'),(3,'incremental-state-storage')", "unsupported PwnMesh schema version 3"},
+		{"future", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace'),(5,'future')", "unsupported PwnMesh schema version"},
+		{"missing_baseline", "(2,'pwnmesh-namespace')", "inconsistent PwnMesh migration history"},
+		{"renamed", "(1,'different-baseline')", "inconsistent PwnMesh migration history"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "unsupported.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(migrationLedgerSchema + "INSERT INTO pwnmesh_schema_migrations(version,name) VALUES" + test.history + `;
+CREATE TABLE retained_bytes(id INTEGER PRIMARY KEY,data BLOB);
+INSERT INTO retained_bytes VALUES(71,X'0078FF');`); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			assertStoreRejectedUnchanged(t, path, test.want)
+		})
+	}
+}
+
+func assertStoreRejectedUnchanged(t *testing.T, path, message string) {
+	t.Helper()
+	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	seed := migrationLedgerSchema + `INSERT INTO pwnmesh_schema_migrations VALUES(1,'unversioned-baseline','original');
-CREATE TABLE xloom_state(id INTEGER PRIMARY KEY,data BLOB);
-INSERT INTO xloom_state VALUES(71,X'0078FF');`
-	if _, err := db.Exec(seed); err != nil {
-		db.Close()
-		t.Fatal(err)
+	store, err := Open(path)
+	if store != nil {
+		store.Close()
 	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
+	if err == nil || !strings.Contains(err.Error(), message) {
+		t.Fatalf("unsupported store was not rejected: %v", err)
 	}
-	assertStoreRejectedUnchanged(t, path, "unsupported PwnMesh schema version 1")
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected store changed database bytes: %v", err)
+	}
+}
+
+func TestStoreRejectsUnversionedDataWithoutMutation(t *testing.T) {
+	for _, seed := range []string{
+		`CREATE TABLE projects(id TEXT PRIMARY KEY,bootstrap_mode TEXT NOT NULL); INSERT INTO projects VALUES('retained','disabled');`,
+		`CREATE TABLE sqlitearchive(id INTEGER); INSERT INTO sqlitearchive VALUES(1);`,
+		migrationLedgerSchema,
+	} {
+		t.Run(seed[:12], func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "unsupported.db")
+			db, err := sql.Open("sqlite", path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(seed); err != nil {
+				db.Close()
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			message := "unversioned databases are unsupported"
+			if seed == migrationLedgerSchema {
+				message = "missing baseline"
+			}
+			assertStoreRejectedUnchanged(t, path, message)
+		})
+	}
 }

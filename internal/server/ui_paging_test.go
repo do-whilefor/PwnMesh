@@ -2,6 +2,8 @@ package server
 
 import (
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"pwnmesh/internal/board"
@@ -88,8 +90,30 @@ func TestProjectExecutionPagingRejectsInvalidNumbers(t *testing.T) {
 
 func TestRetiredHTTPRoutesAreUnavailable(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
+	f.register("explore")
+	// Missing routes must reject before decoding bodies or opening transactions.
+	if err := f.store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, path := range []string{"/ui/overview", "/executions?namespace=protocol-test", f.base() + "/state/changes?after=0&through=1"} {
 		f.request("GET", path, nil, false, http.StatusNotFound, nil)
 	}
 	f.request("POST", f.base()+"/executions", map[string]any{}, false, http.StatusMethodNotAllowed, nil)
+	for _, path := range []string{f.base() + "/intents", f.base() + "/complete", f.base() + "/intents/" + f.intent + "/conclude"} {
+		for _, fenced := range []bool{false, true} {
+			for _, body := range []string{`{"worker":"` + f.lease + `","from":["origin"],"description":"Old mutation","creator":"user"}`, `{`} {
+				r := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+				if fenced {
+					r.Header.Set("X-PwnMesh-Run", f.lease)
+					r.Header.Set("X-PwnMesh-Lease", f.kind)
+					r.Header.Set("X-PwnMesh-Intent", f.intent)
+				}
+				w := httptest.NewRecorder()
+				f.handler.ServeHTTP(w, r)
+				if w.Code != http.StatusNotFound {
+					t.Fatalf("POST %s (fenced=%t, body=%q): HTTP %d: %s", path, fenced, body, w.Code, w.Body.String())
+				}
+			}
+		}
+	}
 }

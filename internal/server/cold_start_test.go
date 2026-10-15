@@ -93,7 +93,6 @@ func TestUnsupportedProjectRemainsRejectedAfterDatabaseReopen(t *testing.T) {
 				f.request("PUT", f.base()+"/status", map[string]string{"status": status}, false, http.StatusConflict, nil)
 				assertStrategy()
 			}
-			f.request("POST", f.base()+"/complete", map[string]any{"from": []string{"origin"}, "description": "Historical completion", "worker": "fixture"}, false, http.StatusConflict, nil)
 			f.request("POST", f.base()+"/reopen", map[string]string{"description": "More checks requested", "creator": "user"}, false, http.StatusConflict, nil)
 			assertStrategy()
 			f.request("POST", f.base()+"/restart", map[string]any{}, false, http.StatusConflict, nil)

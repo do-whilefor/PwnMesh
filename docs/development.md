@@ -137,7 +137,11 @@ rejection boundaries, their fixtures, and artifact exclusions. Keep comments tha
 explain constraints or failure modes; omit narration of the code itself.
 
 Keep regression tests beside the owning Go package or in the existing integration
-package. Preserve transaction, wire/hash and recovery boundaries described in
+package, and track the fixtures they require. Keep one-off comparison and diagnostic
+tests under `.local/` and delete them after validation. Remove obsolete comparison
+implementations once the change is verified; retain current behavior regressions
+and reusable benchmarks. Do not ignore files solely because their names contain
+`test`. Preserve transaction, wire/hash and recovery boundaries described in
 [architecture](architecture.md) and [supported formats](formats.md). Before a
 schema change, test empty initialization, a current versioned reopen, unsupported
 input rejection without mutation and atomic write rollback. Preserve

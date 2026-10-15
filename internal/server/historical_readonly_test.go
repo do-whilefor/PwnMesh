@@ -85,7 +85,7 @@ func TestUnsupportedProjectRequestsPreserveStoredState(t *testing.T) {
 		}
 	}
 	for _, operation := range []struct{ method, path string }{
-		{"PUT", "/title"}, {"PUT", "/status"}, {"POST", "/hints"}, {"POST", "/intents"}, {"POST", "/complete"}, {"POST", "/reopen"}, {"POST", "/restart"}, {"POST", "/terminate"}, {"POST", "/reason/claim"}, {"POST", "/reason/heartbeat"}, {"POST", "/reason/release"}, {"POST", "/curate/claim"}, {"POST", "/state/actions"}, {"POST", "/state/decisions/commit"}, {"POST", "/executions/prepare"}, {"POST", "/executions/" + f.run + "/resume"}, {"POST", "/executions/" + f.run + "/status"}, {"POST", "/executions/" + f.run + "/apply"}, {"POST", "/executions/" + f.run + "/retry"}, {"DELETE", ""},
+		{"PUT", "/title"}, {"PUT", "/status"}, {"POST", "/hints"}, {"POST", "/reopen"}, {"POST", "/restart"}, {"POST", "/terminate"}, {"POST", "/reason/claim"}, {"POST", "/reason/heartbeat"}, {"POST", "/reason/release"}, {"POST", "/curate/claim"}, {"POST", "/state/actions"}, {"POST", "/state/decisions/commit"}, {"POST", "/executions/prepare"}, {"POST", "/executions/" + f.run + "/resume"}, {"POST", "/executions/" + f.run + "/status"}, {"POST", "/executions/" + f.run + "/apply"}, {"POST", "/executions/" + f.run + "/retry"}, {"DELETE", ""},
 	} {
 		f.request(operation.method, f.base()+operation.path, map[string]any{}, true, http.StatusConflict, nil)
 	}
@@ -161,7 +161,7 @@ func TestRetiredLeaseRolesCannotWriteCurrentProject(t *testing.T) {
 	for _, role := range []string{"bootstrap", "intent"} {
 		f.kind = role
 		f.request("POST", f.base()+"/state/actions", map[string]any{"op": "fact", "idempotency_key": "old-role", "payload": evidenceFixtureFact(f.run)}, true, http.StatusForbidden, nil)
-		for _, op := range []string{"heartbeat", "release", "conclude"} {
+		for _, op := range []string{"heartbeat", "release"} {
 			f.request("POST", f.base()+"/intents/"+f.intent+"/"+op, map[string]string{"worker": f.lease, "description": "Old alias"}, true, http.StatusForbidden, nil)
 		}
 	}

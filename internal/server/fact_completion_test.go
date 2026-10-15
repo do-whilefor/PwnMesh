@@ -79,17 +79,6 @@ func TestEvidenceCompletionCannotDowngradeOrForgeProvenance(t *testing.T) {
 	}
 }
 
-func TestVersionTwoCannotUseBareCompatibilityConclusion(t *testing.T) {
-	for _, fenced := range []bool{false, true} {
-		f := newExecutionProtocolFixture(t)
-		f.register("explore")
-		f.request("POST", f.base()+"/intents/"+f.intent+"/conclude", map[string]string{"worker": f.lease, "description": "bare conclusion"}, fenced, http.StatusConflict, nil)
-		if len(f.state().Graph.Facts) != 2 {
-			t.Fatal("compatibility endpoint bypassed the registered evidence contract")
-		}
-	}
-}
-
 func TestEvidenceCompletionCannotReuseOtherStepOrCorrectedObservation(t *testing.T) {
 	for _, otherStep := range []bool{false, true} {
 		name := "corrected observation"

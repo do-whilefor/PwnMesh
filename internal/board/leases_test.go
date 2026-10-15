@@ -79,6 +79,8 @@ func TestLeaseOperationsFenceIdentityRevocationAndState(t *testing.T) {
 		requireAPIStatus(t, err, 409)
 		_, err = tx.IntentLease("p", step, LeaseOperation{Op: "heartbeat", Worker: "executor", Fence: ExecutionFence{Run: "executor", Lease: "explore", Intent: "different-step"}})
 		requireAPIStatus(t, err, 403)
+		_, err = tx.IntentLease("p", step, LeaseOperation{Op: "conclude", Worker: "executor"})
+		requireAPIStatus(t, err, 404)
 		_, err = tx.CuratorLease("p", LeaseOperation{Op: "claim", Worker: "curator", Trigger: "test", Fence: ExecutionFence{Run: "curator", Lease: "reason"}})
 		requireAPIStatus(t, err, 403)
 		return nil

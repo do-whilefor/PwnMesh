@@ -220,7 +220,7 @@ func TestDecisionCanWithdrawAuxiliaryPlanAndCompleteAtomically(t *testing.T) {
 		t.Fatal("completed and revoked planner cannot read its durable receipt")
 	}
 	f.decision("commit", batch, http.StatusOK)
-	f.request("POST", f.base()+"/intents/"+step.ID+"/conclude", map[string]string{"worker": "existing-executor", "description": "Late result"}, false, http.StatusForbidden, nil)
+	f.request("POST", f.base()+"/intents/"+step.ID+"/heartbeat", map[string]string{"worker": "existing-executor"}, false, http.StatusForbidden, nil)
 }
 
 func TestDecisionCannotWithdrawRootOrCompleteWithoutObservedSupport(t *testing.T) {

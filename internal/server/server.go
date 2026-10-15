@@ -73,8 +73,7 @@ func NewWithModelSettings(store *b.Store, modelSettingsPath string) http.Handler
 		"PUT /settings":  s.settings,
 		"POST /projects": s.projects, "DELETE /projects/{pid}": s.project,
 		"PUT /projects/{pid}/title": s.title, "PUT /projects/{pid}/status": s.status,
-		"POST /projects/{pid}/hints": s.hint, "POST /projects/{pid}/intents": s.intent,
-		"POST /projects/{pid}/complete": s.complete, "POST /projects/{pid}/reopen": s.reopen,
+		"POST /projects/{pid}/hints": s.hint, "POST /projects/{pid}/reopen": s.reopen,
 		"POST /projects/{pid}/restart":   s.restart,
 		"POST /projects/{pid}/terminate": s.terminate,
 	} {
@@ -90,7 +89,7 @@ func NewWithModelSettings(store *b.Store, modelSettingsPath string) http.Handler
 			s.wrap(s.curate)(w, r)
 		})
 	}
-	for _, op := range []string{"heartbeat", "release", "conclude"} {
+	for _, op := range []string{"heartbeat", "release"} {
 		m.HandleFunc("POST /projects/{pid}/intents/{iid}/"+op, func(w http.ResponseWriter, r *http.Request) {
 			r.SetPathValue("op", op)
 			s.wrap(s.intentAction)(w, r)
@@ -428,10 +427,6 @@ func (s *Server) hint(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	return http.StatusCreated, hint, err
 }
 
-func (s *Server) intent(_ *b.Tx, _ *request, _ *http.Request) (int, any, error) {
-	return 0, nil, b.Err(403, "Steps require the primary agent's decision batch")
-}
-
 func (s *Server) intentAction(t *b.Tx, q *request, r *http.Request) (int, any, error) {
 	input := b.LeaseOperation{Op: r.PathValue("op"), Worker: q.text("worker"), Fence: decisionFence(r)}
 	if q.err != nil {
@@ -439,10 +434,6 @@ func (s *Server) intentAction(t *b.Tx, q *request, r *http.Request) (int, any, e
 	}
 	intent, err := t.IntentLease(r.PathValue("pid"), r.PathValue("iid"), input)
 	return http.StatusOK, intent, err
-}
-
-func (s *Server) complete(_ *b.Tx, _ *request, _ *http.Request) (int, any, error) {
-	return 0, nil, b.Err(403, "Project completion requires a reviewed primary-agent decision batch")
 }
 
 func (s *Server) reopen(t *b.Tx, q *request, r *http.Request) (int, any, error) {

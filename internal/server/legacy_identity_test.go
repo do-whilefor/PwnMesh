@@ -44,7 +44,7 @@ func TestUnregisteredClaimsCannotReuseRevokedIdentity(t *testing.T) {
 
 func TestRegisteredStepOperationsBindRequestIdentity(t *testing.T) {
 	for _, kind := range []string{"reason", "explore"} {
-		for _, op := range []string{"heartbeat", "release", "conclude"} {
+		for _, op := range []string{"heartbeat", "release"} {
 			t.Run(kind+"/"+op, func(t *testing.T) {
 				f := newExecutionProtocolFixture(t)
 				if kind == "reason" {
@@ -66,7 +66,7 @@ func TestRegisteredStepOperationsBindRequestIdentity(t *testing.T) {
 					{"non-string", 123, http.StatusUnprocessableEntity},
 				} {
 					t.Run(test.name, func(t *testing.T) {
-						f.request("POST", f.base()+"/intents/"+f.intent+"/"+op, map[string]any{"worker": test.worker, "description": "Unbound result"}, true, test.status, nil)
+						f.request("POST", f.base()+"/intents/"+f.intent+"/"+op, map[string]any{"worker": test.worker}, true, test.status, nil)
 						if !reflect.DeepEqual(before, f.state()) {
 							t.Fatal("invalid identity changed the Step or published a Fact")
 						}
@@ -82,7 +82,9 @@ func TestRegisteredStepOperationCannotUseAnotherStepPath(t *testing.T) {
 	f.register("explore")
 	other := f.newIntent()
 	before := f.state()
-	f.request("POST", f.base()+"/intents/"+other.ID+"/conclude", map[string]string{"worker": f.lease, "description": "Wrong Step"}, true, http.StatusForbidden, nil)
+	for _, op := range []string{"heartbeat", "release"} {
+		f.request("POST", f.base()+"/intents/"+other.ID+"/"+op, map[string]string{"worker": f.lease}, true, http.StatusForbidden, nil)
+	}
 	if !reflect.DeepEqual(before, f.state()) {
 		t.Fatal("mismatched Step path changed shared state")
 	}

@@ -139,7 +139,6 @@ func TestCuratorCannotForgeSuccessfulResultWithoutReceipt(t *testing.T) {
 	for _, op := range []string{"fact", "candidate", "fact_relation"} {
 		f.request("POST", f.base()+"/state/actions", map[string]any{"op": op, "idempotency_key": "forbidden-" + op, "payload": evidenceFixtureFact(f.run), "expected_version": board.DecisionStateVersion(f.state())}, true, http.StatusForbidden, nil)
 	}
-	f.request("POST", f.base()+"/intents", map[string]any{"from": []string{"origin"}, "description": "Unauthorized plan", "creator": f.lease}, true, http.StatusForbidden, nil)
 	f.pending(`{"accepted":true,"data":{"curated":true}}`)
 	before := f.state()
 	for range 2 {
@@ -278,20 +277,5 @@ func TestOrchestrationPreparationRejectsLegacyExecutionProtocols(t *testing.T) {
 				t.Fatal("rejected legacy protocol persisted an execution")
 			}
 		})
-	}
-}
-
-func TestOrchestrationLegacyMutationEndpointsCannotBypassRoleAuthority(t *testing.T) {
-	f := newCurationHTTPFixture(t)
-	prepareOrchestratedExecute(f)
-	f.request("POST", f.base()+"/intents/"+f.intent+"/release", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)
-	before := f.state()
-	for _, fenced := range []bool{false, true} {
-		f.request("POST", f.base()+"/intents", map[string]any{"from": []string{"origin"}, "description": "Unplanned work", "creator": "unregistered"}, fenced, http.StatusForbidden, nil)
-		f.request("POST", f.base()+"/complete", map[string]any{"from": []string{"origin"}, "description": "Unreviewed completion", "worker": "unregistered"}, fenced, http.StatusForbidden, nil)
-	}
-	f.request("POST", f.base()+"/intents/"+f.intent+"/conclude", map[string]string{"worker": "unregistered", "description": "Unsupported legacy conclusion"}, false, http.StatusConflict, nil)
-	if !reflect.DeepEqual(before, f.state()) {
-		t.Fatal("legacy HTTP mutation bypassed the orchestrated write protocol")
 	}
 }

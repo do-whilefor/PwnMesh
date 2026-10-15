@@ -24,7 +24,7 @@ inside Protocol.
 | Worker session | `schema_version: 1` with immutable session identity |
 | Acceptance receipt | `schema_version: 1` in `acceptance.json` |
 | Agent context checkpoint | Version `1`, separate from session and acceptance |
-| SQLite schema | Schema `2` with `pwnmesh_*` object names; older schemas are rejected |
+| SQLite schema | Schema `4` with `pwnmesh_*` object names; older schemas are rejected |
 
 These numbers are independent. Incrementing one does not authorize rewriting
 another. Server rejects unsupported project protocols, and
@@ -50,6 +50,11 @@ The lease string is bound to backend and run (`backend@run_id`). Project restart
 increments generation; revocation tombstones fence late workers. State digests,
 input revisions and expected versions prevent applying a decision to stale input.
 Version checks and mutation/receipt writes belong in the same transaction.
+
+Steps and project completion are submitted through decision batches; Step
+completion uses the registered execution result protocol. The old direct
+`POST /projects/{pid}/intents`, `/projects/{pid}/complete` and
+`/projects/{pid}/intents/{iid}/conclude` routes are absent and return `404`.
 
 ## RPC and byte stability
 

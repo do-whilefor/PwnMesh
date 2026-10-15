@@ -10,7 +10,7 @@ import (
 // retained for integrity; they do not authorize opening an older schema.
 var storeSchemaHistory = [...]string{"unversioned-baseline", "pwnmesh-namespace", "incremental-state-storage", "normalized-state-records"}
 
-const migrationLedgerSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_schema_migrations(
+const migrationLedgerSchema = `CREATE TABLE pwnmesh_schema_migrations(
  version INTEGER PRIMARY KEY CHECK(version > 0),name TEXT NOT NULL,
  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));`
 
