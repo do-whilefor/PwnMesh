@@ -1,4 +1,8 @@
 .git
+node_modules
+**/node_modules
+**/test-results
+**/playwright-report
 refer
 .local
 design

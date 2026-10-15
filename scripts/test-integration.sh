@@ -12,6 +12,7 @@ case "$suite" in
         [[ $# == 0 ]] || fail "$usage"
         clear_acceptance_env
         clear_model_env
+        build_web
         exec go test -mod=readonly -race -count=1 ./tests/integration
         ;;
     docker)
@@ -21,6 +22,7 @@ case "$suite" in
         clear_model_env
         export PWNMESH_DOCKER_TEST_IMAGE=$worker_image
         require_worker_image
+        build_web
         exec go test -mod=readonly -count=1 -timeout=20m -run '^TestDocker' ./tests/integration ./internal/docker
         ;;
     live)
@@ -60,6 +62,7 @@ case "$suite" in
         else
             require_worker_image
         fi
+        build_web
         exec go test -mod=readonly -count=1 -timeout=45m -run "^${test_name}$" ./tests/integration
         ;;
     *) fail "$usage" ;;

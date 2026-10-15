@@ -1,0 +1,27 @@
+{
+  "name": "pwnmesh-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "typecheck": "vue-tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "test": "vitest run",
+    "test:browser": "node browser/run.cjs",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": { "vue": "3.5.44", "vue-router": "4.6.4" },
+  "devDependencies": {
+    "playwright": "1.64.1",
+    "@types/node": "22.20.5",
+    "@vitejs/plugin-vue": "6.0.10",
+    "@vue/test-utils": "2.5.1",
+    "happy-dom": "21.0.1",
+    "typescript": "5.9.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.4",
+    "vue-tsc": "3.3.13"
+  }
+}

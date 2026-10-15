@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,7 +39,7 @@ class CommandTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.directory = pathlib.Path(self.temp.name)
         self.record = self.directory / "commands.jsonl"
-        for tool in ("go", "docker"):
+        for tool in ("go", "docker", "npm"):
             path = self.directory / tool
             path.write_text(STUB)
             path.chmod(0o755)
@@ -48,9 +49,9 @@ class CommandTests(unittest.TestCase):
         }
         self.env.update(PATH=str(self.directory) + os.pathsep + self.env["PATH"], COMMAND_RECORD=str(self.record))
 
-    def run_script(self, name, *args, success=True):
+    def run_script(self, name, *args, success=True, root=ROOT):
         result = subprocess.run(
-            ["bash", str(ROOT / "scripts" / name), *args], cwd=self.directory,
+            ["bash", str(root / "scripts" / name), *args], cwd=self.directory,
             env=self.env, capture_output=True, text=True, timeout=10,
         )
         if success:
@@ -82,8 +83,8 @@ class CommandTests(unittest.TestCase):
     def test_offline_keeps_all_oracles_without_inherited_opt_ins(self):
         self.inherited_controls()
         records = self.run_script("test-integration.sh", "offline")
-        self.assertEqual(len(records), 1)
-        run = records[0]
+        self.assertEqual([record["tool"] for record in records], ["npm", "go"])
+        run = records[-1]
         self.assertEqual(run["tool"], "go")
         self.assertEqual(run["cwd"], str(ROOT))
         self.assertEqual(run["args"], ["test", "-mod=readonly", "-race", "-count=1", "./tests/integration"])
@@ -93,24 +94,54 @@ class CommandTests(unittest.TestCase):
     def test_ci_go_suite_also_isolates_acceptance(self):
         self.inherited_controls()
         records = self.run_script("check.sh", "go")
-        self.assertEqual([record["args"][0] for record in records], ["test", "vet"])
+        self.assertEqual([record["tool"] for record in records], ["npm", "go", "go"])
+        self.assertEqual(records[0]["args"], ["--prefix", "web", "run", "build"])
+        self.assertEqual([record["args"][0] for record in records[1:]], ["test", "vet"])
         for record in records:
-            self.assertEqual(record["args"][-1], "./...")
             self.assertEqual(record["controls"], {})
             self.assertFalse(record["has_model_credentials"])
+        for record in records[1:]:
+            self.assertEqual(record["args"][-1], "./...")
 
     def test_build_routes_an_explicit_output_path_and_reproducible_flags(self):
         output = self.directory / "build output" / "pwnmesh"
         records = self.run_script("build.sh", str(output))
         self.assertTrue(output.parent.is_dir())
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["args"], ["build", "-mod=readonly", "-trimpath", "-ldflags=-s -w", "-o", str(output), "./cmd/pwnmesh"])
-        self.assertEqual(records[0]["cgo"], "0")
+        self.assertEqual([record["tool"] for record in records], ["npm", "go"])
+        self.assertEqual(records[0]["args"], ["--prefix", "web", "run", "build"])
+        self.assertEqual(records[-1]["args"], ["build", "-mod=readonly", "-trimpath", "-ldflags=-s -w", "-o", str(output), "./cmd/pwnmesh"])
+        self.assertEqual(records[-1]["cgo"], "0")
+
+    def test_web_suite_builds_and_checks_without_go(self):
+        self.inherited_controls()
+        records = self.run_script("check.sh", "web")
+        self.assertEqual([record["tool"] for record in records], ["npm", "npm"])
+        self.assertEqual([record["args"] for record in records], [["--prefix", "web", "run", "build"], ["--prefix", "web", "test"]])
+        self.assertTrue(all(not record["has_model_credentials"] for record in records))
+
+    def test_prebuilt_requires_nonempty_entry_and_javascript_before_go(self):
+        workspace = self.directory / "prebuilt"
+        (workspace / "scripts").mkdir(parents=True)
+        for name in ("build.sh", "common.sh"):
+            shutil.copyfile(ROOT / "scripts" / name, workspace / "scripts" / name)
+        self.env["PWNMESH_WEB_PREBUILT"] = "1"
+        self.assertEqual(self.run_script("build.sh", root=workspace, success=False), [])
+        (workspace / "web/dist/assets").mkdir(parents=True)
+        (workspace / "web/dist/index.html").write_text('<script src="/static/assets/index.js"></script>')
+        self.assertEqual(self.run_script("build.sh", root=workspace, success=False), [])
+        (workspace / "web/dist/assets/index.js").write_text('export {};')
+        records = self.run_script("build.sh", root=workspace)
+        self.assertEqual([record["tool"] for record in records], ["go"])
+        self.assertEqual(records[0]["cwd"], str(workspace))
+
+    def test_invalid_prebuilt_mode_fails_before_build_tools(self):
+        self.env["PWNMESH_WEB_PREBUILT"] = "yes"
+        self.assertEqual(self.run_script("build.sh", success=False), [])
 
     def test_docker_runs_both_packages_with_scripted_models_only(self):
         self.inherited_controls()
         records = self.run_script("test-integration.sh", "docker")
-        self.assertEqual([record["tool"] for record in records], ["docker", "docker", "go"])
+        self.assertEqual([record["tool"] for record in records], ["docker", "docker", "npm", "go"])
         self.assertEqual(records[0]["args"][:2], ["--host", "unix:///var/run/docker.sock"])
         self.assertIn("inspect", records[1]["args"])
         self.assertEqual(records[-1]["args"][-4:], ["-run", "^TestDocker", "./tests/integration", "./internal/docker"])
@@ -122,10 +153,10 @@ class CommandTests(unittest.TestCase):
         self.inherited_controls()
         self.model_environment()
         records = self.run_script("test-integration.sh", "live", "readiness")
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["args"][-3:], ["-run", "^TestLiveModelReadiness$", "./tests/integration"])
-        self.assertEqual(records[0]["controls"], {"PWNMESH_LIVE_READINESS_TEST": "1", "PWNMESH_LIVE_OUTPUT": "/test-output"})
-        self.assertTrue(records[0]["has_model_credentials"])
+        self.assertEqual([record["tool"] for record in records], ["npm", "go"])
+        self.assertEqual(records[-1]["args"][-3:], ["-run", "^TestLiveModelReadiness$", "./tests/integration"])
+        self.assertEqual(records[-1]["controls"], {"PWNMESH_LIVE_READINESS_TEST": "1", "PWNMESH_LIVE_OUTPUT": "/test-output"})
+        self.assertTrue(records[-1]["has_model_credentials"])
 
     def test_docker_preflight_failure_never_starts_go_tests(self):
         self.env["PWNMESH_DOCKER_TEST_IMAGE"] = "fixture-worker"
@@ -169,7 +200,7 @@ class ContainerBuildTests(unittest.TestCase):
         rules = (ROOT / ".dockerignore").read_text().splitlines()
         checks = (ROOT / "internal/config/repository_test.go").read_text()
         inputs = re.findall(r'"((?:docs|container)/[^"\n]+\.md)"', checks)
-        inputs += ["scripts/build.sh", "scripts/check.sh", "scripts/common.sh"]
+        inputs += ["scripts/build.sh", "scripts/check.sh", "scripts/common.sh", "web/package.json", "web/package-lock.json", "web/index.html", "web/src/main.ts"]
         for name in inputs:
             excluded = False
             ancestors = [name, *(str(parent) for parent in pathlib.PurePosixPath(name).parents)]
@@ -210,10 +241,15 @@ class ContainerBuildTests(unittest.TestCase):
         self.assertEqual(current, "runtime", "plain docker build must select the release image")
         self.assertIn("test", dependencies(current))
         self.assertIn("build", dependencies(current))
+        self.assertIn("web-build", dependencies(current))
         self.assertNotIn("test", dependencies("development"))
         self.assertIn("build", dependencies("development"))
         self.assertIn("scripts/check.sh go", "\n".join(bodies["test"]))
         self.assertIn("scripts/build.sh /out/pwnmesh", "\n".join(bodies["build"]))
+        self.assertIn("npm ci", "\n".join(bodies["web-build"]))
+        self.assertIn("npm run build && npm test", "\n".join(bodies["web-build"]))
+        self.assertIn("COPY --from=web-build /web/dist ./web/dist", "\n".join(bodies["source"]))
+        self.assertNotIn("node", "\n".join(bodies["runtime-base"]))
 
     def test_worker_browser_dependency_is_versioned(self):
         source = (ROOT / "container/Dockerfile").read_text()

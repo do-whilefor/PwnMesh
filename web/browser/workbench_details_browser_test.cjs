@@ -198,7 +198,8 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       await page.locator('#add-hint').click();await page.locator('#hint-text').fill('A draft opened before the project became read-only');
       delete state.graph.project.orchestration_version;state.revision++;
       await page.waitForFunction(()=>document.querySelector('#add-hint')?.disabled);
-      await page.locator('#hint-form [type="submit"]').click();assert.match(await page.locator('#hint-error').innerText(),/历史项目只读/);
+      assert.equal(await page.locator('#hint-form [type="submit"]').isDisabled(),true);
+      await page.locator('#hint-form').dispatchEvent('submit');assert.match(await page.locator('#hint-error').innerText(),/历史项目只读/);
       assert.equal(await page.locator('#hint-form [type="submit"]').isDisabled(),true);await page.locator('#hint-dialog [data-close="hint-dialog"]').first().click();
       assert.match(await page.locator('.project-heading .badge').innerText(),/历史项目.*只读/);assert.equal(await page.locator('.project-more').isDisabled(),true);
       await page.locator('#project-manage').click();assert.match(await page.locator('#project-dialog').innerText(),/历史项目只读/);assert.equal(await page.locator('#project-dialog [data-action]').count(),0);await page.locator('[data-close="project-dialog"]').click();

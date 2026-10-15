@@ -1,6 +1,6 @@
 # PwnMesh development
 
-Use Linux. CI uses Go 1.26, Node 22, Python 3.13 and ripgrep. Go declares a 1.23
+Use Linux. CI uses Go 1.26, Node 22 (22.12 or newer), Python 3.13 and ripgrep. Go declares a 1.23
 minimum in `go.mod`; use the CI toolchain for matching checks. Go race detection
 also needs a working C compiler. Offline tests use local processes and loopback
 HTTP fixtures. They do not require Docker or model credentials after dependencies
@@ -13,16 +13,37 @@ Run from the repository checkout:
 ```sh
 go mod download
 go mod verify
+npm --prefix web ci
 bash scripts/build.sh
 bin/pwnmesh --help
 bash scripts/check.sh
 ```
 
-`build.sh [output]` defaults to `bin/pwnmesh`, uses read-only Go dependencies and
-builds a static Linux executable. `check.sh` runs the Go race suite and vet,
-browser JavaScript syntax/Node tests, Python HTTP replay and command regressions.
+`build.sh [output]` defaults to `bin/pwnmesh`, type checks and builds the Vue
+workspace, then embeds `web/dist` in a static Linux executable using read-only Go
+dependencies. `check.sh` builds the frontend and runs its Vitest regressions,
+the Go race suite and vet, Python HTTP replay and command regressions.
 Select `go`, `web`, or `python` to run one check group. CI uses these same entries
 and separately builds/smoke-tests `serve`, `dispatch`, and `worker`.
+
+`web/src` contains Vue single-file components and TypeScript modules;
+`web/public` contains fixed-path assets. `web/dist` and `web/node_modules` are
+ignored generated directories. A clean checkout must build the frontend before
+raw `go build` or `go test` commands can import the embedded UI. The Linux build,
+Go check and integration scripts perform this step automatically. Install the
+locked npm dependencies once before running them.
+
+CI and Docker set `PWNMESH_WEB_PREBUILT=1` after building the same frontend source
+to avoid rebuilding it for each Go command. This explicit mode requires a
+nonempty `web/dist/index.html` and JavaScript bundle; it does not check source
+freshness. Ordinary builds regenerate the output. The Docker build uses a Node
+stage for the frontend; the runtime image contains no Node installation.
+
+For UI development, start the Go service on port 8000 and run
+`npm --prefix web run dev`. Vite proxies the existing API paths while preserving
+the browser Host and Origin. Keep the server's same-origin and trusted-host
+checks enabled. Vue Router uses hash navigation, including existing project and
+model links; production static resources continue to use `/static/`.
 
 The default Docker build keeps the Go release checks. For faster local image
 iteration, `docker build --target development -t pwnmesh:dev .` compiles without
@@ -72,8 +93,19 @@ Docker socket constraints, retained-artifact replay and runtime knobs. External
 entrypoints live in `docker_acceptance_test.go`, `live_acceptance_test.go` and
 `replay_acceptance_test.go`. Shared helpers and offline oracle tests stay in the
 same Go package; no export-only fixture framework or duplicated fixtures is needed.
-Browser acceptance in `web/browser/` is independently opt-in; the default
-`web/*_test.cjs` entry contains only Node regressions.
+Browser acceptance in `web/browser/` is independently opt-in and serves the
+production `web/dist` bundle. After building, install Chromium with
+`npm --prefix web exec -- playwright install chromium` and run all isolated
+fixture suites with `npm --prefix web run test:browser`. To select one suite:
+
+```sh
+PLAYWRIGHT_MODULE="$PWD/web/node_modules/playwright" node --test web/browser/models_browser_test.cjs
+```
+
+Without an explicit dedicated `PWNMESH_WEB_URL` and the relevant opt-in flags,
+live service/model tests stay skipped. Default `check.sh web` runs TypeScript
+checks, a production build and colocated `web/src/**/*.test.ts` regressions;
+it does not start a browser or contact a model.
 
 Use `container/README.md` for image/runtime ownership. Delete only containers and
 images created for an acceptance run once they are no longer needed; do not prune

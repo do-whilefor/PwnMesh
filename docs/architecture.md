@@ -46,11 +46,56 @@ Execute evidence must pass acceptance, and Decide/Curate rely on server receipts
 | `internal/contract/` | Result/evidence contracts and policy checks |
 | `internal/artifactcheck/`, `internal/cvss/` | Deterministic artifact validation and vulnerability scoring |
 | `internal/workergraph/` | Local dependency graphs within a Worker run |
-| `web/` | Embedded browser UI and browser/Node regressions |
+| `web/src/`, `web/public/` | Vue/TypeScript browser source, fixed assets and colocated regressions |
+| `web/embed.go`, `web/dist/` | Go embedding boundary and generated production assets |
 | `tests/` | Cross-component scenarios and opt-in acceptance |
 | `container/` | Worker image, tool environment and HTTP replay helper |
 | `scripts/` | Linux build, checks and explicit acceptance commands |
 | `docs/` | Maintained architecture, protocol, recovery, format and development guides |
+
+The browser is a Vue 3 application built with TypeScript and Vite. Go embeds
+only the generated `web/dist` files and serves them under the existing `/` and
+`/static/` routes. Vue Router owns hash navigation, so browser navigation does
+not overlap the root-level API routes or require an HTML fallback for API errors.
+Node is a build dependency and is absent from the production runtime.
+
+The frontend API layer owns transport and wire contracts. `workspace/project-resource`
+assembles accepted read views; one `useWorkspaceSync` adapter owns polling and
+publication. Request versions, project generations, state revisions and execution
+change cursors have separate meanings. A refresh checks round identity before
+publishing, and a failed or superseded read cannot overwrite the last accepted
+view. Components consume that shared view instead of starting independent
+project polling loops. Project commands own mutation exclusion, uncertain
+creation, upload continuation and supplement idempotency across dialog closure.
+
+Pure workspace models map API data into display values. The graph feature owns
+layout, camera, selection and controller lifecycle, with view state scoped to
+project and generation. The graph controller alone owns the DOM inside its Vue
+host. Model settings use an independent request lifecycle; secret drafts stay
+inside the settings page and clear when it is disposed. Existing CSS and fixed
+assets define the UI appearance; components preserve its classes and structure.
+
+Frontend files follow feature ownership rather than a global component/store
+directory. Keep tests next to the module they protect; browser fixtures live in
+`web/browser`. Add a shared helper only when more than one feature needs it.
+
+| Frontend location | Ownership and dependency direction |
+| --- | --- |
+| `src/api/` | HTTP transport and wire DTOs; no Vue, router or DOM dependencies |
+| `src/workspace/model/` | Pure project rules and projections; depends only on models and API types |
+| `src/workspace/project-resource.ts`, `project-commands.ts` | Accepted reads, caches and writes; no component imports |
+| `src/workspace/useWorkspaceSync.ts` | One application-scoped reactive adapter and polling lifecycle |
+| `src/workspace/graph/` | Graph rendering and geometry behind the GraphCanvas component boundary |
+| `src/workspace/activity/`, `details/`, `materials/`, `results/`, `dialogs/` | Feature components, local view state and user events |
+| `src/model-settings/` | Provider settings, validation and short-lived secret drafts |
+| `src/ui/` | Shared icons and presentation helpers; no project state |
+| `src/App.vue`, `src/router.ts` | Composition and navigation; child features communicate through props and events |
+| `src/styles/`, `public/` | Original visual cascade and fixed assets |
+
+Architecture tests reject reverse model/API dependencies, legacy browser globals,
+HTML string renderers and blanket type suppressions. UI state uses local Vue
+refs; server state has one resource owner. No additional global store is needed
+for the current scope.
 
 `board/model` owns the canonical State, its JSON encoding and decision hash,
 shared execution/scheduling/input values, evidence rules, bounded context and

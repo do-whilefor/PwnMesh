@@ -20,7 +20,7 @@ const stateFor = p => ({graph:{project:p,facts:[{id:'origin',description:'https:
 // Serve the real bundle. API fixtures remain browser-local so this helper can
 // also test a populated live service.
 async function staticServer() {
-  const root = path.resolve(__dirname,'../static');
+  const root = path.resolve(__dirname,'../dist');
   const server = http.createServer(async (req,res) => {
     try {
       const pathname = decodeURIComponent(new URL(req.url,'http://local').pathname);

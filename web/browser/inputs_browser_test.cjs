@@ -61,10 +61,11 @@ test('a lost supplement response remains retryable after the last project file s
   const page=await browser.newPage({viewport:{width:1440,height:960}});page.setDefaultTimeout(10000);
   const project={id:'quota',title:'最后一个文件重试',scenario:'pentest',status:'active',orchestration_version:1,generation:0,created_at:'2026-10-10T02:00:00Z'},keys=[];
   const inputs=Array.from({length:31},(_,i)=>({id:String(i),name:'existing-'+i+'.txt',size:1,path:'/inputs/'+i,created_at:project.created_at,sha256:'a'.repeat(64)}));
-  await interceptProject(page,{state:stateFor(project),inputs});
+  const fixture={state:stateFor(project),inputs};
+  await interceptProject(page,fixture);
   await page.route('**/inputs/batch',async route=>{
    const req=route.request(),form=await new Response(req.postDataBuffer(),{headers:{'Content-Type':req.headers()['content-type']}}).formData();keys.push(form.get('idempotency_key'));
-   if(keys.length===1){inputs.push({id:'last',name:'last.apk',size:4,path:'/inputs/last',created_at:project.created_at,sha256:'b'.repeat(64)});return route.abort('failed');}
+   if(keys.length===1){inputs.push({id:'last',name:'last.apk',size:4,path:'/inputs/last',created_at:project.created_at,sha256:'b'.repeat(64)});fixture.state.revision++;return route.abort('failed');}
    assert.equal(keys[1],keys[0]);return route.fulfill({status:201,contentType:'application/json',body:JSON.stringify([inputs.at(-1)])});
   });
   await page.goto(server.url,{waitUntil:'networkidle'});await page.locator('[data-view="materials"]').click();await page.locator('#add-hint').click();
@@ -80,7 +81,7 @@ test('demo upload form preserves bytes and retries a lost supplement response th
  const base=new URL(process.env.PWNMESH_WEB_URL),request=async(path,options={})=>{const r=await fetch(new URL(path,base),options);assert.ok(r.ok,path+': '+r.status);return r;};assert.deepEqual(await(await request('/projects')).json(),[]);const browser=await launch();let id;
  try{
   const page=await browser.newPage({viewport:{width:1440,height:960}});await page.goto(base.href,{waitUntil:'networkidle'});await fillCreate(page,'真实上传字节验证');const bytes=Buffer.from([0,255,13,10,80,75]);
-  await page.locator('#project-files').setInputFiles({name:'fixture.bin',mimeType:'application/octet-stream',buffer:bytes});await page.locator('#create-form [type="submit"]').click();await page.locator('#create-dialog').waitFor({state:'hidden'});id=await page.evaluate(()=>location.hash.slice(9));
+  await page.locator('#project-files').setInputFiles({name:'fixture.bin',mimeType:'application/octet-stream',buffer:bytes});await page.locator('#create-form [type="submit"]').click();await page.locator('#create-dialog').waitFor({state:'hidden'});id=await page.evaluate(()=>decodeURIComponent(location.hash.replace(/^#\/project\//,'')));
   const inputs=await(await request(projectPath(id)+'/inputs')).json();assert.equal(inputs.length,1);const download=await request(projectPath(id)+'/inputs/'+inputs[0].id);assert.deepEqual(Buffer.from(await download.arrayBuffer()),bytes);
   await page.locator('[data-view="materials"]').click();await page.locator('[data-material="0"]').click();await page.locator('.inspector-reader[open]').waitFor();assert.equal(await page.locator('.inspector-reader[open] a[download]').count(),1);await page.locator('.inspector-reader[open] [data-inspector-action="close"]').click();
   const keys=[];await page.route('**/inputs/batch',async route=>{
@@ -115,10 +116,12 @@ test('material readers ignore older responses and navigation to the model page',
   const requests=await interceptProject(page,{state:stateFor(project),inputs:files,contents:{fast:'fast actual'}});
   await page.route('**/inputs/slow',route=>{slowRoute=route;});
   await page.goto(server.url,{waitUntil:'networkidle'});await page.locator('[data-view="materials"]').click();
-  const first=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await first;await page.locator('[data-material="1"]').click();await page.waitForFunction(()=>document.querySelector('.inspector-reader[open]')?.textContent.includes('fast actual'));
-  const firstResponse=page.waitForResponse(res=>res.url().endsWith('/inputs/slow'));await slowRoute.fulfill({body:'slow actual',contentType:'application/octet-stream'});await firstResponse;await page.evaluate(()=>new Promise(requestAnimationFrame));assert.match(await page.locator('.inspector-reader[open]').textContent(),/fast actual/);
+  const first=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await first;
+  const cancelledFirst=page.waitForEvent('requestfailed',request=>request.url().endsWith('/inputs/slow'));await page.locator('[data-material="1"]').click();await cancelledFirst;await page.waitForFunction(()=>document.querySelector('.inspector-reader[open]')?.textContent.includes('fast actual'));
+  await slowRoute.fulfill({body:'slow actual',contentType:'application/octet-stream'});await page.evaluate(()=>new Promise(requestAnimationFrame));assert.match(await page.locator('.inspector-reader[open]').textContent(),/fast actual/);
   await page.locator('.inspector-reader[open] [data-inspector-action="close"]').click();await page.locator('.inspector-reader[open]').waitFor({state:'hidden'});
-  const second=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await second;await page.locator('#model-entry').click();await page.locator('.llm-page').waitFor();const secondResponse=page.waitForResponse(res=>res.url().endsWith('/inputs/slow'));await slowRoute.fulfill({body:'stale after navigation',contentType:'application/octet-stream'});await secondResponse;await page.evaluate(()=>new Promise(requestAnimationFrame));assert.equal(await page.locator('.inspector-reader[open]').count(),0);
+  const second=page.waitForRequest(req=>req.url().endsWith('/inputs/slow'));await page.locator('[data-material="0"]').click();await second;
+  const cancelledSecond=page.waitForEvent('requestfailed',request=>request.url().endsWith('/inputs/slow'));await page.locator('#model-entry').click();await page.locator('.llm-page').waitFor();await cancelledSecond;await slowRoute.fulfill({body:'stale after navigation',contentType:'application/octet-stream'});await page.evaluate(()=>new Promise(requestAnimationFrame));assert.equal(await page.locator('.inspector-reader[open]').count(),0);
   assert.deepEqual(requests.writes,[]);assert.deepEqual(requests.unexpected,[]);
  }finally{await browser.close();await server.close();}
 });

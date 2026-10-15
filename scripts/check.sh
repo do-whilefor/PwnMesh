@@ -8,13 +8,14 @@ case "$suite" in go|web|python|all) ;; *) fail "Unknown check suite: $suite" ;; 
 clear_acceptance_env
 clear_model_env
 
+if [[ $suite == web || $suite == all ]]; then
+    npm --prefix web run build
+    npm --prefix web test
+fi
 if [[ $suite == go || $suite == all ]]; then
+    if [[ $suite == go ]]; then build_web; fi
     go test -mod=readonly -race -count=1 ./...
     go vet -mod=readonly ./...
-fi
-if [[ $suite == web || $suite == all ]]; then
-    for script in web/static/*.js; do node --check "$script"; done
-    node --test web/*_test.cjs
 fi
 if [[ $suite == python || $suite == all ]]; then
     python3 -m unittest discover -s container -p 'test_*.py'

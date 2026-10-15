@@ -26,7 +26,7 @@ func TestWorkbenchServesDocumentWithSameOriginPolicy(t *testing.T) {
 				t.Fatalf("workspace content type = %q", response.Header().Get("Content-Type"))
 			}
 			html := response.Body.String()
-			for _, want := range []string{"<title>PwnMesh · 安全探索工作台</title>", `src="/static/brand.png"`, `id="main"`, `id="project-list"`, `id="create-form"`, `id="project-dialog"`, `id="i-target"`} {
+			for _, want := range []string{"<title>PwnMesh · 安全探索工作台</title>", `id="app"`, `type="module"`} {
 				if !strings.Contains(html, want) {
 					t.Errorf("PwnMesh workspace is missing %q", want)
 				}
@@ -36,6 +36,9 @@ func TestWorkbenchServesDocumentWithSameOriginPolicy(t *testing.T) {
 			}
 			if strings.Contains(html, "legacy.html") || strings.Contains(html, "经典管理界面") {
 				t.Fatal("workspace still links to the removed classic interface")
+			}
+			if strings.Contains(html, "/src/") || strings.Contains(html, ".ts\"") {
+				t.Fatal("workspace must serve compiled assets, not frontend source")
 			}
 			policy := regexp.MustCompile(`<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"`).FindStringSubmatch(html)
 			if len(policy) != 2 {
@@ -65,7 +68,7 @@ func TestWorkbenchServesDocumentWithSameOriginPolicy(t *testing.T) {
 	}
 }
 
-func TestWorkbenchLoadsEmbeddedCanvasAssets(t *testing.T) {
+func TestWorkbenchLoadsEmbeddedBuildAssets(t *testing.T) {
 	handler := New(nil)
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -101,18 +104,17 @@ func TestWorkbenchLoadsEmbeddedCanvasAssets(t *testing.T) {
 			}
 		}
 	}
-	for _, name := range []string{
-		"api.js", "data.js", "graph-data.js", "canvas.js", "layout.js", "routing.js",
-		"graph-view.js", "graph.js", "app.js", "style.css", "graph.css", "brand.png", "model-settings.js", "project-model.js", "activity-view.js", "llm.js", "llm.css", "shell.css", "blackboard.css", "forms.css", "inspector.css", "lucide.min.js",
-	} {
-		if !loaded["/static/"+name] {
-			t.Errorf("workspace does not load %s", name)
+	scripts, styles := 0, 0
+	for endpoint := range loaded {
+		switch path.Ext(endpoint) {
+		case ".js":
+			scripts++
+		case ".css":
+			styles++
 		}
 	}
-	for endpoint := range loaded {
-		if strings.Contains(endpoint, "/vendor/") || strings.HasSuffix(endpoint, "/graph-demo.js") || strings.HasSuffix(endpoint, "/workbench.css") || strings.HasSuffix(endpoint, "/models.css") {
-			t.Errorf("workspace loads a replaced renderer or demo data source: %s", endpoint)
-		}
+	if scripts == 0 || styles == 0 {
+		t.Fatalf("workspace must load its compiled application and styles: scripts=%d styles=%d", scripts, styles)
 	}
 }
 
@@ -124,6 +126,9 @@ func TestWorkbenchEmbedsNestedVisualAssets(t *testing.T) {
 		}
 		if entry.IsDir() {
 			return nil
+		}
+		if strings.HasSuffix(name, ".ts") || strings.HasSuffix(name, ".vue") || strings.HasSuffix(name, ".map") || strings.Contains(name, "node_modules/") {
+			t.Errorf("frontend source or dependencies must not be embedded: %s", name)
 		}
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/"+name, nil))
@@ -137,15 +142,9 @@ func TestWorkbenchEmbedsNestedVisualAssets(t *testing.T) {
 	}
 }
 
-func TestWorkbenchLogoIdentifiesPwnMesh(t *testing.T) {
+func TestWorkbenchServesBrandAsset(t *testing.T) {
 	handler := New(nil)
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
-	html := response.Body.String()
-	if !regexp.MustCompile(`<a\b[^>]*aria-label="PwnMesh 工作台"[^>]*><span\b[^>]*><img\b[^>]*src="/static/brand.png"[^>]*alt="PwnMesh"`).MatchString(html) {
-		t.Fatal("visible logo must identify PwnMesh for assistive technology")
-	}
-	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/static/brand.png", nil))
 	if response.Code != http.StatusOK {
 		t.Fatalf("logo returned HTTP %d", response.Code)
@@ -158,6 +157,7 @@ func TestWorkbenchLogoIdentifiesPwnMesh(t *testing.T) {
 func TestClassicInterfaceIsUnavailable(t *testing.T) {
 	handler := New(nil)
 	for _, path := range []string{
+		"/static/app.js", "/static/api.js", "/static/service.js", "/static/src/main.ts", "/src/main.ts",
 		"/legacy.html", "/static/legacy.html", "/static/favicon.svg",
 		"/static/vendor/alpine.min.js", "/static/vendor/tailwindcss.js",
 		"/static/vendor/cola.min.js", "/static/vendor/cytoscape-cola.js",

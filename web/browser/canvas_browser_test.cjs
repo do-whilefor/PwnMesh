@@ -1,185 +1,157 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {staticServer,launch} = require('./visual_fixture.cjs');
+const {staticServer,launch,interceptProject,paint} = require('./visual_fixture.cjs');
 
-// Run against the embedded assets in a disposable Linux pwnmesh serve instance.
-// PWNMESH_WEB_URL=http://127.0.0.1:18767 node --test web/browser/canvas_browser_test.cjs
-// Browser dependencies stay outside the product's zero-build static bundle.
+// Exercise the production Vue workbench through its public controls and HTTP reads.
+// Graph algorithms and controller lifecycle contracts have focused Vitest coverage.
 test('embedded canvas handles live graph changes and unrestricted pointer movement', {
   skip: process.env.PWNMESH_WEB_URL || process.env.PLAYWRIGHT_MODULE ? false : 'Set PWNMESH_WEB_URL or PLAYWRIGHT_MODULE to load the canvas assets', timeout:90000
 }, async t => {
-  const browser = await launch();
-  t.after(() => browser.close());
+  const browser = await launch(); t.after(() => browser.close());
   const server = process.env.PWNMESH_WEB_URL ? null : await staticServer();
   if (server) t.after(() => server.close());
-  const page = await browser.newPage({viewport:{width:1440,height:960}});
-  const errors = [];
-  page.on('pageerror',error => errors.push(error.message));
-  await page.route('**/projects',route => route.fulfill({contentType:'application/json',body:'[]'}));
-  await page.goto(process.env.PWNMESH_WEB_URL || server.url);
-  await page.waitForFunction(() => typeof window.PwnMeshGraph === 'function');
-  await page.evaluate(() => {
-    const host = document.createElement('div'); host.id = 'canvas-probe';
-    host.style.cssText = 'position:fixed;inset:0;z-index:10000;background:#faf9f5';
-    document.body.append(host);
-    window.probe = new PwnMeshGraph(host);
-    window.probeState = {graph:{project:{id:'browser-graph',generation:0,status:'active'}},
-      goals:[{id:'goal',condition:'真实目标',status:'open'}],
-      steps:Array.from({length:60},(_,i) => ({id:'s'+i,description:'任务 '+i,goal_id:'goal',from:['origin'],result:'f'+i,status:'completed'})),
-      fact_records:[{id:'origin',description:'项目输入',status:'input'},...Array.from({length:60},(_,i) => ({id:'f'+i,description:'证据 '+i,status:'valid'}))],
-      findings:[],fact_relations:[{kind:'refutes',source:'f0',target:'f1',reason:'第一条说明'},
-        {kind:'narrows',source:'f0',target:'f1',reason:'另一种关系'},
-        {kind:'supersedes',source:'f1',target:'f0',reason:'有环'},
-        {kind:'refutes',source:'missing',target:'f1',reason:'缺失引用'}]};
-    const started = performance.now(); probe.setState(probeState);
-    window.initialDuration = performance.now() - started;
+  const page = await browser.newPage({viewport:{width:1440,height:960},reducedMotion:'reduce'});
+  page.setDefaultTimeout(10000);
+  const errors = []; page.on('pageerror',error => errors.push(error.message));
+  const state = {
+    graph:{project:{id:'browser-graph',title:'Graph acceptance',generation:0,status:'active',scenario:'pentest',orchestration_version:1,created_at:'2026-10-10T02:00:00Z'},
+      facts:[{id:'origin',description:'https://authorized.example.test'},{id:'goal',description:'Controlled graph evidence'}],intents:[],hints:[]},
+    revision:1, goals:[{id:'goal',condition:'真实目标',status:'open'}],
+    steps:Array.from({length:60},(_,i) => ({id:'s'+i,description:'任务 '+i,goal_id:'goal',from:['origin'],result:'f'+i,status:'completed',support_valid:true})),
+    fact_records:[{id:'origin',description:'项目输入',status:'input'},...Array.from({length:60},(_,i) => ({id:'f'+i,description:'证据 '+i,status:'valid'}))],
+    findings:[],fact_relations:[{kind:'refutes',source:'f0',target:'f1',reason:'第一条说明'},
+      {kind:'narrows',source:'f0',target:'f1',reason:'另一种关系'},
+      {kind:'supersedes',source:'f1',target:'f0',reason:'有环'},
+      {kind:'refutes',source:'missing',target:'f1',reason:'缺失引用'}]
+  };
+  const requests = await interceptProject(page,{state});
+  let firstStateRead;
+  page.on('response',response => { if (new URL(response.url()).pathname.endsWith('/state')) firstStateRead ??= Date.now(); });
+  await page.goto(new URL('/#project/browser-graph',process.env.PWNMESH_WEB_URL || server.url).href);
+  await page.waitForFunction(() => document.querySelectorAll('#graph-host .graph-node').length === 122);
+  const initialDuration = Date.now() - firstStateRead;
+  assert.ok(initialDuration < 3000, `122-node render after state response took ${initialDuration}ms`);
+  await paint(page);
+  const snapshot = () => page.evaluate(() => {
+    const host = document.querySelector('#graph-host'), viewport = host.querySelector('.graph-viewport');
+    const transform = new DOMMatrix(getComputedStyle(host.querySelector('.graph-world')).transform);
+    return {positions:[...host.querySelectorAll('.graph-node')].map(node => [node.dataset.nodeKey,{x:parseFloat(node.style.left),y:parseFloat(node.style.top)}]),
+      camera:[transform.a,transform.e,transform.f],width:viewport.clientWidth,height:viewport.clientHeight};
   });
-  await page.waitForFunction(() => document.querySelectorAll('#canvas-probe .graph-node').length === 122);
-  await page.evaluate(() => new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const initial = await page.evaluate(() => ({duration:initialDuration,positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty]}));
-  assert.ok(initial.duration < 3000, `122-node initial update blocked for ${initial.duration}ms`);
+  const initial = await snapshot();
   const presentation = await page.evaluate(() => {
     const card = key => {
-      const element = probe.cards.get(key), style = getComputedStyle(element);
+      const element = document.querySelector(`[data-node-key="${key}"]`), style = getComputedStyle(element);
       return {width:element.offsetWidth,height:element.offsetHeight,background:style.backgroundColor};
     };
     const edge = kind => {
-      const record = probe.edges.find(edge => edge.kind === kind), element = probe.edgeElements.get(record.id);
-      const marker = document.getElementById(element.path.getAttribute('marker-end').slice(5,-1));
-      return {stroke:getComputedStyle(element.path).stroke,marker:marker.firstElementChild.getAttribute('stroke'),fill:marker.firstElementChild.getAttribute('fill')};
+      const element = document.querySelector(`#graph-host .graph-edge[data-edge-kind="${kind}"]`);
+      const marker = document.getElementById(element.getAttribute('marker-end').slice(5,-1));
+      return {stroke:getComputedStyle(element).stroke,marker:marker.firstElementChild.getAttribute('stroke'),fill:marker.firstElementChild.getAttribute('fill')};
     };
     return {start:card('fact:origin'),fact:card('fact:f0'),task:card('step:s0'),goal:card('goal:goal'),input:edge('step_input'),output:edge('step_result'),refutes:edge('refutes')};
   });
-  for (const kind of ['start','fact','task','goal']) {
-    assert.equal(presentation[kind].width,148); assert.equal(presentation[kind].height,78);
-  }
+  for (const kind of ['start','fact','task','goal']) { assert.equal(presentation[kind].width,148); assert.equal(presentation[kind].height,78); }
   assert.equal(presentation.start.background,'rgb(52, 73, 96)');
   assert.equal(presentation.fact.background,'rgb(243, 248, 255)');
   assert.equal(presentation.task.background,'rgb(247, 244, 255)');
   assert.equal(presentation.goal.background,'rgb(237, 248, 244)');
-  assert.equal(new Set(['input','output','refutes'].map(kind=>presentation[kind].stroke)).size,3,'relation colors remain distinct even when statuses match');
+  assert.equal(new Set(['input','output','refutes'].map(kind=>presentation[kind].stroke)).size,3);
   assert.equal(presentation.input.fill,'none'); assert.equal(presentation.input.marker,'#6b89b2');
-  const update = await page.evaluate(async () => {
-    const element = document.querySelector('#canvas-probe [data-node-key="fact:f0"]');
-    probeState.fact_records.reverse(); probeState.steps.reverse();
-    probeState.fact_records.find(f=>f.id==='f0').description = '变更标题，不重排';
-    probeState.fact_relations[0].reason = '更新后的关系说明';
-    probe.setState(probeState);
-    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    return {positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty],
-      sameDOM:element===document.querySelector('#canvas-probe [data-node-key="fact:f0"]'),
-      text:document.querySelector('#canvas-probe [data-node-key="fact:f0"]').textContent,
-      details:probe.getEdgeDetails('edge:'+JSON.stringify(['refutes','fact:f0','fact:f1']))};
-  });
-  assert.deepEqual(new Map(update.positions),new Map(initial.positions));
-  assert.deepEqual(update.camera,initial.camera);
-  assert.equal(update.sameDOM,true);
-  assert.match(update.text,/变更标题/);
-  assert.match(JSON.stringify(update.details),/更新后的关系说明/);
-  assert.equal(await page.locator('#canvas-probe .graph-edge-hit').count(),183);
-  const filtered = await page.evaluate(async () => {
-    probe.setStatusFilter('done');
-    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    return {positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty],count:probe.getVisibleNodeCount()};
-  });
+
+  const node = page.locator('#graph-host [data-node-key="fact:f0"]'), originalElement = await node.elementHandle();
+  state.fact_records.reverse(); state.steps.reverse();
+  state.fact_records.find(f=>f.id==='f0').description = '变更标题，不重排';
+  state.fact_relations[0].reason = '更新后的关系说明'; state.revision++;
+  await page.waitForFunction(() => document.querySelector('[data-node-key="fact:f0"]').textContent.includes('变更标题'));
+  await paint(page);
+  const update = await snapshot();
+  assert.deepEqual(new Map(update.positions),new Map(initial.positions)); assert.deepEqual(update.camera,initial.camera);
+  assert.equal(await originalElement.evaluate(element=>element===document.querySelector('[data-node-key="fact:f0"]')),true);
+  await page.locator('#graph-host .graph-edge-hit[data-edge-kind="refutes"]').first().dispatchEvent('click');
+  await page.waitForFunction(() => document.querySelector('.node-inspector')?.textContent.includes('更新后的关系说明'));
+  await page.locator('#clear-selection').click();
+  assert.equal(await page.locator('#graph-host .graph-edge-hit').count(),183);
+
+  await page.locator('[data-filter="done"]').click(); await paint(page);
+  const filtered = await snapshot();
   assert.deepEqual(new Map(filtered.positions),new Map(initial.positions)); assert.deepEqual(filtered.camera,initial.camera);
-  assert.equal(filtered.count,121); assert.equal(await page.locator('#canvas-probe .graph-node:visible').count(),121);
-  assert.equal(await page.locator('#canvas-probe .graph-edge-hit:visible').count(),123);
-  await page.locator('#canvas-probe .graph-viewport').focus(); await page.keyboard.press('Tab');
-  assert.ok(await page.evaluate(()=>document.activeElement.dataset.edgeKey),'visible edge hit targets remain keyboard reachable');
-  await page.evaluate(()=>probe.setStatusFilter('pending'));
-  await page.waitForFunction(()=>document.querySelector('#canvas-probe [data-node-key="fact:f0"]').hidden);
-  assert.equal(await page.locator('#canvas-probe .graph-node:visible').count(),1);
-  assert.equal(await page.locator('#canvas-probe .graph-edge-hit:visible').count(),0);
-  await page.locator('#canvas-probe .graph-viewport').focus(); await page.keyboard.press('0');
-  const pendingFit = await page.evaluate(() => {
-    const bounds = PwnMeshCanvas.worldBounds(new Map([['goal:goal',probe.positions.get('goal:goal')]]), {width:PwnMeshLayout.NODE_WIDTH,height:PwnMeshLayout.NODE_HEIGHT,baseWidth:0,baseHeight:0,padding:96});
-    const expected = PwnMeshCanvas.fitTransform(bounds,1440,960);
-    return {camera:[probe.scale,probe.tx,probe.ty],expected:[expected.scale,expected.tx,expected.ty]};
-  });
-  assert.deepEqual(pendingFit.camera,pendingFit.expected,'keyboard fit excludes all hidden cards');
+  assert.equal(await page.locator('#graph-host .graph-node:visible').count(),121);
+  assert.equal(await page.locator('#graph-host .graph-edge-hit:visible').count(),123);
+  await page.locator('.graph-viewport').focus(); await page.keyboard.press('Tab');
+  assert.ok(await page.evaluate(()=>document.activeElement.dataset.edgeKey),'visible edges remain keyboard reachable');
+  await page.locator('[data-filter="pending"]').click(); await paint(page);
+  assert.equal(await page.locator('#graph-host .graph-node:visible').count(),1);
+  assert.equal(await page.locator('#graph-host .graph-edge-hit:visible').count(),0);
+  await page.locator('.graph-viewport').focus(); await page.keyboard.press('0'); await paint(page);
+  const viewport = await page.locator('.graph-viewport').boundingBox(), goal = await page.locator('[data-node-key="goal:goal"]').boundingBox();
+  assert.ok(goal.x>=viewport.x && goal.y>=viewport.y && goal.x+goal.width<=viewport.x+viewport.width && goal.y+goal.height<=viewport.y+viewport.height);
   await page.keyboard.press('Tab');
-  assert.equal(await page.evaluate(()=>document.activeElement.dataset.nodeKey),'goal:goal','keyboard navigation skips hidden nodes and edge hit targets');
-  await page.evaluate(()=>probe.setStatusFilter('running'));
-  await page.waitForFunction(()=>!document.querySelector('#canvas-probe .graph-data-empty').hidden);
-  assert.equal(await page.locator('#canvas-probe .graph-node:visible').count(),0);
-  await page.evaluate(()=>{probeState.steps.find(step=>step.id==='s0').status='running'; probe.setState(probeState);});
-  await page.waitForFunction(()=>!document.querySelector('#canvas-probe [data-node-key="step:s0"]').hidden);
-  assert.equal(await page.locator('#canvas-probe .graph-node:visible').count(),1);
-  assert.equal(await page.locator('#canvas-probe .graph-edge-hit:visible').count(),0);
-  await page.evaluate(()=>{probeState.steps.find(step=>step.id==='s0').status='completed'; probe.setState(probeState); probe.setStatusFilter('all');});
-  await page.waitForFunction(()=>!document.querySelector('#canvas-probe [data-node-key="fact:f0"]').hidden);
-  assert.equal(await page.locator('#canvas-probe .graph-node:visible').count(),122);
-  assert.equal(await page.locator('#canvas-probe .graph-edge-hit:visible').count(),183);
-  await page.evaluate(async () => {
-    probe.positions.set('fact:f0',{x:-15000,y:-9000});
-    probe.setState(probeState); probe.fit();
-    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  });
-  const far = await page.locator('#canvas-probe [data-node-key="fact:f0"]').boundingBox();
-  assert.ok(far.x >= 0 && far.y >= 0 && far.x+far.width <= 1441 && far.y+far.height <= 961);
-  await page.evaluate(() => {probe.zoomBy(12); probe.focusNode('fact:f0');});
-  const node = page.locator('#canvas-probe [data-node-key="fact:f0"]');
-  const rect = await node.boundingBox();
-  await page.mouse.move(rect.x+rect.width/2,rect.y+rect.height/2);
-  await page.mouse.down(); await page.mouse.move(8,8,{steps:8});
-  const before = await page.evaluate(() => ({point:{...probe.positions.get('fact:f0')},tx:probe.tx,ty:probe.ty}));
-  await page.waitForTimeout(220);
-  const moving = await page.evaluate(() => ({point:{...probe.positions.get('fact:f0')},tx:probe.tx,ty:probe.ty}));
-  assert.ok(moving.tx > before.tx && moving.ty > before.ty,'top/left edge pan must continue without pointer events');
-  assert.ok(moving.point.x < before.point.x && moving.point.y < before.point.y,'drag permits negative world coordinates');
-  await page.mouse.wheel(0,-100);
-  await page.waitForTimeout(50);
+  assert.equal(await page.evaluate(()=>document.activeElement.dataset.nodeKey),'goal:goal');
+  await page.locator('[data-filter="running"]').click(); await paint(page);
+  assert.equal(await page.locator('#graph-host .graph-node:visible').count(),0);
+  state.steps.find(step=>step.id==='s0').status='running'; state.revision++;
+  await page.waitForFunction(()=>!document.querySelector('[data-node-key="step:s0"]').hidden);
+  assert.equal(await page.locator('#graph-host .graph-node:visible').count(),1);
+  assert.equal(await page.locator('#graph-host .graph-edge-hit:visible').count(),0);
+  state.steps.find(step=>step.id==='s0').status='completed'; state.revision++;
+  await page.waitForFunction(()=>document.querySelector('[data-node-key="step:s0"]').dataset.status==='completed');
+  await page.locator('[data-filter="running"]').click(); await paint(page);
+  assert.equal(await page.locator('#graph-host .graph-node:visible').count(),122);
+
+  // Move using the real keyboard handler; negative coordinates remain valid.
+  await node.evaluate(element => { for(let i=0;i<400;i++) element.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft',bubbles:true})); });
+  await paint(page); assert.ok(new Map((await snapshot()).positions).get('fact:f0').x<0);
+  await page.locator('#fit-graph').click(); await paint(page);
+  const far = await node.boundingBox(), area = await page.locator('.graph-viewport').boundingBox();
+  assert.ok(far.x>=area.x && far.y>=area.y && far.x+far.width<=area.x+area.width+1 && far.y+far.height<=area.y+area.height+1);
+  await page.mouse.move(far.x+far.width/2,far.y+far.height/2);
+  // Inspect a readable card before dragging, as a user would on a dense graph.
+  // The whole-graph fit makes cards smaller than one frame of edge-pan travel.
+  for (let i=0;i<3;i++) { await page.mouse.wheel(0,-150); await paint(page); }
+  const enlarged = await node.boundingBox();
+  await page.mouse.move(enlarged.x+enlarged.width/2,enlarged.y+enlarged.height/2); await page.mouse.down();
+  await page.mouse.move(area.x+8,area.y+8,{steps:8});
+  const before = await snapshot(); await page.waitForTimeout(220); const moving = await snapshot();
+  assert.ok(moving.camera[1]>before.camera[1] && moving.camera[2]>before.camera[2],'top/left edge pan continues without pointer events');
+  assert.ok(new Map(moving.positions).get('fact:f0').x<new Map(before.positions).get('fact:f0').x);
+  await page.mouse.wheel(0,-100); await page.waitForTimeout(50);
   const grabbed = await node.boundingBox();
-  assert.ok(grabbed.x <= 9 && grabbed.x+grabbed.width >= 7 && grabbed.y <= 9 && grabbed.y+grabbed.height >= 7,'zoom retains the pointer grab');
-  await page.mouse.up();
-  const stopped = await page.evaluate(()=>[probe.tx,probe.ty]);
-  await page.waitForTimeout(130);
-  assert.deepEqual(await page.evaluate(()=>[probe.tx,probe.ty]),stopped);
-  await page.evaluate(()=>probe.focusNode('fact:f0'));
-  const secondGrab = await node.boundingBox();
-  await page.mouse.move(secondGrab.x+secondGrab.width/2,secondGrab.y+secondGrab.height/2);
-  await page.mouse.down(); await page.mouse.move(1432,952,{steps:8});
-  const rightBefore = await page.evaluate(()=>[probe.tx,probe.ty]);
-  await page.waitForTimeout(220);
-  const rightAfter = await page.evaluate(()=>[probe.tx,probe.ty]);
-  assert.ok(rightAfter[0]<rightBefore[0] && rightAfter[1]<rightBefore[1],'right/bottom edge pan continues');
-  await page.evaluate(()=>probe.viewport.dispatchEvent(new PointerEvent('pointercancel',{pointerId:probe.drag.pointerId})));
-  await page.mouse.up();
-  const cancelled = await page.evaluate(()=>[probe.tx,probe.ty]);
-  await page.waitForTimeout(130);
-  assert.deepEqual(await page.evaluate(()=>[probe.tx,probe.ty]),cancelled);
-  const center = await page.evaluate(()=>({scale:probe.scale,x:(720-probe.tx)/probe.scale,y:(480-probe.ty)/probe.scale}));
-  await page.setViewportSize({width:1280,height:800});
-  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const resized = await page.evaluate(()=>({scale:probe.scale,x:(640-probe.tx)/probe.scale,y:(400-probe.ty)/probe.scale}));
-  assert.equal(resized.scale,center.scale);
-  assert.ok(Math.abs(resized.x-center.x)<0.001 && Math.abs(resized.y-center.y)<0.001,'resize keeps world center');
-  await page.setViewportSize({width:1440,height:960});
-  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const saved = await page.evaluate(()=>({point:probe.positions.get('fact:f0'),camera:[probe.scale,probe.tx,probe.ty]}));
-  await page.evaluate(() => {probe.setState({graph:{project:{id:'other',generation:0}}}); probe.setState(probeState);});
-  assert.deepEqual(await page.evaluate(()=>({point:probe.positions.get('fact:f0'),camera:[probe.scale,probe.tx,probe.ty]})),saved);
-  await page.evaluate(()=>{probe.selectNode('fact:f0'); probeState.fact_records=probeState.fact_records.filter(f=>f.id!=='f0'); probe.setState(probeState);});
-  assert.equal(await page.locator('#canvas-probe [data-node-key="fact:f0"]').count(),0);
-  await page.evaluate(()=>{probeState.graph.project.generation=1; probe.setState(probeState);});
-  assert.notDeepEqual(await page.evaluate(()=>[probe.scale,probe.tx,probe.ty]),saved.camera);
-  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
-  const currentRound = await page.evaluate(()=>{
-    probe.positions.set('step:s0',{x:-620,y:480});probe.zoomBy(.8);
-    return {positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty]};
-  });
-  await page.evaluate(async()=>{
-    const archived=structuredClone(probeState);archived.graph.project.generation=0;
-    probe.setState(archived);
-    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-    probe.setState(probeState);
-    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  });
-  const restoredRound = await page.evaluate(()=>({positions:[...probe.positions],camera:[probe.scale,probe.tx,probe.ty]}));
-  assert.deepEqual(new Map(restoredRound.positions),new Map(currentRound.positions),'viewing an archived round preserves the current round arrangement');
-  assert.deepEqual(restoredRound.camera,currentRound.camera);
-  await page.evaluate(()=>{probe.destroy(); document.getElementById('canvas-probe').remove();});
-  assert.deepEqual(errors,[]);
-  t.diagnostic(`122 nodes / 183 edges; initial synchronous update ${initial.duration.toFixed(1)} ms`);
+  assert.ok(grabbed.x<=area.x+9 && grabbed.x+grabbed.width>=area.x+7 && grabbed.y<=area.y+9 && grabbed.y+grabbed.height>=area.y+7,'zoom retains the pointer grab: '+JSON.stringify({grabbed,area,camera:(await snapshot()).camera}));
+  await page.mouse.up(); const stopped=(await snapshot()).camera; await page.waitForTimeout(130);
+  assert.deepEqual((await snapshot()).camera,stopped);
+  await page.locator('#fit-graph').click(); await paint(page);
+  const secondGrab=await node.boundingBox();
+  await page.mouse.move(secondGrab.x+secondGrab.width/2,secondGrab.y+secondGrab.height/2); await page.mouse.down();
+  await page.mouse.move(area.x+area.width-8,area.y+area.height-8,{steps:8});
+  const rightBefore=(await snapshot()).camera; await page.waitForTimeout(220); const rightAfter=(await snapshot()).camera;
+  assert.ok(rightAfter[1]<rightBefore[1] && rightAfter[2]<rightBefore[2],'right/bottom edge pan continues');
+  await page.evaluate(()=>window.dispatchEvent(new Event('blur'))); await page.mouse.up();
+  const cancelled=(await snapshot()).camera; await page.waitForTimeout(130); assert.deepEqual((await snapshot()).camera,cancelled);
+  const center=await snapshot();
+  await page.setViewportSize({width:1280,height:800}); await paint(page); const resized=await snapshot();
+  assert.equal(resized.camera[0],center.camera[0]);
+  const worldCenter=value=>[(value.width/2-value.camera[1])/value.camera[0],(value.height/2-value.camera[2])/value.camera[0]];
+  worldCenter(center).forEach((coordinate,index)=>assert.ok(Math.abs(coordinate-worldCenter(resized)[index])<.01,'resize keeps world center'));
+  await page.setViewportSize({width:1440,height:960}); await paint(page);
+  const saved=await snapshot();
+  await page.locator('[data-view="materials"]').click(); await page.locator('[data-view="graph"]').click(); await paint(page);
+  const restored=await snapshot(); assert.deepEqual(new Map(restored.positions),new Map(saved.positions)); assert.deepEqual(restored.camera,saved.camera);
+  await page.locator('[data-filter="done"]').click(); await node.dispatchEvent('click'); await paint(page);
+  const beforeSettings=await snapshot();
+  await page.locator('#model-entry').click(); await page.locator('.llm-page').waitFor();
+  assert.equal(await page.locator('#graph-host').count(),0);
+  await page.locator('[data-llm-return]').click(); await page.locator('#graph-host').waitFor(); await paint(page);
+  const afterSettings=await snapshot();
+  assert.deepEqual(new Map(afterSettings.positions),new Map(beforeSettings.positions)); assert.deepEqual(afterSettings.camera,beforeSettings.camera);
+  assert.equal(await page.locator('[data-filter="done"]').getAttribute('aria-pressed'),'true');
+  assert.equal(await node.getAttribute('aria-pressed'),'true');
+  await page.locator('#clear-selection').click(); await page.locator('[data-filter="done"]').click();
+  state.fact_records=state.fact_records.filter(f=>f.id!=='f0'); state.revision++;
+  await page.waitForFunction(()=>!document.querySelector('[data-node-key="fact:f0"]'));
+  state.graph.project.generation=1; state.fact_records.find(f=>f.id==='origin').description='新的轮次'; state.revision++;
+  await page.waitForFunction(()=>document.querySelector('[data-node-key="fact:origin"]').textContent.includes('新的轮次')); await paint(page);
+  assert.notDeepEqual((await snapshot()).camera,saved.camera);
+  assert.deepEqual(errors,[]); assert.deepEqual(requests.writes,[]); assert.deepEqual(requests.unexpected,[]);
+  t.diagnostic(`122 nodes / 183 edges; first accepted state rendered in ${initialDuration} ms`);
 });

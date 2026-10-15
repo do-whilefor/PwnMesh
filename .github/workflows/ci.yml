@@ -28,6 +28,20 @@ jobs:
         with:
           go-version: '1.26.x'
 
+      - name: Set up Node for the Vue workspace
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install locked frontend dependencies
+        run: npm --prefix web ci
+
+      # Compile the embedded assets before any Go package imports web.
+      - name: Type check, build and test the Vue workspace
+        run: bash scripts/check.sh web
+
       - name: Set up Python for Go fixtures and HTTP replay tests
         uses: actions/setup-python@v5
         with:
@@ -45,10 +59,10 @@ jobs:
 
       # Docker and live-model acceptance tests remain opt-in.
       - name: Test Go packages with race detection and vet
-        run: bash scripts/check.sh go
+        run: PWNMESH_WEB_PREBUILT=1 bash scripts/check.sh go
 
       - name: Compile Linux executable
-        run: bash scripts/build.sh "$RUNNER_TEMP/pwnmesh"
+        run: PWNMESH_WEB_PREBUILT=1 bash scripts/build.sh "$RUNNER_TEMP/pwnmesh"
 
       - name: Smoke test compiled commands
         run: |
@@ -56,15 +70,6 @@ jobs:
           for command in serve dispatch worker; do
             "$RUNNER_TEMP/pwnmesh" "$command" --help
           done
-
-      - name: Set up Node for workbench tests
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-
-      # Browser acceptance is opt-in under web/browser; this step needs no browser.
-      - name: Check workbench scripts and Node regressions
-        run: bash scripts/check.sh web
 
       - name: Check client HTTP replay and development commands
         run: bash scripts/check.sh python

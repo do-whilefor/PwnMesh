@@ -1,0 +1,399 @@
+import { mapState, resolveNodeKey } from './graph-data';
+import { worldBounds, fitTransform, edgePanVelocity } from './canvas';
+import { mergePositions, NODE_WIDTH, NODE_HEIGHT } from './layout';
+import { routeEdges } from './routing';
+import { projectGeometry, describeEdge, collectSelection, placeEdgeLabel, nodePresentation, edgeKey } from './graph-view';
+import type { GraphNode, GraphEdge, GraphDiagnostic, GraphProject, GraphLayout, Point, Rect, EdgeRoute, NodeSelection, EdgeSelection, StatusFilter } from './types';
+interface GraphOptions { onSelect?: (node: GraphNode | null) => void; onSelectEdge?: (edge: GraphEdge | null) => void; projectLayouts?: Map<string, GraphLayout> }
+interface CardParts { kind: HTMLSpanElement; kindText: HTMLSpanElement; status: HTMLSpanElement; statusText: HTMLSpanElement; title: HTMLElement }
+interface GraphCard extends HTMLButtonElement { parts: CardParts; stamp?: string }
+interface EdgeElements { group: SVGGElement; path: SVGPathElement; port: SVGCircleElement; hit: SVGPathElement; title: SVGTitleElement; label: SVGTextElement }
+interface Drag { id?: string; pointerId: number; projectKey: string; x: number; y: number; lastX: number; lastY: number; ox: number; oy: number; moved: boolean; grabX: number; grabY: number }
+type GraphEvents = GlobalEventHandlersEventMap & Pick<DocumentEventMap, 'visibilitychange'>;
+const closest = (target: EventTarget | null, selector: string): HTMLElement | SVGElement | null => target instanceof Element ? target.closest(selector) : null;
+const NS = 'http://www.w3.org/2000/svg';
+const COLORS: Readonly<Record<string, string>> = Object.freeze({neutral: '#7b8b9e', step_input: '#6b89b2', step_result: '#4a938a', step_dependency: '#8a71aa', goal_step: '#9983b3', parent: '#62977d', goal_support: '#3f8b70', finding_support: '#b18a42', refutes: '#b66b73', supersedes: '#9275a8', narrows: '#8c854d'});
+let nextInstance = 0;
+const clone = <T>(value: T | null | undefined): T | null => value == null ? null : JSON.parse(JSON.stringify(value));
+
+export class GraphController {
+  host: HTMLElement;
+  document: Document;
+  window: Window & typeof globalThis;
+  onSelect: (node: GraphNode | null) => void;
+  onSelectEdge: (edge: GraphEdge | null) => void;
+  instanceId: string;
+  positions: Map<string, Point>;
+  nodeGeometry: Map<string, Rect>;
+  projectLayouts: Map<string, GraphLayout>;
+  cards: Map<string, GraphCard>;
+  edgeElements: Map<string, EdgeElements>;
+  listeners: (() => void)[];
+  selected: string | null;
+  selectedEdge: string | null;
+  scale: number;
+  tx: number;
+  ty: number;
+  project: GraphProject | null;
+  projectId: string | null;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  diagnostics: GraphDiagnostic[];
+  drag: Drag | null;
+  statusFilter: StatusFilter;
+  destroyed: boolean;
+  panFrame: number | null;
+  panTime: number | null;
+  fitFrame: number | null;
+  drawFrame: number | null;
+  clickTimer: number | null;
+  viewport: HTMLDivElement;
+  world: HTMLDivElement;
+  nodeHost: HTMLDivElement;
+  svg: SVGSVGElement;
+  defs: SVGDefsElement;
+  edgeLayer: SVGGElement;
+  labelLayer: SVGGElement;
+  empty: HTMLDivElement;
+  warning: HTMLDivElement;
+  live: HTMLDivElement;
+  viewportSize: {width: number; height: number};
+  hoveredEdgeKey: string | null = null;
+  focusedEdgeKey: string | null = null;
+  resizeObserver?: ResizeObserver;
+  edgeRouteCache?: {signature: string; routes: Map<string, EdgeRoute>};
+  pendingFit = false;
+  suppressClick = false;
+  constructor(host: HTMLElement, options: GraphOptions = {}) {
+    if (!host?.ownerDocument) throw new TypeError('GraphController requires a host element');
+    this.host = host; this.document = host.ownerDocument; this.window = this.document.defaultView || window;
+    this.onSelect = options.onSelect || (() => {}); this.onSelectEdge = options.onSelectEdge || (() => {});
+    this.instanceId = 'pwnmesh-graph-' + (++nextInstance);
+    this.positions = new Map(); this.nodeGeometry = new Map(); this.projectLayouts = options.projectLayouts || new Map();
+    this.cards = new Map(); this.edgeElements = new Map(); this.listeners = [];
+    this.selected = null; this.selectedEdge = null; this.scale = 1; this.tx = 0; this.ty = 0;
+    this.project = null; this.projectId = null; this.nodes = []; this.edges = []; this.diagnostics = [];
+    this.drag = null; this.statusFilter = 'all'; this.destroyed = false;
+    this.panFrame = null; this.panTime = null; this.fitFrame = null; this.drawFrame = null; this.clickTimer = null;
+    this.viewport = this.el('div', 'graph-viewport'); this.viewport.tabIndex = 0;
+    this.viewport.setAttribute('role', 'group'); this.viewport.setAttribute('aria-label', '项目业务与步骤依赖图。点击节点追踪上游，方向键移动节点，加减号缩放，0 适应画布，Escape 清除选择。');
+    this.world = this.el('div', 'graph-world'); this.nodeHost = this.el('div', 'graph-nodes'); this.svg = this.svgEl('svg', {class: 'graph-edges', tabindex: -1});
+    this.defs = this.svgEl('defs');
+    for (const [name, color] of Object.entries(COLORS)) {
+      const marker = this.svgEl('marker', {id: this.instanceId + '-arrow-' + name, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 5, markerHeight: 5, orient: 'auto-start-reverse'});
+      marker.append(this.svgEl('path', {d: 'M 2 2 L 8 5 L 2 8', fill: 'none', stroke: color, 'stroke-width': 1.5, 'stroke-linecap': 'round', 'stroke-linejoin': 'round'})); this.defs.append(marker);
+    }
+    this.edgeLayer = this.svgEl('g'); this.labelLayer = this.svgEl('g', {class: 'graph-edge-labels'}); this.svg.append(this.defs, this.edgeLayer, this.labelLayer);
+    this.world.append(this.svg, this.nodeHost); this.viewport.append(this.world);
+    this.empty = this.el('div', 'graph-data-empty', '暂无图节点'); this.empty.hidden = true;
+    this.warning = this.el('div', 'graph-data-warning'); this.warning.hidden = true;
+    this.live = this.el('div', 'graph-screen-reader'); this.live.setAttribute('aria-live', 'polite');
+    host.append(this.viewport, this.empty, this.warning, this.live);
+    this.viewportSize = this.size();
+    this.listen(this.viewport, 'pointerdown', event => this.pointerDown(event));
+    this.listen(this.viewport, 'pointermove', event => this.pointerMove(event));
+    this.listen(this.viewport, 'pointerup', event => this.pointerUp(event));
+    for (const type of ['pointercancel', 'lostpointercapture'] as const) this.listen(this.viewport, type, event => { if (event.pointerId === this.drag?.pointerId) this.cancelDrag(); });
+    this.listen(this.window, 'blur', () => this.cancelDrag());
+    this.listen(this.document, 'visibilitychange', () => { if (this.document.hidden) this.cancelDrag(); });
+    this.listen(this.viewport, 'wheel', event => { event.preventDefault(); const rect = this.viewport.getBoundingClientRect(); this.zoom(Math.exp(-Math.max(-150, Math.min(150, event.deltaY)) * .003), event.clientX - rect.left, event.clientY - rect.top); }, {passive: false});
+    this.listen(this.nodeHost, 'click', event => { const button = closest(event.target, '.graph-node'); if (button && !this.suppressClick) this.selectNode(button.dataset.nodeKey); });
+    this.listen(this.viewport, 'keydown', event => this.keyDown(event));
+    const hitTarget = (target: EventTarget | null) => closest(target, '.graph-edge-hit, .graph-edge-label');
+    const activateEdge = (event: MouseEvent | KeyboardEvent) => {
+      const hit = hitTarget(event.target);
+      if (!hit || (event.type === 'keydown' && !['Enter', ' '].includes((event as KeyboardEvent).key))) return;
+      event.preventDefault(); event.stopPropagation(); this.selectEdge(hit.dataset.edgeKey);
+    };
+    this.listen(this.svg, 'click', activateEdge); this.listen(this.svg, 'keydown', activateEdge);
+    this.listen(this.svg, 'pointerover', event => { this.hoveredEdgeKey = hitTarget(event.target)?.dataset.edgeKey || null; this.updateEdgeLabelVisibility(); });
+    this.listen(this.svg, 'pointerout', event => { this.hoveredEdgeKey = hitTarget(event.relatedTarget)?.dataset.edgeKey || null; this.updateEdgeLabelVisibility(); });
+    this.listen(this.svg, 'focusin', event => { this.focusedEdgeKey = hitTarget(event.target)?.dataset.edgeKey || null; this.updateEdgeLabelVisibility(); });
+    this.listen(this.svg, 'focusout', event => { this.focusedEdgeKey = hitTarget(event.relatedTarget)?.dataset.edgeKey || null; this.updateEdgeLabelVisibility(); });
+    if (typeof this.window.ResizeObserver === 'function') { this.resizeObserver = new this.window.ResizeObserver(() => this.resize()); this.resizeObserver.observe(this.viewport); }
+    else this.listen(this.window, 'resize', () => this.resize());
+  }
+  el<K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, text?: string): HTMLElementTagNameMap[K] { const node = this.document.createElement(tag); node.className = cls; if (text !== undefined) node.textContent = text; return node; }
+  svgEl<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number> = {}): SVGElementTagNameMap[K] { const node = this.document.createElementNS(NS, tag); for (const [key, value] of Object.entries(attrs)) node.setAttribute(key, String(value)); return node; }
+  icon(name: string) { const icon = this.svgEl('svg', {class: 'icon', viewBox: '0 0 24 24', 'aria-hidden': 'true'}); icon.append(this.svgEl('use', {href: '#i-' + name})); return icon; }
+  listen<K extends keyof GraphEvents>(target: EventTarget, name: K, fn: (event: GraphEvents[K]) => void, options?: AddEventListenerOptions) { const listener = fn as EventListener; target.addEventListener(name, listener, options); this.listeners.push(() => target.removeEventListener(name, listener, options)); }
+  size() { return {width: this.viewport.clientWidth, height: this.viewport.clientHeight}; }
+  requestFrame(fn: FrameRequestCallback) { return this.window.requestAnimationFrame(fn); }
+  cancelFrame(id: number | null) { if (id !== null) this.window.cancelAnimationFrame(id); }
+  cacheKey(project: GraphProject | null = this.project) { return project ? JSON.stringify([project.projectId, project.generation]) : ''; }
+  saveView() {
+    const saved = this.projectLayouts.get(this.cacheKey());
+    if (saved) {
+      const measured = this.size();
+      // KeepAlive deactivation runs after detaching the DOM. Zero dimensions
+      // describe that detached subtree, not the viewport for the saved camera.
+      const size = measured.width && measured.height ? measured : this.viewportSize;
+      saved.positions = this.positions;
+      saved.camera = {scale: this.scale, tx: this.tx, ty: this.ty, ...size};
+    }
+  }
+  setState(state: unknown) {
+    if (this.destroyed) return;
+    const mapped = mapState(state), key = this.cacheKey(mapped), changed = key !== this.cacheKey();
+    const previousNode = this.project?.nodeIndex.get(this.selected ?? ''), previousEdge = describeEdge(this.project, this.selectedEdge);
+    this.saveView();
+    if (changed) { this.cancelDrag(); this.cancelPendingFit(); this.statusFilter = 'all'; }
+    // The generation-scoped key gives new rounds a fresh layout while
+    // preserving each viewed round when navigating through history.
+    let saved = this.projectLayouts.get(key ?? '');
+    const fresh = !saved;
+    if (!saved) saved = {projectId: mapped.projectId, generation: mapped.generation, positions: new Map()};
+    const firstNodes = !saved.positions.size && mapped.nodes.length > 0;
+    Object.assign(saved, mergePositions(mapped.nodes, saved.positions, {seed: key + ':0'}));
+    this.projectLayouts.set(key, saved); this.positions = saved.positions;
+    this.project = mapped; this.projectId = mapped.projectId;
+    this.nodes = mapped.nodes; this.edges = mapped.edges; this.diagnostics = mapped.diagnostics;
+    if (this.drag?.id && !mapped.nodeIndex.has(this.drag.id)) this.cancelDrag();
+    if (changed || !mapped.nodeIndex.has(this.selected ?? '')) this.selected = null;
+    if (changed || !mapped.edgeIndex.has(this.selectedEdge ?? '')) this.selectedEdge = null;
+    if (!mapped.edgeIndex.has(this.hoveredEdgeKey ?? '')) this.hoveredEdgeKey = null;
+    if (!mapped.edgeIndex.has(this.focusedEdgeKey ?? '')) this.focusedEdgeKey = null;
+    this.clearHiddenSelection(false); this.warning.hidden = !this.diagnostics.length;
+    this.warning.textContent = this.diagnostics.length ? this.diagnostics.length + ' 条图数据引用需要检查' : '';
+    this.renderCards(saved.endKey); this.scheduleDraw();
+    if (changed && saved.camera) {
+      const size = this.size(); this.scale = saved.camera.scale;
+      this.tx = saved.camera.tx + (size.width - saved.camera.width) / 2; this.ty = saved.camera.ty + (size.height - saved.camera.height) / 2;
+      this.viewportSize = size; this.transform();
+    } else if (fresh) { this.scale = 1; this.tx = 0; this.ty = 0; this.transform(); this.scheduleFit(); }
+    else if (firstNodes) this.scheduleFit();
+    const selected = mapped.nodeIndex.get(this.selected ?? ''), selectedEdge = mapped.edgeIndex.get(this.selectedEdge ?? '');
+    if (previousNode || selected) { if (changed || JSON.stringify(previousNode) !== JSON.stringify(selected)) this.onSelect(clone(selected)); }
+    if (previousEdge || selectedEdge) { if (changed || JSON.stringify(previousEdge) !== JSON.stringify(describeEdge(mapped, selectedEdge))) this.onSelectEdge(clone(selectedEdge)); }
+  }
+  renderCards(endKey: string | null | undefined) {
+    for (const [key, card] of this.cards) if (!this.project!.nodeIndex.has(key)) { card.remove(); this.cards.delete(key); }
+    for (const node of this.nodes) {
+      let card = this.cards.get(node.key);
+      if (!card) {
+        card = this.el('button', 'graph-node') as GraphCard; card.type = 'button'; card.dataset.nodeKey = node.key; card.dataset.nodeId = node.id;
+        const top = this.el('span', 'node-top'), kind = this.el('span', 'node-kind'), status = this.el('span', 'node-status');
+        const kindText = this.el('span', ''), statusText = this.el('span', ''); kind.append(kindText); status.append(statusText); top.append(kind, status);
+        const title = this.el('strong', 'node-title'); card.append(top, title);
+        card.parts = {kind, kindText, status, statusText, title}; this.cards.set(node.key, card); this.nodeHost.append(card);
+      }
+      const shape = nodePresentation(node, endKey), stamp = JSON.stringify([node.label, shape]);
+      if (stamp === card.stamp) continue;
+      card.stamp = stamp; card.className = 'graph-node ' + shape.kind + ' ' + shape.status;
+      card.dataset.status = node.status; card.dataset.viewType = shape.kind;
+      card.setAttribute('aria-label', shape.label + '：' + (node.label || node.id) + '，' + shape.statusLabel);
+      card.title = shape.label + ' · ' + shape.statusLabel + '\n' + (node.description || node.id);
+      card.parts.kind.replaceChildren(this.icon(({start: 'flag', task: 'node', fact: 'file', goal: 'target', subgoal: 'target', finding: 'shield'})[shape.kind] || 'node'), card.parts.kindText);
+      card.parts.kindText.textContent = shape.label; card.parts.statusText.textContent = shape.statusLabel;
+      card.parts.title.textContent = node.label || node.id;
+      card.parts.status.replaceChildren();
+      if (shape.status === 'done') card.parts.status.append(this.icon('check'));
+      if (shape.status === 'running') card.parts.status.append(this.el('i', 'node-running-dot'));
+      card.parts.status.append(card.parts.statusText);
+    }
+  }
+  scheduleFit() { this.cancelPendingFit(); this.fitFrame = this.requestFrame(() => { this.fitFrame = null; if (!this.destroyed && !this.drag) this.fit(); }); }
+  cancelPendingFit() { this.cancelFrame(this.fitFrame); this.fitFrame = null; }
+  scheduleDraw() { if (this.drawFrame === null && !this.destroyed) this.drawFrame = this.requestFrame(() => { this.drawFrame = null; this.drawEdges(); }); }
+  syncGeometry() {
+    this.nodeGeometry = projectGeometry(this.nodes, this.positions, NODE_WIDTH, NODE_HEIGHT);
+    for (const [key, card] of this.cards) {
+      const shape = this.nodeGeometry.get(key ?? ''); if (!shape) continue;
+      card.style.left = shape.x + 'px'; card.style.top = shape.y + 'px'; card.style.width = shape.width + 'px'; card.style.height = shape.height + 'px';
+    }
+  }
+  updateBounds() {
+    const bounds = worldBounds(this.positions, {width: NODE_WIDTH, height: NODE_HEIGHT, baseWidth: 0, baseHeight: 0, padding: 96});
+    this.world.style.width = Math.max(1, bounds.right) + 'px'; this.world.style.height = Math.max(1, bounds.bottom) + 'px';
+    this.svg.style.left = bounds.left + 'px'; this.svg.style.top = bounds.top + 'px';
+    this.svg.setAttribute('width', String(Math.max(1, bounds.width))); this.svg.setAttribute('height', String(Math.max(1, bounds.height)));
+    this.svg.setAttribute('viewBox', `${bounds.left} ${bounds.top} ${Math.max(1, bounds.width)} ${Math.max(1, bounds.height)}`);
+    return bounds;
+  }
+  drawEdges() {
+    if (this.destroyed || !this.project) return;
+    this.syncGeometry(); this.updateBounds();
+    this.empty.hidden = this.getVisibleNodeCount() > 0;
+    this.empty.textContent = this.statusFilter === 'all' ? '暂无图节点' : '暂无' + ({done: '已完成', running: '运行中', pending: '待执行'})[this.statusFilter] + '节点';
+    const selection = collectSelection(this.project, this.selected, this.selectedEdge);
+    for (const [key, card] of this.cards) {
+      const node = this.project.nodeIndex.get(key ?? ''), related = selection.nodeIds.has(key);
+      card.hidden = !this.isNodeVisible(node);
+      card.classList.toggle('selected', this.selected === key); card.classList.toggle('lineage', selection.active && related); card.classList.toggle('dim', selection.active && !related);
+      card.setAttribute('aria-pressed', String(this.selected === key));
+    }
+    const signature = JSON.stringify([this.edges.map(edge => [edge.id, edge.source, edge.target]), [...this.nodeGeometry]]);
+    if (this.edgeRouteCache?.signature !== signature) {
+      this.edgeRouteCache = {signature, routes: new Map([...routeEdges(this.edges, this.nodeGeometry)].map(([edge, route]) => [edge.id, route]))};
+    }
+    for (const [key, entry] of this.edgeElements) if (!this.project.edgeIndex.has(key)) { entry.group.remove(); entry.label.remove(); this.edgeElements.delete(key); }
+    for (const edge of this.edges) {
+      const route = this.edgeRouteCache.routes.get(edge.id), detail = describeEdge(this.project, edge); if (!route || !detail) continue;
+      let entry = this.edgeElements.get(edge.id);
+      if (!entry) {
+        const group = this.svgEl('g'), path = this.svgEl('path', {'aria-hidden': 'true'}), port = this.svgEl('circle', {r: 1.7, class: 'graph-source-port'});
+        const hit = this.svgEl('path', {role: 'button', tabindex: 0}), title = this.svgEl('title'), label = this.svgEl('text', {'text-anchor': 'middle', 'dominant-baseline': 'central', 'aria-hidden': 'true'});
+        hit.append(title); group.append(path, port, hit); this.edgeLayer.append(group); this.labelLayer.append(label);
+        hit.dataset.edgeKey = edge.id; label.dataset.edgeKey = edge.id;
+        entry = {group, path, port, hit, title, label}; this.edgeElements.set(edge.id, entry);
+      }
+      const visible = this.isEdgeVisible(edge);
+      entry.group.style.display = visible ? '' : 'none'; entry.label.style.display = visible ? '' : 'none';
+      const selected = this.selectedEdge === edge.id, related = selection.edgeKeys.has(edge.id), dim = selection.active && !related;
+      const color = Object.hasOwn(COLORS, edge.kind) ? edge.kind : 'neutral';
+      entry.group.style.setProperty('--edge-color', COLORS[color]);
+      entry.label.style.setProperty('--edge-color', COLORS[color]);
+      for (const element of [entry.path, entry.port, entry.hit, entry.label]) element.dataset.edgeKind = edge.kind;
+      const classes = detail.status + (selected ? ' selected' : '') + (related ? ' lineage' : '') + (dim ? ' dim' : '');
+      entry.path.setAttribute('d', route.d); entry.path.setAttribute('class', 'graph-edge ' + classes); entry.path.setAttribute('marker-end', 'url(#' + this.instanceId + '-arrow-' + color + ')');
+      entry.port.setAttribute('cx', String(route.start.x)); entry.port.setAttribute('cy', String(route.start.y)); entry.port.setAttribute('fill', COLORS[color]); entry.port.setAttribute('opacity', String(dim ? .2 : 1));
+      entry.hit.setAttribute('d', route.d); entry.hit.setAttribute('class', 'graph-edge-hit ' + classes); entry.hit.setAttribute('aria-pressed', String(selected));
+      entry.hit.setAttribute('aria-label', detail.label + '：' + detail.sourceNode.label + ' → ' + detail.targetNode.label + '，' + detail.statusLabel);
+      entry.title.textContent = detail.label + ' · ' + detail.statusLabel + '\n' + detail.description;
+      // Text is deliberately projected on every update, outside geometry cache.
+      const label = placeEdgeLabel(route.points, detail.label)!;
+      entry.label.setAttribute('class', 'graph-edge-label ' + classes); entry.label.setAttribute('transform', `translate(${label.x} ${label.y}) rotate(${label.angle})`); entry.label.textContent = label.text;
+    }
+    this.updateEdgeLabelVisibility(); this.saveView();
+  }
+  updateEdgeLabelVisibility() { for (const [key, entry] of this.edgeElements) entry.label.classList.toggle('is-revealed', key === this.hoveredEdgeKey || key === this.focusedEdgeKey); }
+  getEdgeDetails(edge: EdgeSelection) { return clone(describeEdge(this.project, edge)); }
+  selectNode(selection: NodeSelection) {
+    if (this.destroyed) return;
+    const key = resolveNodeKey(this.nodes, selection);
+    if (selection != null && (!key || !this.isNodeVisible(this.project?.nodeIndex.get(key ?? '')))) return;
+    const hadEdge = this.selectedEdge !== null; this.selected = key; this.selectedEdge = null; this.scheduleDraw();
+    if (hadEdge) this.onSelectEdge(null);
+    const node = this.project?.nodeIndex.get(key ?? ''); this.onSelect(clone(node));
+    this.live.textContent = node ? node.label : '已清除选择';
+  }
+  selectEdge(edge: EdgeSelection) {
+    if (this.destroyed) return;
+    const key = edge == null ? null : edgeKey(edge);
+    if (key && !this.isEdgeVisible(this.project?.edgeIndex.get(key ?? ''))) return;
+    const hadNode = this.selected !== null; this.selected = null; this.selectedEdge = key; this.scheduleDraw();
+    if (hadNode) this.onSelect(null); this.onSelectEdge(clone(this.project?.edgeIndex.get(key ?? '')));
+  }
+  clearSelection() { this.selected = null; this.selectedEdge = null; this.scheduleDraw(); this.onSelect(null); this.onSelectEdge(null); }
+  isNodeVisible(node: GraphNode | undefined) { return !!node && (this.statusFilter === 'all' || nodePresentation(node, null).status === this.statusFilter); }
+  isEdgeVisible(edge: GraphEdge | undefined) { return !!edge && this.isNodeVisible(this.project?.nodeIndex.get(edge.source)) && this.isNodeVisible(this.project?.nodeIndex.get(edge.target)); }
+  clearHiddenSelection(notify = true) {
+    if (this.drag?.id && !this.isNodeVisible(this.project?.nodeIndex.get(this.drag.id))) this.cancelDrag();
+    if (this.selected && !this.isNodeVisible(this.project?.nodeIndex.get(this.selected ?? ''))) { this.selected = null; if (notify) this.onSelect(null); this.live.textContent = '已清除选择'; }
+    if (this.selectedEdge && !this.isEdgeVisible(this.project?.edgeIndex.get(this.selectedEdge ?? ''))) { this.selectedEdge = null; if (notify) this.onSelectEdge(null); }
+    if (!this.isEdgeVisible(this.project?.edgeIndex.get(this.hoveredEdgeKey ?? ''))) this.hoveredEdgeKey = null;
+    if (!this.isEdgeVisible(this.project?.edgeIndex.get(this.focusedEdgeKey ?? ''))) this.focusedEdgeKey = null;
+  }
+  setStatusFilter(status: string) {
+    if (this.destroyed) return;
+    const next: StatusFilter = status === 'done' || status === 'running' || status === 'pending' ? status : 'all';
+    if (next === this.statusFilter) return;
+    this.statusFilter = next; this.cancelPendingFit(); this.clearHiddenSelection(); this.scheduleDraw();
+  }
+  getStatusFilter() { return this.statusFilter; }
+  transform() {
+    this.world.style.transform = `translate(${this.tx}px,${this.ty}px) scale(${this.scale})`; this.saveView();
+    this.host.dispatchEvent(new this.window.CustomEvent('graphzoom', {detail: {zoom: this.scale}}));
+  }
+  fit() {
+    if (this.destroyed) return;
+    this.cancelDrag(); this.cancelPendingFit(); const size = this.size();
+    const visible = this.nodes.filter(node => this.isNodeVisible(node));
+    if (!visible.length || !size.width || !size.height) { this.pendingFit = !!visible.length; return; }
+    const bounds = worldBounds(new Map(visible.map(node => [node.key, this.positions.get(node.key)!])), {width: NODE_WIDTH, height: NODE_HEIGHT, baseWidth: 0, baseHeight: 0, padding: 96});
+    const camera = fitTransform(bounds, size.width, size.height); if (!camera) return;
+    this.pendingFit = false; this.viewportSize = size; Object.assign(this, camera); this.transform();
+  }
+  zoom(factor: number, x = this.viewport.clientWidth / 2, y = this.viewport.clientHeight / 2) {
+    if (this.destroyed || !Number.isFinite(factor) || factor <= 0) return;
+    this.cancelPendingFit(); const next = Math.min(2.5, this.scale * factor); if (!Number.isFinite(next) || next <= 0) return;
+    const ratio = next / this.scale; this.tx = x - (x - this.tx) * ratio; this.ty = y - (y - this.ty) * ratio; this.scale = next;
+    this.transform(); this.syncDragToView();
+  }
+  zoomBy(factor: number) { this.zoom(factor); }
+  resize() {
+    if (this.destroyed) return;
+    const size = this.size(), previous = this.viewportSize;
+    if (!this.project || !size.width || !size.height) return;
+    this.viewportSize = size;
+    if (this.pendingFit || !previous.width || !previous.height) { this.fit(); return; }
+    this.tx += (size.width - previous.width) / 2; this.ty += (size.height - previous.height) / 2; this.transform(); this.syncDragToView();
+  }
+  syncDragToView() {
+    if (this.drag?.id) this.updateDraggedNode();
+    else if (this.drag) { this.drag.ox = this.tx; this.drag.oy = this.ty; this.drag.x = this.drag.lastX; this.drag.y = this.drag.lastY; }
+  }
+  focusNode(selection: NodeSelection) {
+    const key = resolveNodeKey(this.nodes, selection), point = this.positions.get(key ?? ''); if (this.destroyed || !point || !this.isNodeVisible(this.project?.nodeIndex.get(key ?? ''))) return;
+    this.cancelPendingFit(); this.tx = this.viewport.clientWidth / 2 - (point.x + NODE_WIDTH / 2) * this.scale;
+    this.ty = this.viewport.clientHeight / 2 - (point.y + NODE_HEIGHT / 2) * this.scale; this.transform();
+  }
+  pointerDown(event: PointerEvent) {
+    if (this.destroyed || event.button !== 0 || this.drag || closest(event.target, '.graph-edge-hit, .graph-edge-label')) return;
+    this.cancelPendingFit(); const button = closest(event.target, '.graph-node'), key = button?.dataset.nodeKey, position = this.positions.get(key ?? ''), rect = this.viewport.getBoundingClientRect();
+    this.drag = {id: key, pointerId: event.pointerId, projectKey: this.cacheKey(), x: event.clientX, y: event.clientY, lastX: event.clientX, lastY: event.clientY, ox: this.tx, oy: this.ty, moved: false,
+      grabX: position ? (event.clientX - rect.left - this.tx) / this.scale - position.x : 0, grabY: position ? (event.clientY - rect.top - this.ty) / this.scale - position.y : 0};
+    this.viewport.setPointerCapture(event.pointerId); this.viewport.classList.add('is-panning');
+  }
+  pointerMove(event: PointerEvent) {
+    if (!this.drag || event.pointerId !== this.drag.pointerId) return;
+    const drag = this.drag, dx = event.clientX - drag.x, dy = event.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) drag.moved = true; drag.lastX = event.clientX; drag.lastY = event.clientY;
+    if (drag.id) { if (drag.moved) { this.updateDraggedNode(); this.startEdgePan(); } }
+    else { this.tx = drag.ox + dx; this.ty = drag.oy + dy; this.transform(); }
+  }
+  updateDraggedNode() {
+    const drag = this.drag; if (!drag?.id || drag.projectKey !== this.cacheKey()) return;
+    const point = this.positions.get(drag.id); if (!point) { this.cancelDrag(); return; }
+    const rect = this.viewport.getBoundingClientRect();
+    point.x = (drag.lastX - rect.left - this.tx) / this.scale - drag.grabX; point.y = (drag.lastY - rect.top - this.ty) / this.scale - drag.grabY;
+    this.scheduleDraw(); this.saveView();
+  }
+  startEdgePan() {
+    if (this.panFrame !== null || !this.drag?.id || !this.drag.moved) return;
+    this.panTime = null;
+    const step = (time: number) => {
+      this.panFrame = null; const drag = this.drag;
+      if (this.destroyed || !drag?.id || !drag.moved || drag.projectKey !== this.cacheKey()) { this.panTime = null; return; }
+      const rect = this.viewport.getBoundingClientRect(), velocity = edgePanVelocity(drag.lastX - rect.left, drag.lastY - rect.top, rect.width, rect.height);
+      if (!velocity.x && !velocity.y) { this.panTime = null; return; }
+      const seconds = this.panTime === null ? 0 : Math.min(.04, (time - this.panTime) / 1000); this.panTime = time;
+      this.tx += velocity.x * seconds; this.ty += velocity.y * seconds; this.transform(); this.updateDraggedNode(); this.panFrame = this.requestFrame(step);
+    };
+    this.panFrame = this.requestFrame(step);
+  }
+  cancelDrag() {
+    this.cancelFrame(this.panFrame); this.panFrame = null; this.panTime = null;
+    const drag = this.drag; this.drag = null; this.viewport.classList.remove('is-panning');
+    if (drag && this.viewport.hasPointerCapture(drag.pointerId)) this.viewport.releasePointerCapture(drag.pointerId);
+    this.saveView();
+  }
+  pointerUp(event: PointerEvent) {
+    if (!this.drag || event.pointerId !== this.drag.pointerId) return;
+    const drag = this.drag; this.suppressClick = true; this.cancelDrag();
+    if (!drag.moved) { if (drag.id) this.selectNode(drag.id); else this.clearSelection(); }
+    if (this.clickTimer !== null) this.window.clearTimeout(this.clickTimer);
+    this.clickTimer = this.window.setTimeout(() => { this.suppressClick = false; this.clickTimer = null; }, 0);
+  }
+  keyDown(event: KeyboardEvent) {
+    const button = closest(event.target, '.graph-node'), direction = ({ArrowLeft: [-12, 0], ArrowRight: [12, 0], ArrowUp: [0, -12], ArrowDown: [0, 12]} as Record<string, [number, number]>)[event.key];
+    if (button && direction) { event.preventDefault(); const point = this.positions.get(button.dataset.nodeKey ?? ''); if (point) { point.x += direction[0]; point.y += direction[1]; this.scheduleDraw(); this.saveView(); } }
+    else if (event.key === 'Escape') { event.preventDefault(); this.clearSelection(); }
+    else if (event.key === '+' || event.key === '=') { event.preventDefault(); this.zoomBy(1.2); }
+    else if (event.key === '-') { event.preventDefault(); this.zoomBy(1 / 1.2); }
+    else if (event.key === '0') { event.preventDefault(); this.fit(); }
+  }
+  getNodes() { return clone(this.nodes); }
+  getVisibleNodeCount() { return this.nodes.filter(node => this.isNodeVisible(node)).length; }
+  forgetProject(projectId: string) {
+    for (const [key, value] of this.projectLayouts) if (value.projectId === projectId) this.projectLayouts.delete(key);
+    if (this.projectId === projectId) this.setState(null);
+  }
+  destroy() {
+    if (this.destroyed) return;
+    this.cancelDrag(); this.cancelPendingFit(); this.cancelFrame(this.drawFrame); this.drawFrame = null;
+    if (this.clickTimer !== null) this.window.clearTimeout(this.clickTimer); this.clickTimer = null;
+    this.destroyed = true; this.resizeObserver?.disconnect(); for (const remove of this.listeners) remove(); this.listeners = [];
+    this.viewport.remove(); this.empty.remove(); this.warning.remove(); this.live.remove(); this.cards.clear(); this.edgeElements.clear(); this.projectLayouts = new Map();
+  }
+}
