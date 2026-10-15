@@ -1,4 +1,4 @@
-import type { CreateDraft, HintDraft, ProjectView } from './types';
+import type { CreateProjectValues, HintValues, ProjectView } from './types';
 const MiB = 1048576;
 export const PROJECT_TYPES = [
   {value: 'ctf', label: 'CTF', icon: 'flag'},
@@ -17,7 +17,7 @@ export function validateFiles(files: FileMetadata[] = [], existing: FileMetadata
   if (all.some(file => typeof file.name !== 'string' || !file.name.trim() || file.name === '.' || file.name === '..' || /[\\/\u0000-\u001f\u007f-\u009f]/.test(file.name) || new TextEncoder().encode(file.name).length > 200)) return '文件名须为不含路径或控制字符的普通名称，长度不超过 200 字节。';
   return '';
 }
-export function validateProject(data: Partial<CreateDraft> = {}): string {
+export function validateProject(data: Partial<CreateProjectValues> = {}): string {
   const name = asText(data.name).trim(), target = asText(data.target).trim(), goal = asText(data.goal).trim();
   if (!name) return '请填写项目名称。';
   if (name.length > 200) return '项目名称不能超过 200 个字符。';
@@ -27,10 +27,10 @@ export function validateProject(data: Partial<CreateDraft> = {}): string {
   if (!PROJECT_TYPES.some(type => type.value === data.type)) return '请选择项目类型。';
   return validateFiles(data.files || []);
 }
-export function isProjectClosed(project?: {archived?: boolean; status?: string} | null): boolean {
-  return !!project?.archived || ['done', 'completed', 'ended', 'finished', 'terminated', 'archived'].includes(project?.status || '');
+export function isProjectClosed(project?: Pick<ProjectView, 'archived' | 'status'> | null): boolean {
+  return !!project?.archived || project?.status === 'done' || project?.status === 'terminated';
 }
-export function validateHint(data: Partial<HintDraft> = {}, project?: Pick<ProjectView, 'status' | 'files' | 'archived'> | null): string {
+export function validateHint(data: Partial<HintValues> = {}, project?: Pick<ProjectView, 'status' | 'files' | 'archived'> | null): string {
   if (!project) return '项目不存在或已移除。';
   if (isProjectClosed(project)) return '项目已结束，无法补充信息。';
   const text = asText(data.text).trim(), files = data.files || [];
@@ -39,20 +39,6 @@ export function validateHint(data: Partial<HintDraft> = {}, project?: Pick<Proje
   if (error) return error;
   if (!text && !files.length) return '请填写补充信息或选择文件。';
   return '';
-}
-export function createFormDrafts() {
-  const emptyCreate = (): CreateDraft => ({name: '', target: '', goal: '', type: 'pentest', files: []});
-  const clone = <T extends HintDraft | CreateDraft>(draft: T): T => ({...draft, files: draft.files.slice()});
-  let create = emptyCreate();
-  const hints = new Map<string, HintDraft>();
-  return {
-    getCreate: () => clone(create),
-    setCreate: (value: CreateDraft) => { create = {name: asText(value.name), target: asText(value.target), goal: asText(value.goal), type: value.type, files: value.files.slice()}; },
-    clearCreate: () => { create = emptyCreate(); },
-    getHint: (id: string): HintDraft => clone(hints.get(id) || {text: '', files: []}),
-    setHint: (id: string, value: HintDraft) => { hints.set(id, {text: asText(value.text), files: value.files.slice()}); },
-    clearHint: (id: string) => { hints.delete(id); },
-  };
 }
 export function fileSize(bytes: number): string {
   if (bytes >= MiB) return (bytes / MiB).toFixed(1) + ' MiB';

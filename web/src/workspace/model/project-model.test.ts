@@ -1,17 +1,19 @@
 import { expect, test } from 'vitest';
-import { createFormDrafts, validateFiles, validateHint, validateProject } from './project-model';
+import { validateFiles, validateHint, validateProject } from './project-model';
 import { actions, canHint } from './lifecycle';
 import { buildEntries } from './activity-data';
-import type { LogRecord } from './types';
+import type { LogRecord, ProjectStatus } from './types';
 
-test('drafts retain File identity but isolate their mutable file arrays', () => {
-  const file = new File(['bytes'], 'request.http'), drafts = createFormDrafts(), files = [file];
-  drafts.setCreate({name: 'Audit', type: 'pentest', target: 'scope', goal: 'evidence', files});
-  drafts.setHint('a', {text: 'scope', files}); files.length = 0;
-  const create = drafts.getCreate(); expect(create.files[0]).toBe(file); create.files.length = 0;
-  expect(drafts.getCreate().files[0]).toBe(file);
-  const hint = drafts.getHint('a'); expect(hint.files[0]).toBe(file); hint.files.length = 0;
-  expect(drafts.getHint('a').files[0]).toBe(file); expect(drafts.getHint('b').files).toEqual([]);
+test('hint validation uses normalized lifecycle states and rejects archived rounds', () => {
+  const text = {text: 'Additional authorized scope'};
+  for (const status of ['running', 'paused', 'pending'] satisfies ProjectStatus[]) {
+    expect(validateHint(text, {status, files: []})).toBe('');
+    expect(validateHint(text, {status, archived: true, files: []})).toContain('已结束');
+  }
+  for (const status of ['done', 'terminated'] satisfies ProjectStatus[]) {
+    expect(validateHint(text, {status, files: []})).toContain('已结束');
+  }
+  expect(validateHint(text)).toContain('不存在');
 });
 test('forms enforce upload sizes, counts and every server-disallowed control character', () => {
   expect(validateFiles([{name: 'large.zip', size: 257 * 1048576}])).toContain('256');

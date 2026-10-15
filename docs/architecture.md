@@ -187,10 +187,6 @@ associations. Derived Finding support uses a separate slice: Curate explicitly
 retains the recalculated support in its pending metadata after each correction,
 without changing the input used to measure progress through remaining groups.
 
-The embedded frontend keeps project form rules in `project-model.js`, provider
-settings in `model-settings.js`, and activity rendering in `activity-view.js`.
-`app.js` owns UI state and lifecycle; `service.js` owns fenced refreshes and caches.
-
 ## Lifecycle and boundaries
 
 Dispatcher's `scheduler.go` gives the Run/Step ordering. `runtime.go` owns startup,
