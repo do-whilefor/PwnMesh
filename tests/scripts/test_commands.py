@@ -97,6 +97,7 @@ class CommandTests(unittest.TestCase):
         self.assertEqual([record["tool"] for record in records], ["npm", "go", "go"])
         self.assertEqual(records[0]["args"], ["--prefix", "web", "run", "build"])
         self.assertEqual([record["args"][0] for record in records[1:]], ["test", "vet"])
+        self.assertEqual(records[1]["args"], ["test", "-mod=readonly", "-race", "-count=1", "-timeout=15m", "./..."])
         for record in records:
             self.assertEqual(record["controls"], {})
             self.assertFalse(record["has_model_credentials"])

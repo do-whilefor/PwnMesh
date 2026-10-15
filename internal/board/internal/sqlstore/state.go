@@ -146,6 +146,7 @@ func saveStateFacts(q Queries, project string, facts []json.RawMessage) error {
 		return err
 	}
 	previous := make(map[int]string, len(facts))
+	trim := false
 	for rows.Next() {
 		var position int
 		var data string
@@ -154,6 +155,7 @@ func saveStateFacts(q Queries, project string, facts []json.RawMessage) error {
 			return err
 		}
 		previous[position] = data
+		trim = trim || position >= len(facts)
 	}
 	err = rows.Err()
 	rows.Close()
@@ -167,6 +169,10 @@ func saveStateFacts(q Queries, project string, facts []json.RawMessage) error {
 		if _, err := q.Exec("INSERT INTO pwnmesh_fact_metadata(project_id,position,data) VALUES(?,?,?) ON CONFLICT(project_id,position) DO UPDATE SET data=excluded.data", project, position, string(fact)); err != nil {
 			return err
 		}
+	}
+	// Even a no-op DELETE compiles its invalidation trigger programs.
+	if !trim {
+		return nil
 	}
 	_, err = q.Exec("DELETE FROM pwnmesh_fact_metadata WHERE project_id=? AND position>=?", project, len(facts))
 	return err

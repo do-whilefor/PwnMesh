@@ -14,7 +14,8 @@ if [[ $suite == web || $suite == all ]]; then
 fi
 if [[ $suite == go || $suite == all ]]; then
     if [[ $suite == go ]]; then build_web; fi
-    go test -mod=readonly -race -count=1 ./...
+    # The SQLite-heavy race suite can exceed Go's default ten-minute package limit.
+    go test -mod=readonly -race -count=1 -timeout=15m ./...
     go vet -mod=readonly ./...
 fi
 if [[ $suite == python || $suite == all ]]; then

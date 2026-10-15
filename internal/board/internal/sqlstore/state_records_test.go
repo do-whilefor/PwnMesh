@@ -2,6 +2,7 @@ package sqlstore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -10,6 +11,80 @@ import (
 
 	"pwnmesh/internal/board/model"
 )
+
+type metadataTrimQueries struct {
+	Queries
+	deletes int
+}
+
+func (q *metadataTrimQueries) Exec(query string, args ...any) (sql.Result, error) {
+	if strings.HasPrefix(query, "DELETE FROM pwnmesh_state_records ") || strings.HasPrefix(query, "DELETE FROM pwnmesh_fact_metadata ") {
+		q.deletes++
+	}
+	return q.Queries.Exec(query, args...)
+}
+
+func TestStateMetadataTrimsOnlyRetainedTailRecords(t *testing.T) {
+	store := actionReceiptStore(t)
+	const initial = `{"steps":[{"id":"first"}],"facts":[{"id":"first"}]}`
+	const appended = `{"steps":[{"id":"first"},{"id":"second"}],"facts":[{"id":"first"},{"id":"second"}]}`
+	if err := store.Do(context.Background(), func(q Queries) error {
+		if err := SaveStateMetadata(q, "other", initial, 1, 1); err != nil {
+			return err
+		}
+		tracked := &metadataTrimQueries{Queries: q}
+		save := func(raw string, deletes int) error {
+			tracked.deletes = 0
+			if err := SaveStateMetadata(tracked, "p", raw, 1, 1); err != nil {
+				return err
+			}
+			if tracked.deletes != deletes {
+				t.Fatalf("metadata issued %d tail deletes, want %d for %s", tracked.deletes, deletes, raw)
+			}
+			restored, _, _, err := StateMetadata(q, "p")
+			if err != nil {
+				return err
+			}
+			var got, want any
+			if json.Unmarshal(restored, &got) != nil || json.Unmarshal([]byte(raw), &want) != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("tail trimming changed metadata: %s, want %s", restored, raw)
+			}
+			return nil
+		}
+		// Preparing a no-op DELETE still compiles its SQLite trigger programs.
+		// New, repeated and appended metadata must avoid all such statements.
+		for _, raw := range []string{initial, initial, appended} {
+			if err := save(raw, 0); err != nil {
+				return err
+			}
+		}
+		// Historical positions can be sparse: row counts cannot identify tails.
+		if _, err := q.Exec(`UPDATE pwnmesh_state_records SET position=5 WHERE project_id='p' AND kind='steps' AND position=1;
+UPDATE pwnmesh_fact_metadata SET position=5 WHERE project_id='p' AND position=1;`); err != nil {
+			return err
+		}
+		if err := save(appended, 2); err != nil {
+			return err
+		}
+		if err := save(`{}`, 2); err != nil {
+			return err
+		}
+		if err := save(`{}`, 0); err != nil {
+			return err
+		}
+		raw, _, _, err := StateMetadata(q, "other")
+		if err != nil {
+			return err
+		}
+		var got, want any
+		if json.Unmarshal(raw, &got) != nil || json.Unmarshal([]byte(initial), &want) != nil || !reflect.DeepEqual(got, want) {
+			t.Fatalf("tail trimming changed another project's metadata: %s", raw)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestStateMetadataCollectionsWriteOnlyChangedRecords(t *testing.T) {
 	store := actionReceiptStore(t)

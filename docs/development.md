@@ -23,6 +23,7 @@ bash scripts/check.sh
 workspace, then embeds `web/dist` in a static Linux executable using read-only Go
 dependencies. `check.sh` builds the frontend and runs its Vitest regressions,
 the Go race suite and vet, Python HTTP replay and command regressions.
+The full Go race suite allows 15 minutes per package; the CI job remains capped at 20 minutes.
 Select `go`, `web`, or `python` to run one check group. CI uses these same entries
 and separately builds/smoke-tests `serve`, `dispatch`, and `worker`.
 

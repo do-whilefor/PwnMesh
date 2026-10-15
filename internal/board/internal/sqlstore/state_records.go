@@ -152,6 +152,7 @@ func saveStateRecords(q Queries, project string, records map[string][]json.RawMe
 		return err
 	}
 	previous := map[key]string{}
+	trim := map[string]bool{}
 	for rows.Next() {
 		var entry key
 		var data string
@@ -160,6 +161,9 @@ func saveStateRecords(q Queries, project string, records map[string][]json.RawMe
 			return err
 		}
 		previous[entry] = data
+		if entry.position >= len(records[entry.kind]) {
+			trim[entry.kind] = true
+		}
 	}
 	err = rows.Err()
 	rows.Close()
@@ -185,8 +189,10 @@ func saveStateRecords(q Queries, project string, records map[string][]json.RawMe
 				return err
 			}
 		}
-		if _, err := q.Exec("DELETE FROM pwnmesh_state_records WHERE project_id=? AND kind=? AND position>=?", project, kind, len(items)); err != nil {
-			return err
+		if trim[kind] {
+			if _, err := q.Exec("DELETE FROM pwnmesh_state_records WHERE project_id=? AND kind=? AND position>=?", project, kind, len(items)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
