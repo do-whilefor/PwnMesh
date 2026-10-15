@@ -1,8 +1,8 @@
 <div align="center">
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="./web/static/brand-dark.png">
-  <img src="./web/static/brand.png" alt="PwnMesh" width="640">
+  <source media="(prefers-color-scheme: dark)" srcset="./web/public/brand-dark.png">
+  <img src="./web/public/brand.png" alt="PwnMesh" width="640">
 </picture>
 
 

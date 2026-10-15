@@ -3,10 +3,35 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"testing"
 	"unicode"
 	"unicode/utf8"
 )
+
+func TestRepositoryREADMEBrandImagesExist(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	picture := regexp.MustCompile(`(?s)<picture>.*?</picture>`).Find(body)
+	images := regexp.MustCompile(`\b(?:src|srcset)="(\./[^"]+)"`).FindAllSubmatch(picture, -1)
+	if len(images) != 2 {
+		t.Fatalf("README brand picture must reference light and dark images, got %d", len(images))
+	}
+	for _, image := range images {
+		path := string(image[1])
+		t.Run(path, func(t *testing.T) {
+			info, err := os.Stat(filepath.Join("..", "..", filepath.FromSlash(path)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.Mode().IsRegular() || info.Size() == 0 {
+				t.Fatal("README brand image must be a nonempty file")
+			}
+		})
+	}
+}
 
 func TestRepositoryDocumentationContainsNoChinese(t *testing.T) {
 	for _, file := range []string{

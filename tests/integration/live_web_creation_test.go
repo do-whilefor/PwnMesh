@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"sync"
 	"testing"
@@ -317,7 +319,26 @@ func TestLiveWebCreationObservesUnchangedProductionHandler(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer api.Close()
-	for _, path := range []string{"/", "/static/data.js", "/projects"} {
+	response, err := http.Get(api.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	html, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("production Web document returned %d: %v", response.StatusCode, err)
+	}
+	// Follow the built document so asset hashes can change with the Vue source.
+	paths := []string{"/projects"}
+	loaded := map[string]bool{}
+	for _, asset := range regexp.MustCompile(`(?:src|href)="(/static/[^"?]+\.(js|css))"`).FindAllSubmatch(html, -1) {
+		paths = append(paths, string(asset[1]))
+		loaded[string(asset[2])] = true
+	}
+	if !loaded["js"] || !loaded["css"] {
+		t.Fatal("production Web document must reference compiled JavaScript and CSS")
+	}
+	for _, path := range paths {
 		response, err := http.Get(api.URL + path)
 		if err != nil {
 			t.Fatal(err)
@@ -331,7 +352,7 @@ func TestLiveWebCreationObservesUnchangedProductionHandler(t *testing.T) {
 		t.Fatal("read-only browser navigation authorized dispatch")
 	}
 	body, _ := json.Marshal(want)
-	response, err := http.Post(api.URL+"/projects", "application/json", bytes.NewReader(body))
+	response, err = http.Post(api.URL+"/projects", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

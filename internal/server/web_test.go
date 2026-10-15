@@ -157,7 +157,7 @@ func TestWorkbenchServesBrandAsset(t *testing.T) {
 func TestClassicInterfaceIsUnavailable(t *testing.T) {
 	handler := New(nil)
 	for _, path := range []string{
-		"/static/app.js", "/static/api.js", "/static/service.js", "/static/src/main.ts", "/src/main.ts",
+		"/static/app.js", "/static/api.js", "/static/data.js", "/static/service.js", "/static/src/main.ts", "/src/main.ts",
 		"/legacy.html", "/static/legacy.html", "/static/favicon.svg",
 		"/static/vendor/alpine.min.js", "/static/vendor/tailwindcss.js",
 		"/static/vendor/cola.min.js", "/static/vendor/cytoscape-cola.js",
