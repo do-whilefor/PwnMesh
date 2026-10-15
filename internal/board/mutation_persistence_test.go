@@ -115,12 +115,12 @@ func TestStateNodeFailureRollsBackAllPersistence(t *testing.T) {
 						return err
 					}
 					var metadata string
-					var facts, intents, sources, actions, events, factCounter, intentCounter int
-					if err = tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM intent_sources),(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='fact'),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='intent') FROM pwnmesh_state WHERE project_id=?`, stateBenchmarkProject, stateBenchmarkProject, stateBenchmarkProject).Scan(&metadata, &facts, &intents, &sources, &actions, &events, &factCounter, &intentCounter); err != nil {
+					var facts, records, intents, sources, actions, events, factCounter, intentCounter int
+					if err = tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM pwnmesh_fact_metadata),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM intent_sources),(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='fact'),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='intent') FROM pwnmesh_state WHERE project_id=?`, stateBenchmarkProject, stateBenchmarkProject, stateBenchmarkProject).Scan(&metadata, &facts, &records, &intents, &sources, &actions, &events, &factCounter, &intentCounter); err != nil {
 						return err
 					}
 					encoded, err := json.Marshal(state)
-					raw = fmt.Sprintf("%s|%s|%d,%d,%d,%d,%d,%d,%d", encoded, metadata, facts, intents, sources, actions, events, factCounter, intentCounter)
+					raw = fmt.Sprintf("%s|%s|%d,%d,%d,%d,%d,%d,%d,%d", encoded, metadata, facts, records, intents, sources, actions, events, factCounter, intentCounter)
 					return err
 				}); err != nil {
 					t.Fatal(err)

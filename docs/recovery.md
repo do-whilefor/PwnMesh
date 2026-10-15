@@ -72,12 +72,31 @@ API/tooling; copying only the database file while WAL writes are active is not a
 consistent backup. Do not rename runtime directories or edit saved JSON to force
 a mismatch through validation.
 
-The current binary opens schema `2` only and rejects schema `1` without changes.
+The current binary opens schema `3`, atomically upgrades complete schema `2`
+databases, and rejects schema `1` without changes.
 To retain a schema `1` database, stop its Server and Dispatcher and use a previous
 release that supports the namespace migration before starting this release.
 Preserve installation identity, stored JSON and workspace paths. A binary that
-queries the old names cannot share a schema `2` database; rollback requires a
+does not support schema `3` cannot share the upgraded database; rollback requires a
 compatible binary or the matching database backup.
+
+Database and file retention have separate boundaries:
+
+| Data | Restart | Project deletion | Backup and cleanup |
+| --- | --- | --- | --- |
+| Uploaded inputs, immutable snapshots and their chunks | Retained | Database rows cascade | Included in the consistent SQLite backup |
+| Archived rounds and execution inputs | Retained | Database rows cascade | Retain referenced snapshots; completion alone is not permission to prune them |
+| Scheduling projection | Invalidated and rebuilt | Database rows cascade | Disposable; contains no independent authority |
+| Worker workspaces, journals, evidence and receipts | Retained | Managed separately from SQLite | Back up matching files; database deletion does not remove these paths |
+| Download staging files | Request lifetime only | Independent of project rows after staging | Unlinked immediately on Linux; the descriptor closes on completion, failure, disconnect or process exit |
+
+Input, snapshot and archive payloads still reside in SQLite. Deleting rows makes
+database pages reusable; it does not necessarily shrink the database file.
+Download staging releases its read transaction before serving a slow client.
+Permanent external payload storage would additionally need durable publication
+before reference commit, consistent backup of referenced objects and safe orphan
+collection after rollback. Do not remove snapshots merely because their current
+execution ended: archived Jobs may still reference them.
 
 After interruption, let Dispatcher reconcile generations and recover registered
 executions before admitting new work. Investigate identity, evidence hash or

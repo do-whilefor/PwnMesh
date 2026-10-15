@@ -1,6 +1,11 @@
 package sqlstore
 
-import "pwnmesh/internal/board/model"
+import (
+	"errors"
+	"io"
+
+	"pwnmesh/internal/board/model"
+)
 
 // Input reads keep file contents separate from metadata. Board projects the
 // execution path and owns identities, quota checks and upload instructions.
@@ -31,10 +36,53 @@ func InputFile(q Queries, project, id string) (model.InputFile, error) {
 	return scanInputFile(q.QueryRow("SELECT id,name,size,sha256,created_at FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id))
 }
 
-func InputData(q Queries, project, id string) ([]byte, error) {
-	var data []byte
-	err := q.QueryRow("SELECT data FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id).Scan(&data)
-	return data, err
+// CopyInputData bounds driver result buffers and retains the caller's snapshot.
+// SQLite still materializes the original BLOB internally. The uncorrelated
+// scalar subquery does that once; separate substr queries would reread the whole
+// BLOB for every chunk. Keep the output private until Board verifies its digest.
+func CopyInputData(q Queries, project, id string, size int64, output io.Writer) error {
+	const chunkBytes = 64 << 10
+	var storedSize int64
+	if err := q.QueryRow("SELECT length(data) FROM pwnmesh_input_files WHERE project_id=? AND id=?", project, id).Scan(&storedSize); err != nil {
+		return err
+	}
+	if size < 0 || storedSize != size {
+		return errors.New("input file size mismatch")
+	}
+	rows, err := q.Query(`WITH RECURSIVE chunks(offset) AS (
+ SELECT 1 UNION ALL SELECT offset+? FROM chunks WHERE offset+?<=?)
+SELECT substr((SELECT data FROM pwnmesh_input_files WHERE project_id=? AND id=?),offset,?) FROM chunks`, chunkBytes, chunkBytes, size, project, id, chunkBytes)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var offset int64
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return err
+		}
+		if int64(len(data)) != min(int64(chunkBytes), size-offset) {
+			return errors.New("input file size mismatch")
+		}
+		if len(data) > 0 {
+			n, err := output.Write(data)
+			if err != nil {
+				return err
+			}
+			if n != len(data) {
+				return io.ErrShortWrite
+			}
+		}
+		offset += int64(len(data))
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if offset != size {
+		return errors.New("input file size mismatch")
+	}
+	return nil
 }
 
 func InputUsage(q Queries, project string) (count int, size int64, err error) {

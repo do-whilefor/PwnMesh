@@ -2,6 +2,7 @@ package board
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -305,6 +306,53 @@ func TestScheduleExecutionChecksSkipUnavailableHistory(t *testing.T) {
 		checks, err := tx.ScheduleExecutionChecks("p", "ns", projected)
 		if err != nil || len(checks) != 0 {
 			t.Fatalf("history triggered registry work: %+v err=%v", checks, err)
+		}
+	})
+}
+
+type schedulingMetadataQueries struct{ transactionQueries }
+
+func (q schedulingMetadataQueries) Query(query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "FROM pwnmesh_fact_metadata") {
+		return nil, errors.New("scheduling loaded Fact metadata")
+	}
+	return q.transactionQueries.Query(query, args...)
+}
+
+func (q schedulingMetadataQueries) QueryRow(query string, args ...any) *sql.Row {
+	if strings.Contains(query, "SELECT data,revision,decision_revision FROM pwnmesh_state") {
+		return q.transactionQueries.QueryRow("SELECT full_state_metadata_read_is_forbidden()")
+	}
+	return q.transactionQueries.QueryRow(query, args...)
+}
+
+func TestScheduleChecksReadOnlyStepMetadataAndKeepOrphanReservations(t *testing.T) {
+	store := executionQueryStore(t)
+	executionQueryTx(t, store, func(tx *Tx) {
+		if err := tx.Save(Graph{Project: Project{ID: "p", Title: "Reservations", Status: "active", CreatedAt: tx.Now}, Intents: []Intent{{ID: "blocked", CreatedAt: tx.Now}, {ID: "free", CreatedAt: tx.Now}}}); err != nil {
+			t.Fatal(err)
+		}
+		metadata := `{"steps":[{"id":"orphan","write_paths":["/workspace/old"]},{"id":"orphan","status":"abandoned","write_paths":["/workspace/shared"]},{"id":"blocked","write_paths":["/workspace/shared/file"]},{"id":"free","write_paths":["/workspace/other"]}],"facts":[{"id":"observation","status":"valid"}]}`
+		if err := sqlstore.SaveStateMetadata(tx, "p", metadata, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		putQueryExecution(t, tx, Execution{ID: "orphan-run", Kind: "explore", Intent: "orphan", Status: "running"}, 0, "")
+		first, err := tx.ScheduleInput("p", 0, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx.transactionQueries = schedulingMetadataQueries{tx.transactionQueries}
+		page, err := tx.ScheduleInput("p", 0, first.StateVersion)
+		if err != nil {
+			t.Fatal(err)
+		}
+		checks, err := tx.ScheduleExecutionChecks("p", "ns", page.Steps)
+		if err != nil || len(checks) != 2 || !checks["explore:blocked"].Blocked || checks["explore:free"].Blocked {
+			t.Fatalf("cached page lost the orphan's last retained reservation: %+v, %v", checks, err)
+		}
+		checks, err = tx.ScheduleExecutionChecks("no-state", "ns", []ScheduleStep{{ID: "new", Ready: true, WritePaths: []string{"/workspace/out"}}})
+		if err != nil || len(checks) != 1 || checks["explore:new"].Blocked {
+			t.Fatalf("absent metadata changed scheduling admission: %+v, %v", checks, err)
 		}
 	})
 }

@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Keep the previous /projects read path as a compatibility oracle and benchmark
@@ -211,6 +212,69 @@ func TestProjectSummariesSeeCurrentTransactionAndReopenedDatabase(t *testing.T) 
 	}); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestObservedProjectSummariesMatchExpiryWithoutChangingStoredLeases(t *testing.T) {
+	store := executionQueryStore(t)
+	executionQueryTx(t, store, func(tx *Tx) {
+		if err := tx.UpdateSettings(Settings{IntentTimeout: 30, ReasonTimeout: 60}); err != nil {
+			t.Fatal(err)
+		}
+		now, err := time.Parse(time.RFC3339, tx.Now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, row := range []struct {
+			id, heartbeat string
+			version       int
+		}{
+			{"fresh", tx.Now, 1},
+			{"expired", now.Add(-time.Hour).Format(time.RFC3339), 1},
+			{"task-only-expired", now.Add(-45 * time.Second).Format(time.RFC3339), 1},
+			{"invalid", "invalid-time", 1},
+			{"missing", "", 1},
+			{"legacy", now.Add(-time.Hour).Format(time.RFC3339), 0},
+		} {
+			heartbeat := Ptr(row.heartbeat)
+			if row.id == "missing" {
+				heartbeat = nil
+			}
+			lease := &Reason{Worker: "worker", Trigger: "initial", StartedAt: tx.Now, Heartbeat: row.heartbeat}
+			graph := Graph{Project: Project{ID: row.id, Title: row.id, Status: "active", CreatedAt: tx.Now, OrchestrationVersion: row.version, Reason: lease, Curator: lease}, Intents: []Intent{
+				{ID: "open", Worker: Ptr("worker"), Heartbeat: heartbeat, CreatedAt: tx.Now},
+				{ID: "retained-result", To: Ptr("fact"), Worker: Ptr("worker"), Heartbeat: heartbeat, CreatedAt: tx.Now},
+				{ID: "concluded", ConcludedAt: Ptr(tx.Now), Worker: Ptr("worker"), Heartbeat: heartbeat, CreatedAt: tx.Now},
+				{ID: "unclaimed", CreatedAt: tx.Now},
+			}}
+			if row.version == 0 {
+				graph.Project.Curator = nil
+			}
+			if err := tx.Save(graph); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := assertProjectSummaries(t, tx)
+		observed, err := tx.ObservedProjectSummaries()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if after := assertProjectSummaries(t, tx); !reflect.DeepEqual(before, after) {
+			t.Fatal("observed summaries changed persisted leases")
+		}
+		if _, err := tx.Exec("SAVEPOINT summary_expiry"); err != nil {
+			t.Fatal(err)
+		}
+		if err := tx.ExpireProject(""); err != nil {
+			t.Fatal(err)
+		}
+		want := assertProjectSummaries(t, tx)
+		if _, err := tx.Exec("ROLLBACK TO summary_expiry; RELEASE summary_expiry"); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(observed, want) {
+			t.Fatalf("observed summaries differ from lease housekeeping:\ngot %+v\nwant %+v", observed, want)
+		}
+	})
 }
 
 var projectSummariesBenchmarkResult []Summary

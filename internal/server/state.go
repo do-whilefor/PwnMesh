@@ -16,7 +16,7 @@ func (s *Server) registerStateRoutes(m *http.ServeMux) {
 	m.HandleFunc("POST /projects/{pid}/state/decisions/preview", s.wrap(s.decisionPreview))
 	m.HandleFunc("POST /projects/{pid}/state/decisions/commit", s.wrap(s.decisionCommit))
 	m.HandleFunc("GET /projects/{pid}/state/decisions/receipt", s.wrap(s.decisionReceipt))
-	m.HandleFunc("GET /projects/{pid}/state/curation/receipt", s.wrap(s.curationReceipt))
+	m.HandleFunc("GET /projects/{pid}/state/curation/receipt", s.readOnly(s.curationReceipt))
 }
 
 func decisionFence(r *http.Request) b.ExecutionFence {

@@ -17,7 +17,8 @@ type transactionQueries = sqlstore.Queries
 
 type Tx struct {
 	transactionQueries
-	Now string
+	Now      string
+	readOnly bool
 }
 
 func Open(path string) (*Store, error) {
@@ -35,7 +36,7 @@ func (s *Store) Close() error {
 // View keeps domain reads on one snapshot. Lease expiry and state changes use Do.
 func (s *Store) View(ctx context.Context, fn func(*Tx) error) error {
 	return s.storage.View(ctx, func(q sqlstore.Queries) error {
-		return fn(&Tx{transactionQueries: q, Now: s.Now().UTC().Format(time.RFC3339)})
+		return fn(&Tx{transactionQueries: q, Now: s.Now().UTC().Format(time.RFC3339), readOnly: true})
 	})
 }
 

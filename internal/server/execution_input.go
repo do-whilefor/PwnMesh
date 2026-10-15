@@ -301,7 +301,7 @@ func executionReadState(t *b.Tx, e b.Execution, r *http.Request, read protocol.G
 	if err != nil {
 		return job, current, err
 	}
-	if err = guard(t, current.Graph, r); err != nil {
+	if err = t.CheckExecutionRead(current.Graph, decisionFence(r)); err != nil {
 		return job, current, err
 	}
 	if job.Graph.Project.ID != e.ProjectID || job.Graph.Project.Generation != current.Graph.Project.Generation || job.RunID != e.ID || job.Kind != e.Kind {

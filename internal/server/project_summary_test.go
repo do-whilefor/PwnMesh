@@ -10,7 +10,7 @@ import (
 	"pwnmesh/internal/board"
 )
 
-func TestProjectListSummariesExpireLeasesWithoutLoadingGraph(t *testing.T) {
+func TestProjectListSummariesHideExpiredLeasesWithoutWritingOrLoadingGraph(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	old := f.store.Now().Add(-time.Minute).Format(time.RFC3339)
 	var want board.Summary
@@ -42,9 +42,26 @@ func TestProjectListSummariesExpireLeasesWithoutLoadingGraph(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var retained []board.Summary
+	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+		var err error
+		retained, err = tx.ProjectSummaries()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	var got []board.Summary
 	f.request("GET", "/projects", nil, false, http.StatusOK, &got)
 	if !reflect.DeepEqual(got, []board.Summary{want}) {
 		t.Fatalf("list changed its public projection: got=%+v want=%+v", got, want)
+	}
+	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+		after, err := tx.ProjectSummaries()
+		if err == nil && !reflect.DeepEqual(after, retained) {
+			t.Fatal("observational project list expired persisted leases")
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

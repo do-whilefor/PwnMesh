@@ -42,7 +42,7 @@ func TestStoreMigrationRejectsUnsupportedHistoryBeforeApplicationSchema(t *testi
 		name, history, want string
 	}{
 		{"retired_v1", "(1,'unversioned-baseline')", "unsupported PwnMesh schema version 1"},
-		{"future", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace'),(3,'future')", "unsupported PwnMesh schema version"},
+		{"future", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace'),(4,'future')", "unsupported PwnMesh schema version"},
 		{"missing_baseline", "(2,'pwnmesh-namespace')", "inconsistent PwnMesh migration history"},
 		{"renamed", "(1,'different-baseline')", "inconsistent PwnMesh migration history"},
 	} {

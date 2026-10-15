@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS pwnmesh_state(project_id TEXT PRIMARY KEY REFERENCES 
 CREATE TABLE IF NOT EXISTS pwnmesh_state_actions(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,idempotency_key TEXT NOT NULL,request TEXT NOT NULL,response TEXT NOT NULL,PRIMARY KEY(project_id,idempotency_key));
 CREATE TABLE IF NOT EXISTS pwnmesh_state_events(project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,revision INTEGER NOT NULL,event TEXT NOT NULL,PRIMARY KEY(project_id,revision));`
 
+const factMetadataSchema = `CREATE TABLE pwnmesh_fact_metadata(
+ project_id TEXT NOT NULL REFERENCES pwnmesh_state(project_id) ON DELETE CASCADE,
+ position INTEGER NOT NULL CHECK(position>=0),data TEXT NOT NULL,
+ PRIMARY KEY(project_id,position));`
+
 const executionSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_executions(
  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  id TEXT NOT NULL,namespace TEXT NOT NULL,backend TEXT NOT NULL,kind TEXT NOT NULL,intent TEXT NOT NULL,

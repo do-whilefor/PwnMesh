@@ -1,13 +1,14 @@
 # Supported PwnMesh formats
 
-PwnMesh supports current execution formats and database schema `2`. Retired
-formats are rejected without conversion, replay or workspace migration.
+PwnMesh supports current execution formats and database schema `3`, with an
+atomic upgrade from schema `2`. Retired formats are rejected without replay or
+workspace migration.
 
 ## Accepted inputs
 
 | Boundary | Requirement |
 | --- | --- |
-| Database | Empty database for initialization, or a complete schema `2` database with a valid migration ledger and execution metadata `1` |
+| Database | Empty database for initialization, or a complete schema `2` or `3` database with a valid migration ledger and execution metadata `1` |
 | Configuration | `PWNMESH_*` settings; no `XLOOM_*` alias lookup or normalization; retired `runtime.execution` and `runtime.prompt_group` selectors are rejected |
 | Server project | Orchestration version `1`; older project endpoints are rejected |
 | Execution | Current registered Job: live graph bridge, result contract `2`, Decide context `2`; lease roles `reason`, `explore`, `curate` only |
@@ -34,18 +35,24 @@ run into a new model/tool execution.
 ## Database initialization and validation
 
 `internal/board/internal/sqlstore/migrations.go` validates the schema ledger and execution metadata
-before committing changes. Empty databases create schema `2` directly with
+before committing changes. Empty databases create schema `3` directly with
 `pwnmesh_*` names for branded SQL objects. Runtime queries use those names only;
 there are no views or aliases for the old namespace.
 
 The ledger retains version `1` as `unversioned-baseline`, including its original
 timestamp, and records version `2` as `pwnmesh-namespace`. Fresh databases record
-both versions without creating old SQL objects. The historical version `1` name
+all three versions without creating old SQL objects. Version `3` is
+`incremental-state-storage`: it separates ordered Fact metadata and adds a
+disposable scheduling projection. The historical version `1` name
 does not permit opening a schema `1` or unversioned database. Schema `1` databases,
 nonempty unversioned databases, mixed namespaces, inconsistent or future ledgers
 and unsupported execution metadata are rejected without adoption or raw Job/Result
-reconstruction. Current row IDs, record bytes, hashes and installation identity
-remain unchanged. Future schema
+reconstruction. A schema `2` upgrade validates the old namespace first, then
+creates the new tables, moves Fact metadata and appends the ledger entry in one
+transaction. Fact order, duplicate IDs and orphan records survive; public State
+encoding, frozen input hashes, unrelated record bytes and installation identity
+remain unchanged. Metadata JSON physically loses its extracted Facts array.
+Current-schema reopen does not repeat this backfill. Future schema
 changes append migrations and tests; editing fresh-database DDL alone cannot
 upgrade existing data.
 
@@ -66,13 +73,13 @@ receipts before upgrading. Preserve the installation identity row to retain
 container ownership. Use SQLite backup tooling rather than copying only an active
 WAL database file. Stop the old Server and Dispatcher before changing binaries.
 Schema `1` databases must first be upgraded with a previous release that supports
-the namespace migration; this release does not perform that upgrade. Older
-binaries that query the former namespace cannot share a schema `2` database.
+the namespace migration; this release does not perform that upgrade. A schema
+`2` database upgrades on first open. Older binaries cannot open schema `3`.
 There is no automatic down-migration; restore the matching backup to return to
 an older binary.
 
-Regression coverage checks direct canonical initialization, current reopen,
-schema `1` and other unsupported-input nonmutation, atomic failure,
+Regression coverage checks direct canonical initialization, the schema `2`
+upgrade, current reopen, schema `1` and other unsupported-input nonmutation, atomic failure,
 canonical JSON hashes, current recovery and rejection before side effects.
 Obsolete execution recovery implementations and their success fixtures have been
 removed; rejection and current-format tests replace them.

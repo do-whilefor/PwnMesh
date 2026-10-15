@@ -19,14 +19,14 @@ func (s *Server) registerExecutionRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /projects/{pid}/scheduling", s.wrap(s.schedulingInput))
 	m.HandleFunc("POST /projects/{pid}/executions/prepare", s.wrap(s.prepareExecution))
 	m.HandleFunc("POST /projects/{pid}/executions/{rid}/input/read", s.readOnly(s.snapshotRead))
-	m.HandleFunc("POST /projects/{pid}/executions/{rid}/updates", s.wrap(s.executionUpdates))
-	m.HandleFunc("POST /projects/{pid}/executions/{rid}/traces/read", s.wrap(s.executionTraces))
-	m.HandleFunc("GET /executions/pending", s.wrap(s.pendingExecutions))
+	m.HandleFunc("POST /projects/{pid}/executions/{rid}/updates", s.readOnly(s.executionUpdates))
+	m.HandleFunc("POST /projects/{pid}/executions/{rid}/traces/read", s.readOnly(s.executionTraces))
+	m.HandleFunc("GET /executions/pending", s.readOnly(s.pendingExecutions))
 	m.HandleFunc("GET /projects/{pid}/executions/check", s.wrap(s.executionCheck))
-	m.HandleFunc("GET /projects/{pid}/executions/{rid}", s.wrap(s.executionDetail))
+	m.HandleFunc("GET /projects/{pid}/executions/{rid}", s.readOnly(s.executionDetail))
 	m.HandleFunc("GET /projects/{pid}/executions/{rid}/identity", func(w http.ResponseWriter, r *http.Request) {
 		r.SetPathValue("execution_identity", "true")
-		s.wrap(s.executionDetail)(w, r)
+		s.readOnly(s.executionDetail)(w, r)
 	})
 	for _, op := range []string{"status", "resume", "apply", "retry"} {
 		m.HandleFunc("POST /projects/{pid}/executions/{rid}/"+op, func(w http.ResponseWriter, r *http.Request) {

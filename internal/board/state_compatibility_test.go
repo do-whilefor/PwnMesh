@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 func TestDecisionRetryKeyPreservesCurrentBytes(t *testing.T) {
@@ -215,7 +217,7 @@ func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
 	}
 }
 
-func TestNewFactMatchesLegacyReaderAndFrozenInput(t *testing.T) {
+func TestNormalizedFactMatchesProjectionAndFrozenInput(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	e := f.worker("observation", "")
 	id := f.fact(e, "current-observation")
@@ -223,11 +225,11 @@ func TestNewFactMatchesLegacyReaderAndFrozenInput(t *testing.T) {
 	version := DecisionStateVersion(before)
 	var ref *InputSnapshot
 	f.do(func(tx *Tx) error {
-		var raw []byte
-		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='p'").Scan(&raw); err != nil {
+		raw, _, _, err := sqlstore.StateMetadata(tx, "p")
+		if err != nil {
 			return err
 		}
-		// The rollback reader replaces the SQL Fact with this complete record.
+		// The storage reader combines normalized observations with metadata.
 		var legacy struct {
 			Facts []FactRecord `json:"facts"`
 		}
@@ -241,7 +243,6 @@ func TestNewFactMatchesLegacyReaderAndFrozenInput(t *testing.T) {
 		if len(legacy.Facts) != 1 || legacy.Facts[0].ID != base.ID || legacy.Facts[0].Description != base.Description || !reflect.DeepEqual(legacy.Facts[0], before.FactRecords[len(before.FactRecords)-1]) {
 			t.Fatal("current Fact, rollback reader and SQL base do not describe the same observation")
 		}
-		var err error
 		ref, err = tx.FreezeInput(before)
 		return err
 	})

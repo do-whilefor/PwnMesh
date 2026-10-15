@@ -86,6 +86,33 @@ const ScheduleProtocolVersion = model.ScheduleProtocolVersion
 type SchedulePage = model.SchedulePage
 
 func (t *Tx) ScheduleInput(project string, offset int, expected string) (SchedulePage, error) {
+	if offset < 0 {
+		return SchedulePage{}, Err(422, "invalid scheduling offset")
+	}
+	header, count, err := sqlstore.ScheduleHeader(t, project)
+	if err == nil {
+		var page SchedulePage
+		if err := json.Unmarshal(header, &page); err != nil {
+			return SchedulePage{}, err
+		}
+		if expected != "" && expected != page.StateVersion {
+			return SchedulePage{}, Err(409, "state_changed: scheduling input changed")
+		}
+		if offset > count {
+			return SchedulePage{}, Err(422, "invalid scheduling offset")
+		}
+		page.Steps, err = sqlstore.ScheduleSteps(t, project, offset, 100)
+		if err == nil && len(page.Steps) != min(100, count-offset) {
+			return SchedulePage{}, errors.New("incomplete scheduling projection")
+		}
+		if offset+len(page.Steps) < count {
+			page.NextOffset = offset + len(page.Steps)
+		}
+		return page, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return SchedulePage{}, err
+	}
 	s, err := t.State(project)
 	if err != nil {
 		return SchedulePage{}, err
@@ -94,7 +121,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 	if expected != "" && expected != version {
 		return SchedulePage{}, Err(409, "state_changed: scheduling input changed")
 	}
-	if offset < 0 || offset > len(s.Graph.Intents) {
+	if offset > len(s.Graph.Intents) {
 		return SchedulePage{}, Err(422, "invalid scheduling offset")
 	}
 	p := SchedulePage{ProtocolVersion: ScheduleProtocolVersion, Project: s.Graph.Project, FactCount: len(s.Graph.Facts), HintCount: len(s.Graph.Hints), OpenCount: s.Graph.OpenCount(), Revision: s.Revision, DecisionRevision: s.DecisionRevision, StateVersion: version, RetryKey: DecisionRetryKey(s.Graph, s.DecisionRevision)}
@@ -115,8 +142,20 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 	for _, i := range s.Graph.Intents {
 		p.Initial = p.Initial && pendingBootstrap(i)
 	}
-	end := min(offset+100, len(s.Graph.Intents))
-	p.Steps = scheduleSteps(s.Graph.Intents[offset:end], s.Steps)
+	steps := scheduleSteps(s.Graph.Intents, s.Steps)
+	// Cold views remain observational. The scheduling endpoint uses Do to
+	// expire leases and atomically publish a reusable projection.
+	if !t.readOnly {
+		header, err := json.Marshal(p)
+		if err != nil {
+			return SchedulePage{}, err
+		}
+		if err := sqlstore.SaveSchedule(t, project, header, steps); err != nil {
+			return SchedulePage{}, err
+		}
+	}
+	end := offset + min(100, len(steps)-offset)
+	p.Steps = steps[offset:end]
 	if end < len(s.Graph.Intents) {
 		p.NextOffset = end
 	}

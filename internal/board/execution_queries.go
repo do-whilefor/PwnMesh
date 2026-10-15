@@ -131,11 +131,17 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, steps []Schedule
 	}
 	var writeOwners []Step
 	if slices.ContainsFunc(steps, func(step ScheduleStep) bool { return step.Ready && len(step.WritePaths) != 0 }) {
-		data, _, _, err := t.stateData(project)
-		if err != nil {
+		raw, err := sqlstore.StateStepMetadata(t, project)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return nil, err
 		}
-		writeOwners, err = t.activeStepWriteOwners(project, data.Steps)
+		var metadata []stepMetadata
+		if raw != nil {
+			if err := json.Unmarshal(raw, &metadata); err != nil {
+				return nil, err
+			}
+		}
+		writeOwners, err = t.activeStepWriteOwners(project, metadata)
 		if err != nil {
 			return nil, err
 		}

@@ -123,7 +123,10 @@ func TestSchedulerWaitsForAcceptedDependencyAndCancelsInvalidatedConsumer(t *tes
 			if invalidate {
 				fact := consumer.DependencyResults[0].FactID
 				err = store.Do(ctx, func(tx *board.Tx) error {
-					_, err := tx.Exec(`UPDATE pwnmesh_state SET data=json_set(data,'$.facts['||(SELECT key FROM json_each(data,'$.facts') WHERE json_extract(value,'$.id')=?)||'].status','refuted'),revision=revision+1,decision_revision=decision_revision+1 WHERE project_id=?`, fact, g.Project.ID)
+					if _, err := tx.Exec(`UPDATE pwnmesh_fact_metadata SET data=json_set(data,'$.status','refuted') WHERE project_id=? AND json_extract(data,'$.id')=?`, g.Project.ID, fact); err != nil {
+						return err
+					}
+					_, err := tx.Exec(`UPDATE pwnmesh_state SET revision=revision+1,decision_revision=decision_revision+1 WHERE project_id=?`, g.Project.ID)
 					return err
 				})
 				if err != nil {

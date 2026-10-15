@@ -6,3 +6,13 @@ import "pwnmesh/internal/board/internal/sqlstore"
 func (t *Tx) ProjectSummaries() ([]Summary, error) {
 	return sqlstore.ProjectSummaries(t)
 }
+
+// ObservedProjectSummaries hides expired leases while retaining their stored
+// values. Scheduling and mutations remain responsible for actual housekeeping.
+func (t *Tx) ObservedProjectSummaries() ([]Summary, error) {
+	settings, err := t.Settings()
+	if err != nil {
+		return nil, err
+	}
+	return sqlstore.ObservedProjectSummaries(t, t.Now, 1, settings.IntentTimeout, settings.ReasonTimeout)
+}

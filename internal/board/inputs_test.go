@@ -1,8 +1,10 @@
 package board
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"reflect"
 	"strings"
 	"testing"
@@ -53,6 +55,33 @@ func TestInputUploadHandledFailureRollsBackFileAndInstruction(t *testing.T) {
 	}
 }
 
+func TestInputCopyChecksStoredBytesBeforePublication(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	for _, tc := range []struct {
+		name    string
+		payload []byte
+	}{{"empty.bin", []byte{}}, {"binary.bin", []byte{0, 255, '\r', '\n'}}} {
+		f.do(func(tx *Tx) error {
+			file, err := tx.AddInput("p", tc.name, tc.payload)
+			if err != nil {
+				return err
+			}
+			var copied bytes.Buffer
+			metadata, err := tx.CopyInputData("p", file.ID, &copied)
+			if err != nil || metadata != file || !bytes.Equal(copied.Bytes(), tc.payload) {
+				t.Fatalf("verified copy changed metadata or bytes: %+v %v %v", metadata, copied.Bytes(), err)
+			}
+			if _, err := tx.Exec("UPDATE pwnmesh_input_files SET sha256='corrupt' WHERE project_id='p' AND id=?", file.ID); err != nil {
+				return err
+			}
+			if _, err := tx.CopyInputData("p", file.ID, io.Discard); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+				t.Fatalf("copy accepted a corrupt content digest: %v", err)
+			}
+			return nil
+		})
+	}
+}
+
 func TestInputReceiptReplayKeepsEmptyShapeAndBoardPolicy(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	f.do(func(tx *Tx) error {
@@ -89,8 +118,8 @@ func TestInputReceiptReplayKeepsEmptyShapeAndBoardPolicy(t *testing.T) {
 		if _, err := tx.InputFiles("missing"); !errors.As(err, &api) || api.Status != 404 {
 			t.Fatalf("missing project policy changed: %v", err)
 		}
-		if _, data, err := tx.InputData("p", "missing"); !errors.As(err, &api) || api.Status != 404 || data != nil {
-			t.Fatalf("missing file policy changed: %v, %v", data, err)
+		if _, err := tx.CopyInputData("p", "missing", io.Discard); !errors.As(err, &api) || api.Status != 404 {
+			t.Fatalf("missing file policy changed: %v", err)
 		}
 		return nil
 	})

@@ -6,16 +6,16 @@ import (
 	"fmt"
 )
 
-// Current stores retain their original ledger identities. Earlier schemas are
-// unsupported; these names do not enable historical adoption or upgrades.
-var storeSchemaHistory = [...]string{"unversioned-baseline", "pwnmesh-namespace"}
+// Version 2 is the supported upgrade baseline; retired/unversioned stores are
+// never adopted by replaying current DDL over their unknown schema.
+var storeSchemaHistory = [...]string{"unversioned-baseline", "pwnmesh-namespace", "incremental-state-storage"}
 
 const migrationLedgerSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_schema_migrations(
  version INTEGER PRIMARY KEY CHECK(version > 0),name TEXT NOT NULL,
  applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')));`
 
-// Validate support before any writes. Only an empty database may initialize
-// the current schema directly; reopening retains the ledger and record bytes.
+// Validate support before any writes. Empty stores initialize directly; version
+// 2 moves Fact metadata into records. Current-version reopen preserves bytes.
 func migrateStore(db *sql.DB) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -28,7 +28,7 @@ func migrateStore(db *sql.DB) error {
 	}
 	if ledgers == 0 {
 		if objects != 0 {
-			return errors.New("unversioned databases are unsupported; use a new database or a current PwnMesh schema version 2 database")
+			return errors.New("unversioned databases are unsupported; use a new database or a PwnMesh schema version 2 or 3 database")
 		}
 		if _, err := tx.Exec(migrationLedgerSchema); err != nil {
 			return err
@@ -41,8 +41,25 @@ func migrateStore(db *sql.DB) error {
 				return err
 			}
 		}
-	} else if err := validateStoreHistory(tx); err != nil {
-		return err
+	} else {
+		version, err := validateStoreHistory(tx)
+		if err != nil {
+			return err
+		}
+		if err := validatePwnMeshNamespaceVersion(tx, version); err != nil {
+			return err
+		}
+		if err := validateExecutionMetadata(tx); err != nil {
+			return err
+		}
+		if version == 2 {
+			if err := upgradeStateStorage(tx); err != nil {
+				return err
+			}
+			if _, err := tx.Exec("INSERT INTO pwnmesh_schema_migrations(version,name) VALUES(3,?)", storeSchemaHistory[2]); err != nil {
+				return err
+			}
+		}
 	}
 	if err := validatePwnMeshNamespace(tx); err != nil {
 		return err
@@ -74,10 +91,10 @@ func validateExecutionMetadata(tx *sql.Tx) error {
 	return nil
 }
 
-func validateStoreHistory(tx *sql.Tx) error {
+func validateStoreHistory(tx *sql.Tx) (int, error) {
 	rows, err := tx.Query("SELECT version,name FROM pwnmesh_schema_migrations ORDER BY version")
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer rows.Close()
 	applied := 0
@@ -85,30 +102,71 @@ func validateStoreHistory(tx *sql.Tx) error {
 		var version int
 		var name string
 		if err := rows.Scan(&version, &name); err != nil {
-			return err
+			return 0, err
 		}
 		if version > len(storeSchemaHistory) {
-			return fmt.Errorf("unsupported PwnMesh schema version %d (current: %d)", version, len(storeSchemaHistory))
+			return 0, fmt.Errorf("unsupported PwnMesh schema version %d (current: %d)", version, len(storeSchemaHistory))
 		}
 		if version != applied+1 || name != storeSchemaHistory[applied] {
-			return fmt.Errorf("inconsistent PwnMesh migration history at version %d", version)
+			return 0, fmt.Errorf("inconsistent PwnMesh migration history at version %d", version)
 		}
 		applied++
 	}
 	if err := rows.Err(); err != nil {
-		return err
+		return 0, err
 	}
 	if applied == 0 {
-		return errors.New("inconsistent PwnMesh migration history: missing baseline")
+		return 0, errors.New("inconsistent PwnMesh migration history: missing baseline")
 	}
-	if applied != len(storeSchemaHistory) {
-		return fmt.Errorf("unsupported PwnMesh schema version %d (current: %d); automatic upgrades are unsupported", applied, len(storeSchemaHistory))
+	if applied < 2 {
+		return 0, fmt.Errorf("unsupported PwnMesh schema version %d (current: %d)", applied, len(storeSchemaHistory))
 	}
-	return nil
+	return applied, nil
 }
 
 func createStoreSchema(tx *sql.Tx) error {
-	_, err := tx.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema)
+	_, err := tx.Exec(schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema + factMetadataSchema + scheduleCacheSchema + scheduleInvalidationSchema())
+	return err
+}
+
+func upgradeStateStorage(tx *sql.Tx) error {
+	if _, err := tx.Exec(factMetadataSchema + scheduleCacheSchema); err != nil {
+		return err
+	}
+	rows, err := tx.Query("SELECT project_id FROM pwnmesh_state ORDER BY project_id")
+	if err != nil {
+		return err
+	}
+	var projects []string
+	for rows.Next() {
+		var project string
+		if err := rows.Scan(&project); err != nil {
+			rows.Close()
+			return err
+		}
+		projects = append(projects, project)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, project := range projects {
+		var raw string
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id=?", project).Scan(&raw); err != nil {
+			return err
+		}
+		remainder, _, err := splitStateFacts(raw)
+		if err != nil {
+			return fmt.Errorf("migrate Fact metadata for %s: %w", project, err)
+		}
+		if remainder != raw {
+			if err := UpdateStateMetadata(tx, project, raw); err != nil {
+				return err
+			}
+		}
+	}
+	_, err = tx.Exec(scheduleInvalidationSchema())
 	return err
 }
 

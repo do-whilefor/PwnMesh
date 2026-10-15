@@ -1,12 +1,12 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -85,13 +85,32 @@ func (s *Server) downloadInput(w http.ResponseWriter, r *http.Request) {
 	// dispatchers receive them over a slow connection.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(5 * time.Minute))
 	var file b.InputFile
-	var data []byte
+	var staged *os.File
+	defer func() {
+		if staged != nil {
+			staged.Close()
+			os.Remove(staged.Name())
+		}
+	}()
 	err := s.Store.View(r.Context(), func(t *b.Tx) error {
 		if err := t.RequireCurrentProject(r.PathValue("pid")); err != nil {
 			return err
 		}
 		var e error
-		file, data, e = t.InputData(r.PathValue("pid"), r.PathValue("fid"))
+		file, e = t.InputFile(r.PathValue("pid"), r.PathValue("fid"))
+		if e != nil || r.Method == http.MethodHead {
+			return e
+		}
+		staged, e = os.CreateTemp("", "pwnmesh-input-download-*")
+		if e != nil {
+			return e
+		}
+		// Linux keeps an unlinked file readable through its open descriptor.
+		// A process crash then releases staging bytes without leaving a name.
+		if e = os.Remove(staged.Name()); e != nil {
+			return e
+		}
+		file, e = t.CopyInputData(r.PathValue("pid"), r.PathValue("fid"), staged)
 		return e
 	})
 	if err != nil {
@@ -104,5 +123,12 @@ func (s *Server) downloadInput(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-SHA256", file.SHA256)
 	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
-	http.ServeContent(w, r, file.Name, time.Time{}, bytes.NewReader(data))
+	if r.Method == http.MethodHead {
+		w.Header().Set("Accept-Ranges", "bytes")
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	// A slow download owns only a temporary file, not a database connection or
+	// a WAL snapshot. ServeContent seeks this verified file for range requests.
+	http.ServeContent(w, r, file.Name, time.Time{}, staged)
 }

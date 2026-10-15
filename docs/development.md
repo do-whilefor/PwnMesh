@@ -136,9 +136,10 @@ explain constraints or failure modes; omit narration of the code itself.
 Keep regression tests beside the owning Go package or in the existing integration
 package. Preserve transaction, wire/hash and recovery boundaries described in
 [architecture](architecture.md) and [supported formats](formats.md). Before a
-schema change, test empty initialization, a current versioned reopen, unsupported
-input rejection and rollback. Preserve canonical object names, stored bytes,
-foreign keys, triggers and query behavior for current databases; retired schema
+schema change, test empty initialization, each supported incremental upgrade,
+a current versioned reopen, unsupported input rejection and rollback. Preserve
+canonical object names, public State/frozen input bytes, foreign keys, triggers
+and query behavior for current databases; retired schema
 versions must be rejected without mutation. Before a protocol move, retain exact wire fixtures.
 Commit reviewable changes with their focused regressions, without generated
 evidence or local plans. The Docker context includes the five maintained guides

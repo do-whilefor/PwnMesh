@@ -13,7 +13,7 @@ import (
 	"pwnmesh/internal/board"
 )
 
-func TestProjectRequestsExpireOnlyTheirOwnLeases(t *testing.T) {
+func TestProjectReadsPreserveLeasesAndSchedulingExpiresOnlyItsProject(t *testing.T) {
 	f, store := newSnapshotHTTPFixture(t)
 	old := store.Now().Add(-time.Hour).Format(time.RFC3339)
 	if err := store.Do(context.Background(), func(tx *board.Tx) error {
@@ -35,8 +35,12 @@ func TestProjectRequestsExpireOnlyTheirOwnLeases(t *testing.T) {
 		}
 	}
 	check(false)
-	// The dispatcher's global project listing still clears all crashed leases.
+	// Listing is observational; only scheduling and mutations clear leases.
 	f.request("GET", "/projects", nil, false, http.StatusOK, nil)
+	check(false)
+	f.request("GET", f.base()+"/scheduling?protocol_version=1", nil, false, http.StatusOK, nil)
+	check(false)
+	f.request("GET", "/projects/unrelated/scheduling?protocol_version=1", nil, false, http.StatusOK, nil)
 	check(true)
 }
 

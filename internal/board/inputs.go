@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"path"
 
 	"pwnmesh/internal/board/internal/sqlstore"
@@ -74,17 +75,33 @@ func (t *Tx) InputFiles(project string) ([]InputFile, error) {
 	return items, err
 }
 
-func (t *Tx) InputData(project, id string) (InputFile, []byte, error) {
+func (t *Tx) InputFile(project, id string) (InputFile, error) {
 	f, err := sqlstore.InputFile(t, project, id)
 	f = inputPath(f)
 	if errors.Is(err, sql.ErrNoRows) {
-		return f, nil, Err(404, "Input file not found")
+		return f, Err(404, "Input file not found")
 	}
+	return f, err
+}
+
+// CopyInputData writes into private staging storage. Callers must publish it
+// only after this method succeeds and the surrounding read transaction closes.
+func (t *Tx) CopyInputData(project, id string, output io.Writer) (InputFile, error) {
+	f, err := t.InputFile(project, id)
 	if err != nil {
-		return f, nil, err
+		return f, err
 	}
-	data, err := sqlstore.InputData(t, project, id)
-	return f, data, err
+	if f.Size < 0 || f.Size > MaxInputBytes {
+		return f, errors.New("invalid input file size")
+	}
+	hash := sha256.New()
+	if err := sqlstore.CopyInputData(t, project, id, f.Size, io.MultiWriter(output, hash)); err != nil {
+		return f, err
+	}
+	if hex.EncodeToString(hash.Sum(nil)) != f.SHA256 {
+		return f, errors.New("input file digest mismatch")
+	}
+	return f, nil
 }
 
 func (t *Tx) AddInput(project, name string, data []byte) (out InputFile, err error) {

@@ -66,16 +66,17 @@ func NewWithModelSettings(store *b.Store, modelSettingsPath string) http.Handler
 	})
 	m.HandleFunc("GET /health", s.readOnly(s.health))
 	m.HandleFunc("GET /settings", s.readOnly(s.settings))
+	m.HandleFunc("GET /projects", s.readOnly(s.projects))
+	m.HandleFunc("GET /projects/{pid}", s.readOnly(s.project))
+	m.HandleFunc("GET /projects/{pid}/export", s.readOnly(s.export))
 	for pattern, fn := range map[string]action{
-		"PUT /settings": s.settings,
-		"GET /projects": s.projects, "POST /projects": s.projects,
-		"GET /projects/{pid}": s.project, "DELETE /projects/{pid}": s.project,
+		"PUT /settings":  s.settings,
+		"POST /projects": s.projects, "DELETE /projects/{pid}": s.project,
 		"PUT /projects/{pid}/title": s.title, "PUT /projects/{pid}/status": s.status,
 		"POST /projects/{pid}/hints": s.hint, "POST /projects/{pid}/intents": s.intent,
 		"POST /projects/{pid}/complete": s.complete, "POST /projects/{pid}/reopen": s.reopen,
 		"POST /projects/{pid}/restart":   s.restart,
 		"POST /projects/{pid}/terminate": s.terminate,
-		"GET /projects/{pid}/export":     s.export,
 	} {
 		m.HandleFunc(pattern, s.wrap(fn))
 	}
@@ -302,7 +303,7 @@ func (s *Server) health(t *b.Tx, _ *request, _ *http.Request) (int, any, error) 
 	return 200, map[string]string{"status": "ok"}, err
 }
 func (s *Server) settings(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	if r.Method == "GET" {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		v, err := t.Settings()
 		return 200, v, err
 	}
@@ -314,8 +315,8 @@ func (s *Server) settings(t *b.Tx, q *request, r *http.Request) (int, any, error
 	return 200, v, err
 }
 func (s *Server) projects(t *b.Tx, q *request, r *http.Request) (int, any, error) {
-	if r.Method == "GET" {
-		out, err := t.ProjectSummaries()
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		out, err := t.ObservedProjectSummaries()
 		return 200, out, err
 	}
 	input := b.ProjectInput{Title: q.text("title"), Origin: q.text("origin"), Goal: q.text("goal")}
@@ -360,7 +361,7 @@ func (s *Server) projects(t *b.Tx, q *request, r *http.Request) (int, any, error
 }
 
 func (s *Server) project(t *b.Tx, _ *request, r *http.Request) (int, any, error) {
-	if r.Method == "GET" {
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
 		graph, err := t.Load(r.PathValue("pid"))
 		return http.StatusOK, graph, err
 	}

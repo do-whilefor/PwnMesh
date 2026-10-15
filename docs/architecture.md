@@ -150,6 +150,13 @@ Input storage separates metadata from binary file contents and preserves batch
 receipt text. Board owns filenames, content-derived identities, quotas, workspace
 paths and replay validation. An upload's file, hint, revision and event share a
 local savepoint, so a caller can handle failure without keeping a partial upload.
+Downloads copy 64 KiB result rows into a private temporary file under one read
+snapshot, verify size and digest, then release the database before serving the
+client. Linux staging files are unlinked immediately and remain accessible only
+through their open descriptor, so process exit also reclaims them. HEAD reads
+metadata only. SQLite still materializes the original BLOB
+internally once, and GET range requests stage the complete file for verification;
+this separates transfer lifetime without introducing permanent external storage.
 
 UI storage reads bounded public result fields, streams execution changes and
 aggregates project summaries without loading historical Jobs. Board owns Unicode
@@ -161,7 +168,11 @@ omit Result. Decision read views preserve raw bytes, while Board validates their
 version and project binding. Observation writes update Result alone, retaining
 execution identity, status and read-view cleanup semantics.
 
-Sqlstore owns state metadata, event and action receipt rows. Board supplies the
+Sqlstore owns state metadata, event and action receipt rows. Fact metadata is
+stored as ordered rows linked to the state record; unchanged observations are
+not rewritten when another Fact changes. Goals, Step metadata, findings,
+relations, candidates, disputes and curation progress remain in the JSON
+remainder. Full canonical State reads still assemble these values. Board supplies the
 encoded metadata, initial state, revision changes and canonical receipt bytes,
 then combines them with graph mutations and execution settlement. Event-only
 increments retain existing metadata bytes. Event reads stream raw bytes for Board
@@ -235,12 +246,27 @@ transcript and restores the prior cursor on a rejected save. Acceptance reads an
 identity-bound committed transcript rather than interpreting session storage
 fields itself. The retained session JSON and journal commit boundaries are unchanged.
 
+Scheduling retains a disposable header and ordered Step projection in SQLite.
+Valid pages seek by project and position with `LIMIT 100`; they do not reload the
+graph. Source-table triggers invalidate the projection transactionally, including
+lease/heartbeat changes, execution outcomes, metadata and asset support. A cold
+or invalidated projection still requires full State assembly to preserve decision
+hashes and curation rules. Admission checks retain cross-page output reservations;
+only Step metadata is needed for those checks. Cache publication and lease expiry
+remain in the scheduling write transaction; ordinary read-only Board snapshots
+can compute a cold page without publishing it.
+
 Board's `Store.Do` keeps lease/generation validation, idempotency lookup, mutation,
 revisions and receipts in one `BEGIN IMMEDIATE` transaction. `Store.View` uses
 query-only WAL readers for consistent snapshots without reserving the writer.
 Keep these operations together even when their source files are split. Health
-and settings GET requests use observational reads and do not expire leases;
-scheduling and settings mutations retain their write transaction maintenance.
+and settings GET requests use observational reads and do not expire leases.
+Project lists/details/exports, execution lookups, curation receipts and execution
+updates/traces also use observational reads. Lease-sensitive reads check expiry
+without clearing authority records. Project lists compute effective lease counts
+and hide expired control leases without changing their stored rows. Scheduling and settings mutations retain
+their write transaction maintenance. Planner reads that pin a view and decision
+previews that execute under a savepoint still need a writer.
 Server calls semantic Board operations for project management and all three
 role leases; it does not execute SQL. Board callbacks expose query operations,
 but no underlying `sql.Tx` field or transaction lifecycle methods. A private query

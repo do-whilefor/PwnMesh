@@ -1,21 +1,25 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/protocol"
 )
 
-func TestObservationalHTTPReadsDoNotWaitForWriter(t *testing.T) {
-	f, store := newSnapshotHTTPFixture(t)
+func holdProjectWriter(t *testing.T, f *executionProtocolFixture) {
+	t.Helper()
 	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
-		done <- store.Do(context.Background(), func(tx *board.Tx) error {
+		done <- f.store.Do(context.Background(), func(tx *board.Tx) error {
 			_, err := tx.Exec("UPDATE projects SET title='uncommitted title' WHERE id=?", f.project)
 			close(started)
 			<-release
@@ -23,14 +27,20 @@ func TestObservationalHTTPReadsDoNotWaitForWriter(t *testing.T) {
 		})
 	}()
 	<-started
-	defer func() {
+	t.Cleanup(func() {
 		close(release)
 		if err := <-done; err != nil {
 			t.Error(err)
 		}
-	}()
-	paths := []string{"/health", "/settings"}
-	for _, suffix := range []string{"/state", "/state/events", "/rounds", "/inputs", "/executions", "/executions/changes?generation=0", "/identity"} {
+	})
+}
+
+func TestObservationalHTTPReadsDoNotWaitForWriter(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	prepareSnapshot(t, f, snapshotTemplate(f, "explore"))
+	holdProjectWriter(t, f)
+	paths := []string{"/health", "/settings", "/projects", "/executions/pending?namespace=protocol-test"}
+	for _, suffix := range []string{"", "/state", "/state/events", "/rounds", "/inputs", "/executions", "/executions/changes?generation=0", "/identity", "/export?format=yaml", "/export?format=timeline", "/executions/" + f.run + "?namespace=protocol-test", "/executions/" + f.run + "/identity?namespace=protocol-test"} {
 		paths = append(paths, f.base()+suffix)
 	}
 	for _, path := range paths {
@@ -46,6 +56,72 @@ func TestObservationalHTTPReadsDoNotWaitForWriter(t *testing.T) {
 			t.Fatal("observational endpoint exposed uncommitted writer data")
 		}
 	}
+	for _, endpoint := range []struct{ path, op string }{{"updates", "read_updates"}, {"traces/read", "read_trace_runs"}} {
+		body, err := json.Marshal(protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: endpoint.op})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		request := httptest.NewRequest(http.MethodPost, f.base()+"/executions/"+f.run+"/"+endpoint.path, bytes.NewReader(body)).WithContext(ctx)
+		request.Header.Set("X-PwnMesh-Run", f.lease)
+		request.Header.Set("X-PwnMesh-Lease", f.kind)
+		request.Header.Set("X-PwnMesh-Intent", f.intent)
+		response := httptest.NewRecorder()
+		f.handler.ServeHTTP(response, request)
+		cancel()
+		if response.Code != http.StatusOK {
+			t.Fatalf("observational %s waited for the writer: %d %s", endpoint.op, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestCurationReceiptReadDoesNotWaitForWriter(t *testing.T) {
+	f := newCurationHTTPFixture(t)
+	_, job := prepareCurator(f)
+	f.action("curate", "committed", board.CuratePayload{ThroughRevision: job.InputSnapshot.Revision, Groups: []board.CurateGroup{}})
+	holdProjectWriter(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	request := httptest.NewRequest(http.MethodGet, f.base()+"/state/curation/receipt", nil).WithContext(ctx)
+	request.Header.Set("X-PwnMesh-Run", f.lease)
+	request.Header.Set("X-PwnMesh-Lease", "curate")
+	response := httptest.NewRecorder()
+	f.handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"committed":true`) {
+		t.Fatalf("curation receipt waited for the writer: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestLiveExecutionReadsRejectExpiredLeaseWithoutMutatingState(t *testing.T) {
+	f, _ := prepareUpdateFixture(t, "snapshot")
+	later := f.store.Now().Add(time.Hour)
+	f.store.Now = func() time.Time { return later }
+	before := f.state()
+	for _, endpoint := range []struct{ path, op string }{{"updates", "read_updates"}, {"traces/read", "read_trace_runs"}} {
+		read := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: endpoint.op}
+		f.request("POST", f.base()+"/executions/"+f.run+"/"+endpoint.path, read, true, http.StatusConflict, nil)
+		if !reflect.DeepEqual(before, f.state()) {
+			t.Fatalf("%s expired or changed a stored lease", endpoint.op)
+		}
+	}
+}
+
+func TestObservationalHEADRequestsDoNotMutateProjects(t *testing.T) {
+	f, _ := newSnapshotHTTPFixture(t)
+	before := f.state()
+	for _, path := range []string{"/settings", "/projects", f.base()} {
+		t.Run(path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodHead, path, nil)
+			response := httptest.NewRecorder()
+			f.handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("HEAD returned %d: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	if !reflect.DeepEqual(before, f.state()) {
+		t.Fatal("HEAD changed the project")
+	}
 }
 
 func TestObservationalStateDoesNotExpireLeasesButSchedulingDoes(t *testing.T) {
@@ -58,7 +134,7 @@ func TestObservationalStateDoesNotExpireLeasesButSchedulingDoes(t *testing.T) {
 		t.Fatal(err)
 	}
 	var state board.State
-	for _, path := range []string{"/health", "/settings"} {
+	for _, path := range []string{"/health", "/settings", "/projects", f.base(), f.base() + "/export?format=timeline", "/executions/pending?namespace=protocol-test"} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		response := httptest.NewRecorder()
 		f.handler.ServeHTTP(response, request)

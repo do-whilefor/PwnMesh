@@ -13,9 +13,9 @@ func (t *Tx) RunRevoked(project, worker string) (bool, error) {
 	return sqlstore.RunRevoked(t.transactionQueries, project, worker)
 }
 
-// ExpireProject limits lease housekeeping to the project being observed or
-// mutated. Global scheduling/list requests pass an empty project and still
-// expire all leases, including those whose workers have crashed.
+// ExpireProject limits lease housekeeping to the project being scheduled or
+// mutated. Global mutations pass an empty project and expire all leases,
+// including those whose workers have crashed. Observational reads never expire.
 func (t *Tx) ExpireProject(project string) error {
 	s, err := t.Settings()
 	if err != nil {
