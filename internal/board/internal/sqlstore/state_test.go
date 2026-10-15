@@ -12,29 +12,29 @@ func TestStateRecordsPreserveMetadataRevisionsAndCallerRollback(t *testing.T) {
 	ctx := context.Background()
 	const retained = "{ \"unknown\":9007199254740993, \"text\":\"\\u0061\" }\n"
 	if err := store.Do(ctx, func(q Queries) error {
-		if err := SaveStateMetadata(q, "p", "original", 4, 2); err != nil {
+		if err := SaveStateMetadata(q, "p", `{"value":"original"}`, 4, 2); err != nil {
 			return err
 		}
-		if err := SaveStateMetadata(q, "p", "replacement", 7, 5); err != nil {
+		if err := SaveStateMetadata(q, "p", `{"value":"replacement"}`, 7, 5); err != nil {
 			return err
 		}
 		if err := UpdateStateMetadata(q, "p", retained); err != nil {
 			return err
 		}
-		if err := UpdateStateMetadata(q, "other", "must not insert"); err != nil {
+		if err := UpdateStateMetadata(q, "other", `{"value":"must not insert"}`); err != nil {
 			return err
 		}
 		if _, _, _, err := StateMetadata(q, "other"); !errors.Is(err, sql.ErrNoRows) {
 			t.Fatalf("update created an absent state: %v", err)
 		}
-		if revision, err := AdvanceStateRevision(q, "other", "initial bytes", 1); err != nil || revision != 1 {
+		if revision, err := AdvanceStateRevision(q, "other", `{"value":"initial bytes"}`, 1); err != nil || revision != 1 {
 			t.Fatalf("initial revision = %d, %v", revision, err)
 		}
 		if _, err := q.Exec(`CREATE TRIGGER guard_event_metadata BEFORE UPDATE OF data ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'event changed metadata'); END`); err != nil {
 			return err
 		}
 		for n, increment := range []int{0, 1} {
-			revision, err := AdvanceStateRevision(q, "p", "must not overwrite", increment)
+			revision, err := AdvanceStateRevision(q, "p", `{"value":"must not overwrite"}`, increment)
 			if err != nil || revision != int64(8+n) {
 				t.Fatalf("event revision = %d, %v", revision, err)
 			}
@@ -72,7 +72,7 @@ func TestStateRecordsPreserveMetadataRevisionsAndCallerRollback(t *testing.T) {
 				} else {
 					want, wantRevision, wantDecision := retained, int64(9), int64(6)
 					if project == "other" {
-						want, wantRevision, wantDecision = "initial bytes", 1, 1
+						want, wantRevision, wantDecision = `{"value":"initial bytes"}`, 1, 1
 					}
 					if err != nil || string(raw) != want || revision != wantRevision || decision != wantDecision {
 						t.Fatalf("metadata/revisions changed for %s: %q %d/%d %v", project, raw, revision, decision, err)

@@ -204,9 +204,9 @@ Termination also cancels outstanding retry grants without replacing their
 stored result or emitting a second failure event.
 
 The private `projection` package consumes canonical graph/runtime values and
-compact metadata without querying storage or changing its input. Metadata decoding
-keeps historical status adaptation at the read boundary. Board loads metadata,
-latest attempts, failure diagnostics and assets within one transaction snapshot.
+compact metadata without querying storage or changing its input. Only abandonment
+comes from Step metadata; runtime status comes from authoritative records. Board
+loads metadata, latest attempts, failure diagnostics and assets within one transaction snapshot.
 Pure projection computes effective evidence, Step dependencies and finding asset
 associations. Derived Finding support uses a separate slice: Curate explicitly
 retains the recalculated support in its pending metadata after each correction,
@@ -302,12 +302,13 @@ leases or reserving a writer.
 Source-boundary tests prevent SQL from returning to HTTP
 handlers or storage dependencies from returning to execution clients.
 
-The schema and migration sequence live in `sqlstore/schema.go` and
+The current schema and its validation live in `sqlstore/schema.go` and
 `sqlstore/migrations.go`; Board does not own connection pools or migration state.
 Schema version `4` uses `pwnmesh_*` names for branded SQL objects. Empty databases
-create the current schema directly; complete version `2` and `3` stores upgrade
-atomically through the migration sequence. Version `1` and nonempty unversioned
-databases are rejected without modification. Runtime queries use only the current names.
+create the current schema directly; existing databases must have the complete
+version `4` ledger and schema. Older versions and nonempty unversioned databases
+are rejected without modification. There are no old-version migration or inline
+metadata fallback paths. Runtime queries use only the current names.
 Current database validation preserves stored records and execution identities.
 Current-format validation stays beside storage and execution boundaries.
 Unsupported inputs fail before they can trigger fresh work or implicit upgrades.

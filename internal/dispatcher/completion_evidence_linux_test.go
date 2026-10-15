@@ -60,12 +60,7 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 				if err := tx.Save(current); err != nil {
 					return err
 				}
-				data, err := json.Marshal(map[string]any{"facts": []board.FactRecord{fact}})
-				if err != nil {
-					return err
-				}
-				_, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,1,1) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data", graph.Project.ID, string(data))
-				return err
+				return seedFixtureFacts(tx, graph.Project.ID, 1, fact)
 			}); err != nil {
 				t.Fatal(err)
 			}

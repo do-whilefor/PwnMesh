@@ -4,52 +4,75 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 )
 
 var stateRecordKinds = [...]string{"goals", "steps", "findings", "fact_relations", "candidates", "disputes"}
 
-// Go accepts case-folded fields and merges repeated struct fields in input
-// order. Preserve these historical headers instead of collapsing them to a map.
-func keepStateHeaderInline(raw string) bool {
-	decoder := json.NewDecoder(strings.NewReader(raw))
-	if _, err := decoder.Token(); err != nil {
-		return true
+// Current metadata uses one exact lowercase key per known field. Reject
+// unsupported forms before splitting arrays, so no values are silently lost.
+func decodeStateFields(raw []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	opening, err := decoder.Token()
+	if err != nil || opening != json.Delim('{') {
+		return nil, fmt.Errorf("invalid current state metadata: expected a JSON object")
 	}
 	known := append(stateRecordKinds[:], "facts", "curation")
-	seen := map[string]bool{}
+	fields := map[string]json.RawMessage{}
 	for decoder.More() {
 		token, err := decoder.Token()
 		if err != nil {
-			return true
+			return nil, fmt.Errorf("invalid current state metadata: %w", err)
 		}
 		name, ok := token.(string)
 		if !ok {
-			return true
+			return nil, fmt.Errorf("invalid current state metadata field")
 		}
 		for _, kind := range known {
 			if strings.EqualFold(name, kind) {
-				if name != kind || seen[kind] {
-					return true
+				if name != kind || fields[kind] != nil {
+					return nil, fmt.Errorf("unsupported current state metadata field %q", name)
 				}
-				seen[kind] = true
 				break
 			}
 		}
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
-			return true
+			return nil, fmt.Errorf("invalid current state metadata: %w", err)
+		}
+		fields[name] = value
+	}
+	if _, err := decoder.Token(); err != nil {
+		return nil, fmt.Errorf("invalid current state metadata: %w", err)
+	}
+	var trailing json.RawMessage
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, fmt.Errorf("invalid current state metadata: trailing data")
+	}
+	return fields, nil
+}
+
+func storedStateFields(raw []byte) (map[string]json.RawMessage, error) {
+	fields, err := decodeStateFields(raw)
+	if err != nil {
+		return nil, err
+	}
+	for _, kind := range append(stateRecordKinds[:], "facts") {
+		value := fields[kind]
+		if value != nil && !bytes.Equal(bytes.TrimSpace(value), []byte("null")) && !emptyStateArray(value) {
+			return nil, fmt.Errorf("unsupported inline %s metadata: current storage requires normalized records", kind)
 		}
 	}
-	return false
+	return fields, nil
 }
 
 // Empty array markers distinguish present arrays from null and omitted fields.
 // Their payloads move into ordered records; small scalar metadata stays inline.
 func splitStateRecords(raw string) (string, map[string][]json.RawMessage, error) {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(raw), &fields) != nil || fields == nil || keepStateHeaderInline(raw) {
-		return raw, nil, nil
+	fields, err := decodeStateFields([]byte(raw))
+	if err != nil {
+		return "", nil, err
 	}
 	records := make(map[string][]json.RawMessage, len(stateRecordKinds))
 	changed := false
@@ -102,9 +125,8 @@ func restoreStateRecords(q Queries, project string, fields map[string]json.RawMe
 	}
 	changed := false
 	for kind, items := range records {
-		// Legacy inline arrays remain readable until their next normalized write.
 		if !emptyStateArray(fields[kind]) {
-			continue
+			return false, fmt.Errorf("current %s records require an empty array header marker", kind)
 		}
 		fields[kind], err = json.Marshal(items)
 		if err != nil {
@@ -154,8 +176,7 @@ func saveStateRecords(q Queries, project string, records map[string][]json.RawMe
 				ID string `json:"id"`
 			}
 			if kind == "steps" {
-				// Go's field matching and duplicate-key order define the identity,
-				// including retained ID/Id spellings that SQLite JSON paths miss.
+				// Use the same identity decoder as the public Step projection.
 				if err := json.Unmarshal(item, &identity); err != nil {
 					return fmt.Errorf("invalid Step identity: %w", err)
 				}

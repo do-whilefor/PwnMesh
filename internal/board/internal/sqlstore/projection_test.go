@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"pwnmesh/internal/board/model"
@@ -85,8 +86,8 @@ func TestProjectionReadsKeepSnapshotScopeAndRawMetadata(t *testing.T) {
 	}
 	if err := store.View(ctx, func(q Queries) error {
 		raw, revision, _, err := StateMetadata(q, "p")
-		if err != nil || raw == nil || len(raw) != 0 || revision != 5 {
-			t.Fatalf("present empty metadata became an absent row: %v %d %v", raw, revision, err)
+		if err == nil || !strings.Contains(err.Error(), "invalid current state metadata") || raw == nil || len(raw) != 0 || revision != 5 {
+			t.Fatalf("damaged current metadata was accepted or treated as absent: %v %d %v", raw, revision, err)
 		}
 		return nil
 	}); err != nil {

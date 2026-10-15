@@ -14,7 +14,6 @@ import (
 func TestNormalizedStatePreservesCanonicalInput(t *testing.T) {
 	for _, metadata := range []string{
 		`{"goals":null,"steps":[],"facts":null,"findings":[],"fact_relations":null,"candidates":[],"disputes":null}`,
-		`{"steps":[{"id":"i1","priority":3}],"Steps":[{"id":"i1","priority":7}],"curation":{"generation":2},"curation":{"through_revision":1}}`,
 		`{"goals":[{"id":"g1","parent_id":"goal","condition":"Check observation","status":"open","sources":["f1"]}],
 		"steps":[{"id":"i1","goal_id":"g1","priority":3,"depends_on":[],"write_paths":["/workspace/result"]},{"id":"i1","goal_id":"g1","priority":7},{"id":"orphan","status":"abandoned"}],
 		"facts":[{"id":"f1","description":"Observed","status":"valid","legacy":true,"evidence":[]}],
@@ -33,18 +32,23 @@ func TestNormalizedStatePreservesCanonicalInput(t *testing.T) {
 		var before []byte
 		var version, snapshotID string
 		if err := store.Do(context.Background(), func(tx *Tx) error {
-			if err := tx.Save(Graph{
+			graph := Graph{
 				Project: Project{ID: "p", Title: "Canonical input", Status: "active", CreatedAt: "then"},
 				Facts:   []Fact{{ID: "origin", Description: "Input"}, {ID: "goal", Description: "Goal"}, {ID: "f1", Description: "Observed"}},
 				Intents: []Intent{{ID: "i1", From: []string{"f1"}, Description: "Inspect", Creator: "planner", CreatedAt: "then"}},
-			}); err != nil {
+			}
+			if err := tx.Save(graph); err != nil {
 				return err
 			}
-			// Read the retained JSON representation before splitting its arrays.
-			if _, err := tx.Exec("INSERT INTO pwnmesh_state VALUES('p',?,4,2)", metadata); err != nil {
+			graph, err := tx.Load("p")
+			if err != nil {
 				return err
 			}
-			state, err := tx.State("p")
+			var data stateData
+			if err := json.Unmarshal([]byte(metadata), &data); err != nil {
+				return err
+			}
+			state, err := tx.projectState(graph, data, 4, 2)
 			if err != nil {
 				return err
 			}
@@ -142,15 +146,15 @@ func TestCompactStepMetadataLifecycleAndReopen(t *testing.T) {
 			}
 			// Storage reconstruction preserves the metadata's public Step fields;
 			// runtime fields still come from the authoritative Intent.
-			var legacy struct {
+			var decoded struct {
 				Steps []Step `json:"steps"`
 			}
-			if err := json.Unmarshal(raw, &legacy); err != nil {
+			if err := json.Unmarshal(raw, &decoded); err != nil {
 				return err
 			}
-			old := legacy.Steps[0]
-			if old.ID != step.ID || old.GoalID != step.GoalID || old.Priority != step.Priority || old.Reason != step.Reason || (old.Status == "abandoned") != (status == "abandoned") {
-				t.Fatalf("reconstructed metadata lost Step fields: %+v", old)
+			storedStep := decoded.Steps[0]
+			if storedStep.ID != step.ID || storedStep.GoalID != step.GoalID || storedStep.Priority != step.Priority || storedStep.Reason != step.Reason || (storedStep.Status == "abandoned") != (status == "abandoned") {
+				t.Fatalf("reconstructed metadata lost Step fields: %+v", storedStep)
 			}
 			return nil
 		})
@@ -193,81 +197,15 @@ func TestCompactStepMetadataLifecycleAndReopen(t *testing.T) {
 	}
 }
 
-func TestLegacyStepMetadataProjectionAfterReopen(t *testing.T) {
-	// This is the old persisted public Step shape. Runtime and task fields
-	// intentionally disagree with the authoritative Intent below.
-	const legacy = `{"steps":[{"id":"i001","goal_id":"goal","priority":7,"reason":"saved rationale","status":"completed","from":["stale"],"description":"obsolete task","worker":"obsolete worker","result":"obsolete result","created_at":"obsolete date"}]}`
-	for _, tc := range []struct {
-		name, metadata, status, goal, reason string
-		worker, result                       *string
-		priority                             int
-	}{
-		{name: "open", metadata: legacy, status: "open", goal: "goal", reason: "saved rationale", priority: 7},
-		{name: "claimed", metadata: legacy, status: "running", goal: "goal", reason: "saved rationale", worker: Ptr("runner@current"), priority: 7},
-		{name: "completed", metadata: legacy, status: "completed", goal: "goal", reason: "saved rationale", worker: Ptr("runner@current"), result: Ptr("f001"), priority: 7},
-		{name: "abandoned", metadata: `{"steps":[{"id":"i001","goal_id":"goal","status":"abandoned","reason":"cancelled plan"}]}`, status: "abandoned", goal: "goal", reason: "cancelled plan"},
-		{name: "missing goal stays missing", metadata: `{"steps":[{"id":"i001","status":"failed"}]}`, status: "open"},
-		{name: "historical intent defaults to root", metadata: `{"steps":[]}`, status: "open", goal: "goal"},
-		{name: "duplicate metadata keeps last fields", metadata: `{"steps":[{"id":"i001","goal_id":"stale","priority":1,"reason":"old"},{"id":"i001","goal_id":"goal","priority":9,"reason":"latest"}]}`, status: "open", goal: "goal", priority: 9, reason: "latest"},
-		{name: "duplicate metadata retains abandonment", metadata: `{"steps":[{"id":"i001","status":"abandoned","reason":"old"},{"id":"i001","goal_id":"goal","priority":9,"reason":"latest","status":"completed"}]}`, status: "abandoned", goal: "goal", priority: 9, reason: "latest"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "legacy.db")
-			store, err := Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			t.Cleanup(func() { _ = store.Close() })
-			const created = "2026-09-23T00:00:00Z"
-			err = store.Do(context.Background(), func(tx *Tx) error {
-				if err := tx.Save(Graph{
-					Project: Project{ID: "proj_001", Title: "Legacy fixture", Status: "active", CreatedAt: created},
-					Facts:   []Fact{{ID: "origin", Description: "Original requirement"}, {ID: "goal", Description: "Root goal"}, {ID: "f001", Description: "Observed result"}},
-					Intents: []Intent{{ID: "i001", From: []string{"origin"}, Description: "Current task", Creator: "planner", Worker: tc.worker, To: tc.result, CreatedAt: created}},
-				}); err != nil {
-					return err
-				}
-				_, err := tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES('proj_001',?,4,2)", tc.metadata)
-				return err
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := store.Close(); err != nil {
-				t.Fatal(err)
-			}
-			reopened, err := Open(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer reopened.Close()
-			err = reopened.Do(context.Background(), func(tx *Tx) error {
-				state, err := tx.State("proj_001")
-				if err != nil {
-					return err
-				}
-				want := Step{ID: "i001", From: []string{"origin"}, GoalID: tc.goal, Description: "Current task", Status: tc.status, Worker: tc.worker, Result: tc.result, CreatedAt: created, Priority: tc.priority, Reason: tc.reason}
-				if !reflect.DeepEqual(state.Steps, []Step{want}) || state.Revision != 4 || state.DecisionRevision != 2 {
-					t.Fatalf("legacy projection changed: steps=%+v, revision=%d/%d; want %+v, revision=4/2", state.Steps, state.Revision, state.DecisionRevision, want)
-				}
-				return nil
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
-	store, err := Open(filepath.Join(t.TempDir(), "legacy-facts.db"))
+func TestNormalizedFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
+	store, err := Open(filepath.Join(t.TempDir(), "facts.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	err = store.Do(context.Background(), func(tx *Tx) error {
 		graph := Graph{
-			Project: Project{ID: "legacy", Title: "Historical observations", Status: "active", CreatedAt: tx.Now},
+			Project: Project{ID: "observations", Title: "Ordered observations", Status: "active", CreatedAt: tx.Now},
 			Facts: []Fact{{ID: "origin", Description: "Original requirement"}, {ID: "goal", Description: "Root goal"},
 				{ID: "f001", Description: "First graph fact"}, {ID: "f002", Description: "Second graph fact"}, {ID: "f003", Description: "Legacy fact"}},
 		}
@@ -275,10 +213,14 @@ func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
 			return err
 		}
 		const raw = `{"facts":[{"id":"f002","description":"Second observation","status":"valid"},{"id":"f001","description":"First observation","status":"valid"},{"id":"f001","description":"Duplicate must not replace the first","status":"refuted"},{"id":"missing","description":"Unlinked record","status":"valid"}],"fact_relations":[{"kind":"refutes","target":"f001","source":"f002"},{"kind":"narrows","target":"f001","source":"f002"}]}`
-		if _, err := tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES('legacy',?,4,2)", raw); err != nil {
+		if err := sqlstore.SaveStateMetadata(tx, "observations", raw, 4, 2); err != nil {
 			return err
 		}
-		state, err := tx.State("legacy")
+		var header string
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='observations'").Scan(&header); err != nil {
+			return err
+		}
+		state, err := tx.State("observations")
 		if err != nil {
 			return err
 		}
@@ -290,14 +232,14 @@ func TestLegacyFactProjectionPreservesOrderAndRelationPrecedence(t *testing.T) {
 			{ID: "f003", Description: "Legacy fact", Status: "valid", Evidence: []EvidenceRef{}, Legacy: true},
 		}
 		if !reflect.DeepEqual(state.FactRecords, want) || !reflect.DeepEqual(state.Graph.Facts, graph.Facts) {
-			t.Fatalf("historical fact projection changed: %+v", state.FactRecords)
+			t.Fatalf("normalized fact projection changed: %+v", state.FactRecords)
 		}
 		var saved string
-		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='legacy'").Scan(&saved); err != nil {
+		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='observations'").Scan(&saved); err != nil {
 			return err
 		}
-		if saved != raw || state.Revision != 4 || state.DecisionRevision != 2 {
-			t.Fatal("reading historical facts changed their retained data or revisions")
+		if saved != header || state.Revision != 4 || state.DecisionRevision != 2 {
+			t.Fatal("reading normalized facts changed their retained data or revisions")
 		}
 		return nil
 	})
@@ -319,18 +261,18 @@ func TestNormalizedFactMatchesProjectionAndFrozenInput(t *testing.T) {
 			return err
 		}
 		// The storage reader combines normalized observations with metadata.
-		var legacy struct {
+		var decoded struct {
 			Facts []FactRecord `json:"facts"`
 		}
-		if err := json.Unmarshal(raw, &legacy); err != nil {
+		if err := json.Unmarshal(raw, &decoded); err != nil {
 			return err
 		}
 		var base Fact
 		if err := tx.QueryRow("SELECT id,description FROM facts WHERE project_id='p' AND id=?", id).Scan(&base.ID, &base.Description); err != nil {
 			return err
 		}
-		if len(legacy.Facts) != 1 || legacy.Facts[0].ID != base.ID || legacy.Facts[0].Description != base.Description || !reflect.DeepEqual(legacy.Facts[0], before.FactRecords[len(before.FactRecords)-1]) {
-			t.Fatal("current Fact, rollback reader and SQL base do not describe the same observation")
+		if len(decoded.Facts) != 1 || decoded.Facts[0].ID != base.ID || decoded.Facts[0].Description != base.Description || !reflect.DeepEqual(decoded.Facts[0], before.FactRecords[len(before.FactRecords)-1]) {
+			t.Fatal("current Fact, metadata reader and SQL base do not describe the same observation")
 		}
 		ref, err = tx.FreezeInput(before)
 		return err

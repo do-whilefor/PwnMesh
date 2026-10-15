@@ -72,10 +72,10 @@ API/tooling; copying only the database file while WAL writes are active is not a
 consistent backup. Do not rename runtime directories or edit saved JSON to force
 a mismatch through validation.
 
-The current binary opens schema `4`, atomically upgrades complete schema `2` or `3`
-databases, and rejects schema `1` without changes.
-To retain a schema `1` database, stop its Server and Dispatcher and use a previous
-release that supports the namespace migration before starting this release.
+The current binary only initializes or opens schema `4`. It rejects older schemas
+without changes and has no automatic migration path. To retain an older database,
+stop its Server and Dispatcher and use a previous release or migration tooling
+that supports its format before starting this release.
 Preserve installation identity, stored JSON and workspace paths. A binary that
 does not support schema `4` cannot share the upgraded database; rollback requires a
 compatible binary or the matching database backup.

@@ -4,11 +4,12 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 // StateStepMetadataByID keeps admission proportional to the requested Steps.
 // Positions preserve duplicate-ID order: callers choose the existing first or
-// last match policy. Legacy inline arrays remain readable until normalized.
+// last match policy.
 func StateStepMetadataByID(q Queries, project string, ids []string) ([]json.RawMessage, error) {
 	if len(ids) == 0 {
 		return nil, nil
@@ -21,40 +22,19 @@ func StateStepMetadataByID(q Queries, project string, ids []string) ([]json.RawM
 	if err != nil {
 		return nil, err
 	}
-	// Match Go's key casing and last-key semantics for historical headers.
-	// Normalized headers contain only markers and small scalar metadata.
-	var fields struct {
-		Steps json.RawMessage `json:"steps"`
-	}
-	if err := json.Unmarshal(header, &fields); err != nil {
+	fields, err := storedStateFields(header)
+	if err != nil {
 		return nil, err
 	}
-	inline := fields.Steps
-	if inline == nil {
-		return nil, nil
-	}
-	if !emptyStateArray(inline) {
-		var steps []json.RawMessage
-		if err := json.Unmarshal(inline, &steps); err != nil {
+	if !emptyStateArray(fields["steps"]) {
+		var records bool
+		if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_state_records WHERE project_id=? AND kind='steps')", project).Scan(&records); err != nil {
 			return nil, err
 		}
-		wanted := make(map[string]bool, len(ids))
-		for _, id := range ids {
-			wanted[id] = true
+		if records {
+			return nil, fmt.Errorf("current Step records require an empty array header marker")
 		}
-		selected := make([]json.RawMessage, 0)
-		for _, raw := range steps {
-			var step struct {
-				ID string `json:"id"`
-			}
-			if err := json.Unmarshal(raw, &step); err != nil {
-				return nil, err
-			}
-			if wanted[step.ID] {
-				selected = append(selected, raw)
-			}
-		}
-		return selected, nil
+		return nil, nil
 	}
 	rawIDs, err := json.Marshal(ids)
 	if err != nil {

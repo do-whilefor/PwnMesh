@@ -169,3 +169,28 @@ func registerLegacyExecution(t *testing.T, store *board.Store, execution board.E
 	}
 	return execution
 }
+
+// Seed observations in current storage without discarding other normalized
+// metadata. Existing revisions never move backward while adding fixture data.
+func seedFixtureFacts(tx *board.Tx, project string, revision int64, facts ...board.FactRecord) error {
+	if _, err := tx.Exec(`INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,'{"facts":[]}',?,?)
+ON CONFLICT(project_id) DO UPDATE SET data=json_set(pwnmesh_state.data,'$.facts',json('[]')),
+ revision=MAX(pwnmesh_state.revision,excluded.revision),decision_revision=MAX(pwnmesh_state.decision_revision,excluded.decision_revision)`, project, revision, revision); err != nil {
+		return err
+	}
+	var position int
+	if err := tx.QueryRow("SELECT COALESCE(MAX(position)+1,0) FROM pwnmesh_fact_metadata WHERE project_id=?", project).Scan(&position); err != nil {
+		return err
+	}
+	for _, fact := range facts {
+		raw, err := json.Marshal(fact)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec("INSERT INTO pwnmesh_fact_metadata(project_id,position,data) VALUES(?,?,?)", project, position, string(raw)); err != nil {
+			return err
+		}
+		position++
+	}
+	return nil
+}

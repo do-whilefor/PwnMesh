@@ -8,7 +8,7 @@ import (
 	"pwnmesh/internal/board/model"
 )
 
-func TestMetadataPreservesEncodingAndLegacyStatusBoundary(t *testing.T) {
+func TestMetadataPreservesEncodingAndCollectionShapes(t *testing.T) {
 	absent, err := DecodeMetadata(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -25,13 +25,31 @@ func TestMetadataPreservesEncodingAndLegacyStatusBoundary(t *testing.T) {
 	if err != nil || nulls.Goals != nil || nulls.Steps != nil || nulls.Facts != nil || nulls.Findings != nil || nulls.FactRelations != nil {
 		t.Fatalf("explicit null collections changed: %+v, %v", nulls, err)
 	}
-	legacy, err := DecodeMetadata([]byte(`{"steps":[{"id":"old","status":"completed","unknown":"retained-format"},{"id":"retired","goal_id":"goal","priority":2,"status":"abandoned","depends_on":["upstream"]}]}`))
-	if err != nil || legacy.Steps[0].Status != "" || legacy.Steps[1].Status != "abandoned" {
-		t.Fatalf("historical runtime status escaped the loading adapter: %+v, %v", legacy, err)
+	metadata, err := DecodeMetadata([]byte(`{"steps":[{"id":"stopped","goal_id":"goal","priority":2,"status":"abandoned","depends_on":["upstream"]}]}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	raw, _ = json.Marshal(legacy.Steps[1])
-	if string(raw) != `{"id":"retired","goal_id":"goal","priority":2,"status":"abandoned","depends_on":["upstream"]}` {
+	raw, _ = json.Marshal(metadata.Steps[0])
+	if string(raw) != `{"id":"stopped","goal_id":"goal","priority":2,"status":"abandoned","depends_on":["upstream"]}` {
 		t.Fatalf("step metadata encoding changed: %s", raw)
+	}
+}
+
+func TestBuildUsesIntentAndExecutionStatusWithExplicitAbandonment(t *testing.T) {
+	g := model.Graph{Intents: []model.Intent{
+		{ID: "open"},
+		{ID: "running", Worker: model.Ptr("worker")},
+		{ID: "completed", To: model.Ptr("result")},
+		{ID: "failed"},
+		{ID: "abandoned", Worker: model.Ptr("worker")},
+	}}
+	d := Metadata{Steps: []StepMetadata{{ID: "abandoned", Status: "abandoned"}}}
+	runs := []model.ExecutionSummary{{Intent: "failed", Status: "failed"}}
+	state := Build(g, d, 0, 0, runs)
+	for _, step := range state.Steps {
+		if step.Status != step.ID {
+			t.Fatalf("Step %s ignored its authoritative status source: %s", step.ID, step.Status)
+		}
 	}
 }
 

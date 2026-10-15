@@ -63,15 +63,11 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 			return err
 		}
 		// Corrections require a retained observation, not a legacy input Fact.
-		data, err := json.Marshal(map[string]any{"facts": []board.FactRecord{{
+		if err := seedFixtureFacts(tx, graph.Project.ID, 0, board.FactRecord{
 			ID: "f002", Description: graph.Facts[3].Description, Scope: "controlled fixture", ObservedAt: tx.Now,
 			Status: "valid", RunID: "observer@correction-source",
 			Evidence: []board.EvidenceRef{{RunID: "observer@correction-source", Path: "/workspace/evidence/correction.txt", Excerpt: "Independent check disproved the initial premise"}},
-		}}})
-		if err != nil {
-			return err
-		}
-		if _, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data) VALUES(?,?)", graph.Project.ID, string(data)); err != nil {
+		}); err != nil {
 			return err
 		}
 		state, err = tx.State(graph.Project.ID)

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 type stateBenchmarkSize struct {
@@ -51,17 +53,14 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registered
 			f.from = append(f.from, id)
 			g.Facts = append(g.Facts, Fact{ID: id, Description: "Independent synthetic observation " + id})
 		}
-		// Full legacy Step JSON deliberately provides the same persisted input
-		// before and after the metadata simplification, without using stateData.
-		steps := []Step{}
+		steps := []stepMetadata{}
 		for n := 1; n <= size.intents; n++ {
 			id, result := fmt.Sprintf("i%03d", n), fmt.Sprintf("f%03d", n)
 			description := fmt.Sprintf("Historical task %04d: ", n) + strings.Repeat("x", size.descriptionBytes-22)
 			g.Facts = append(g.Facts, Fact{ID: result, Description: "Synthetic result " + result})
 			g.Intents = append(g.Intents, Intent{ID: id, From: f.from, To: Ptr(result), Description: description,
 				Creator: "history", Worker: Ptr("worker@history"), CreatedAt: tx.Now, ConcludedAt: Ptr(tx.Now)})
-			steps = append(steps, Step{ID: id, From: f.from, GoalID: "goal", Description: description,
-				Status: "completed", Result: Ptr(result), Worker: Ptr("worker@history"), CreatedAt: tx.Now})
+			steps = append(steps, stepMetadata{ID: id, GoalID: "goal"})
 		}
 		g.Intents = append(g.Intents, Intent{ID: "active", From: []string{"origin"}, Description: "Observe fixture",
 			Creator: "history", Worker: Ptr(stateBenchmarkWorker.Run), Heartbeat: Ptr(tx.Now), CreatedAt: tx.Now})
@@ -77,7 +76,7 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registered
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,0,0)", stateBenchmarkProject, string(raw)); err != nil {
+		if err = sqlstore.SaveStateMetadata(tx, stateBenchmarkProject, string(raw), 0, 0); err != nil {
 			return err
 		}
 		state, err := tx.State(stateBenchmarkProject)

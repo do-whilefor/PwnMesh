@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 func retryStepAction(step, run string) json.RawMessage {
@@ -236,8 +238,7 @@ func TestMainRetryRequiresCurrentTerminalRunAndValidPrerequisites(t *testing.T) 
 							}
 						}
 						raw, _ := json.Marshal(d)
-						_, err = tx.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id=?", string(raw), "p")
-						return err
+						return sqlstore.UpdateStateMetadata(tx, "p", string(raw))
 					})
 				}
 			}

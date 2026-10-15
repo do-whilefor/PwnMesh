@@ -42,6 +42,8 @@ func TestStoreMigrationRejectsUnsupportedHistoryBeforeApplicationSchema(t *testi
 		name, history, want string
 	}{
 		{"retired_v1", "(1,'unversioned-baseline')", "unsupported PwnMesh schema version 1"},
+		{"retired_v2", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace')", "unsupported PwnMesh schema version 2"},
+		{"retired_v3", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace'),(3,'incremental-state-storage')", "unsupported PwnMesh schema version 3"},
 		{"future", "(1,'unversioned-baseline'),(2,'pwnmesh-namespace'),(5,'future')", "unsupported PwnMesh schema version"},
 		{"missing_baseline", "(2,'pwnmesh-namespace')", "inconsistent PwnMesh migration history"},
 		{"renamed", "(1,'different-baseline')", "inconsistent PwnMesh migration history"},
@@ -52,29 +54,16 @@ func TestStoreMigrationRejectsUnsupportedHistoryBeforeApplicationSchema(t *testi
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer db.Close()
-			if _, err := db.Exec(migrationLedgerSchema + "INSERT INTO pwnmesh_schema_migrations(version,name) VALUES" + test.history); err != nil {
+			if _, err := db.Exec(migrationLedgerSchema + "INSERT INTO pwnmesh_schema_migrations(version,name) VALUES" + test.history + `;
+CREATE TABLE retained_bytes(id INTEGER PRIMARY KEY,data BLOB);
+INSERT INTO retained_bytes VALUES(71,X'0078FF');`); err != nil {
+				db.Close()
 				t.Fatal(err)
 			}
-			var before string
-			if err := db.QueryRow("SELECT json_group_array(json_object('version',version,'name',name,'applied_at',applied_at)) FROM pwnmesh_schema_migrations").Scan(&before); err != nil {
+			if err := db.Close(); err != nil {
 				t.Fatal(err)
 			}
-			store, err := Open(path)
-			if store != nil {
-				store.Close()
-			}
-			if err == nil || !strings.Contains(err.Error(), test.want) {
-				t.Fatalf("unsupported history was not rejected: %v", err)
-			}
-			var count int
-			if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name!='pwnmesh_schema_migrations'").Scan(&count); err != nil || count != 0 {
-				t.Fatalf("rejected history created application tables: %d %v", count, err)
-			}
-			var after string
-			if err := db.QueryRow("SELECT json_group_array(json_object('version',version,'name',name,'applied_at',applied_at)) FROM pwnmesh_schema_migrations").Scan(&after); err != nil || before != after {
-				t.Fatalf("rejected history changed ledger: before=%s after=%s err=%v", before, after, err)
-			}
+			assertStoreRejectedUnchanged(t, path, test.want)
 		})
 	}
 }

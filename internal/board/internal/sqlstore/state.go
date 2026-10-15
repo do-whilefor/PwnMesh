@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 )
 
 func StateMetadata(q Queries, project string) (raw []byte, revision, decision int64, err error) {
@@ -11,19 +12,14 @@ func StateMetadata(q Queries, project string) (raw []byte, revision, decision in
 	if err != nil {
 		return
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+	fields, decodeErr := storedStateFields(raw)
+	if decodeErr != nil {
+		err = decodeErr
 		return
 	}
 	changed, restoreErr := restoreStateRecords(q, project, fields)
 	if restoreErr != nil {
 		err = restoreErr
-		return
-	}
-	if fields["facts"] != nil {
-		if changed {
-			raw, err = json.Marshal(fields)
-		}
 		return
 	}
 	var facts []json.RawMessage
@@ -44,6 +40,10 @@ func StateMetadata(q Queries, project string) (raw []byte, revision, decision in
 		return
 	}
 	if len(facts) != 0 {
+		if bytes.Equal(bytes.TrimSpace(fields["facts"]), []byte("null")) {
+			err = fmt.Errorf("current Fact records conflict with a null header marker")
+			return
+		}
 		fields["facts"], err = json.Marshal(facts)
 		changed = true
 	}
@@ -115,11 +115,13 @@ func writeStateMetadata(q Queries, write func() error) (err error) {
 	return write()
 }
 
-// Ordered records retain historical duplicate IDs and orphan observations.
-// Only the facts array moves; arbitrary legacy bytes remain readable as before.
+// Ordered records preserve duplicate IDs and orphan observations.
 func splitStateFacts(raw string) (string, []json.RawMessage, error) {
-	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(raw), &fields) != nil || fields == nil || keepStateHeaderInline(raw) || fields["facts"] == nil || bytes.Equal(bytes.TrimSpace(fields["facts"]), []byte("null")) {
+	fields, err := decodeStateFields([]byte(raw))
+	if err != nil {
+		return "", nil, err
+	}
+	if fields["facts"] == nil || bytes.Equal(bytes.TrimSpace(fields["facts"]), []byte("null")) {
 		return raw, nil, nil
 	}
 	var facts []json.RawMessage
@@ -173,6 +175,9 @@ func saveStateFacts(q Queries, project string, facts []json.RawMessage) error {
 // Board supplies initial metadata and the decision increment. Existing metadata
 // is never rewritten for an event-only change, including unknown stored fields.
 func AdvanceStateRevision(q Queries, project, initial string, decisionIncrement int) (int64, error) {
+	if _, err := storedStateFields([]byte(initial)); err != nil {
+		return 0, err
+	}
 	var revision int64
 	err := q.QueryRow(`INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision)
 		VALUES(?,?,1,?)

@@ -33,18 +33,12 @@ type StepMetadata struct {
 	WritePaths []string            `json:"write_paths,omitempty"`
 }
 
-// DecodeMetadata accepts nil for an absent row. Historical runtime fields are
-// ignored; only explicit abandonment can override current execution state.
+// DecodeMetadata accepts nil for an absent row and retains explicit null arrays.
 func DecodeMetadata(raw []byte) (Metadata, error) {
 	d := Metadata{Goals: []model.Goal{}, Steps: []StepMetadata{}, Facts: []model.FactRecord{}, Findings: []model.Finding{}, FactRelations: []model.FactRelation{}}
 	if raw == nil {
 		return d, nil
 	}
 	err := json.Unmarshal(raw, &d)
-	for n := range d.Steps {
-		if d.Steps[n].Status != "abandoned" {
-			d.Steps[n].Status = ""
-		}
-	}
 	return d, err
 }

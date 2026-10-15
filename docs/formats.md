@@ -1,14 +1,13 @@
 # Supported PwnMesh formats
 
-PwnMesh supports current execution formats and database schema `4`, with an
-atomic upgrade from schema `2` or `3`. Retired formats are rejected without replay or
-workspace migration.
+PwnMesh supports current execution formats and database schema `4` only.
+Retired formats are rejected without replay or migration.
 
 ## Accepted inputs
 
 | Boundary | Requirement |
 | --- | --- |
-| Database | Empty database for initialization, or a complete schema `2`, `3` or `4` database with a valid migration ledger and execution metadata `1` |
+| Database | Empty database for initialization, or a complete schema `4` database with a valid migration ledger and execution metadata `1` |
 | Configuration | `PWNMESH_*` settings; no `XLOOM_*` alias lookup or normalization; retired `runtime.execution` and `runtime.prompt_group` selectors are rejected |
 | Server project | Orchestration version `1`; older project endpoints are rejected |
 | Execution | Current registered Job: live graph bridge, result contract `2`, Decide context `2`; lease roles `reason`, `explore`, `curate` only |
@@ -39,34 +38,23 @@ before committing changes. Empty databases create schema `4` directly with
 `pwnmesh_*` names for branded SQL objects. Runtime queries use those names only;
 there are no views or aliases for the old namespace.
 
-The ledger retains version `1` as `unversioned-baseline`, including its original
-timestamp, and records version `2` as `pwnmesh-namespace`. Fresh databases record
-all four versions without creating old SQL objects. Version `3` is
-`incremental-state-storage`: it separates ordered Fact metadata and adds a
-disposable scheduling projection. Version `4`, `normalized-state-records`, moves
-goals, Step metadata, findings, relations, candidates and disputes into ordered
-records and indexes Step identities for scheduling admission. The historical version `1` name
-does not permit opening a schema `1` or unversioned database. Schema `1` databases,
-nonempty unversioned databases, mixed namespaces, inconsistent or future ledgers
-and unsupported execution metadata are rejected without adoption or raw Job/Result
-reconstruction. A schema `2` upgrade validates the old namespace first, then
-creates the new tables, moves Fact metadata and appends the ledger entry in one
-transaction. Fact order, duplicate IDs and orphan records survive; public State
-encoding, frozen input hashes, unrelated record bytes and installation identity
-remain unchanged. Metadata JSON physically loses its extracted Facts array.
-Current-schema reopen does not repeat this backfill. Future schema
-changes append migrations and tests; editing fresh-database DDL alone cannot
-upgrade existing data.
+The current ledger contains four historical entries: `unversioned-baseline`,
+`pwnmesh-namespace`, `incremental-state-storage` and `normalized-state-records`.
+Fresh databases record all four without creating old SQL objects. Reopening a
+current database preserves its ledger and timestamps; those entries do not enable
+old-version compatibility. Schema `1`, `2` and `3` databases, nonempty unversioned
+databases, mixed namespaces, incomplete or future ledgers and unsupported execution
+metadata are rejected without modification. There is no automatic upgrade path.
 
-The version `3` to `4` migration leaves Fact records and immutable payloads
-untouched. Ordered positions preserve duplicate IDs and orphan records. Empty
-array markers distinguish normalized collections from absent or null values;
-curation progress and unknown fields remain in the compact state header.
-Historical headers with noncanonical or repeated known keys stay inline so Go's
-field matching and merge order remain unchanged. Ordinary application writes use
-canonical keys and normalize their collections.
-The entire version `2` to `4` sequence rolls back if any intermediate migration
-fails. Reopening schema `4` does not reapply either backfill.
+Schema `4` stores ordered Fact metadata separately and uses ordered records for
+goals, Step metadata, findings, relations, candidates and disputes. Step identities
+are indexed for scheduling admission. Ordered positions preserve duplicate IDs
+and orphan records. Empty array markers distinguish normalized collections from
+absent or null values; curation progress and unknown fields remain in the compact
+state header. Known header keys must be unique and use their exact lowercase
+names. Reads reject old inline collection payloads, aliases and duplicate known
+keys. Application writes normalize canonical arrays into records atomically.
+Public State encoding and frozen input hashes retain their current format.
 
 Current default rows, installation ownership, UI projections, counters and stale
 read-view maintenance remain part of database integrity; old execution metadata
@@ -78,20 +66,20 @@ current model/protocol definitions rather than implementing a historical format.
 Likewise, `FactRecord.Legacy` is used for current human input without execution
 evidence; removing it would change current planning and evidence policy.
 
-## Upgrade operations
+## Database operations
 
 Keep a consistent SQLite backup and matching workspace, journals, evidence and
-receipts before upgrading. Preserve the installation identity row to retain
+receipts before changing binaries. Preserve the installation identity row to retain
 container ownership. Use SQLite backup tooling rather than copying only an active
 WAL database file. Stop the old Server and Dispatcher before changing binaries.
-Schema `1` databases must first be upgraded with a previous release that supports
-the namespace migration; this release does not perform that upgrade. A schema
-`2` or `3` database upgrades on first open. Older binaries cannot open schema `4`.
+Old databases require a previous release or migration tooling that supports their
+format before this binary can open them. This binary only initializes or opens
+schema `4`. Older binaries cannot open schema `4`.
 There is no automatic down-migration; restore the matching backup to return to
 an older binary.
 
-Regression coverage checks direct canonical initialization, the schema `2` and `3`
-upgrades, current reopen, schema `1` and other unsupported-input nonmutation, atomic failure,
+Regression coverage checks direct canonical initialization, current reopen,
+old-schema and other unsupported-input nonmutation, atomic metadata writes,
 canonical JSON hashes, current recovery and rejection before side effects.
 Obsolete execution recovery implementations and their success fixtures have been
 removed; rejection and current-format tests replace them.

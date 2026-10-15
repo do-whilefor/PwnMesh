@@ -67,28 +67,6 @@ func TestStepMetadataLookupPreservesScopeOrderAndUsesIndex(t *testing.T) {
 		if !indexed {
 			t.Fatal("step selection did not seek by project and Step ID")
 		}
-		for _, header := range []string{`{}`, `{"steps":null}`, `{"steps": [ ] }`} {
-			if _, err := q.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id='p'", header); err != nil {
-				return err
-			}
-			got, err := StateStepMetadataByID(q, "p", []string{"a"})
-			wantCount := 0
-			if strings.Contains(header, "[ ]") {
-				wantCount = 2
-			}
-			if err != nil || len(got) != wantCount {
-				t.Fatalf("header %s lost its array shape: %s, %v", header, got, err)
-			}
-		}
-		// Current reads still accept an older inline array until it is saved.
-		if _, err := q.Exec(`UPDATE pwnmesh_state SET data='{"steps":[{"id":"a","priority":7},{"id":"b"},{"id":"a","priority":8}]}' WHERE project_id='p'`); err != nil {
-			return err
-		}
-		got, err := StateStepMetadataByID(q, "p", []string{"a"})
-		want := []json.RawMessage{json.RawMessage(`{"id":"a","priority":7}`), json.RawMessage(`{"id":"a","priority":8}`)}
-		if err != nil || !reflect.DeepEqual(got, want) {
-			t.Fatalf("inline metadata lost precedence or duplicate order: %s, %v", got, err)
-		}
 		return nil
 	}); err != nil {
 		t.Fatal(err)
@@ -115,32 +93,25 @@ func TestStepMetadataLookupMatchesGoIDDecoding(t *testing.T) {
 		if err := json.Unmarshal([]byte(metadata), &original); err != nil {
 			return err
 		}
-		for _, inline := range []string{"", metadata, strings.Replace(metadata, `"steps"`, `"Steps"`, 1)} {
-			if inline != "" {
-				if _, err := q.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id='p'", inline); err != nil {
+		for _, id := range []string{"upper", "mixed", "first", "last", "before", "after", "retained", ""} {
+			var want []json.RawMessage
+			for _, raw := range original.Steps {
+				var step struct {
+					ID string `json:"id"`
+				}
+				if err := json.Unmarshal(raw, &step); err != nil {
 					return err
 				}
+				if step.ID == id {
+					want = append(want, raw)
+				}
 			}
-			for _, id := range []string{"upper", "mixed", "first", "last", "before", "after", "retained", ""} {
-				var want []json.RawMessage
-				for _, raw := range original.Steps {
-					var step struct {
-						ID string `json:"id"`
-					}
-					if err := json.Unmarshal(raw, &step); err != nil {
-						return err
-					}
-					if step.ID == id {
-						want = append(want, raw)
-					}
-				}
-				got, err := StateStepMetadataByID(q, "p", []string{id})
-				if len(got) == 0 && len(want) == 0 {
-					got = nil
-				}
-				if err != nil || !reflect.DeepEqual(got, want) {
-					t.Fatalf("inline=%v id=%q: got %s, want %s: %v", inline, id, got, want, err)
-				}
+			got, err := StateStepMetadataByID(q, "p", []string{id})
+			if len(got) == 0 && len(want) == 0 {
+				got = nil
+			}
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("id=%q: got %s, want %s: %v", id, got, want, err)
 			}
 		}
 		return nil

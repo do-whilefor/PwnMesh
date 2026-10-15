@@ -57,7 +57,7 @@ For a focused change, run its package and test names first. For example:
 
 ```sh
 go test ./internal/board -run 'TestStore' -count=1
-go test ./internal/board/internal/sqlstore -run 'Test(VersionTwo|VersionThree|StateMetadata|StepMetadata|StepWriteOwners)' -count=1
+go test ./internal/board/internal/sqlstore -run 'Test(Store|Current|StateMetadata|StepMetadata|StepWriteOwners)' -count=1
 go test ./internal/board -run 'Test(NormalizedState|StepAdmission|Schedule)' -count=1
 go test ./internal/server -run 'Test(DecisionReceiptRead|InputBatch|InputDownload)' -count=1
 go test ./internal/worker -run '^TestAcceptance' -count=1
@@ -139,8 +139,8 @@ explain constraints or failure modes; omit narration of the code itself.
 Keep regression tests beside the owning Go package or in the existing integration
 package. Preserve transaction, wire/hash and recovery boundaries described in
 [architecture](architecture.md) and [supported formats](formats.md). Before a
-schema change, test empty initialization, each supported incremental upgrade,
-a current versioned reopen, unsupported input rejection and rollback. Preserve
+schema change, test empty initialization, a current versioned reopen, unsupported
+input rejection without mutation and atomic write rollback. Preserve
 canonical object names, public State/frozen input bytes, foreign keys, triggers
 and query behavior for current databases; retired schema
 versions must be rejected without mutation. Before a protocol move, retain exact wire fixtures.

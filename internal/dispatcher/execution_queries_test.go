@@ -268,12 +268,7 @@ func TestLiveGraphReadPagesBeforeDispatcherResponseLimit(t *testing.T) {
 		if err = tx.Save(g); err != nil {
 			return err
 		}
-		data, err := json.Marshal(map[string]any{"facts": []board.FactRecord{{ID: "large", Description: "Large retained evidence", Status: "valid", Evidence: []board.EvidenceRef{evidence}}}})
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,1,1) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=1,decision_revision=1", graph.Project.ID, string(data))
-		return err
+		return seedFixtureFacts(tx, graph.Project.ID, 1, board.FactRecord{ID: "large", Description: "Large retained evidence", Status: "valid", Evidence: []board.EvidenceRef{evidence}})
 	})
 	if err != nil {
 		t.Fatal(err)

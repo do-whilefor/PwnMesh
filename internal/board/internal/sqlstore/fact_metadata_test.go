@@ -2,9 +2,7 @@ package sqlstore
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -38,7 +36,7 @@ func TestFactMetadataWritesOnlyChangedRecordsAndCascades(t *testing.T) {
 		if err := UpdateStateMetadata(q, "p", appended); err != nil {
 			return err
 		}
-		if _, err := AdvanceStateRevision(q, "p", "unused", 0); err != nil {
+		if _, err := AdvanceStateRevision(q, "p", `{}`, 0); err != nil {
 			return err
 		}
 		raw, revision, decision, err := StateMetadata(q, "p")
@@ -132,92 +130,6 @@ func TestFactMetadataFailureRemainsAtomicWhenCallerCommits(t *testing.T) {
 			}); err != nil {
 				t.Fatal(err)
 			}
-		})
-	}
-}
-
-func createVersionTwoFixture(t *testing.T, path, extra string) {
-	t.Helper()
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close()
-	baseline := schema + stateSchema + executionSchema + projectMetadataSchema + restartSchema + terminationSchema + orchestrationSchema + inputFileSchema + assetSchema + deploymentSchema
-	if _, err := db.Exec(migrationLedgerSchema + baseline + `INSERT INTO pwnmesh_schema_migrations VALUES(1,'unversioned-baseline','original'),(2,'pwnmesh-namespace','original');` + currentStoreData + extra); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestVersionTwoUpgradePreservesMetadataAndHistory(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "version-two.db")
-	createVersionTwoFixture(t, path, `UPDATE pwnmesh_state SET data=' { "unknown":9007199254740993,"steps":[{"id":"step","status":"abandoned"}],"facts":[{"id":"f2","description":"first"},{"id":"f2","description":"duplicate"},{"id":"orphan","description":"retained"}] } ';`)
-	store, err := Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.View(context.Background(), func(q Queries) error {
-		var count int
-		if err := q.QueryRow("SELECT COUNT(*) FROM pwnmesh_schema_migrations WHERE version<=2 AND applied_at='original'").Scan(&count); err != nil {
-			return err
-		}
-		if count != 2 {
-			t.Fatalf("upgrade rewrote baseline history: %d", count)
-		}
-		if err := q.QueryRow("SELECT COUNT(*) FROM pwnmesh_schema_migrations WHERE version=3 AND name='incremental-state-storage'").Scan(&count); err != nil || count != 1 {
-			t.Fatalf("upgrade missing ledger: %d %v", count, err)
-		}
-		raw, revision, decision, err := StateMetadata(q, "project")
-		if err != nil {
-			return err
-		}
-		var data struct {
-			Facts []struct{ ID, Description string }
-		}
-		if err := json.Unmarshal(raw, &data); err != nil {
-			return err
-		}
-		if len(data.Facts) != 3 || data.Facts[0].Description != "first" || data.Facts[1].Description != "duplicate" || data.Facts[2].ID != "orphan" || !strings.Contains(string(raw), "9007199254740993") || revision != 9 || decision != 7 {
-			t.Fatalf("upgrade changed observations, unknown integer or revisions: %s, %d/%d", raw, revision, decision)
-		}
-		var job, result []byte
-		if err := q.QueryRow("SELECT job,result FROM pwnmesh_executions WHERE rowid=70").Scan(&job, &result); err != nil {
-			return err
-		}
-		if string(job) != ` {"job":true} ` || !reflect.DeepEqual(result, []byte{0, 'x', 255}) {
-			t.Fatalf("upgrade changed execution rowid or bytes: %q %v", job, result)
-		}
-		return nil
-	}); err != nil {
-		store.Close()
-		t.Fatal(err)
-	}
-	before := currentStoreRows(t, store.db)
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err = Open(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if after := currentStoreRows(t, store.db); !reflect.DeepEqual(after, before) {
-		t.Fatal("current reopen reapplied the upgrade or rewrote retained rows")
-	}
-}
-
-func TestVersionTwoUpgradeRejectsDamageAndRollsBack(t *testing.T) {
-	for _, test := range []struct{ name, extra, message string }{
-		{"missing_table", "DROP TABLE pwnmesh_state;", "namespace"},
-		{"unexpected_target", "CREATE TABLE pwnmesh_fact_metadata(id INTEGER);", "namespace"},
-		{"invalid_facts", `UPDATE pwnmesh_state SET data='{"facts":{"invalid":true}}';`, "migrate Fact metadata"},
-		{"later_record_failure", `UPDATE pwnmesh_state SET data='{"facts":[{"id":"retained"}],"steps":{"invalid":true}}';`, "migrate state records"},
-		{"backfill_failure", `UPDATE pwnmesh_state SET data='{"facts":[{"id":"f1"}]}'; CREATE TRIGGER reject_fact_migration BEFORE UPDATE OF data ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'migration rejected'); END;`, "migration rejected"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "rejected.db")
-			createVersionTwoFixture(t, path, test.extra)
-			assertStoreRejectedUnchanged(t, path, test.message)
 		})
 	}
 }

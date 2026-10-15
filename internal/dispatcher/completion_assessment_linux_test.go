@@ -88,8 +88,11 @@ func TestCompletionAssessmentProductionBridgeCompletesOrKeepsMissingCoverage(t *
 				if err = tx.Save(g); err != nil {
 					return err
 				}
-				data, _ := json.Marshal(map[string]any{"facts": facts, "curation": board.CurationProgress{ThroughRevision: 2}})
-				_, err = tx.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,2,2) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", graph.Project.ID, string(data))
+				if err = seedFixtureFacts(tx, graph.Project.ID, 2, facts...); err != nil {
+					return err
+				}
+				data, _ := json.Marshal(board.CurationProgress{ThroughRevision: 2})
+				_, err = tx.Exec("UPDATE pwnmesh_state SET data=json_set(data,'$.curation',json(?)) WHERE project_id=?", string(data), graph.Project.ID)
 				return err
 			}); err != nil {
 				t.Fatal(err)

@@ -43,15 +43,8 @@ func scheduleInvalidationObjects() []struct{ kind, name, table string } {
 }
 
 func scheduleInvalidationSchema() string {
-	return scheduleInvalidationSchemaVersion(len(storeSchemaHistory), "")
-}
-
-func scheduleInvalidationSchemaVersion(version int, onlyTable string) string {
 	var ddl strings.Builder
 	for _, object := range scheduleInvalidationObjects() {
-		if version < 4 && object.table == "pwnmesh_state_records" || onlyTable != "" && object.table != onlyTable {
-			continue
-		}
 		op := object.name[strings.LastIndexByte(object.name, '_')+1:]
 		column := "project_id"
 		if object.table == "projects" {
