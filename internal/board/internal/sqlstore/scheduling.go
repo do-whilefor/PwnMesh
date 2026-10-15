@@ -23,7 +23,7 @@ CREATE TABLE pwnmesh_schedule_steps(
 // Project deletion also cascades the cache; UPDATE covers its runtime leases.
 var scheduleSources = []string{
 	"projects", "facts", "intents", "intent_sources", "hints",
-	"pwnmesh_state", "pwnmesh_fact_metadata", "pwnmesh_state_events",
+	"pwnmesh_state", "pwnmesh_fact_metadata", "pwnmesh_state_records", "pwnmesh_state_events",
 	"pwnmesh_project_metadata", "pwnmesh_project_rounds", "pwnmesh_project_termination",
 	"pwnmesh_project_orchestration", "pwnmesh_executions", "pwnmesh_revoked_runs",
 	"pwnmesh_assets", "pwnmesh_asset_anchors",
@@ -43,8 +43,15 @@ func scheduleInvalidationObjects() []struct{ kind, name, table string } {
 }
 
 func scheduleInvalidationSchema() string {
+	return scheduleInvalidationSchemaVersion(len(storeSchemaHistory), "")
+}
+
+func scheduleInvalidationSchemaVersion(version int, onlyTable string) string {
 	var ddl strings.Builder
 	for _, object := range scheduleInvalidationObjects() {
+		if version < 4 && object.table == "pwnmesh_state_records" || onlyTable != "" && object.table != onlyTable {
+			continue
+		}
 		op := object.name[strings.LastIndexByte(object.name, '_')+1:]
 		column := "project_id"
 		if object.table == "projects" {

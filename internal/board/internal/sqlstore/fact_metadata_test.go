@@ -211,6 +211,7 @@ func TestVersionTwoUpgradeRejectsDamageAndRollsBack(t *testing.T) {
 		{"missing_table", "DROP TABLE pwnmesh_state;", "namespace"},
 		{"unexpected_target", "CREATE TABLE pwnmesh_fact_metadata(id INTEGER);", "namespace"},
 		{"invalid_facts", `UPDATE pwnmesh_state SET data='{"facts":{"invalid":true}}';`, "migrate Fact metadata"},
+		{"later_record_failure", `UPDATE pwnmesh_state SET data='{"facts":[{"id":"retained"}],"steps":{"invalid":true}}';`, "migrate state records"},
 		{"backfill_failure", `UPDATE pwnmesh_state SET data='{"facts":[{"id":"f1"}]}'; CREATE TRIGGER reject_fact_migration BEFORE UPDATE OF data ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'migration rejected'); END;`, "migration rejected"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

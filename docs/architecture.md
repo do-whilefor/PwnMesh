@@ -150,6 +150,10 @@ Input storage separates metadata from binary file contents and preserves batch
 receipt text. Board owns filenames, content-derived identities, quotas, workspace
 paths and replay validation. An upload's file, hint, revision and event share a
 local savepoint, so a caller can handle failure without keeping a partial upload.
+Batch uploads spool all network bytes before opening a database transaction.
+Staging files are unlinked immediately and retained by at most 32 descriptors;
+normal completion, rejected requests and process exit all reclaim those files.
+Persistence still buffers one file, bounded at 256 MiB, for the SQLite insert.
 Downloads copy 64 KiB result rows into a private temporary file under one read
 snapshot, verify size and digest, then release the database before serving the
 client. Linux staging files are unlinked immediately and remain accessible only
@@ -169,10 +173,12 @@ version and project binding. Observation writes update Result alone, retaining
 execution identity, status and read-view cleanup semantics.
 
 Sqlstore owns state metadata, event and action receipt rows. Fact metadata is
-stored as ordered rows linked to the state record; unchanged observations are
-not rewritten when another Fact changes. Goals, Step metadata, findings,
-relations, candidates, disputes and curation progress remain in the JSON
-remainder. Full canonical State reads still assemble these values. Board supplies the
+stored as ordered rows linked to the state record. Goals, Step metadata, findings,
+relations, candidates and disputes use ordered records keyed by project, kind
+and position. Writes update only changed records; duplicates and orphan metadata
+keep their original order. The small JSON remainder retains curation progress,
+unknown fields and collection-shape markers. Full canonical State reads still
+assemble these values. Board supplies the
 encoded metadata, initial state, revision changes and canonical receipt bytes,
 then combines them with graph mutations and execution settlement. Event-only
 increments retain existing metadata bytes. Event reads stream raw bytes for Board
@@ -252,7 +258,9 @@ graph. Source-table triggers invalidate the projection transactionally, includin
 lease/heartbeat changes, execution outcomes, metadata and asset support. A cold
 or invalidated projection still requires full State assembly to preserve decision
 hashes and curation rules. Admission checks retain cross-page output reservations;
-only Step metadata is needed for those checks. Cache publication and lease expiry
+indexed Step metadata reads select the target and live write owners, including
+orphaned Steps with pending runs. A project-scoped partial execution index keeps
+historical and other-project runs out of owner scans. Cache publication and lease expiry
 remain in the scheduling write transaction; ordinary read-only Board snapshots
 can compute a cold page without publishing it.
 
@@ -261,7 +269,7 @@ revisions and receipts in one `BEGIN IMMEDIATE` transaction. `Store.View` uses
 query-only WAL readers for consistent snapshots without reserving the writer.
 Keep these operations together even when their source files are split. Health
 and settings GET requests use observational reads and do not expire leases.
-Project lists/details/exports, execution lookups, curation receipts and execution
+Project lists/details/exports, execution lookups, decision and curation receipts and execution
 updates/traces also use observational reads. Lease-sensitive reads check expiry
 without clearing authority records. Project lists compute effective lease counts
 and hide expired control leases without changing their stored rows. Scheduling and settings mutations retain
@@ -296,9 +304,10 @@ handlers or storage dependencies from returning to execution clients.
 
 The schema and migration sequence live in `sqlstore/schema.go` and
 `sqlstore/migrations.go`; Board does not own connection pools or migration state.
-Schema version `2` uses `pwnmesh_*` names for branded SQL objects. Empty databases
-create the current schema directly; version `1` and nonempty unversioned databases
-are rejected without modification. Runtime queries use only the current names.
+Schema version `4` uses `pwnmesh_*` names for branded SQL objects. Empty databases
+create the current schema directly; complete version `2` and `3` stores upgrade
+atomically through the migration sequence. Version `1` and nonempty unversioned
+databases are rejected without modification. Runtime queries use only the current names.
 Current database validation preserves stored records and execution identities.
 Current-format validation stays beside storage and execution boundaries.
 Unsupported inputs fail before they can trigger fresh work or implicit upgrades.

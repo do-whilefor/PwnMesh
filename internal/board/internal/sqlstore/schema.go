@@ -34,6 +34,19 @@ const factMetadataSchema = `CREATE TABLE pwnmesh_fact_metadata(
  position INTEGER NOT NULL CHECK(position>=0),data TEXT NOT NULL,
  PRIMARY KEY(project_id,position));`
 
+// Positions preserve duplicate identities and orphaned historical records.
+// Only Step identities need a secondary index for targeted admission reads.
+const stateRecordsSchema = `CREATE TABLE pwnmesh_state_records(
+ project_id TEXT NOT NULL REFERENCES pwnmesh_state(project_id) ON DELETE CASCADE,
+ kind TEXT NOT NULL CHECK(kind IN ('goals','steps','findings','fact_relations','candidates','disputes')),
+ position INTEGER NOT NULL CHECK(position>=0),data TEXT NOT NULL,record_id TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(project_id,kind,position));
+CREATE INDEX pwnmesh_state_steps_id ON pwnmesh_state_records(project_id,record_id,position) WHERE kind='steps';`
+
+// Admission reads live output reservations across namespaces, independent of
+// the project's retained execution history and immutable Job/Result bodies.
+const executionWriteOwnerSchema = `CREATE INDEX pwnmesh_execution_write_owners ON pwnmesh_executions(project_id,intent,lease) WHERE kind='explore' AND ` + PendingExecutionSQL + `;`
+
 const executionSchema = `CREATE TABLE IF NOT EXISTS pwnmesh_executions(
  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  id TEXT NOT NULL,namespace TEXT NOT NULL,backend TEXT NOT NULL,kind TEXT NOT NULL,intent TEXT NOT NULL,

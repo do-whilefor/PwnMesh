@@ -59,11 +59,11 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 }
 
 func (t *Tx) StepAvailable(project, id string) error {
-	d, _, _, err := t.stateData(project)
+	steps, err := t.stepMetadataByID(project, id)
 	if err != nil {
 		return err
 	}
-	for _, step := range d.Steps {
+	for _, step := range steps {
 		if step.ID == id && step.Status == "abandoned" {
 			return Err(409, "Step was abandoned")
 		}

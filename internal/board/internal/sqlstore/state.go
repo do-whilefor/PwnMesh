@@ -12,7 +12,18 @@ func StateMetadata(q Queries, project string) (raw []byte, revision, decision in
 		return
 	}
 	var fields map[string]json.RawMessage
-	if json.Unmarshal(raw, &fields) != nil || fields == nil || fields["facts"] != nil {
+	if json.Unmarshal(raw, &fields) != nil || fields == nil {
+		return
+	}
+	changed, restoreErr := restoreStateRecords(q, project, fields)
+	if restoreErr != nil {
+		err = restoreErr
+		return
+	}
+	if fields["facts"] != nil {
+		if changed {
+			raw, err = json.Marshal(fields)
+		}
 		return
 	}
 	var facts []json.RawMessage
@@ -29,11 +40,14 @@ func StateMetadata(q Queries, project string) (raw []byte, revision, decision in
 		}
 		facts = append(facts, fact)
 	}
-	if err = rows.Err(); err != nil || len(facts) == 0 {
+	if err = rows.Err(); err != nil {
 		return
 	}
-	fields["facts"], err = json.Marshal(facts)
-	if err == nil {
+	if len(facts) != 0 {
+		fields["facts"], err = json.Marshal(facts)
+		changed = true
+	}
+	if err == nil && changed {
 		raw, err = json.Marshal(fields)
 	}
 	return
@@ -44,16 +58,27 @@ func SaveStateMetadata(q Queries, project, raw string, revision, decision int64)
 	if err != nil {
 		return err
 	}
+	remainder, records, err := splitStateRecords(remainder)
+	if err != nil {
+		return err
+	}
 	return writeStateMetadata(q, func() error {
 		if _, err := q.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", project, remainder, revision, decision); err != nil {
 			return err
 		}
-		return saveStateFacts(q, project, facts)
+		if err := saveStateFacts(q, project, facts); err != nil {
+			return err
+		}
+		return saveStateRecords(q, project, records)
 	})
 }
 
 func UpdateStateMetadata(q Queries, project, raw string) error {
 	remainder, facts, err := splitStateFacts(raw)
+	if err != nil {
+		return err
+	}
+	remainder, records, err := splitStateRecords(remainder)
 	if err != nil {
 		return err
 	}
@@ -66,7 +91,10 @@ func UpdateStateMetadata(q Queries, project, raw string) error {
 		if err != nil || count == 0 {
 			return err
 		}
-		return saveStateFacts(q, project, facts)
+		if err := saveStateFacts(q, project, facts); err != nil {
+			return err
+		}
+		return saveStateRecords(q, project, records)
 	})
 }
 
@@ -91,7 +119,7 @@ func writeStateMetadata(q Queries, write func() error) (err error) {
 // Only the facts array moves; arbitrary legacy bytes remain readable as before.
 func splitStateFacts(raw string) (string, []json.RawMessage, error) {
 	var fields map[string]json.RawMessage
-	if json.Unmarshal([]byte(raw), &fields) != nil || fields == nil || fields["facts"] == nil || bytes.Equal(bytes.TrimSpace(fields["facts"]), []byte("null")) {
+	if json.Unmarshal([]byte(raw), &fields) != nil || fields == nil || keepStateHeaderInline(raw) || fields["facts"] == nil || bytes.Equal(bytes.TrimSpace(fields["facts"]), []byte("null")) {
 		return raw, nil, nil
 	}
 	var facts []json.RawMessage

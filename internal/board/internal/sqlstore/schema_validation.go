@@ -13,7 +13,7 @@ var namespaceTables = []string{
 	"project_metadata", "ui_execution_revisions", "ui_execution_changes",
 	"project_rounds", "round_history", "round_entries", "project_termination",
 	"project_orchestration", "input_files", "input_batches", "assets", "asset_anchors",
-	"fact_metadata", "schedule_cache", "schedule_steps",
+	"fact_metadata", "schedule_cache", "schedule_steps", "state_records",
 }
 
 var namespaceObjects = []struct{ kind, name, table string }{
@@ -40,6 +40,9 @@ func validatePwnMeshNamespaceVersion(tx *sql.Tx, version int) error {
 	type object struct{ kind, table string }
 	expected := map[string]object{}
 	for _, suffix := range namespaceTables {
+		if version < 4 && suffix == "state_records" {
+			continue
+		}
 		if version < 3 && (suffix == "fact_metadata" || suffix == "schedule_cache" || suffix == "schedule_steps") {
 			continue
 		}
@@ -51,8 +54,15 @@ func validatePwnMeshNamespaceVersion(tx *sql.Tx, version int) error {
 	}
 	if version >= 3 {
 		for _, spec := range scheduleInvalidationObjects() {
+			if version < 4 && spec.table == "pwnmesh_state_records" {
+				continue
+			}
 			expected["pwnmesh_"+spec.name] = object{kind: spec.kind, table: spec.table}
 		}
+	}
+	if version >= 4 {
+		expected["pwnmesh_state_steps_id"] = object{kind: "index", table: "pwnmesh_state_records"}
+		expected["pwnmesh_execution_write_owners"] = object{kind: "index", table: "pwnmesh_executions"}
 	}
 	rows, err := tx.Query("SELECT type,name,tbl_name FROM sqlite_master WHERE name NOT GLOB 'sqlite_*'")
 	if err != nil {

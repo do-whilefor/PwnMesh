@@ -24,10 +24,10 @@ func TestStoreMigrationBaselineAndReopenMaintenance(t *testing.T) {
 	if err := store.Do(context.Background(), func(tx *Tx) error {
 		var version int
 		var name string
-		if err := tx.QueryRow("SELECT version,name,applied_at FROM pwnmesh_schema_migrations WHERE version=3").Scan(&version, &name, &appliedAt); err != nil {
+		if err := tx.QueryRow("SELECT version,name,applied_at FROM pwnmesh_schema_migrations WHERE version=4").Scan(&version, &name, &appliedAt); err != nil {
 			return err
 		}
-		if version != 3 || name != "incremental-state-storage" || appliedAt == "" {
+		if version != 4 || name != "normalized-state-records" || appliedAt == "" {
 			t.Fatalf("unexpected baseline: %d %q %q", version, name, appliedAt)
 		}
 		// Retained/imported identities must still repair counters on later opens.
@@ -58,7 +58,7 @@ DELETE FROM pwnmesh_ui_execution_changes; DELETE FROM pwnmesh_ui_execution_revis
 		if err := tx.QueryRow("SELECT COUNT(*),MAX(applied_at) FROM pwnmesh_schema_migrations").Scan(&count, &after); err != nil {
 			return err
 		}
-		if count != 3 || after != appliedAt {
+		if count != 4 || after != appliedAt {
 			t.Fatalf("reopen rewrote migration history: count=%d before=%q after=%q", count, appliedAt, after)
 		}
 		if id, err := tx.Next("", "project"); err != nil || id != "proj_042" {

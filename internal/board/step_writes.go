@@ -1,6 +1,7 @@
 package board
 
 import (
+	"encoding/json"
 	"path"
 	"slices"
 	"strings"
@@ -71,35 +72,60 @@ func stepWriteConflict(step Step, others []Step) string {
 // can clear an Intent lease before its Worker returns, so pending executions
 // retain their reservation through that handoff. Existing terminal statuses
 // release it; they are not an independent proof of operating-system cleanup.
-func (t *Tx) activeStepWriteOwners(project string, metadata []stepMetadata) ([]Step, error) {
-	byID := make(map[string]stepMetadata, len(metadata))
-	for _, step := range metadata {
-		byID[step.ID] = step
-	}
+func (t *Tx) activeStepWriteOwners(project string) ([]Step, error) {
 	var owners []Step
+	var ids []string
 	err := sqlstore.VisitStepWriteOwners(t, project, func(id, worker string) error {
-		step := byID[id]
 		// An abandoned or already concluded Step can still have a pending Run.
 		// Do not project its business status into the reservation's lifetime.
-		owners = append(owners, Step{ID: id, Worker: Ptr(worker), Status: "running", WritePaths: step.WritePaths, Repair: step.Repair})
+		owners = append(owners, Step{ID: id, Worker: Ptr(worker), Status: "running"})
+		ids = append(ids, id)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	metadata, err := t.stepMetadataByID(project, ids...)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]stepMetadata, len(metadata))
+	for _, step := range metadata {
+		byID[step.ID] = step
+	}
+	for n := range owners {
+		step := byID[owners[n].ID]
+		owners[n].WritePaths, owners[n].Repair = step.WritePaths, step.Repair
+	}
 	return owners, nil
 }
 
+func (t *Tx) stepMetadataByID(project string, ids ...string) ([]stepMetadata, error) {
+	rows, err := sqlstore.StateStepMetadataByID(t, project, ids)
+	if err != nil {
+		return nil, err
+	}
+	metadata := make([]stepMetadata, 0, len(rows))
+	for _, raw := range rows {
+		var step stepMetadata
+		if err := json.Unmarshal(raw, &step); err != nil {
+			return nil, err
+		}
+		metadata = append(metadata, step)
+	}
+	return metadata, nil
+}
+
 func (t *Tx) stepWriteBlocked(project, id string) (bool, error) {
-	data, _, _, err := t.stateData(project)
+	steps, err := t.stepMetadataByID(project, id)
 	if err != nil {
 		return false, err
 	}
-	for _, metadata := range data.Steps {
+	for _, metadata := range steps {
 		if metadata.ID != id || len(metadata.WritePaths) == 0 && metadata.Repair == nil {
 			continue
 		}
-		owners, err := t.activeStepWriteOwners(project, data.Steps)
+		owners, err := t.activeStepWriteOwners(project)
 		return stepWriteConflict(Step{ID: id, WritePaths: metadata.WritePaths, Repair: metadata.Repair}, owners) != "", err
 	}
 	return false, nil

@@ -2,7 +2,9 @@ package board
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,7 +13,76 @@ import (
 	"time"
 
 	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board/internal/sqlstore"
 )
+
+type scopedStepMetadataQueries struct{ transactionQueries }
+
+func (q scopedStepMetadataQueries) QueryRow(query string, args ...any) *sql.Row {
+	if strings.Contains(query, "SELECT data,revision,decision_revision FROM pwnmesh_state") {
+		return q.transactionQueries.QueryRow("SELECT unbounded_step_metadata_read")
+	}
+	return q.transactionQueries.QueryRow(query, args...)
+}
+
+func (q scopedStepMetadataQueries) Query(query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "FROM pwnmesh_state_records") && !strings.Contains(query, "record_id IN") {
+		return nil, errors.New("step admission loaded unrelated metadata records")
+	}
+	return q.transactionQueries.Query(query, args...)
+}
+
+func TestStepAdmissionReadsOnlyTargetAndLiveOwnerMetadata(t *testing.T) {
+	s := executionQueryStore(t)
+	executionQueryTx(t, s, func(tx *Tx) {
+		if err := tx.Save(Graph{Project: Project{ID: "p", Title: "Scoped writes", Status: "active", CreatedAt: tx.Now}, Intents: []Intent{
+			{ID: "owner", Description: "writer", CreatedAt: tx.Now, Worker: Ptr("writer")},
+			{ID: "waiting", Description: "next writer", CreatedAt: tx.Now},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := sqlstore.SaveStateMetadata(tx, "p", `{"steps":[{"id":"owner","write_paths":["/workspace/shared"]},{"id":"waiting","write_paths":["/workspace/shared/file"]}]}`, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		tx.transactionQueries = scopedStepMetadataQueries{tx.transactionQueries}
+		checks, err := tx.ScheduleExecutionChecks("p", "test", []ScheduleStep{{ID: "waiting", Ready: true, WritePaths: []string{"/workspace/shared/file"}}})
+		if err != nil || !checks["explore:waiting"].Blocked {
+			t.Fatalf("paged admission lost live write owner: %+v, %v", checks, err)
+		}
+		check, err := tx.CheckExecutions(ExecutionCheckQuery{ProjectID: "p", Namespace: "test", Kind: "explore", Intent: "waiting", RetryKey: "explore:waiting"})
+		if err != nil || !check.Blocked {
+			t.Fatalf("targeted admission loaded full metadata or lost write owner: %+v, %v", check, err)
+		}
+		if err := tx.StepAvailable("p", "waiting"); err != nil {
+			t.Fatalf("availability loaded unrelated metadata: %v", err)
+		}
+	})
+}
+
+func TestStepAdmissionPreservesDuplicateMetadataPolicies(t *testing.T) {
+	s := executionQueryStore(t)
+	executionQueryTx(t, s, func(tx *Tx) {
+		if err := tx.Save(Graph{Project: Project{ID: "p", Title: "Legacy duplicates", Status: "active", CreatedAt: tx.Now}, Intents: []Intent{
+			{ID: "owner", Description: "writer", CreatedAt: tx.Now, Worker: Ptr("writer")},
+			{ID: "waiting", Description: "next writer", CreatedAt: tx.Now},
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := sqlstore.SaveStateMetadata(tx, "p", `{"steps":[{"id":"owner","write_paths":["/workspace/old"]},{"id":"waiting"},{"id":"waiting","write_paths":["/workspace/shared/file"]},{"id":"owner","write_paths":["/workspace/shared"]},{"id":"waiting","write_paths":["/workspace/unrelated"],"status":"abandoned"},{"id":"unrelated","priority":"not decoded"}]}`, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+		tx.transactionQueries = scopedStepMetadataQueries{tx.transactionQueries}
+		blocked, err := tx.stepWriteBlocked("p", "waiting")
+		if err != nil || !blocked {
+			t.Fatalf("first declared target or last owner metadata changed: blocked=%v, %v", blocked, err)
+		}
+		requireAPIStatus(t, tx.StepAvailable("p", "waiting"), 409)
+		checks, err := tx.ScheduleExecutionChecks("p", "test", []ScheduleStep{{ID: "waiting", Ready: true, WritePaths: []string{"/workspace/shared/file"}}})
+		if err != nil || !checks["explore:waiting"].Blocked {
+			t.Fatalf("paged admission lost last duplicate owner: %+v, %v", checks, err)
+		}
+	})
+}
 
 func writingStep(f *orchestrationFixture, label string, paths ...string) string {
 	f.t.Helper()

@@ -72,12 +72,12 @@ API/tooling; copying only the database file while WAL writes are active is not a
 consistent backup. Do not rename runtime directories or edit saved JSON to force
 a mismatch through validation.
 
-The current binary opens schema `3`, atomically upgrades complete schema `2`
+The current binary opens schema `4`, atomically upgrades complete schema `2` or `3`
 databases, and rejects schema `1` without changes.
 To retain a schema `1` database, stop its Server and Dispatcher and use a previous
 release that supports the namespace migration before starting this release.
 Preserve installation identity, stored JSON and workspace paths. A binary that
-does not support schema `3` cannot share the upgraded database; rollback requires a
+does not support schema `4` cannot share the upgraded database; rollback requires a
 compatible binary or the matching database backup.
 
 Database and file retention have separate boundaries:
@@ -88,7 +88,7 @@ Database and file retention have separate boundaries:
 | Archived rounds and execution inputs | Retained | Database rows cascade | Retain referenced snapshots; completion alone is not permission to prune them |
 | Scheduling projection | Invalidated and rebuilt | Database rows cascade | Disposable; contains no independent authority |
 | Worker workspaces, journals, evidence and receipts | Retained | Managed separately from SQLite | Back up matching files; database deletion does not remove these paths |
-| Download staging files | Request lifetime only | Independent of project rows after staging | Unlinked immediately on Linux; the descriptor closes on completion, failure, disconnect or process exit |
+| Batch-upload and download staging files | Request lifetime only | Independent of database row retention | Unlinked immediately on Linux; descriptors close on completion, failure, disconnect or process exit |
 
 Input, snapshot and archive payloads still reside in SQLite. Deleting rows makes
 database pages reusable; it does not necessarily shrink the database file.

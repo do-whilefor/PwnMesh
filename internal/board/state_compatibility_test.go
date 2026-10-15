@@ -1,6 +1,7 @@
 package board
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
@@ -9,6 +10,94 @@ import (
 
 	"pwnmesh/internal/board/internal/sqlstore"
 )
+
+func TestNormalizedStatePreservesCanonicalInput(t *testing.T) {
+	for _, metadata := range []string{
+		`{"goals":null,"steps":[],"facts":null,"findings":[],"fact_relations":null,"candidates":[],"disputes":null}`,
+		`{"steps":[{"id":"i1","priority":3}],"Steps":[{"id":"i1","priority":7}],"curation":{"generation":2},"curation":{"through_revision":1}}`,
+		`{"goals":[{"id":"g1","parent_id":"goal","condition":"Check observation","status":"open","sources":["f1"]}],
+		"steps":[{"id":"i1","goal_id":"g1","priority":3,"depends_on":[],"write_paths":["/workspace/result"]},{"id":"i1","goal_id":"g1","priority":7},{"id":"orphan","status":"abandoned"}],
+		"facts":[{"id":"f1","description":"Observed","status":"valid","legacy":true,"evidence":[]}],
+		"findings":[{"id":"finding1","claim":"Retained claim","scope":"fixture","status":"candidate","sources":["f1"],"evidence":[]}],
+		"fact_relations":[{"kind":"narrows","source":"f1","target":"f1","reason":"Retained relation"}],
+		"candidates":[{"id":"c1","claim":"Candidate claim","status":"candidate","sources":["f1"],"evidence":[],"generation":0,"revision":2}],
+		"disputes":[{"id":"d1","finding_id":"finding1","candidate_ids":["c1"],"status":"open","review_step_ids":["i1"]}],
+		"curation":{"generation":0,"through_revision":1,"request":{"sources":["f1"],"reason":"Reconcile","revision":2}}}`,
+	} {
+		path := filepath.Join(t.TempDir(), "canonical.db")
+		store, err := Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = store.Close() })
+		var before []byte
+		var version, snapshotID string
+		if err := store.Do(context.Background(), func(tx *Tx) error {
+			if err := tx.Save(Graph{
+				Project: Project{ID: "p", Title: "Canonical input", Status: "active", CreatedAt: "then"},
+				Facts:   []Fact{{ID: "origin", Description: "Input"}, {ID: "goal", Description: "Goal"}, {ID: "f1", Description: "Observed"}},
+				Intents: []Intent{{ID: "i1", From: []string{"f1"}, Description: "Inspect", Creator: "planner", CreatedAt: "then"}},
+			}); err != nil {
+				return err
+			}
+			// Read the retained JSON representation before splitting its arrays.
+			if _, err := tx.Exec("INSERT INTO pwnmesh_state VALUES('p',?,4,2)", metadata); err != nil {
+				return err
+			}
+			state, err := tx.State("p")
+			if err != nil {
+				return err
+			}
+			before, err = json.Marshal(state)
+			if err != nil {
+				return err
+			}
+			version = DecisionStateVersion(state)
+			ref, err := tx.FreezeInput(state)
+			if err != nil {
+				return err
+			}
+			snapshotID = ref.ID
+			return sqlstore.SaveStateMetadata(tx, "p", metadata, 4, 2)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		store, err = Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Do(context.Background(), func(tx *Tx) error {
+			state, err := tx.State("p")
+			if err != nil {
+				return err
+			}
+			after, err := json.Marshal(state)
+			if err != nil {
+				return err
+			}
+			if !bytes.Equal(before, after) || DecisionStateVersion(state) != version {
+				t.Fatalf("normalization changed canonical input: before=%s after=%s", before, after)
+			}
+			ref, err := tx.FreezeInput(state)
+			if err != nil {
+				return err
+			}
+			if ref.ID != snapshotID {
+				t.Fatalf("normalization changed frozen input identity: %s != %s", ref.ID, snapshotID)
+			}
+			frozen, err := tx.readInputSnapshotBytes("p", snapshotID)
+			if err == nil && !bytes.Equal(frozen, before) {
+				t.Fatal("normalization rewrote retained snapshot bytes")
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestDecisionRetryKeyPreservesCurrentBytes(t *testing.T) {
 	g := Graph{Project: Project{ID: "fixture", OrchestrationVersion: 1}}
@@ -22,7 +111,7 @@ func TestDecisionRetryKeyPreservesCurrentBytes(t *testing.T) {
 	}
 }
 
-func TestCompactStepMetadataLifecycleAndRollbackRead(t *testing.T) {
+func TestCompactStepMetadataLifecycleAndReopen(t *testing.T) {
 	f := newPlanFixture(t)
 	id := f.action("step", "add", stepInput("Current task", []string{"f002", "f001"}, "goal", 7)).ID
 	check := func(status string, priority int, reason string) {
@@ -33,8 +122,8 @@ func TestCompactStepMetadataLifecycleAndRollbackRead(t *testing.T) {
 			t.Fatalf("unexpected Step projection: %+v", step)
 		}
 		f.tx(func(tx *Tx) error {
-			var raw []byte
-			if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
+			raw, _, _, err := sqlstore.StateMetadata(tx, "proj_001")
+			if err != nil {
 				return err
 			}
 			var stored struct {
@@ -51,8 +140,8 @@ func TestCompactStepMetadataLifecycleAndRollbackRead(t *testing.T) {
 			if marker := string(stored.Steps[0]["status"]); marker != "" && marker != `"abandoned"` {
 				t.Fatalf("runtime status persisted: %s", marker)
 			}
-			// The old version decoded public Step values and projected these exact
-			// five fields onto Intent. New JSON must remain usable by that reader.
+			// Storage reconstruction preserves the metadata's public Step fields;
+			// runtime fields still come from the authoritative Intent.
 			var legacy struct {
 				Steps []Step `json:"steps"`
 			}
@@ -61,7 +150,7 @@ func TestCompactStepMetadataLifecycleAndRollbackRead(t *testing.T) {
 			}
 			old := legacy.Steps[0]
 			if old.ID != step.ID || old.GoalID != step.GoalID || old.Priority != step.Priority || old.Reason != step.Reason || (old.Status == "abandoned") != (status == "abandoned") {
-				t.Fatalf("rollback reader lost metadata: %+v", old)
+				t.Fatalf("reconstructed metadata lost Step fields: %+v", old)
 			}
 			return nil
 		})

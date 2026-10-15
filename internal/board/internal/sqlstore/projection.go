@@ -2,13 +2,6 @@ package sqlstore
 
 import "pwnmesh/internal/board/model"
 
-// Scheduling admission needs every Step's reservation metadata, including
-// orphaned Steps with pending runs, but never the other state arrays.
-func StateStepMetadata(q Queries, project string) (raw []byte, err error) {
-	err = q.QueryRow("SELECT json_extract(data,'$.steps') FROM pwnmesh_state WHERE project_id=?", project).Scan(&raw)
-	return
-}
-
 // Only runtime identity is needed for the current graph. Keep archived Job and
 // Result bodies out of this read, including when a retained body is malformed.
 // Registration order selects the latest attempt across namespaces/generations;
