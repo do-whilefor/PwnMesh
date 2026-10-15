@@ -1,6 +1,7 @@
 .git
 node_modules
 **/node_modules
+web/.browser
 **/test-results
 **/playwright-report
 refer

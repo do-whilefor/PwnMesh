@@ -33,6 +33,7 @@
 /AGENTS.md
 
 # Build outputs
+/web/.browser/
 node_modules/
 playwright-report/
 test-results/

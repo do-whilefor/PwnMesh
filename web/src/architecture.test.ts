@@ -1,17 +1,22 @@
-import { readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
 import ts from 'typescript';
 import { parse } from 'vue/compiler-sfc';
+import { discoverBrowserTests } from '../browser/run';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const normalize = (path: string) => path.replaceAll('\\', '/');
-function sources(directory = root): string[] {
+function files(directory: string): string[] {
   return readdirSync(directory, {withFileTypes:true}).flatMap(entry => {
     const path = resolve(directory, entry.name);
-    return entry.isDirectory() ? sources(path) : /\.(?:ts|vue)$/.test(entry.name) && !entry.name.endsWith('.test.ts') ? [path] : [];
+    return entry.isDirectory() ? files(path) : [path];
   });
+}
+function sources(): string[] {
+  return files(root).filter(path => /\.(?:ts|vue)$/.test(path) && !path.endsWith('.test.ts'));
 }
 function importPath(node: ts.Node): string | undefined {
   if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)) return node.moduleSpecifier.text;
@@ -26,6 +31,27 @@ function localImport(file: string, specifier: string): string | undefined {
   return path && normalize(relative(root, path));
 }
 const domIdentifiers = new Set(['window', 'document', 'localStorage', 'sessionStorage', 'navigator', 'Document', 'Window', 'HTMLElement', 'SVGElement', 'Element', 'Node']);
+
+test('frontend source keeps scripts in TypeScript and styles in Vue components', () => {
+  const web = resolve(root, '..');
+  const paths = ['src', 'browser', 'public'].flatMap(directory => files(resolve(web, directory)));
+  expect(paths.filter(path => /\.(?:[cm]?js|css)$/.test(path)).map(path => normalize(relative(web, path)))).toEqual([]);
+});
+
+test('browser suites follow TypeScript sources and ignore stale emitted scripts', () => {
+  const directory = mkdtempSync(resolve(tmpdir(), 'pwnmesh-browser-discovery-'));
+  try {
+    const source = resolve(directory, 'source'), output = resolve(directory, 'output');
+    mkdirSync(source); mkdirSync(output);
+    for (const name of ['models_test.ts', 'canvas_test.ts', 'visual_fixture.ts']) writeFileSync(resolve(source, name), '');
+    writeFileSync(resolve(output, 'retired_test.js'), 'throw new Error("Stale suite must not run");');
+    expect(discoverBrowserTests(source, output)).toEqual([resolve(output, 'canvas_test.js'), resolve(output, 'models_test.js')]);
+    expect(discoverBrowserTests(source, output, ['models'])).toEqual([resolve(output, 'models_test.js')]);
+    expect(discoverBrowserTests(source, output, ['missing'])).toEqual([]);
+  } finally {
+    rmSync(directory, {recursive:true, force:true});
+  }
+});
 
 test('HTTP and workspace models depend only on their own layer and lower-level contracts', () => {
   const violations: string[] = [];
@@ -58,6 +84,9 @@ test('production modules use typed imports and Vue templates instead of legacy g
     if (file.endsWith('.vue')) {
       const {descriptor, errors} = parse(contents, {filename:file});
       expect(errors, name).toEqual([]);
+      for (const block of [descriptor.script, descriptor.scriptSetup]) {
+        if (block) expect(block.lang, `${name}: script language`).toBe('ts');
+      }
       scripts = [descriptor.script?.content, descriptor.scriptSetup?.content].filter((value): value is string => value !== undefined);
       const inspectTemplate = (value: unknown): void => {
         if (Array.isArray(value)) { value.forEach(inspectTemplate); return; }

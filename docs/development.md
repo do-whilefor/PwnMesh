@@ -26,9 +26,12 @@ the Go race suite and vet, Python HTTP replay and command regressions.
 Select `go`, `web`, or `python` to run one check group. CI uses these same entries
 and separately builds/smoke-tests `serve`, `dispatch`, and `worker`.
 
-`web/src` contains Vue single-file components and TypeScript modules;
-`web/public` contains fixed-path assets. `web/dist` and `web/node_modules` are
-ignored generated directories. A clean checkout must build the frontend before
+`web/src` contains Vue single-file components and TypeScript modules, with global
+styles in the `App.vue` style blocks. `web/browser` contains TypeScript acceptance
+tests; `web/public` contains fixed-path assets. No standalone JavaScript or CSS
+source is tracked in these directories. `web/dist`, `web/.browser` and
+`web/node_modules` are ignored generated directories. Browsers still receive the
+compiled JavaScript and CSS bundles. A clean checkout must build the frontend before
 raw `go build` or `go test` commands can import the embedded UI. The Linux build,
 Go check and integration scripts perform this step automatically. Install the
 locked npm dependencies once before running them.
@@ -96,15 +99,18 @@ same Go package; no export-only fixture framework or duplicated fixtures is need
 Browser acceptance in `web/browser/` is independently opt-in and serves the
 production `web/dist` bundle. After building, install Chromium with
 `npm --prefix web exec -- playwright install chromium` and run all isolated
-fixture suites with `npm --prefix web run test:browser`. To select one suite:
+fixture suites with `npm --prefix web run test:browser`. This compiles the strict
+TypeScript browser tests into ignored `web/.browser` output and runs them with
+Node's test runner. To select a suite by its source filename:
 
 ```sh
-PLAYWRIGHT_MODULE="$PWD/web/node_modules/playwright" node --test web/browser/models_browser_test.cjs
+npm --prefix web run test:browser -- models_browser_test
 ```
 
 Without an explicit dedicated `PWNMESH_WEB_URL` and the relevant opt-in flags,
-live service/model tests stay skipped. Default `check.sh web` runs TypeScript
-checks, a production build and colocated `web/src/**/*.test.ts` regressions;
+live service/model tests stay skipped. `PLAYWRIGHT_MODULE` can override the
+installed Playwright module. Default `check.sh web` runs TypeScript checks for both
+application and browser tests, a production build and colocated `web/src/**/*.test.ts` regressions;
 it does not start a browser or contact a model.
 
 Use `container/README.md` for image/runtime ownership. Delete only containers and
