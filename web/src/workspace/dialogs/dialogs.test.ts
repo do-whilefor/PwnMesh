@@ -80,3 +80,41 @@ it('management uses current props and keeps historical rounds read-only', async 
   await wrapper.setProps({project: {...value, archived: true, filesKnown: false}});
   expect(wrapper.findAll('[data-action]')).toHaveLength(0); expect(wrapper.get('.project-info-meta').text()).toContain('未知'); wrapper.unmount();
 });
+
+it('lets a disconnected action dialog close after its pending submission settles', async () => {
+  let reject: (error: Error) => void = () => {};
+  const perform = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
+  const wrapper = mount(ActionDialog, {props: {perform}});
+  try {
+    wrapper.vm.open(project(), 'restart');
+    await wrapper.get('#action-form').trigger('submit');
+    await wrapper.setProps({disabled: true});
+    await wrapper.get('#action-form').trigger('submit');
+    expect(perform).toHaveBeenCalledOnce();
+    const busyCancel = new Event('cancel', {cancelable: true});
+    wrapper.get('dialog').element.dispatchEvent(busyCancel);
+    expect(busyCancel.defaultPrevented).toBe(true);
+    expect(wrapper.get<HTMLButtonElement>('[data-close]').element.disabled).toBe(true);
+    wrapper.vm.close(); expect(wrapper.get<HTMLDialogElement>('dialog').element.open).toBe(true);
+    reject(new APIError('Disconnected', 0)); await flushPromises();
+    expect(wrapper.get<HTMLButtonElement>('#confirm-action').element.disabled).toBe(true);
+    expect(wrapper.get<HTMLButtonElement>('[data-close]').element.disabled).toBe(false);
+    const cancel = new Event('cancel', {cancelable: true});
+    wrapper.get('dialog').element.dispatchEvent(cancel); expect(cancel.defaultPrevented).toBe(false);
+    await wrapper.get('[data-close]').trigger('click');
+    expect(wrapper.get<HTMLDialogElement>('dialog').element.open).toBe(false);
+  } finally { wrapper.unmount(); }
+});
+
+it('keeps management dismissal available while disconnected', async () => {
+  const wrapper = mount(ProjectManagement, {props: {project: project()}});
+  try {
+    await wrapper.vm.open(); await wrapper.setProps({disabled: true});
+    expect(wrapper.get<HTMLButtonElement>('[data-action]').element.disabled).toBe(true);
+    expect(wrapper.get<HTMLButtonElement>('[data-close]').element.disabled).toBe(false);
+    const cancel = new Event('cancel', {cancelable: true});
+    wrapper.get('dialog').element.dispatchEvent(cancel); expect(cancel.defaultPrevented).toBe(false);
+    await wrapper.get('[data-close]').trigger('click');
+    expect(wrapper.get<HTMLDialogElement>('dialog').element.open).toBe(false);
+  } finally { wrapper.unmount(); }
+});

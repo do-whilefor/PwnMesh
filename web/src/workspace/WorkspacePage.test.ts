@@ -3,8 +3,11 @@ import { expect, test, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { defineComponent, h } from 'vue';
 import WorkspacePage from './WorkspacePage.vue';
+import GraphCanvas from './graph/GraphCanvas.vue';
 import MaterialsView from './materials/MaterialsView.vue';
-import { snapshotView } from './project-resource';
+import ResultsView from './results/ResultsView.vue';
+import ActivityPanel from './activity/ActivityPanel.vue';
+import { projectView, snapshotView } from './project-resource';
 import type { ProjectView } from './model/types';
 import * as preview from './model/input-preview';
 
@@ -39,6 +42,103 @@ test('changing generation or project resets local workspace navigation', async (
     expect(wrapper.get('#view-tab-graph').attributes('aria-selected')).toBe('true'); expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('current');
   }
   wrapper.unmount();
+});
+
+test('round selection keeps the displayed round while loading and after rejection', async () => {
+  let reject: (error: Error) => void = () => {};
+  const loadRound = () => new Promise<unknown>((_resolve, fail) => { reject = fail; });
+  const wrapper = mount(WorkspacePage, {props: {project: project(), disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    await wrapper.get('#run-select').setValue('0');
+    expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('current');
+    expect(wrapper.get('h1').text()).toBe('Current');
+    reject(new Error('Archive unavailable')); await flushPromises();
+    expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('current');
+    expect(wrapper.get('h1').text()).toBe('Current');
+    expect(wrapper.emitted('toast')).toEqual([['Archive unavailable']]);
+  } finally { wrapper.unmount(); }
+});
+
+test('superseded archive loads cannot replace the latest accepted round', async () => {
+  const current = project('project', 2);
+  current.history.push({...current.history[0]!, generation: 1, name: 'Latest archive'});
+  const pending = new Map<number, () => void>();
+  const loadRound = (_project: ProjectView, generation: number) => new Promise<void>(resolve => pending.set(generation, resolve));
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    await wrapper.get('#run-select').setValue('0');
+    await wrapper.get('#run-select').setValue('1');
+    expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('current');
+    pending.get(1)?.(); await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('Latest archive');
+    pending.get(0)?.(); await flushPromises();
+    expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('1');
+    expect(wrapper.get('h1').text()).toBe('Latest archive');
+    await wrapper.get('#return-current').trigger('click');
+    expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('current');
+    expect(wrapper.get('h1').text()).toBe('Current');
+  } finally { wrapper.unmount(); }
+});
+
+test('round changes keep status buttons and the canvas filter in agreement', async () => {
+  const current = project(), wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => current.history[0]}, global: {stubs: {RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    for (const next of ['0', 'current']) {
+      await wrapper.get('[data-filter="done"]').trigger('click');
+      expect(wrapper.findComponent(GraphCanvas).vm.getStatusFilter()).toBe('done');
+      await wrapper.get('#run-select').setValue(next); await flushPromises();
+      expect(wrapper.findComponent(GraphCanvas).vm.getStatusFilter()).toBe('all');
+      expect(wrapper.get('[data-filter="done"]').attributes('aria-pressed')).toBe('false');
+    }
+  } finally { wrapper.unmount(); }
+});
+
+test('summary-only historical projects explain unavailable details in every tab', async () => {
+  const current = projectView({id: 'historical', title: 'Historical project', status: 'completed', orchestration_version: 0});
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    for (const tab of ['graph', 'materials', 'result']) {
+      await wrapper.get('#view-tab-' + tab).trigger('click');
+      expect(wrapper.get('#project-view').text()).toContain('此历史项目仅提供基本信息，详情暂不可查看。请新建项目继续。');
+      expect(wrapper.findComponent(GraphCanvas).exists()).toBe(false);
+      expect(wrapper.findComponent(MaterialsView).exists()).toBe(false);
+      expect(wrapper.findComponent(ResultsView).exists()).toBe(false);
+      expect(wrapper.find('[data-filter]').exists()).toBe(false);
+      expect(wrapper.find('.task-progress').exists()).toBe(false);
+    }
+  } finally { wrapper.unmount(); }
+});
+
+test('a summary-only refresh clears stale selection and closes its record reader', async () => {
+  const current = project(), close = vi.fn(), open = vi.fn();
+  const reader = defineComponent({setup(_, {expose}) { expose({close, open}); return () => h('div'); }});
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: reader, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    await wrapper.get('#run-select').setValue('0'); await flushPromises();
+    wrapper.findComponent(GraphCanvas).vm.$emit('select-node', {key: 'fact:record', type: 'fact', label: 'Saved detail', status: 'valid', raw: {}});
+    await flushPromises();
+    const activity = wrapper.findComponent(ActivityPanel);
+    const selected = activity.props('selection');
+    expect(selected).toMatchObject({title: 'Saved detail'});
+    activity.vm.$emit('read', selected); await flushPromises(); expect(open).toHaveBeenCalledWith(selected);
+    close.mockClear();
+    await wrapper.setProps({project: projectView({...current.raw, orchestration_version: 0})});
+    expect(activity.props('selection')).toBeNull();
+    expect(close).toHaveBeenCalledOnce();
+    expect(wrapper.find('#return-current').exists()).toBe(false);
+  } finally { wrapper.unmount(); }
+});
+
+test('removing a project prunes all its round layouts while retaining other cameras', async () => {
+  const graph = defineComponent({props: ['projectLayouts'], setup(_, {expose}) { expose({clearSelection() {}}); return () => h('div'); }});
+  const wrapper = mount(WorkspacePage, {props: {project: project('b'), projectIds: ['a', 'b'], disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graph, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    const layouts = wrapper.findComponent(graph).props('projectLayouts');
+    const retained = {projectId: 'b', generation: 0, positions: new Map(), camera: {scale: 1.5, tx: 120, ty: -40, width: 800, height: 600}};
+    layouts.set('a:0', {...retained, projectId: 'a'}); layouts.set('a:1', {...retained, projectId: 'a', generation: 1}); layouts.set('b:0', retained);
+    await wrapper.setProps({projectIds: ['b']});
+    expect([...layouts.keys()]).toEqual(['b:0']); expect(layouts.get('b:0')).toBe(retained);
+  } finally { wrapper.unmount(); }
 });
 
 test('ordinary refresh does not cancel an in-flight material preview, while identity changes do', async () => {

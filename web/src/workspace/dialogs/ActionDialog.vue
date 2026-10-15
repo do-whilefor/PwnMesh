@@ -22,7 +22,7 @@ function open(project: ProjectView, action: ProjectAction) {
   name.value = project.name; error.value = ''; invalid.value = false;
   if (!dialog.value?.open) dialog.value?.showModal(); return true;
 }
-function close() {if (!busy.value && !props.disabled) dialog.value?.close();}
+function close() {if (!busy.value) dialog.value?.close();}
 function onClose() {operation.value = null; emit('closed');}
 async function submit() {
   if (!operation.value || busy.value || props.disabled || invalid.value) return;
@@ -39,11 +39,11 @@ onBeforeUnmount(() => {disposed = true;});
 defineExpose({open, close});
 </script>
 <template>
-  <dialog ref="dialog" id="action-dialog" aria-labelledby="action-title" aria-describedby="action-description" @cancel="(busy || disabled) && $event.preventDefault()" @close="onClose">
+  <dialog ref="dialog" id="action-dialog" aria-labelledby="action-title" aria-describedby="action-description" @cancel="busy && $event.preventDefault()" @close="onClose">
     <form id="action-form" @submit.prevent="submit">
-      <header class="dialog-header"><h2 id="action-title">{{ label }}</h2><button type="button" class="icon-button" data-close="action-dialog" aria-label="关闭项目操作" :disabled="busy || disabled" @click="close"><Icon name="x" /></button></header>
+      <header class="dialog-header"><h2 id="action-title">{{ label }}</h2><button type="button" class="icon-button" data-close="action-dialog" aria-label="关闭项目操作" :disabled="busy" @click="close"><Icon name="x" /></button></header>
       <p id="action-project">{{ name }}</p><p id="action-description">{{ operation ? descriptions[operation.action] : '' }}</p><p id="action-error" class="form-error" role="alert">{{ error }}</p>
-      <footer class="dialog-footer"><button type="button" class="button secondary" data-close="action-dialog" :disabled="busy || disabled" @click="close">取消</button><button type="submit" class="button" :class="operation?.action === 'restart' ? 'primary' : 'danger-button'" id="confirm-action" :disabled="busy || disabled || invalid">{{ busy ? '处理中…' : label }}</button></footer>
+      <footer class="dialog-footer"><button type="button" class="button secondary" data-close="action-dialog" :disabled="busy" @click="close">取消</button><button type="submit" class="button" :class="operation?.action === 'restart' ? 'primary' : 'danger-button'" id="confirm-action" :disabled="busy || disabled || invalid">{{ busy ? '处理中…' : label }}</button></footer>
     </form>
   </dialog>
 </template>

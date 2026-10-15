@@ -48,6 +48,27 @@ test('refresh loads materials, rounds and identity, preserving unknown scenario 
   expect(api.calls.map(call => call.path)).toEqual(expect.arrayContaining(['/projects/a/inputs', '/projects/a/rounds?limit=100&cursor=-1', '/projects/a/identity']));
 });
 
+test('unsupported projects publish summaries without requesting rejected detail endpoints', async () => {
+  const state = snapshot('legacy'); state.graph.project.orchestration_version = 0;
+  const api = new FixtureAPI({legacy: state, current: snapshot('current')});
+  api.handler = path => { if (path.startsWith('/projects/legacy/')) throw new APIError('Unsupported project protocol', 409); return api.response(path); };
+  const resource = new ProjectResource(api), selected = (await resource.refresh('legacy'))?.selected;
+  expect(selected).toMatchObject({id: 'legacy', readOnly: true, state: null, files: [], history: [], logs: [], filesKnown: false});
+  expect(resource.projects).toHaveLength(2); expect(api.calls.map(call => call.path)).toEqual(['/projects']); expect(api.executionCalls).toEqual([]);
+  expect((await resource.refresh('current'))?.selected?.state?.graph.project.id).toBe('current');
+});
+
+test('unsupported protocol discards previously accepted details and cached execution cursors', async () => {
+  const api = new FixtureAPI({a: snapshot(), b: snapshot('b')}), resource = new ProjectResource(api);
+  api.changes = async () => ({items: [{id: 'old', generation: 0}], deleted: [], through: 7});
+  await resource.refresh('a'); api.states.a!.graph.project.orchestration_version = 0;
+  await resource.refresh('b'); const legacy = resource.projects.find(project => project.id === 'a');
+  expect(legacy).toMatchObject({readOnly: true, state: null, target: '', goal: '', logs: [], files: [], history: []});
+  expect(legacy?.runs).toBeUndefined(); expect(legacy?.events).toBeUndefined();
+  api.states.a!.graph.project.orchestration_version = 1;
+  expect((await resource.refresh('a'))?.selected?.filesKnown).toBe(true); expect(api.executionCalls.at(-1)?.after).toBe(0);
+});
+
 test('late obsolete project responses cannot publish even if transport ignores cancellation', async () => {
   const api = new FixtureAPI({a: snapshot(), b: snapshot('b')}), gate = deferred<WorkspaceSnapshot>(), started = deferred<void>();
   api.handler = path => { if (path === '/projects/a/state') { started.resolve(); return gate.promise; } return api.response(path); };
@@ -168,13 +189,15 @@ test('archive hydration survives concurrent refresh, split UTF-8 and retained ma
 test('legacy archive distinguishes absent and empty manifests', async () => {
   for (const filesKnown of [false, true]) {
     const api = new FixtureAPI({a: snapshot('a', 1)}); api.rounds = [{generation: 0, archived_at: stamp}];
-    const stateBytes = Buffer.from(JSON.stringify(snapshot())), empty = Buffer.from('[]');
+    const archivedState = snapshot(); archivedState.graph.project.orchestration_version = 0;
+    const stateBytes = Buffer.from(JSON.stringify(archivedState)), empty = Buffer.from('[]');
     api.handler = path => {
       if (path.includes('/rounds/0/entries?')) return {items: [{cursor: 1, kind: 'state', bytes: stateBytes.length}, ...(filesKnown ? [{cursor: 2, kind: 'inputs', bytes: empty.length}] : [])]};
       if (path.includes('/rounds/0/entries/')) { const bytes = path.includes('/entries/1?') ? stateBytes : empty; return {encoding: 'base64', offset: 0, total_bytes: bytes.length, data: bytes.toString('base64')}; }
       return api.response(path);
     };
-    const resource = new ProjectResource(api); await resource.refresh('a'); expect((await resource.archive('a', 0)).filesKnown).toBe(filesKnown);
+    const resource = new ProjectResource(api); await resource.refresh('a');
+    expect(await resource.archive('a', 0)).toMatchObject({filesKnown, archivedAt: stamp, state: archivedState});
   }
 });
 

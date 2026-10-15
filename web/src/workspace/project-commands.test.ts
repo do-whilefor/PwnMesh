@@ -7,7 +7,7 @@ import type { CreateProjectValues, ProjectAction } from './model/types';
 
 class CommandAPI extends Client {
   calls: {path: string; options: RequestOptions}[] = [];
-  handler = async (_path: string, _options: RequestOptions): Promise<unknown> => ({project: {id: 'created', generation: 0}});
+  handler = async (path: string, _options: RequestOptions): Promise<unknown> => path.endsWith('/identity') ? {id: 'created', generation: 0} : {project: {id: 'created', generation: 0}};
   upload = async (_base: string, _file: File): Promise<unknown> => null;
   batch = async (_base: string, _files: File[], _content: string, _key: string): Promise<unknown> => null;
   override async request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> { this.calls.push({path, options}); return await this.handler(path, options) as T; }
@@ -33,6 +33,48 @@ test('unknown creation outcomes cannot be retried blindly', async () => {
   api.handler = async () => { throw new APIError('lost connection', 0); };
   await expect(commands.create(values())).rejects.toMatchObject({uncertainCreate: true});
   await expect(commands.create(values())).rejects.toThrow('尚未确认'); expect(api.calls).toHaveLength(1); expect(commands.uncertainCreate).toBe(true);
+});
+
+test.each(['resume', 'restart', 'terminate', 'delete'] as const)('successful %s retires an incomplete creation without another upload or create', async action => {
+  const api = new CommandAPI(), commands = new ProjectCommands(new ProjectResource(api)); let uploads = 0;
+  api.upload = async () => { uploads++; throw new APIError('upload interrupted', 503); };
+  await expect(commands.create(values([new File(['data'], 'input.txt')]))).rejects.toMatchObject({pendingCreate: true});
+  await commands.change('other', action, 0); expect(commands.pendingCreate).not.toBeNull();
+  await commands.change('created', action, 0); expect(commands.pendingCreate).toBeNull();
+  expect(uploads).toBe(1); expect(api.calls.filter(call => call.path === '/projects')).toHaveLength(1);
+});
+
+test('failed lifecycle changes and pause preserve an incomplete creation', async () => {
+  const api = new CommandAPI(), commands = new ProjectCommands(new ProjectResource(api));
+  api.upload = async () => { throw new APIError('upload interrupted', 503); };
+  await expect(commands.create(values([new File(['data'], 'input.txt')]))).rejects.toMatchObject({pendingCreate: true});
+  const pending = commands.pendingCreate;
+  api.handler = async () => { throw new APIError('restart rejected', 409); };
+  await expect(commands.change('created', 'restart', 0)).rejects.toThrow('restart rejected'); expect(commands.pendingCreate).toBe(pending);
+  api.handler = async () => ({}); await commands.change('created', 'pause', 0); expect(commands.pendingCreate).toBe(pending);
+});
+
+test('resuming creation detects an external restart before uploading into the next round', async () => {
+  const api = new CommandAPI(), commands = new ProjectCommands(new ProjectResource(api)); let uploads = 0;
+  const draft = values([new File(['data'], 'input.txt')]);
+  api.upload = async () => { uploads++; if (uploads === 1) throw new APIError('upload interrupted', 503); };
+  await expect(commands.create(draft)).rejects.toMatchObject({pendingCreate: true});
+  api.handler = async path => path.endsWith('/identity') ? {id: 'created', generation: 1} : {};
+  await expect(commands.create(draft)).rejects.toMatchObject({pendingCreate: false, status: 409});
+  expect(commands.pendingCreate).toBeNull(); expect(uploads).toBe(1); expect(api.calls.filter(call => call.path === '/projects')).toHaveLength(1);
+});
+
+test.each([404, 409])('definitive project conflict %s retires creation during upload or activation', async status => {
+  for (const stage of ['upload', 'activation']) {
+    const api = new CommandAPI(), commands = new ProjectCommands(new ProjectResource(api));
+    api.upload = async () => { if (stage === 'upload') throw new APIError('Project is no longer writable', status); };
+    api.handler = async path => {
+      if (path.endsWith('/status')) throw new APIError('Project is no longer writable', status);
+      return {project: {id: 'created', generation: 0}};
+    };
+    await expect(commands.create(values([new File(['data'], 'input.txt')]))).rejects.toMatchObject({pendingCreate: false, status});
+    expect(commands.pendingCreate).toBeNull(); expect(api.calls.filter(call => call.path === '/projects')).toHaveLength(1);
+  }
 });
 
 test('lifecycle calls encode project IDs and fence writes with their expected generation', async () => {

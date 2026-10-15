@@ -48,6 +48,7 @@ async function interceptProject(page,fixture,{unavailable = () => false} = {}) {
     const {state,runs=[],inputs=[]}=fixture, project=state.graph.project, base='/projects/'+project.id;
     let body;
     if(pathname==='/projects')body=[project];
+    else if(pathname.startsWith(base+'/') && project.orchestration_version!==1)return route.fulfill({status:409,contentType:'application/json',body:JSON.stringify({detail:'Unsupported project protocol; create a new project to continue'})});
     else if(pathname===base+'/state') {if(unavailable())return route.abort('failed');body=state;}
     else if(pathname===base+'/state/events')body=[];
     else if(pathname===base+'/executions')body={items:runs,through:runs.length};

@@ -44,6 +44,7 @@ test('generic projects keep their scenario and show a consistent generic label',
       await page.locator('[data-create]').first().click();
       assert.deepEqual(await page.locator('input[name="type"]').evaluateAll(nodes=>nodes.map(node=>node.value)),['ctf','audit','pentest']);
       assert.equal(await page.locator('input[name="type"]:checked').inputValue(),'pentest');
+      if(legacy)assert.ok(requests.reads.every(path=>path==='/projects'),'unsupported protocols expose only list summaries');
       assert.deepEqual(requests.writes,[]);assert.deepEqual(requests.unexpected,[]);assert.deepEqual(errors,[]);
       await page.close();
     }
@@ -194,7 +195,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       assert.equal(await completed.isVisible(),false);assert.equal(await page.locator('[data-node-key="fact:long"]').isVisible(),false);assert.equal(await page.locator('[data-node-key="fact:short"]').isVisible(),true);assert.equal(await page.locator('.activity-pane .node-inspector').count(),0);
     });
 
-    await t.test('historical projects stay readable but hide unavailable mutations and reject an already-open hint form',async()=>{
+    await t.test('unsupported projects retain summaries, clear unavailable details and reject an already-open hint form',async()=>{
       await page.locator('#add-hint').click();await page.locator('#hint-text').fill('A draft opened before the project became read-only');
       delete state.graph.project.orchestration_version;state.revision++;
       await page.waitForFunction(()=>document.querySelector('#add-hint')?.disabled);
@@ -203,7 +204,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       assert.equal(await page.locator('#hint-form [type="submit"]').isDisabled(),true);await page.locator('#hint-dialog [data-close="hint-dialog"]').first().click();
       assert.match(await page.locator('.project-heading .badge').innerText(),/历史项目.*只读/);assert.equal(await page.locator('.project-more').isDisabled(),true);
       await page.locator('#project-manage').click();assert.match(await page.locator('#project-dialog').innerText(),/历史项目只读/);assert.equal(await page.locator('#project-dialog [data-action]').count(),0);await page.locator('[data-close="project-dialog"]').click();
-      await page.locator('#view-tab-materials').click();assert.equal(await page.locator('#add-materials').count(),0);assert.equal(await page.locator('.material-row').count(),2);
+      await page.locator('#view-tab-materials').click();assert.equal(await page.locator('#add-materials').count(),0);assert.equal(await page.locator('.material-row').count(),0);
       await page.reload({waitUntil:'networkidle'});await page.locator('.project-heading .badge').filter({hasText:'只读'}).waitFor();assert.equal(await page.locator('#add-hint').isDisabled(),true);assert.equal(await page.locator('.project-more').isDisabled(),true);
     });
 

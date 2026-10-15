@@ -30,15 +30,18 @@ export class ProjectCommands {
   async change(id: string, action: ProjectAction, generation: number): Promise<unknown> {
     return this.run(async () => {
       const base = pathFor(id), api = this.resource.api;
+      let result: unknown;
       if (action === 'delete') {
-        const result = await api.request(base, {method: 'DELETE'}); this.resource.invalidate(id); this.pendingHints.delete(id);
-        if (this.creation?.created.project.id === id) this.creation = null;
-        return result;
+        result = await api.request(base, {method: 'DELETE'}); this.resource.invalidate(id); this.pendingHints.delete(id);
+      } else if (action === 'pause' || action === 'resume') {
+        result = await api.request(base + '/status', {method: 'PUT', body: {status: action === 'pause' ? 'stopped' : 'active', expected_generation: generation}});
+      } else {
+        if (!['restart', 'terminate'].includes(action)) throw new Error('不支持的项目操作。');
+        result = await api.request(base + '/' + action, {method: 'POST', body: {expected_generation: generation}});
+        this.resource.invalidate(id);
       }
-      if (action === 'pause' || action === 'resume') return api.request(base + '/status', {method: 'PUT', body: {status: action === 'pause' ? 'stopped' : 'active', expected_generation: generation}});
-      if (!['restart', 'terminate'].includes(action)) throw new Error('不支持的项目操作。');
-      const result = await api.request(base + '/' + action, {method: 'POST', body: {expected_generation: generation}});
-      this.resource.invalidate(id); return result;
+      if (action !== 'pause' && this.creation?.created.project.id === id) this.creation = null;
+      return result;
     });
   }
   async create(values: CreateProjectValues): Promise<string> {
@@ -46,6 +49,19 @@ export class ProjectCommands {
       if (this.uncertain) throw new CommandError('上次创建结果尚未确认。请关闭窗口并在项目列表核对，刷新页面后再创建。', 0, false, true);
       const payload = validateProject({title: values.name, origin: values.target, goal: values.goal, scenario: values.type});
       const api = this.resource.api;
+      if (this.creation) {
+        const pending = this.creation;
+        try {
+          const identity = await api.request<{generation?: number}>(pathFor(pending.created.project.id) + '/identity');
+          if ((identity.generation || 0) !== (pending.created.project.generation || 0)) throw new APIError('项目已进入新轮次。', 409);
+        } catch (error) {
+          if ([404, 409].includes(statusOf(error))) {
+            this.creation = null;
+            throw new CommandError(asError(error).message + ' 创建续传已取消，请在项目列表核对已保存的项目。', statusOf(error));
+          }
+          throw new CommandError(asError(error).message + '；无法确认项目轮次，请稍后重试。', statusOf(error), true);
+        }
+      }
       if (!this.creation) {
         let created: CreatedProjectDTO;
         try { created = await api.request<CreatedProjectDTO>('/projects', {method: 'POST', body: values.files.length ? {...payload, start_paused: true} : payload}); }
@@ -60,7 +76,13 @@ export class ProjectCommands {
         for (; pending.uploaded < pending.files.length; pending.uploaded++) await api.uploadInput(pathFor(id), pending.files[pending.uploaded]!);
         if (pending.files.length) await api.request(pathFor(id) + '/status', {method: 'PUT', body: {status: 'active', expected_generation: pending.created.project.generation || 0}});
         this.creation = null; return id;
-      } catch (error) { throw new CommandError(asError(error).message + '；项目已保存，已导入材料保留。重试将继续上传并启动同一项目。', statusOf(error), true); }
+      } catch (error) {
+        if ([404, 409].includes(statusOf(error))) {
+          this.creation = null;
+          throw new CommandError(asError(error).message + '；项目状态已变化，创建续传已取消，请核对项目列表。', statusOf(error));
+        }
+        throw new CommandError(asError(error).message + '；项目已保存，已导入材料保留。重试将继续上传并启动同一项目。', statusOf(error), true);
+      }
     });
   }
   isHintRetry(id: string, values: HintValues): boolean {

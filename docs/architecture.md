@@ -64,14 +64,22 @@ assembles accepted read views; one `useWorkspaceSync` adapter owns polling and
 publication. Request versions, project generations, state revisions and execution
 change cursors have separate meanings. A refresh checks round identity before
 publishing, and a failed or superseded read cannot overwrite the last accepted
-view. Components consume that shared view instead of starting independent
-project polling loops. Project commands own mutation exclusion, uncertain
-creation, upload continuation and supplement idempotency across dialog closure.
+view. Unsupported project protocols publish list summaries without requesting
+detail endpoints the server rejects; they do not block other projects or creation.
+Components consume that shared view instead of starting independent project
+polling loops. Project commands own mutation exclusion, uncertain creation,
+upload continuation and supplement idempotency across dialog closure. Lifecycle
+actions retire conflicting pending creations, and upload retries check the saved
+round identity before continuing. This client check does not replace an atomic
+server generation fence for concurrent uploads from multiple clients.
 
 Pure workspace models map API data into display values. The graph feature owns
 layout, camera, selection and controller lifecycle, with view state scoped to
-project and generation. The graph controller alone owns the DOM inside its Vue
-host. Model settings use an independent request lifecycle; secret drafts stay
+project and generation. Reactivation reconciles retained selection against the
+current graph; fitting uses visible content bounds independently of SVG extents.
+Result cards, detail readers and exports use the same finding status and evidence
+support projection. The graph controller alone owns the DOM inside its Vue host.
+Model settings use an independent request lifecycle; secret drafts stay
 inside the settings page and clear when it is disposed. Existing CSS and fixed
 assets define the UI appearance; components preserve its classes and structure.
 

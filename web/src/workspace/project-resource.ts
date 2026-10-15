@@ -15,7 +15,7 @@ export function projectView(raw: ProjectDTO, previous: Partial<ProjectView> = {}
 export function snapshotView(state: WorkspaceSnapshot, events: StateEventDTO[] = [], runs: ExecutionDTO[] = [], files: InputDTO[] = [], previous: Partial<ProjectView> = {}): ProjectView {
   const project = projectView(state.graph.project, previous), facts = state.graph.facts || [];
   const timing = projectTiming(state, runs);
-  return {...project, state, logs: buildLogs(state, events, runs), runs, events, files, target: facts.find(f => f.id === 'origin')?.description || '',
+  return {...project, state, logs: buildLogs(state, events, runs), runs, events, files, filesKnown: true, target: facts.find(f => f.id === 'origin')?.description || '',
     goal: facts.find(f => f.id === 'goal')?.description || state.goals?.find(g => g.id === 'goal')?.condition || '', startedAt: timing.startedAt, endedAt: timing.endedAt || null};
 }
 interface EventCache { generation: number; revision: number; after: number; caughtUp: boolean; items: StateEventDTO[] }
@@ -54,9 +54,9 @@ export class ProjectResource {
     const request = this.scope.begin(), options = {signal: request.signal};
     const list = await this.api.request<ProjectDTO[]>('/projects', options);
     if (!this.scope.current(request.version)) return null;
-    const projects = list.map(raw => projectView(raw, this.accepted.find(p => p.id === raw.id))).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || b.id.localeCompare(a.id));
+    const projects = list.map(raw => projectView(raw, raw.orchestration_version === 1 ? this.accepted.find(p => p.id === raw.id) : {filesKnown: false})).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)) || b.id.localeCompare(a.id));
     const selected = projects.find(p => p.id === preferred) || projects[0];
-    if (selected) {
+    if (selected && !selected.readOnly) {
       const base = pathFor(selected.id), previous = this.views.get(selected.id), summary = JSON.stringify(selected.raw);
       const sameRound = previous?.generation === selected.generation;
       // Late execution cleanup can add data after a project reaches its terminal status.
@@ -96,8 +96,8 @@ export class ProjectResource {
     }
     if (!this.scope.current(request.version)) return null;
     // Archives may finish after the list was copied, including for an unselected project.
-    for (const project of projects) if (project !== selected) project.history = this.accepted.find(value => value.id === project.id)?.history || project.history;
-    for (const id of this.views.keys()) if (!projects.some(project => project.id === id)) this.invalidate(id);
+    for (const project of projects) if (project !== selected && !project.readOnly) project.history = this.accepted.find(value => value.id === project.id)?.history || project.history;
+    for (const id of this.views.keys()) if (!projects.some(project => project.id === id && !project.readOnly)) this.invalidate(id);
     this.accepted = projects;
     return {projects: this.accepted, selected};
   }

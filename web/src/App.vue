@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useWorkspaceSync } from './workspace/useWorkspaceSync';
+import { CommandError } from './workspace/project-commands';
 import { actions, canHint } from './workspace/model/lifecycle';
 import type { CreateProjectValues, HintValues, ProjectView } from './workspace/model/types';
 import type { ProjectOperation } from './workspace/dialogs/types';
@@ -26,7 +27,10 @@ watch(() => route.params.id, value => { if (typeof value === 'string') { returnI
 // Resolve missing routes only from accepted reads. A navigation can name a newly
 // created project before that project has appeared in the published list.
 watch(projects, () => { if (route.name === 'models' || !connected.value || mutating.value) return; if (current.value && (route.name === 'projects' || current.value.id !== projectId.value)) void router.replace('/project/' + current.value.id); });
-async function create(values: CreateProjectValues) { await mutate(async () => { const id = await commands.create(values); sidebar.value?.clear(); await router.push('/project/' + id); toast('项目已创建并开始'); }); }
+async function create(values: CreateProjectValues) { await mutate(async () => {
+  try { const id = await commands.create(values); sidebar.value?.clear(); await router.push('/project/' + id); toast('项目已创建并开始'); }
+  catch (error) { if (error instanceof CommandError && !error.pendingCreate && !error.uncertainCreate) forms.value?.resetCreate(); throw error; }
+}); }
 async function hint(id: string, values: HintValues) { await mutate(async () => { const project = projects.value.find(value => value.id === id); if (!project || !canHint(project)) throw new Error(project?.readOnly ? '历史项目只读，请新建项目继续。' : '项目已结束，重启后可补充信息。'); await commands.hint(id, values); toast(project.status === 'paused' ? '补充已保存，继续后读取' : '补充已添加'); }); }
 async function perform(operation: ProjectOperation) {
   await mutate(async () => {
@@ -36,7 +40,8 @@ async function perform(operation: ProjectOperation) {
     if (!actions(project).includes(operation.action)) throw new Error('当前状态不支持此操作。');
     const pending = commands.pendingCreate?.created.project.id === project.id;
     await commands.change(project.id, operation.action, project.generation);
-    if (operation.action === 'delete') { if (pending) forms.value?.resetCreate(); if (project.id === current.value?.id) { returnId.value = ''; await router.push('/projects'); } }
+    if (pending && !commands.pendingCreate) forms.value?.resetCreate();
+    if (operation.action === 'delete') { if (project.id === current.value?.id) { returnId.value = ''; await router.push('/projects'); } }
     toast('项目已' + actionNames[operation.action]);
   });
 }
