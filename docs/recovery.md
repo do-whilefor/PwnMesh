@@ -1,107 +1,67 @@
 # PwnMesh recovery
 
-Recovery preserves execution identity and authority. Re-running a command is not
-permission to repeat side effects or give an old lease access to current state.
+Recovery preserves execution identity and authority. Retrying does not authorize
+duplicate side effects or restore a revoked lease.
 
-| Operation | Meaning and retained state |
+## Recovery operations
+
+| Operation | Behavior |
 | --- | --- |
-| Infrastructure interruption | `protocol.ErrInterrupted` permits bounded same-run recovery; retain identity, journal, original deadlines and consumed allowances |
-| Ordinary cancellation | A permanent stop of that attempt; it does not imply same-run recovery |
-| Project pause / Continue | Pause marks affected executions; Continue grants retry only to those eligible attempts, not unrelated failures |
-| Explicit execution retry | A validated retry grant; generation, task eligibility and revoked authority are still checked |
-| Result delivery retry | Deliver an already retained result; do not re-run the model or tools |
-| Project restart | Archive the old round, increment generation, revoke old runs and rebuild current projections while preserving human inputs, counters and workspace files |
-| Project termination | Stop an unfinished project without claiming success; retain evidence/history; a new execution round requires explicit restart |
+| Infrastructure interruption | `protocol.ErrInterrupted` permits bounded recovery of the same run |
+| Ordinary cancellation | Stops the attempt; does not grant same-run recovery |
+| Pause / Continue | Grants retry only to eligible attempts affected by the pause |
+| Explicit execution retry | Validates the grant, generation, eligibility and authority |
+| Result delivery retry | Sends the retained result without rerunning models or tools |
+| Project restart | Archives the round, increments generation and revokes old runs; preserves human inputs, counters and workspace files |
+| Project termination | Stops unfinished work and retains history; another round requires explicit restart |
 
-Worker persists session identity and recovery counters before further requests.
-The current same-run recovery limit is two resumptions after the initial attempt.
-Recovery does not reset task
-deadlines, repair/continuation budgets or already consumed allowances.
+Same-run recovery allows two resumptions after the initial attempt. It preserves
+original deadlines and consumed repair, continuation and recovery allowances.
 
-Role controllers own live graph observations separately from the saved session.
-Each successful save captures their values and the supplied Agent checkpoint;
-runtime-triggered saves detach the live checkpoint first. If a save fails, the
-callback restores its own in-memory changes to their values at entry and reports
-the failure. The session file is replaced atomically; a directory-sync error after
-replacement leaves durability uncertain. The private `worker/internal/phase`
-package decides deadlines, repair/continuation consumption and recovery actions
-from values. Session persists each proposed transition before its effects and
-restores both Session and Loop phase values if that save fails. The session JSON
-layout remains unchanged; policy state is converted explicitly, never embedded as
-a second live owner. Acceptance reads
-only the identity-bound saved transcript or its verified committed journal prefix,
-never an uncommitted crash tail.
+## Durable evidence and authority
 
-The private journal owner verifies the saved byte offset and checksum before
-recovery. Complete crash-tail records remain append-only; an incomplete final
-record is archived and synced before truncation. Session saves obtain a synced
-journal checkpoint before replacing the session file. Acceptance visits only the
-verified committed prefix. Metrics replay consumes current events only. Retired
-`replan_*` and other unknown events remain byte-for-byte in the journal without
-contributing metrics or advancing transcript and compaction cursors.
+- Persist session identity and proposed transitions before their effects. Failed
+  saves restore the caller's in-memory changes. Session replacement is atomic,
+  but a directory-sync failure after replacement leaves durability uncertain.
+- Verify the journal's saved offset and checksum before recovery. Complete crash
+  records remain append-only; archive and sync an incomplete tail before truncation.
+  Acceptance reads only the identity-bound transcript or verified committed prefix.
+  Unknown historical events remain intact without advancing current replay state.
+- Execute receipts bind the run and input to session/artifact hashes, which are
+  verified again on read. A changed repair target cannot reuse prior success.
+  Deterministic acceptance failure is terminal; an uncertain callback retains its
+  existing session recovery path.
+- Decide and Curate check the authoritative server commit receipt before planning
+  again. Discarding a conflicting draft neither erases a commit nor grants budget.
+  Automatic retries retain the failed Job/Result and count saved attempt history;
+  revocation, lease release and the retry grant roll back together on failure.
+- Require current acceptance receipts and graph-node definition digests. An old
+  `graph.json` alone cannot authorize recovery; do not reconstruct missing identity
+  bindings. See [supported formats](formats.md).
 
-For Execute, an accepted receipt binds the run and input hash to retained session
-and artifact hashes. Evidence is verified again on read. A changed repair target
-cannot reuse the previous success. Deterministic acceptance failure is terminal;
-an uncertain callback remains tied to its existing session recovery path.
+## Restore and cleanup
 
-For Decide and Curate, the server commit receipt is authoritative. Recovery checks
-it before planning again. A private draft may be discarded after a conflict;
-that does not erase a committed mutation or grant extra execution budget.
-The historical planner-conflict adapter runs only after this receipt check. Old
-Curate batches with an accepted receipt but pending settlement still use the
-explicit apply path; newly committed batches settle within their Board transaction.
+1. Retain a consistent SQLite backup and matching workspace files, journals,
+   evidence and receipts. Use SQLite backup tooling for a live database; copying
+   only its main file during WAL writes is unsafe.
+2. Check the database version before starting. This binary only initializes or
+   opens schema `4` and rejects older schemas without mutation. Use a compatible
+   release or migration tooling for older data; rollback needs a compatible binary
+   or matching backup.
+3. Preserve installation identity, stored JSON and workspace paths. Do not rename
+   runtime directories or edit checkpoints to bypass validation.
+4. Let Dispatcher reconcile generations and registered executions before new work.
+   Investigate identity, hash and version errors using the original artifacts;
+   deleting receipts or lease tombstones can invalidate recovery.
 
-Automatic Decide and infrastructure-failed Curate retries grant a successor while
-retaining the failed execution's Job and Result. The saved attempt history bounds
-that allowance across dispatcher restarts. Defensive revocation, lease release and
-the grant share a local savepoint; a failed grant rolls back those changes even
-when the caller handles the error and commits unrelated work.
+| Data | Retention |
+| --- | --- |
+| Uploaded inputs, snapshots, archived rounds and execution inputs | Stored in SQLite; survive restart and cascade on project deletion |
+| Scheduling projection | Rebuilt as needed; carries no independent authority |
+| Worker workspaces, journals and receipts | Survive restart; back up and manage separately from SQLite |
+| Upload/download staging | Request-scoped; unlinked immediately on Linux, with descriptors closed on completion or process exit |
 
-The `execute-v1` acceptance adapter has been removed. A `graph.json` without a
-current `acceptance.json` is rejected before session callbacks, bookkeeping or
-result output. Current receipts remain recoverable even if an old graph file is
-left beside them. General Worker graphs require per-node definition digests and
-never reconstruct missing bindings to resume or extend an old checkpoint.
-
-## Operational checks
-
-Before restoring, retain a consistent database backup and the matching workspace,
-session journals, evidence and receipts. For a live SQLite database, use its backup
-API/tooling; copying only the database file while WAL writes are active is not a
-consistent backup. Do not rename runtime directories or edit saved JSON to force
-a mismatch through validation.
-
-The current binary only initializes or opens schema `4`. It rejects older schemas
-without changes and has no automatic migration path. To retain an older database,
-stop its Server and Dispatcher and use a previous release or migration tooling
-that supports its format before starting this release.
-Preserve installation identity, stored JSON and workspace paths. A binary that
-does not support schema `4` cannot share the upgraded database; rollback requires a
-compatible binary or the matching database backup.
-
-Database and file retention have separate boundaries:
-
-| Data | Restart | Project deletion | Backup and cleanup |
-| --- | --- | --- | --- |
-| Uploaded inputs, immutable snapshots and their chunks | Retained | Database rows cascade | Included in the consistent SQLite backup |
-| Archived rounds and execution inputs | Retained | Database rows cascade | Retain referenced snapshots; completion alone is not permission to prune them |
-| Scheduling projection | Invalidated and rebuilt | Database rows cascade | Disposable; contains no independent authority |
-| Worker workspaces, journals, evidence and receipts | Retained | Managed separately from SQLite | Back up matching files; database deletion does not remove these paths |
-| Batch-upload and download staging files | Request lifetime only | Independent of database row retention | Unlinked immediately on Linux; descriptors close on completion, failure, disconnect or process exit |
-
-Input, snapshot and archive payloads still reside in SQLite. Deleting rows makes
-database pages reusable; it does not necessarily shrink the database file.
-Download staging releases its read transaction before serving a slow client.
-Permanent external payload storage would additionally need durable publication
-before reference commit, consistent backup of referenced objects and safe orphan
-collection after rollback. Do not remove snapshots merely because their current
-execution ended: archived Jobs may still reference them.
-
-After interruption, let Dispatcher reconcile generations and recover registered
-executions before admitting new work. Investigate identity, evidence hash or
-unsupported-version errors using the original artifacts. Removing checkpoints,
-lease tombstones or acceptance receipts can invalidate recovery guarantees.
-
-See [supported formats](formats.md) for supported representations and
-[development](development.md) for focused regression commands.
+Do not prune snapshots merely because an execution ended: archived Jobs may still
+reference them. Row deletion makes SQLite pages reusable without necessarily
+shrinking its file. Workspace removal follows the ownership rules in
+[container operations](../container/README.md), not database row deletion alone.

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -8,6 +9,10 @@ import (
 	"unicode"
 	"unicode/utf8"
 )
+
+var repositoryMaintenanceDocs = []string{
+	"docs/architecture.md", "docs/development.md", "docs/formats.md", "docs/protocol.md", "docs/recovery.md",
+}
 
 func TestRepositoryREADMEBrandImagesExist(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
@@ -34,12 +39,12 @@ func TestRepositoryREADMEBrandImagesExist(t *testing.T) {
 }
 
 func TestRepositoryDocumentationContainsNoChinese(t *testing.T) {
-	for _, file := range []string{
+	files := append([]string{
 		"README.md", "SECURITY.md", "LICENSE", "container/README.md", "container/environment.md",
 		"Dockerfile", "container/Dockerfile", "compose.yaml", "dispatch.example.yaml", ".env.example",
 		".gitignore", ".gitattributes", ".dockerignore", "tests/integration/README.md",
-		"docs/architecture.md", "docs/development.md", "docs/formats.md", "docs/protocol.md", "docs/recovery.md",
-	} {
+	}, repositoryMaintenanceDocs...)
+	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
 			body, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(file)))
 			if err != nil {
@@ -55,6 +60,32 @@ func TestRepositoryDocumentationContainsNoChinese(t *testing.T) {
 				}
 				if r == '\n' {
 					line++
+				}
+			}
+		})
+	}
+}
+
+func TestRepositoryMaintenanceDocumentationLinksExist(t *testing.T) {
+	links := regexp.MustCompile(`\[[^\]]*\]\(([^\s)]+)\)`)
+	for _, file := range repositoryMaintenanceDocs {
+		t.Run(file, func(t *testing.T) {
+			path := filepath.Join("..", "..", filepath.FromSlash(file))
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, link := range links.FindAllSubmatch(body, -1) {
+				target, err := url.Parse(string(link[1]))
+				if err != nil {
+					t.Errorf("invalid link %q: %v", link[1], err)
+					continue
+				}
+				if target.IsAbs() || target.Host != "" || target.Path == "" {
+					continue
+				}
+				if _, err := os.Stat(filepath.Join(filepath.Dir(path), filepath.FromSlash(target.Path))); err != nil {
+					t.Errorf("broken local link %q: %v", link[1], err)
 				}
 			}
 		})
