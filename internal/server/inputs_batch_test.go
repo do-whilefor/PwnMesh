@@ -88,6 +88,21 @@ func assertInputBatchTempEmpty(t *testing.T, dir string) {
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("batch left temporary files: %v, %v", entries, err)
 	}
+	// Unlinked Linux staging files still occupy space until their descriptors
+	// close. Check both successful transfers and all existing rejection paths.
+	descriptors, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, descriptor := range descriptors {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", descriptor.Name()))
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(target, filepath.Join(dir, "pwnmesh-input-batch-")) {
+			t.Fatalf("batch left a staging descriptor open: %s", target)
+		}
+	}
 }
 
 type gatedBatchReader struct {
@@ -126,6 +141,11 @@ func TestInputBatchWaitsForAllFilesAndFreezesAccompanyingContent(t *testing.T) {
 	case <-reader.waiting:
 	case <-time.After(5 * time.Second):
 		t.Fatal("upload did not reach the blocked second file")
+	}
+	// A process crash at this boundary must not leave either the completed
+	// first file or the partially received second file behind by name.
+	if entries, err := os.ReadDir(dir); err != nil || len(entries) != 0 {
+		t.Errorf("in-progress batch retained staging paths: %v, %v", entries, err)
 	}
 	if state := f.state(); !reflect.DeepEqual(state, before) || !reflect.DeepEqual(storedEvents(f), beforeEvents) {
 		t.Fatal("partially received supplement changed scheduling input")
@@ -300,6 +320,18 @@ func TestInputBatchKeyReplaysDurableReceiptWithoutDuplicatingInstructions(t *tes
 	const content = "Inspect the authorized test account only."
 	body, contentType := inputBatchBody(t, files, content, "supplement-1")
 	first := inputBatchRequest(t, f, body, contentType, http.StatusCreated)
+	// Preserve the request digest produced before staging paths became open
+	// descriptors, so retained receipts still replay across this change.
+	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+		var digest string
+		err := tx.QueryRow("SELECT request_sha256 FROM pwnmesh_input_batches WHERE project_id=? AND idempotency_key=?", f.project, "supplement-1").Scan(&digest)
+		if err == nil && digest != "7bb2bfccc6fe05c336ea75961014e17509435d5e6858690f766510b808f9a6cf" {
+			t.Errorf("staging changed the retained request identity: %s", digest)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
 	before, events := f.state(), storedEvents(f)
 
 	// A lost acknowledgement can be retried after a server restart. Multipart

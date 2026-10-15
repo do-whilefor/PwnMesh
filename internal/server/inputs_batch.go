@@ -34,17 +34,11 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, b.Err(422, "Expected multipart form with input files"))
 		return
 	}
-	dir, err := os.MkdirTemp("", "pwnmesh-input-batch-*")
-	if err != nil {
-		writeError(w, r, err)
-		return
-	}
-	defer os.RemoveAll(dir)
 	type stagedFile struct {
 		Name   string `json:"name"`
 		Size   int64  `json:"size"`
 		SHA256 string `json:"sha256"`
-		path   string
+		file   *os.File
 	}
 	files := []stagedFile{}
 	var total int64
@@ -77,15 +71,24 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 				writeError(w, r, b.Err(413, "Project input limit is 32 files and 512 MiB"))
 				return
 			}
-			file, err := os.CreateTemp(dir, "input-*")
+			file, err := os.CreateTemp("", "pwnmesh-input-batch-*")
 			if err != nil {
+				writeError(w, r, err)
+				return
+			}
+			defer func() {
+				file.Close()
+				os.Remove(file.Name())
+			}()
+			// Linux retains unlinked files through their open descriptors. The
+			// 32-file limit bounds descriptors; process exit also reclaims bytes.
+			if err = os.Remove(file.Name()); err != nil {
 				writeError(w, r, err)
 				return
 			}
 			limit := min(int64(b.MaxInputBytes), int64(b.MaxProjectInputBytes)-total)
 			hash := sha256.New()
 			size, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(part, limit+1))
-			closeErr := file.Close()
 			if size > limit {
 				writeError(w, r, b.Err(413, "Input limit is 256 MiB per file and 512 MiB per project"))
 				return
@@ -94,12 +97,8 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 				writeError(w, r, inputBatchReadError(copyErr))
 				return
 			}
-			if closeErr != nil {
-				writeError(w, r, closeErr)
-				return
-			}
 			total += size
-			files = append(files, stagedFile{Name: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), path: file.Name()})
+			files = append(files, stagedFile{Name: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), file: file})
 		case "content":
 			if _, hasFilename := params["filename"]; contentSeen || hasFilename {
 				writeError(w, r, b.Err(422, "Expected at most one text content field"))
@@ -166,8 +165,14 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		for _, file := range files {
-			data, err := os.ReadFile(file.path)
-			if err != nil {
+			if _, err := file.file.Seek(0, io.SeekStart); err != nil {
+				return err
+			}
+			data := make([]byte, file.Size)
+			if _, err := io.ReadFull(file.file, data); err != nil {
+				return err
+			}
+			if err := file.file.Close(); err != nil {
 				return err
 			}
 			input, err := t.AddInput(project, file.Name, data)
