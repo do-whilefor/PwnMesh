@@ -92,6 +92,55 @@ func TestCurationReceiptReadDoesNotWaitForWriter(t *testing.T) {
 	}
 }
 
+func TestDecisionReceiptReadDoesNotWaitForWriter(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pending", true: "committed"}[committed], func(t *testing.T) {
+			f, _ := newSnapshotHTTPFixture(t)
+			prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
+			if committed {
+				f.decision("commit", f.batch(batchAction("step", "", `{"action":"add","from":["origin"],"description":"Inspect the fixture"}`)), http.StatusOK)
+			}
+			holdProjectWriter(t, f)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			request := httptest.NewRequest(http.MethodGet, f.base()+"/state/decisions/receipt", nil).WithContext(ctx)
+			request.Header.Set("X-PwnMesh-Run", f.lease)
+			request.Header.Set("X-PwnMesh-Lease", "reason")
+			response := httptest.NewRecorder()
+			f.handler.ServeHTTP(response, request)
+			var receipt board.DecisionReceipt
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &receipt) != nil || receipt.Committed != committed {
+				t.Fatalf("decision receipt waited for the writer or changed recovery state: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestDecisionReceiptReadRejectsExpiredAuthorityAndRetainsCommittedRecovery(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "pending", true: "committed"}[committed], func(t *testing.T) {
+			f, _ := newSnapshotHTTPFixture(t)
+			prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
+			var want board.DecisionReceipt
+			status := http.StatusConflict
+			if committed {
+				want = f.decision("commit", f.batch(batchAction("step", "", `{"action":"add","from":["origin"],"description":"Inspect the fixture"}`)), http.StatusOK)
+				status = http.StatusOK
+			}
+			later := f.store.Now().Add(time.Hour)
+			f.store.Now = func() time.Time { return later }
+			before := f.state()
+			got := f.decisionReceipt(status)
+			if committed && !reflect.DeepEqual(got, want) {
+				t.Fatal("committed receipt changed after the original lease ended")
+			}
+			if !reflect.DeepEqual(before, f.state()) {
+				t.Fatal("decision receipt performed lease maintenance")
+			}
+		})
+	}
+}
+
 func TestLiveExecutionReadsRejectExpiredLeaseWithoutMutatingState(t *testing.T) {
 	f, _ := prepareUpdateFixture(t, "snapshot")
 	later := f.store.Now().Add(time.Hour)

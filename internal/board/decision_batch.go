@@ -97,7 +97,7 @@ func (t *Tx) DecisionReceipt(project string, fence ExecutionFence) (DecisionRece
 	}
 	g, err := t.Load(project)
 	if err == nil {
-		err = t.CheckExecution(g, fence)
+		err = t.CheckExecutionRead(g, fence)
 	}
 	if err == nil {
 		err = g.RequireActive()

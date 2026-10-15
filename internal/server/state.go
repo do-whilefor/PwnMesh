@@ -15,7 +15,7 @@ func (s *Server) registerStateRoutes(m *http.ServeMux) {
 	m.HandleFunc("GET /projects/{pid}/state/events", s.readOnly(s.stateEvents))
 	m.HandleFunc("POST /projects/{pid}/state/decisions/preview", s.wrap(s.decisionPreview))
 	m.HandleFunc("POST /projects/{pid}/state/decisions/commit", s.wrap(s.decisionCommit))
-	m.HandleFunc("GET /projects/{pid}/state/decisions/receipt", s.wrap(s.decisionReceipt))
+	m.HandleFunc("GET /projects/{pid}/state/decisions/receipt", s.readOnly(s.decisionReceipt))
 	m.HandleFunc("GET /projects/{pid}/state/curation/receipt", s.readOnly(s.curationReceipt))
 }
 
