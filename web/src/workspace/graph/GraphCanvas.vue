@@ -29,6 +29,7 @@ function activate() {
     controller.setStatusFilter(retained.filter);
     if (retained.node) controller.selectNode(retained.node);
     else if (retained.edge) controller.selectEdge(retained.edge);
+    if (!controller.selected && !controller.selectedEdge) controller.clearSelection();
   } else if (retained) {
     emit('select-node', null);
     emit('select-edge', null);

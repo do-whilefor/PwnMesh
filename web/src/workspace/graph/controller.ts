@@ -1,5 +1,5 @@
 import { mapState, resolveNodeKey } from './graph-data';
-import { worldBounds, fitTransform, edgePanVelocity } from './canvas';
+import { contentBounds, worldBounds, fitTransform, edgePanVelocity } from './canvas';
 import { mergePositions, NODE_WIDTH, NODE_HEIGHT } from './layout';
 import { routeEdges } from './routing';
 import { projectGeometry, describeEdge, collectSelection, placeEdgeLabel, nodePresentation, edgeKey } from './graph-view';
@@ -35,7 +35,6 @@ export class GraphController {
   tx: number;
   ty: number;
   project: GraphProject | null;
-  projectId: string | null;
   nodes: GraphNode[];
   edges: GraphEdge[];
   diagnostics: GraphDiagnostic[];
@@ -72,7 +71,7 @@ export class GraphController {
     this.positions = new Map(); this.nodeGeometry = new Map(); this.projectLayouts = options.projectLayouts || new Map();
     this.cards = new Map(); this.edgeElements = new Map(); this.listeners = [];
     this.selected = null; this.selectedEdge = null; this.scale = 1; this.tx = 0; this.ty = 0;
-    this.project = null; this.projectId = null; this.nodes = []; this.edges = []; this.diagnostics = [];
+    this.project = null; this.nodes = []; this.edges = []; this.diagnostics = [];
     this.drag = null; this.statusFilter = 'all'; this.destroyed = false;
     this.panFrame = null; this.panTime = null; this.fitFrame = null; this.drawFrame = null; this.clickTimer = null;
     this.viewport = this.el('div', 'graph-viewport'); this.viewport.tabIndex = 0;
@@ -146,7 +145,7 @@ export class GraphController {
     const firstNodes = !saved.positions.size && mapped.nodes.length > 0;
     Object.assign(saved, mergePositions(mapped.nodes, saved.positions, {seed: key + ':0'}));
     this.projectLayouts.set(key, saved); this.positions = saved.positions;
-    this.project = mapped; this.projectId = mapped.projectId;
+    this.project = mapped;
     this.nodes = mapped.nodes; this.edges = mapped.edges; this.diagnostics = mapped.diagnostics;
     if (this.drag?.id && !mapped.nodeIndex.has(this.drag.id)) this.cancelDrag();
     if (changed || !mapped.nodeIndex.has(this.selected ?? '')) this.selected = null;
@@ -300,7 +299,7 @@ export class GraphController {
     this.cancelDrag(); this.cancelPendingFit(); const size = this.size();
     const visible = this.nodes.filter(node => this.isNodeVisible(node));
     if (!visible.length || !size.width || !size.height) { this.pendingFit = !!visible.length; return; }
-    const bounds = worldBounds(new Map(visible.map(node => [node.key, this.positions.get(node.key)!])), {width: NODE_WIDTH, height: NODE_HEIGHT, baseWidth: 0, baseHeight: 0, padding: 96});
+    const bounds = contentBounds(new Map(visible.map(node => [node.key, this.positions.get(node.key)!])), {width: NODE_WIDTH, height: NODE_HEIGHT, padding: 96});
     const camera = fitTransform(bounds, size.width, size.height); if (!camera) return;
     this.pendingFit = false; this.viewportSize = size; Object.assign(this, camera); this.transform();
   }
@@ -383,12 +382,7 @@ export class GraphController {
     else if (event.key === '-') { event.preventDefault(); this.zoomBy(1 / 1.2); }
     else if (event.key === '0') { event.preventDefault(); this.fit(); }
   }
-  getNodes() { return clone(this.nodes); }
   getVisibleNodeCount() { return this.nodes.filter(node => this.isNodeVisible(node)).length; }
-  forgetProject(projectId: string) {
-    for (const [key, value] of this.projectLayouts) if (value.projectId === projectId) this.projectLayouts.delete(key);
-    if (this.projectId === projectId) this.setState(null);
-  }
   destroy() {
     if (this.destroyed) return;
     this.cancelDrag(); this.cancelPendingFit(); this.cancelFrame(this.drawFrame); this.drawFrame = null;

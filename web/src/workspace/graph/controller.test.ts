@@ -45,7 +45,7 @@ test('switching projects restores exact camera and positions; new generations re
   graph.setState(state('A')); h.flush();
   assert.deepEqual(graph.positions.get('fact:origin')!, {x: -444, y: 777}); assert.deepEqual([graph.scale, graph.tx, graph.ty], [.36, -555, 888]);
   graph.setState(state('A', 2)); h.flush(); assert.notDeepEqual(graph.positions.get('fact:origin')!, {x: -444, y: 777});
-  assert.ok(graph.projectLayouts.has(JSON.stringify(['A', 1]))); graph.forgetProject('B'); assert.ok(!graph.projectLayouts.has(JSON.stringify(['B', 1])));
+  assert.ok(graph.projectLayouts.has(JSON.stringify(['A', 1]))); assert.ok(graph.projectLayouts.has(JSON.stringify(['B', 1])));
   graph.destroy();
 });
 
@@ -62,7 +62,7 @@ test('application-owned layouts survive graph remounts and remain scoped to the 
   restored.graph.setState(state('A', 2)); restored.flush();
   assert.notDeepEqual(restored.graph.positions.get('step:work')!, {x: 144, y: 288});
   assert.equal(projectLayouts.has(JSON.stringify(['A', 1])),true);
-  restored.graph.forgetProject('B'); assert.equal(projectLayouts.has(JSON.stringify(['B', 1])),false);
+  assert.equal(projectLayouts.has(JSON.stringify(['B', 1])),true);
   restored.graph.destroy();
 });
 
@@ -89,8 +89,6 @@ test('viewing an archived round preserves the current round layout and camera ac
   const restored = harness({projectLayouts}); restored.graph.setState(state('A', 2)); restored.flush();
   assert.deepEqual(restored.graph.positions.get('step:work')!, {x: -620, y: 480});
   assert.deepEqual([restored.graph.scale, restored.graph.tx, restored.graph.ty], [.55, 130, -260]);
-  restored.graph.forgetProject('A');
-  assert.ok([...projectLayouts.values()].every(layout => layout.projectId !== 'A'));
   restored.graph.destroy();
 });
 test('updated text invalidates no geometry but refreshes cached-edge labels, details and selection callbacks', () => {
@@ -250,7 +248,7 @@ test('status filtering hides cards and disconnected edges without changing graph
   const cards = [...graph.cards], positions = [...graph.positions].map(([key, point]) => [key, {...point}]), camera = [graph.scale, graph.tx, graph.ty];
   const visibleKeys = () => [...graph.cards].filter(([, card]) => !card.hidden).map(([key]) => key).sort();
   graph.setStatusFilter('done'); h.flush();
-  assert.equal(graph.getStatusFilter(), 'done'); assert.equal(graph.getVisibleNodeCount(), 2); assert.equal(graph.getNodes()!.length, 8);
+  assert.equal(graph.getStatusFilter(), 'done'); assert.equal(graph.getVisibleNodeCount(), 2); assert.equal(graph.nodes.length, 8);
   assert.deepEqual(visibleKeys(), ['fact:old', 'fact:origin']);
   for (const edge of graph.edges) {
     const expected = edge.kind === 'refutes' ? '' : 'none', entry = graph.edgeElements.get(edge.id)!;
@@ -299,4 +297,16 @@ test('filtered fit uses visible nodes and empty filters preserve the camera; pro
   graph.setState(state('A', 2)); h.flush(); assert.equal(graph.getStatusFilter(), 'all');
   graph.setStatusFilter('done'); graph.setState(state('B')); h.flush(); assert.equal(graph.getStatusFilter(), 'all');
   graph.setStatusFilter('running'); graph.setState(null); h.flush(); assert.equal(graph.getStatusFilter(), 'all'); graph.destroy();
+});
+
+test('fitting a filtered node is independent of its distance from the world origin', () => {
+  const h = harness(), graph = h.graph; graph.setState(state()); h.flush();
+  graph.setStatusFilter('running');
+  for (const point of [{x: 10, y: 20}, {x: 60000, y: 70000}, {x: -60000, y: -70000}]) {
+    graph.positions.set('step:work', point); graph.fit();
+    assert.equal(graph.scale, 1.15);
+    assert.ok(Math.abs((point.x + 74) * graph.scale + graph.tx - 400) < 1e-7);
+    assert.ok(Math.abs((point.y + 39) * graph.scale + graph.ty - 295) < 1e-7);
+  }
+  graph.destroy();
 });

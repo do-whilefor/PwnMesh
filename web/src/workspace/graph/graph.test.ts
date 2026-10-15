@@ -1,7 +1,7 @@
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
 import { mapState, resolveNodeKey } from './graph-data';
-import { layout, mergePositions, anchors, NODE_WIDTH, NODE_HEIGHT } from './layout';
+import { mergePositions, anchors, NODE_WIDTH, NODE_HEIGHT } from './layout';
 import { routeEdges } from './routing';
 import { visualStatus, nodePresentation, collectSelection, describeEdge, projectGeometry } from './graph-view';
 import { worldBounds } from './canvas';
@@ -85,7 +85,7 @@ test('step dependencies preserve explicit direction and factual provenance witho
   const selection = collectSelection(mapped, 'step:next', null);
   assert.deepEqual(selection.nodeIds, new Set(['step:next','step:first','fact:first']));
   assert.equal(selection.edgeKeys.size, 3);
-  const positions = layout(mapped.nodes, mapped.edges, {seed:'dependencies'}).positions;
+  const positions = mergePositions(mapped.nodes, new Map(), {seed:'dependencies'}).positions;
   assert.equal(routeEdges(mapped.edges, positions).size, 3);
   assert.equal(new Set([...routeEdges(mapped.edges, positions).values()].map(route => route.d)).size, 3);
 });
@@ -167,15 +167,14 @@ test('omitted Step support respects legacy and synthetic feedback contracts', ()
   assert.equal(visualStatus(mapped.nodeIndex.get('step:feedback')!), 'invalid', 'description alone cannot confer synthetic input status');
   assert.equal(visualStatus(mapped.nodeIndex.get('step:root')!), 'invalid', 'root completion still requires current support');
 });
-test('incremental layout preserves moved points through reorder, add/remove and cyclic relationships', () => {
-  const mapped = mapState(fixture()); const first = layout(mapped.nodes, mapped.edges, {seed: 'stable'});
+test('incremental placement preserves moved points through reorder and added or removed nodes', () => {
+  const mapped = mapState(fixture()); const first = mergePositions(mapped.nodes, new Map(), {seed: 'stable'});
   first.positions.set('fact:origin', {x: -50000, y: 88000}); first.positions.set('step:same', {x: 121, y: -8500});
   const nodes = [...mapped.nodes.filter(node => node.key !== 'fact:same').reverse(), {key: 'fact:new', id: 'new', type: 'fact'}];
   const second = mergePositions(nodes, first.positions, {seed: 'stable'});
   assert.deepEqual(second.positions.get('fact:origin')!, {x: -50000, y: 88000}); assert.deepEqual(second.positions.get('step:same')!, {x: 121, y: -8500});
   assert.ok(!second.positions.has('fact:same')); assert.ok(second.positions.has('fact:new'));
-  assert.doesNotThrow(() => layout(nodes, [{source: 'fact:origin', target: 'step:same'}, {source: 'step:same', target: 'fact:origin'}, {source: 'missing', target: 'missing'}]));
-  assert.equal(layout([], []).positions.size, 0);
+  assert.equal(mergePositions([]).positions.size, 0);
 });
 test('open goals and source-free candidate findings are pending, not failed evidence', () => {
   const goal = {key: 'goal:goal', type: 'goal' as const, status: 'open', supportValid: false, sources: [], raw: {}};
@@ -192,7 +191,7 @@ test('open goals and source-free candidate findings are pending, not failed evid
 });
 test('dense random placement completes with finite nonoverlapping cards and fixed initial anchors', () => {
   const nodes = [...mapState(fixture()).nodes, ...Array.from({length: 180}, (_, id) => ({key: 'fact:dense-' + id, id: String(id), type: 'fact'}))];
-  const first = layout(nodes, [], {seed: 'one'}), second = layout(nodes, [], {seed: 'two'});
+  const first = mergePositions(nodes, new Map(), {seed: 'one'}), second = mergePositions(nodes, new Map(), {seed: 'two'});
   assert.deepEqual(first.positions.get('fact:origin')!, second.positions.get('fact:origin')!); assert.deepEqual(first.positions.get('goal:goal')!, second.positions.get('goal:goal')!);
   const points = [...first.positions.values()];
   for (let a = 0; a < points.length; a++) for (let b = a + 1; b < points.length; b++) {

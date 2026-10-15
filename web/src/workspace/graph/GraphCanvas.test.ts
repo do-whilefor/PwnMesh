@@ -76,3 +76,30 @@ test('KeepAlive releases inactive work and restores the current round camera, fi
   wrapper.unmount();
   expect(frames.size).toBe(0);
 });
+
+test.each(['removed node', 'hidden node', 'removed edge'])('KeepAlive clears a %s from the parent selection', async change => {
+  const visible = ref(true);
+  const state = ref<WorkspaceSnapshot>({
+    graph: {project: {id: 'project', title: 'Project', status: 'active', generation: 1}},
+    goals: [], steps: [{id: 'step', description: 'Inspect', status: 'running', from: ['origin']}],
+    fact_records: [{id: 'origin', description: 'Original', status: 'input'}], findings: [], revision: 1,
+  });
+  const OtherPage = defineComponent({render: () => h('div', 'Settings')});
+  const Parent = defineComponent({setup: () => () => h(KeepAlive, {}, {
+    default: () => visible.value ? h(GraphCanvas, {state: state.value}) : h(OtherPage),
+  })});
+  const wrapper = mount(Parent), graph = wrapper.findComponent(GraphCanvas);
+  if (change === 'removed edge') {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    await graph.get('.graph-edge-hit').trigger('click');
+  } else {
+    graph.vm.setStatusFilter('running'); graph.vm.selectNode('step:step');
+  }
+  const event = change === 'removed edge' ? 'select-edge' : 'select-node';
+  expect(graph.emitted(event)?.at(-1)?.[0]).not.toBeNull();
+  visible.value = false; await nextTick();
+  state.value = {...state.value, revision: 2, steps: change === 'removed node' ? [] : [{...state.value.steps[0]!, status: 'completed', from: []}]};
+  visible.value = true; await nextTick();
+  expect(graph.emitted(event)?.at(-1)).toEqual([null]);
+  wrapper.unmount();
+});

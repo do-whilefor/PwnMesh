@@ -1,10 +1,11 @@
 import type { Point, Camera } from './types';
 export interface Bounds { left: number; top: number; right: number; bottom: number; width: number; height: number }
-interface BoundsOptions { width?: number; height?: number; baseWidth?: number; baseHeight?: number; padding?: number }
-export function worldBounds(positions: ReadonlyMap<string, Point>, options: BoundsOptions = {}): Bounds {
-  const { width = 148, height = 78, baseWidth = 1780, baseHeight = 1080, padding = 32 } = options;
-  if (![width, height, baseWidth, baseHeight, padding].every(value => Number.isFinite(value) && value >= 0)) throw new RangeError('Canvas dimensions must be finite and non-negative');
-  let left = 0, top = 0, right = baseWidth, bottom = baseHeight;
+interface BoundsOptions { width?: number; height?: number; padding?: number }
+export function contentBounds(positions: ReadonlyMap<string, Point>, options: BoundsOptions = {}): Bounds {
+  const { width = 148, height = 78, padding = 32 } = options;
+  if (![width, height, padding].every(value => Number.isFinite(value) && value >= 0)) throw new RangeError('Canvas dimensions must be finite and non-negative');
+  if (!positions.size) return {left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0};
+  let left = Infinity, top = Infinity, right = -Infinity, bottom = -Infinity;
   for (const point of positions.values()) {
     if (!point || !Number.isFinite(point.x) || !Number.isFinite(point.y)) throw new RangeError('Node coordinates must be finite');
     left = Math.min(left, point.x - padding);
@@ -13,6 +14,14 @@ export function worldBounds(positions: ReadonlyMap<string, Point>, options: Boun
     bottom = Math.max(bottom, point.y + height + padding);
   }
   return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+export function worldBounds(positions: ReadonlyMap<string, Point>, options: BoundsOptions & {baseWidth?: number; baseHeight?: number} = {}): Bounds {
+  const {baseWidth = 1780, baseHeight = 1080} = options;
+  if (![baseWidth, baseHeight].every(value => Number.isFinite(value) && value >= 0)) throw new RangeError('Canvas dimensions must be finite and non-negative');
+  const content = contentBounds(positions, options);
+  const left = Math.min(0, content.left), top = Math.min(0, content.top);
+  const right = Math.max(baseWidth, content.right), bottom = Math.max(baseHeight, content.bottom);
+  return {left, top, right, bottom, width: right - left, height: bottom - top};
 }
 
 export function fitTransform(bounds: Pick<Bounds, 'left' | 'top' | 'width' | 'height'>, viewportWidth: number, viewportHeight: number): Camera | null {

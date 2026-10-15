@@ -1,4 +1,4 @@
-import type { LayoutNode, LayoutOptions, Point, RoutedEdge } from './types';
+import type { LayoutNode, LayoutOptions, Point } from './types';
 export const NODE_WIDTH = 148, NODE_HEIGHT = 78;
 function randomFrom(seed: string) {
   let state = 2166136261;
@@ -59,4 +59,3 @@ export function mergePositions(nodes: readonly LayoutNode[], previous: ReadonlyM
   }
   return {positions, width, height, startKey, endKey};
 }
-export function layout(nodes: readonly LayoutNode[], _edges: readonly RoutedEdge[] = [], options: LayoutOptions = {}) { return mergePositions(nodes, new Map(), options); }
