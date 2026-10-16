@@ -4,7 +4,7 @@ import "pwnmesh/internal/board/internal/sqlstore"
 
 // ProjectSummaries returns list metadata without loading project graphs.
 func (t *Tx) ProjectSummaries() ([]Summary, error) {
-	return sqlstore.ProjectSummaries(t)
+	return sqlstore.ProjectSummaries(t.transactionQueries)
 }
 
 // ObservedProjectSummaries hides expired leases while retaining their stored
@@ -14,5 +14,5 @@ func (t *Tx) ObservedProjectSummaries() ([]Summary, error) {
 	if err != nil {
 		return nil, err
 	}
-	return sqlstore.ObservedProjectSummaries(t, t.Now, 1, settings.IntentTimeout, settings.ReasonTimeout)
+	return sqlstore.ObservedProjectSummaries(t.transactionQueries, t.Now, 1, settings.IntentTimeout, settings.ReasonTimeout)
 }

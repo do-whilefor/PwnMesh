@@ -37,8 +37,11 @@ func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
 		if err = tx.Save(current); err != nil {
 			return err
 		}
-		return seedFixtureFacts(tx, graph.Project.ID, 1, fact)
+		return nil
 	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixtureSQL(store).Do(ctx, func(tx *fixtureSQLTx) error { return seedFixtureFacts(tx, graph.Project.ID, 1, fact) }); err != nil {
 		t.Fatal(err)
 	}
 	lease := Lease{Run: "retry-fixture@completion-review", Kind: "reason"}

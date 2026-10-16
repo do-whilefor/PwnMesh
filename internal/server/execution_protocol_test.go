@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
+	executioncase "pwnmesh/internal/execution"
 )
 
 // Exercise the HTTP application boundary with real SQLite transactions. No
@@ -30,7 +31,7 @@ type executionProtocolFixture struct {
 
 func newExecutionProtocolFixture(t *testing.T) *executionProtocolFixture {
 	t.Helper()
-	store, err := board.Open(filepath.Join(t.TempDir(), "protocol.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "protocol.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +92,8 @@ func (f *executionProtocolFixture) registerInline(body any, want int) string {
 			return 0, nil, board.Err(422, "Invalid execution")
 		}
 		execution.ProjectID = f.project
-		return server.registerExecution(tx, execution, r)
+		saved, err := executioncase.Register(tx, execution, decisionFence(r))
+		return http.StatusCreated, saved, err
 	})
 	return f.requestWithHandler(handler, "POST", f.base()+"/executions", body, true, want, nil)
 }
@@ -99,33 +101,22 @@ func (f *executionProtocolFixture) registerInline(body any, want int) string {
 func (f *executionProtocolFixture) executionRecords() []board.Execution {
 	f.t.Helper()
 	var executions []board.Execution
-	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		rows, err := tx.Query("SELECT project_id,id FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", "protocol-test")
+	err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+		rows, err := tx.Query("SELECT project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,result,resumes,created_at,updated_at FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", "protocol-test")
 		if err != nil {
 			return err
 		}
-		var identities [][2]string
+		defer rows.Close()
 		for rows.Next() {
-			var identity [2]string
-			if err := rows.Scan(&identity[0], &identity[1]); err != nil {
-				rows.Close()
+			var execution board.Execution
+			var job, result []byte
+			if err := rows.Scan(&execution.ProjectID, &execution.ID, &execution.Namespace, &execution.Backend, &execution.Kind, &execution.Intent, &execution.Lease, &job, &execution.RetryKey, &execution.Status, &result, &execution.Resumes, &execution.CreatedAt, &execution.UpdatedAt); err != nil {
 				return err
 			}
-			identities = append(identities, identity)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		for _, identity := range identities {
-			execution, err := tx.Execution(identity[0], identity[1])
-			if err != nil {
-				return err
-			}
+			execution.Job, execution.Result = job, result
 			executions = append(executions, execution)
 		}
-		return nil
+		return rows.Err()
 	})
 	if err != nil {
 		f.t.Fatal(err)

@@ -68,7 +68,7 @@ func TestDecisionReadsSurviveConcurrentFactsAndKeepWritesCurrent(t *testing.T) {
 	// silently replace this view with either the original or current graph.
 	var sequence int
 	var name, database string
-	if err := store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		return tx.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &database)
 	}); err != nil {
 		t.Fatal(err)
@@ -77,7 +77,7 @@ func TestDecisionReadsSurviveConcurrentFactsAndKeepWritesCurrent(t *testing.T) {
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := board.Open(database)
+	reopened, err := openFixtureStore(t, database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestDecisionReadsSurviveConcurrentFactsAndKeepWritesCurrent(t *testing.T) {
 		decisionRead(t, f, "overview", "")
 	}
 	var views int
-	if err = reopened.Do(context.Background(), func(tx *board.Tx) error {
+	if err = fixtureSQL(reopened).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		return tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&views)
 	}); err != nil || views != 1 {
 		t.Fatalf("refresh retained historical full graphs: count=%d err=%v", views, err)
@@ -116,7 +116,7 @@ func TestDecisionReadPagesAndFragmentsKeepTheirView(t *testing.T) {
 	// record directly to exercise the lossless reader's compatibility contract.
 	replaceHint := func(value string) {
 		t.Helper()
-		if err := store.Do(context.Background(), func(tx *board.Tx) error {
+		if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 			_, err := tx.Exec("UPDATE hints SET content=? WHERE project_id=? AND id=?", value, f.project, hint.ID)
 			return err
 		}); err != nil {
@@ -189,7 +189,7 @@ func TestDecisionReadViewDoesNotBypassFences(t *testing.T) {
 				f.request("POST", f.base()+"/restart", map[string]int{"expected_generation": 0}, false, http.StatusOK, nil)
 			}
 			var count int
-			if err := store.Do(context.Background(), func(tx *board.Tx) error {
+			if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 				return tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views WHERE project_id=?", f.project).Scan(&count)
 			}); err != nil || count != 0 {
 				t.Fatalf("%s retained stale views: %d %v", operation, count, err)
@@ -206,31 +206,31 @@ func TestDecisionReadViewRetainedForRecoveryAndPrunedOnCompletion(t *testing.T) 
 			prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
 			view := decisionRead(t, f, "overview", "")
 			pinned := decisionRead(t, f, "facts", view.StateVersion)
-			if err := store.Do(context.Background(), func(tx *board.Tx) error {
-				e, err := tx.Execution(f.project, f.run)
-				if err != nil {
-					return err
-				}
-				for _, status := range []string{"running", "retryable", "result_pending", terminal} {
-					if err := tx.ExecutionStatus(e, status, json.RawMessage(`{"status":"success"}`)); err != nil {
+			for _, status := range []string{"running", "retryable", "result_pending", terminal} {
+				if err := store.Do(context.Background(), func(tx *board.Tx) error {
+					execution, err := tx.Execution(f.project, f.run)
+					if err != nil {
 						return err
 					}
-					var count int
-					if err := tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&count); err != nil {
-						return err
-					}
-					want := 1
-					if status == terminal {
-						want = 0
-					}
-					if count != want {
-						t.Fatalf("status %s retained %d views, want %d", status, count, want)
-					}
+					return tx.ExecutionStatus(execution, status, json.RawMessage(`{"status":"success"}`))
+				}); err != nil {
+					t.Fatal(err)
 				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
+				var count int
+				if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+					return tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views WHERE project_id=? AND execution_id=?", f.project, f.run).Scan(&count)
+				}); err != nil {
+					t.Fatal(err)
+				}
+				want := 1
+				if status == terminal {
+					want = 0
+				}
+				if count != want {
+					t.Fatalf("status %s retained %d views, want %d", status, count, want)
+				}
 			}
+
 			if pinned.StateVersion != view.StateVersion {
 				t.Fatal("fixture did not retain the refreshed read version")
 			}

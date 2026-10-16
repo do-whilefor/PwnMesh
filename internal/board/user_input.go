@@ -48,5 +48,5 @@ func (t *Tx) SaveUserInput(g Graph, op, id, run string, payload, result any) err
 	if err != nil {
 		return err
 	}
-	return sqlstore.InsertStateEvent(t, g.Project.ID, revision, string(event))
+	return sqlstore.InsertStateEvent(t.transactionQueries, g.Project.ID, revision, string(event))
 }

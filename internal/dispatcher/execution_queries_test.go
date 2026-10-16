@@ -22,23 +22,25 @@ func TestDispatcherIgnoresLargeUnrelatedExecutionHistory(t *testing.T) {
 	s, runner, store, graph := automaticRetryFixture(t, 1, "transport")
 	// A retained terminal Job in the same namespace already exceeds the HTTP
 	// client's limit. Neither scheduling nor any live graph tool needs it.
-	err := store.Do(context.Background(), func(tx *board.Tx) error {
-		unrelated := board.Graph{Project: board.Project{ID: "unrelated-history", Status: "stopped", Title: "Retained history", CreatedAt: tx.Now}}
-		if err := tx.Save(unrelated); err != nil {
-			return err
-		}
-		raw, err := json.Marshal(map[string]any{"run_id": "old", "kind": "reason", "graph": unrelated, "retained": strings.Repeat("x", 33<<20)})
-		if err != nil {
-			return err
-		}
-		_, err = tx.Exec(`INSERT INTO pwnmesh_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, unrelated.Project.ID, "old", "pwnmesh", "old", "reason", "", "old@old", raw, "old-input", "succeeded", tx.Now, tx.Now)
+	now := store.Now().UTC().Format(time.RFC3339)
+	unrelated := board.Graph{Project: board.Project{ID: "unrelated-history", Status: "stopped", Title: "Retained history", CreatedAt: now}}
+	if err := store.Do(context.Background(), func(tx *board.Tx) error { return tx.Save(unrelated) }); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"run_id": "old", "kind": "reason", "graph": unrelated, "retained": strings.Repeat("x", 33<<20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+		_, err := tx.Exec(`INSERT INTO pwnmesh_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, unrelated.Project.ID, "old", "pwnmesh", "old", "reason", "", "old@old", raw, "old-input", "succeeded", now, now)
 		return err
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var retainedBytes int64
-	if err = store.Do(context.Background(), func(tx *board.Tx) error {
+	if err = fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		return tx.QueryRow("SELECT SUM(LENGTH(job)+COALESCE(LENGTH(result),0)) FROM pwnmesh_executions WHERE namespace=?", "pwnmesh").Scan(&retainedBytes)
 	}); err != nil || retainedBytes <= 32<<20 {
 		t.Fatalf("fixture did not retain more than 32 MiB: bytes=%d err=%v", retainedBytes, err)
@@ -268,9 +270,14 @@ func TestLiveGraphReadPagesBeforeDispatcherResponseLimit(t *testing.T) {
 		if err = tx.Save(g); err != nil {
 			return err
 		}
-		return seedFixtureFacts(tx, graph.Project.ID, 1, board.FactRecord{ID: "large", Description: "Large retained evidence", Status: "valid", Evidence: []board.EvidenceRef{evidence}})
+		return nil
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fixtureSQL(store).Do(ctx, func(tx *fixtureSQLTx) error {
+		return seedFixtureFacts(tx, graph.Project.ID, 1, board.FactRecord{ID: "large", Description: "Large retained evidence", Status: "valid", Evidence: []board.EvidenceRef{evidence}})
+	}); err != nil {
 		t.Fatal(err)
 	}
 	var whole board.State

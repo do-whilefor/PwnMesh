@@ -41,5 +41,5 @@ func assetIDs(assets []Asset) []string {
 }
 
 func (t *Tx) addAssetAnchors(project string, generation int64, kind, id string, assets []Asset) error {
-	return sqlstore.InsertAssetAnchors(t, project, generation, kind, id, assets)
+	return sqlstore.InsertAssetAnchors(t.transactionQueries, project, generation, kind, id, assets)
 }

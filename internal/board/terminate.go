@@ -23,14 +23,14 @@ func (t *Tx) TerminateProject(project string, expected *int64) (out Graph, err e
 	if g.Project.Status != "active" && g.Project.Status != "stopped" {
 		return Graph{}, Err(409, "Only active or stopped projects can be terminated")
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return Graph{}, err
 	}
 	defer t.finishManagement(&err)
 	if err = t.RevokeRuns(project); err != nil {
 		return Graph{}, err
 	}
-	ids, err := sqlstore.PendingProjectExecutionIDs(t, project)
+	ids, err := sqlstore.PendingProjectExecutionIDs(t.transactionQueries, project)
 	if err != nil {
 		return Graph{}, err
 	}
@@ -46,12 +46,12 @@ func (t *Tx) TerminateProject(project string, expected *int64) (out Graph, err e
 			return Graph{}, err
 		}
 	}
-	if err = sqlstore.DeletePausedExecutions(t, project); err != nil {
+	if err = sqlstore.DeletePausedExecutions(t.transactionQueries, project); err != nil {
 		return Graph{}, err
 	}
 	// Cancel outstanding one-use retry grants as well as running work, while
 	// retaining the attempt's stored result and original failure history.
-	if err = sqlstore.CancelProjectRetries(t, project, t.Now); err != nil {
+	if err = sqlstore.CancelProjectRetries(t.transactionQueries, project, t.Now); err != nil {
 		return Graph{}, err
 	}
 	g.Project.Status, g.Project.Reason, g.Project.TerminatedAt = "terminated", nil, t.Now
@@ -61,7 +61,7 @@ func (t *Tx) TerminateProject(project string, expected *int64) (out Graph, err e
 			g.Intents[index].Worker = nil
 		}
 	}
-	if err = sqlstore.RecordProjectTermination(t, project, t.Now); err != nil {
+	if err = sqlstore.RecordProjectTermination(t.transactionQueries, project, t.Now); err != nil {
 		return Graph{}, err
 	}
 	return g, t.Save(g)

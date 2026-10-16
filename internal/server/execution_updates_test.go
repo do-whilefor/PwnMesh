@@ -17,9 +17,9 @@ func TestExecutionUpdatesRebaselineBeyondEventPage(t *testing.T) {
 	before := f.state()
 	// Seed only event-index churn: the correction deliberately lands beyond
 	// the first page, so scanning those 1000 events cannot discover its ID.
-	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		for revision := before.Revision + 1; revision <= before.Revision+1001; revision++ {
-			event, _ := json.Marshal(board.StateEvent{Revision: revision, Op: "hint", ID: "unrelated", CreatedAt: tx.Now})
+			event, _ := json.Marshal(board.StateEvent{Revision: revision, Op: "hint", ID: "unrelated", CreatedAt: f.store.Now().UTC().Format("2006-01-02T15:04:05Z07:00")})
 			if _, err := tx.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", f.project, revision, string(event)); err != nil {
 				return err
 			}

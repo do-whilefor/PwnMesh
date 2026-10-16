@@ -68,7 +68,7 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registered
 			return err
 		}
 		for _, kind := range []string{"fact", "intent"} {
-			if _, err := tx.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES(?,?,?)", stateBenchmarkProject, kind, size.intents); err != nil {
+			if _, err := tx.transactionQueries.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES(?,?,?)", stateBenchmarkProject, kind, size.intents); err != nil {
 				return err
 			}
 		}
@@ -76,7 +76,7 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registered
 		if err != nil {
 			return err
 		}
-		if err = sqlstore.SaveStateMetadata(tx, stateBenchmarkProject, string(raw), 0, 0); err != nil {
+		if err = sqlstore.SaveStateMetadata(tx.transactionQueries, stateBenchmarkProject, string(raw), 0, 0); err != nil {
 			return err
 		}
 		state, err := tx.State(stateBenchmarkProject)

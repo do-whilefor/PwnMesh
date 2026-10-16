@@ -44,7 +44,7 @@ func (*invalidatingRetryRunner) Cleanup(context.Context, string, string) error {
 func (*invalidatingRetryRunner) Projects(context.Context) ([]string, error)    { return nil, nil }
 
 func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
-	store, err := board.Open(filepath.Join(t.TempDir(), "retry-correction.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "retry-correction.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,8 +53,9 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	var state board.State
+	var graph board.Graph
 	err = store.Do(ctx, func(tx *board.Tx) error {
-		graph := board.Graph{
+		graph = board.Graph{
 			Project: board.Project{ID: "retry-fixture", Status: "active", Title: "Retry fixture", OrchestrationVersion: 1, CreatedAt: tx.Now, Curator: &board.Reason{Worker: "planner@correction", StartedAt: tx.Now, Heartbeat: tx.Now}},
 			Facts:   []board.Fact{{ID: "origin", Description: "Synthetic test scope"}, {ID: "goal", Description: "Verify a bounded observation"}, {ID: "f001", Description: "Initial premise"}, {ID: "f002", Description: "Independent corrective observation"}},
 			Intents: []board.Intent{{ID: "i001", From: []string{"f001"}, Description: "Verify the initial premise", Creator: "fixture", Worker: board.Ptr("fixture@execute-retry"), Heartbeat: board.Ptr(tx.Now), CreatedAt: tx.Now}},
@@ -62,14 +63,26 @@ func TestRetryRechecksCorrectedStepBeforeStartingAnotherProcess(t *testing.T) {
 		if err := tx.Save(graph); err != nil {
 			return err
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = fixtureSQL(store).Do(ctx, func(tx *fixtureSQLTx) error {
 		// Corrections require a retained observation, not a legacy input Fact.
 		if err := seedFixtureFacts(tx, graph.Project.ID, 0, board.FactRecord{
-			ID: "f002", Description: graph.Facts[3].Description, Scope: "controlled fixture", ObservedAt: tx.Now,
+			ID: "f002", Description: graph.Facts[3].Description, Scope: "controlled fixture", ObservedAt: graph.Project.CreatedAt,
 			Status: "valid", RunID: "observer@correction-source",
 			Evidence: []board.EvidenceRef{{RunID: "observer@correction-source", Path: "/workspace/evidence/correction.txt", Excerpt: "Independent check disproved the initial premise"}},
 		}); err != nil {
 			return err
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.View(ctx, func(tx *board.Tx) error {
 		state, err = tx.State(graph.Project.ID)
 		return err
 	})

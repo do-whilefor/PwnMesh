@@ -24,7 +24,7 @@ func (t *Tx) RestartProject(project string, expected *int64) (out Graph, err err
 	if len(inputs) != 2 {
 		return Graph{}, Err(409, "Project is missing its original input or goal")
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return Graph{}, err
 	}
 	defer t.finishManagement(&err)
@@ -40,7 +40,7 @@ func (t *Tx) RestartProject(project string, expected *int64) (out Graph, err err
 	g.Project.RestartedAt = t.Now
 	g.Project.TerminatedAt = ""
 	g.Facts, g.Intents = inputs, []Intent{}
-	if err = sqlstore.ResetProjectRound(t, project, g.Project.Generation, t.Now); err != nil {
+	if err = sqlstore.ResetProjectRound(t.transactionQueries, project, g.Project.Generation, t.Now); err != nil {
 		return Graph{}, err
 	}
 	return g, t.Save(g)

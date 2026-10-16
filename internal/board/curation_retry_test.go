@@ -152,7 +152,7 @@ func TestAutomaticCuratorRetryCannotCrossSafetyBoundaries(t *testing.T) {
 					_, err := tx.ClaimCurator("p", "other@curator", "other input")
 					return err
 				case "pending":
-					_, err := tx.Exec("UPDATE pwnmesh_executions SET status='running' WHERE project_id='p' AND id=?", e.ID)
+					_, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status='running' WHERE project_id='p' AND id=?", e.ID)
 					return err
 				case "other_pending":
 					if err := tx.ReleaseCurator("p", e.Lease); err != nil {
@@ -179,10 +179,10 @@ func TestAutomaticCuratorRetryCannotCrossSafetyBoundaries(t *testing.T) {
 					// changing the content hash, to exercise the independent receipt guard.
 					request, _ := json.Marshal(map[string]any{"Run": e.Lease, "Op": "curate"})
 					response, _ := json.Marshal(StateActionResult{Op: "curate", Committed: true})
-					_, err := tx.Exec("INSERT INTO pwnmesh_state_actions(project_id,idempotency_key,request,response) VALUES('p','committed',?,?)", string(request), string(response))
+					_, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_state_actions(project_id,idempotency_key,request,response) VALUES('p','committed',?,?)", string(request), string(response))
 					return err
 				default:
-					_, err := tx.Exec("UPDATE pwnmesh_executions SET status=? WHERE project_id='p' AND id=?", mode, e.ID)
+					_, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status=? WHERE project_id='p' AND id=?", mode, e.ID)
 					return err
 				}
 			})

@@ -84,7 +84,7 @@ func TestCurationRelationIdentityPreservesProvenanceAndEverySubmission(t *testin
 							t.Fatal("event history lost a curator's original reasoning")
 						}
 						var request string
-						if err := tx.QueryRow("SELECT request FROM pwnmesh_state_actions WHERE project_id='p' AND idempotency_key=?", entry.key).Scan(&request); err != nil {
+						if err := tx.transactionQueries.QueryRow("SELECT request FROM pwnmesh_state_actions WHERE project_id='p' AND idempotency_key=?", entry.key).Scan(&request); err != nil {
 							return err
 						}
 						var savedRequest struct {

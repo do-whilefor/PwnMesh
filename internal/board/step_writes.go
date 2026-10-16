@@ -75,7 +75,7 @@ func stepWriteConflict(step Step, others []Step) string {
 func (t *Tx) activeStepWriteOwners(project string) ([]Step, error) {
 	var owners []Step
 	var ids []string
-	err := sqlstore.VisitStepWriteOwners(t, project, func(id, worker string) error {
+	err := sqlstore.VisitStepWriteOwners(t.transactionQueries, project, func(id, worker string) error {
 		// An abandoned or already concluded Step can still have a pending Run.
 		// Do not project its business status into the reservation's lifetime.
 		owners = append(owners, Step{ID: id, Worker: Ptr(worker), Status: "running"})
@@ -101,7 +101,7 @@ func (t *Tx) activeStepWriteOwners(project string) ([]Step, error) {
 }
 
 func (t *Tx) stepMetadataByID(project string, ids ...string) ([]stepMetadata, error) {
-	rows, err := sqlstore.StateStepMetadataByID(t, project, ids)
+	rows, err := sqlstore.StateStepMetadataByID(t.transactionQueries, project, ids)
 	if err != nil {
 		return nil, err
 	}

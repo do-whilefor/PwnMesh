@@ -24,7 +24,7 @@ func TestPrepareRejectsMalformedProtocolsBeforeFreezingInput(t *testing.T) {
 					f.request("POST", f.base()+"/executions/prepare", invalid, true, http.StatusUnprocessableEntity, nil)
 				})
 			}
-			if err := store.Do(context.Background(), func(tx *board.Tx) error {
+			if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 				for _, table := range []string{"pwnmesh_executions", "pwnmesh_input_snapshots"} {
 					var count int
 					if err := tx.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE project_id=?", f.project).Scan(&count); err != nil {

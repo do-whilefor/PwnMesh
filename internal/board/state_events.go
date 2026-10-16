@@ -26,7 +26,7 @@ func (t *Tx) recordExecutionFailure(e Execution, status string, failure json.Raw
 	}
 	detail, _ := json.Marshal(map[string]any{"run_id": e.ID, "status": status, "reason": executionFailureDescription(status, failure), "result": failure})
 	event, _ := json.Marshal(StateEvent{Revision: revision, Op: "execution_failed", ID: e.Intent, RunID: e.Lease, CreatedAt: t.Now, Payload: detail, Result: detail})
-	return sqlstore.InsertStateEvent(t, e.ProjectID, revision, string(event))
+	return sqlstore.InsertStateEvent(t.transactionQueries, e.ProjectID, revision, string(event))
 }
 
 // Event-only changes preserve metadata byte-for-byte, including unknown fields
@@ -36,7 +36,7 @@ func (t *Tx) advanceStateRevision(project string, decisionChange bool) (int64, e
 	if decisionChange {
 		increment = 1
 	}
-	return sqlstore.AdvanceStateRevision(t, project, `{"goals":[],"steps":[],"facts":[],"findings":[],"fact_relations":[]}`, increment)
+	return sqlstore.AdvanceStateRevision(t.transactionQueries, project, `{"goals":[],"steps":[],"facts":[],"findings":[],"fact_relations":[]}`, increment)
 }
 
 func (t *Tx) StateEvents(project string, after int64) ([]StateEvent, error) {
@@ -44,7 +44,7 @@ func (t *Tx) StateEvents(project string, after int64) ([]StateEvent, error) {
 		return nil, err
 	}
 	out := []StateEvent{}
-	err := sqlstore.VisitStateEvents(t, project, &after, 1000, func(_ int64, raw []byte) error {
+	err := sqlstore.VisitStateEvents(t.transactionQueries, project, &after, 1000, func(_ int64, raw []byte) error {
 		var event StateEvent
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return err

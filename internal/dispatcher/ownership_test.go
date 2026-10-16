@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"pwnmesh/internal/board"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/server"
@@ -58,7 +57,7 @@ func (r *ownershipRunner) assertUntouched(t *testing.T) {
 }
 
 func TestDispatcherOwnershipRejectsConcurrentStartup(t *testing.T) {
-	store, err := board.Open(filepath.Join(t.TempDir(), "ownership.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "ownership.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

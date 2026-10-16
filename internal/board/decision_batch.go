@@ -23,7 +23,7 @@ func (t *Tx) CheckDirectDecisionWrite(project string, fence ExecutionFence) erro
 	if fence.Run == "" || fence.Lease != "reason" {
 		return nil
 	}
-	_, _, _, err := sqlstore.ExecutionIdentityByLease(t, project, fence.Run)
+	_, _, _, err := sqlstore.ExecutionIdentityByLease(t.transactionQueries, project, fence.Run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
@@ -37,7 +37,7 @@ func (t *Tx) batchExecution(project string, fence ExecutionFence) (Execution, er
 	if fence.Run == "" || fence.Lease != "reason" || fence.Intent != "" {
 		return Execution{}, Err(403, "decision batches require a registered Decide lease")
 	}
-	e, err := sqlstore.ExecutionByLease(t, project, fence.Run, "reason")
+	e, err := sqlstore.ExecutionByLease(t.transactionQueries, project, fence.Run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return Execution{}, Err(403, "decision batches require a registered Decide execution")
 	}
@@ -268,16 +268,16 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 			}
 		}
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_decision_batch"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_decision_batch"); err != nil {
 		return out, err
 	}
 	keep := false
 	defer func() {
 		if !keep {
-			_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_decision_batch")
+			_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_decision_batch")
 			err = errors.Join(err, rollbackErr)
 		}
-		_, releaseErr := t.Exec("RELEASE pwnmesh_decision_batch")
+		_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_decision_batch")
 		err = errors.Join(err, releaseErr)
 	}()
 	for n, action := range actions {

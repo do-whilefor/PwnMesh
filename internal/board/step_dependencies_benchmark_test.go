@@ -57,7 +57,7 @@ func BenchmarkStepDependencyResultsArchivedBodies(b *testing.B) {
 				b.Fatal(err)
 			}
 			f.do(func(tx *Tx) error {
-				_, err := tx.Exec("UPDATE pwnmesh_executions SET job=?,result=? WHERE project_id=? AND id=?", body, body, producer.ProjectID, producer.ID)
+				_, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET job=?,result=? WHERE project_id=? AND id=?", body, body, producer.ProjectID, producer.ID)
 				return err
 			})
 			b.ReportAllocs()

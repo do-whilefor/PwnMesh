@@ -72,7 +72,7 @@ func (r *dependencyRunner) Run(ctx context.Context, _ config.Worker, j protocol.
 func TestSchedulerWaitsForAcceptedDependencyAndCancelsInvalidatedConsumer(t *testing.T) {
 	for _, invalidate := range []bool{false, true} {
 		t.Run(map[bool]string{false: "successful_chain", true: "invalidation"}[invalidate], func(t *testing.T) {
-			store, err := board.Open(filepath.Join(t.TempDir(), "dependencies.db"))
+			store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "dependencies.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +122,7 @@ func TestSchedulerWaitsForAcceptedDependencyAndCancelsInvalidatedConsumer(t *tes
 			}
 			if invalidate {
 				fact := consumer.DependencyResults[0].FactID
-				err = store.Do(ctx, func(tx *board.Tx) error {
+				err = fixtureSQL(store).Do(ctx, func(tx *fixtureSQLTx) error {
 					if _, err := tx.Exec(`UPDATE pwnmesh_fact_metadata SET data=json_set(data,'$.status','refuted') WHERE project_id=? AND json_extract(data,'$.id')=?`, g.Project.ID, fact); err != nil {
 						return err
 					}

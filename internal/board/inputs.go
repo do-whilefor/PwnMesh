@@ -27,7 +27,7 @@ func (t *Tx) InputBatchReceipt(project, key, requestSHA256 string) ([]InputFile,
 	if key == "" {
 		return nil, false, nil
 	}
-	digest, response, err := sqlstore.InputBatchReceipt(t, project, key)
+	digest, response, err := sqlstore.InputBatchReceipt(t.transactionQueries, project, key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, false, nil
 	}
@@ -50,7 +50,7 @@ func (t *Tx) SaveInputBatchReceipt(project, key, requestSHA256 string, inputs []
 	if err != nil {
 		return err
 	}
-	return sqlstore.InsertInputBatchReceipt(t, project, key, requestSHA256, string(response))
+	return sqlstore.InsertInputBatchReceipt(t.transactionQueries, project, key, requestSHA256, string(response))
 }
 
 func ValidInputName(name string) bool { return model.ValidInputName(name) }
@@ -61,14 +61,14 @@ func inputPath(f InputFile) InputFile {
 }
 
 func (t *Tx) InputFiles(project string) ([]InputFile, error) {
-	exists, err := sqlstore.ProjectExists(t, project)
+	exists, err := sqlstore.ProjectExists(t.transactionQueries, project)
 	if err != nil {
 		return nil, err
 	}
 	if !exists {
 		return nil, Err(404, "Project not found")
 	}
-	items, err := sqlstore.InputFiles(t, project)
+	items, err := sqlstore.InputFiles(t.transactionQueries, project)
 	for n := range items {
 		items[n] = inputPath(items[n])
 	}
@@ -76,7 +76,7 @@ func (t *Tx) InputFiles(project string) ([]InputFile, error) {
 }
 
 func (t *Tx) InputFile(project, id string) (InputFile, error) {
-	f, err := sqlstore.InputFile(t, project, id)
+	f, err := sqlstore.InputFile(t.transactionQueries, project, id)
 	f = inputPath(f)
 	if errors.Is(err, sql.ErrNoRows) {
 		return f, Err(404, "Input file not found")
@@ -95,7 +95,7 @@ func (t *Tx) CopyInputData(project, id string, output io.Writer) (InputFile, err
 		return f, errors.New("invalid input file size")
 	}
 	hash := sha256.New()
-	if err := sqlstore.CopyInputData(t, project, id, f.Size, io.MultiWriter(output, hash)); err != nil {
+	if err := sqlstore.CopyInputData(t.transactionQueries, project, id, f.Size, io.MultiWriter(output, hash)); err != nil {
 		return f, err
 	}
 	if hex.EncodeToString(hash.Sum(nil)) != f.SHA256 {
@@ -122,26 +122,26 @@ func (t *Tx) AddInput(project, name string, data []byte) (out InputFile, err err
 	digest := hex.EncodeToString(sum[:])
 	idHash := sha256.Sum256([]byte(name + "\x00" + digest))
 	id := hex.EncodeToString(idHash[:])
-	old, err := sqlstore.InputFile(t, project, id)
+	old, err := sqlstore.InputFile(t.transactionQueries, project, id)
 	if err == nil {
 		return inputPath(old), nil
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return InputFile{}, err
 	}
-	count, size, err := sqlstore.InputUsage(t, project)
+	count, size, err := sqlstore.InputUsage(t.transactionQueries, project)
 	if err != nil {
 		return InputFile{}, err
 	}
 	if count >= MaxProjectInputs || size+int64(len(data)) > MaxProjectInputBytes {
 		return InputFile{}, Err(413, "Project input limit is 32 files and 512 MiB")
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return InputFile{}, err
 	}
 	defer t.finishManagement(&err)
 	f := inputPath(InputFile{ID: id, Name: name, Size: int64(len(data)), SHA256: digest, CreatedAt: t.Now})
-	if err = sqlstore.InsertInputFile(t, project, f, data); err != nil {
+	if err = sqlstore.InsertInputFile(t.transactionQueries, project, f, data); err != nil {
 		return InputFile{}, err
 	}
 	hintID, err := t.Next(project, "hint")

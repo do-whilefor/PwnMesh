@@ -38,7 +38,7 @@ func TestViewKeepsConsistentSnapshotWithoutBlockingWriter(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err = store.Do(ctx, func(tx *Tx) error {
-		_, err := tx.Exec("UPDATE projects SET title='after' WHERE id='p'")
+		_, err := tx.transactionQueries.Exec("UPDATE projects SET title='after' WHERE id='p'")
 		return err
 	})
 	close(release)
@@ -53,7 +53,7 @@ func TestViewKeepsConsistentSnapshotWithoutBlockingWriter(t *testing.T) {
 		if err == nil && got.Project.Title != "after" {
 			t.Fatal("new View did not observe the committed update")
 		}
-		if _, writeErr := tx.Exec("UPDATE projects SET title='forbidden' WHERE id='p'"); writeErr == nil {
+		if _, writeErr := tx.transactionQueries.Exec("UPDATE projects SET title='forbidden' WHERE id='p'"); writeErr == nil {
 			t.Fatal("query-only View accepted a mutation")
 		}
 		return err

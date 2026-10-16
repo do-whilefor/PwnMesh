@@ -176,7 +176,7 @@ func (f *batchFaultTransport) RoundTrip(request *http.Request) (*http.Response, 
 
 func batchSchedulerFixture(t *testing.T, directions int) (*Scheduler, *batchProtocolRunner, *batchFaultTransport, board.Graph, *board.Store) {
 	t.Helper()
-	store, err := board.Open(filepath.Join(t.TempDir(), "decision-flow.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "decision-flow.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

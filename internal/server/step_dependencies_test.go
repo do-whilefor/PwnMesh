@@ -51,7 +51,7 @@ func completeDependencyHTTPProducer(t *testing.T, f *executionProtocolFixture, s
 // retained premise is corrected by a future curator or migration.
 func invalidateDependencyHTTPFact(t *testing.T, f *executionProtocolFixture, id string) {
 	t.Helper()
-	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		if _, err := tx.Exec(`UPDATE pwnmesh_fact_metadata SET data=json_set(data,'$.status','refuted') WHERE project_id=? AND json_extract(data,'$.id')=?`, f.project, id); err != nil {
 			return err
 		}

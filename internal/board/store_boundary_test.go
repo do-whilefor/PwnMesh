@@ -10,18 +10,18 @@ import (
 	"pwnmesh/internal/board"
 )
 
-func TestTransactionCallbacksHideSQLLifecycleMethods(t *testing.T) {
+func TestTransactionCallbacksHideSQLAndLifecycleMethods(t *testing.T) {
 	store, err := board.Open(filepath.Join(t.TempDir(), "board.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	ctx := context.Background()
-	var before board.Settings
+	var before []string
 	check := func(tx *board.Tx) error {
-		for _, method := range []string{"Commit", "Rollback", "Stmt", "StmtContext", "Prepare", "PrepareContext"} {
+		for _, method := range []string{"Exec", "Query", "QueryRow", "Commit", "Rollback", "Stmt", "StmtContext", "Prepare", "PrepareContext"} {
 			if _, exists := reflect.TypeOf(tx).MethodByName(method); exists {
-				t.Errorf("callback exposes transaction ownership method %s", method)
+				t.Errorf("callback exposes SQL or transaction ownership method %s", method)
 			}
 		}
 		for _, field := range reflect.VisibleFields(reflect.TypeOf(*tx)) {
@@ -30,7 +30,7 @@ func TestTransactionCallbacksHideSQLLifecycleMethods(t *testing.T) {
 			}
 		}
 		var err error
-		before, err = tx.Settings()
+		before, err = tx.IDs()
 		return err
 	}
 	if err := store.View(ctx, check); err != nil {
@@ -41,7 +41,7 @@ func TestTransactionCallbacksHideSQLLifecycleMethods(t *testing.T) {
 		if err := check(tx); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("UPDATE settings SET intent_timeout=intent_timeout+1 WHERE rowid=1"); err != nil {
+		if err := tx.Save(board.Graph{Project: board.Project{ID: "rolled-back", Title: "Rollback fixture", Status: "active", CreatedAt: tx.Now}}); err != nil {
 			return err
 		}
 		return wantErr
@@ -49,9 +49,9 @@ func TestTransactionCallbacksHideSQLLifecycleMethods(t *testing.T) {
 		t.Fatalf("callback error = %v, want %v", err, wantErr)
 	}
 	if err := store.View(ctx, func(tx *board.Tx) error {
-		after, err := tx.Settings()
-		if err == nil && after != before {
-			t.Fatalf("failed operation committed settings: got %+v, want %+v", after, before)
+		after, err := tx.IDs()
+		if err == nil && !reflect.DeepEqual(after, before) {
+			t.Fatalf("failed operation committed a project: got %+v, want %+v", after, before)
 		}
 		return err
 	}); err != nil {

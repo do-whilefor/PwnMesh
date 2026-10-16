@@ -49,7 +49,7 @@ func TestProjectReadsPreserveLeasesAndSchedulingExpiresOnlyItsProject(t *testing
 func BenchmarkHeartbeatProjectHistory(b *testing.B) {
 	for _, projects := range []int{1, 128} {
 		b.Run(fmt.Sprintf("projects=%d", projects), func(b *testing.B) {
-			store, err := board.Open(filepath.Join(b.TempDir(), "history.db"))
+			store, err := openFixtureStore(b, filepath.Join(b.TempDir(), "history.db"))
 			if err != nil {
 				b.Fatal(err)
 			}

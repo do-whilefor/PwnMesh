@@ -147,6 +147,19 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 	result := CurateResult{Findings: []Finding{}, Disputes: []Dispute{}}
 	touchedFindings, touchedDisputes := map[string]bool{}, map[string]bool{}
 	beforeRelations := s
+	var inputs projectionInputs
+	if len(input.Relations) > 0 {
+		inputs, err = t.loadProjectionInputs(s.Graph)
+		if err != nil {
+			return "", nil, err
+		}
+		inputs.failureReasons = map[string]string{}
+		for _, step := range s.Steps {
+			if step.Status == "failed" {
+				inputs.failureReasons[step.ID] = step.Reason
+			}
+		}
+	}
 	for _, relation := range input.Relations {
 		raw, err := json.Marshal(relation)
 		if err != nil {
@@ -164,10 +177,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			// Validate later relations, candidate conclusions and review facts
 			// against the effective support after each preceding relation. The
 			// durable state, receipt and cursor remain untouched until all pass.
-			s, err = t.projectState(s.Graph, *d, s.Revision, s.DecisionRevision)
-			if err != nil {
-				return "", nil, err
-			}
+			s = inputs.build(s.Graph, *d, s.Revision, s.DecisionRevision)
 			// Curation owns persistence of changed support. The read projection
 			// stays detached so later finding replacements cannot erase this
 			// batch's originally pending groups before its progress check.
@@ -464,7 +474,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 }
 
 func (t *Tx) executionForLease(project, lease string) (Execution, error) {
-	return sqlstore.ExecutionByLease(t, project, lease, "")
+	return sqlstore.ExecutionByLease(t.transactionQueries, project, lease, "")
 }
 
 func (t *Tx) validateReviewFacts(s State, dispute Dispute, ids []string) error {

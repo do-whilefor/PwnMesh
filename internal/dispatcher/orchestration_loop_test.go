@@ -266,7 +266,7 @@ func (t *curationLostResponseTransport) RoundTrip(request *http.Request) (*http.
 func TestOrchestrationIndependentReviewClosesThroughProductionScheduler(t *testing.T) {
 	for _, mode := range []string{"normal", "curator_final_lost", "curation_response_lost"} {
 		t.Run(mode, func(t *testing.T) {
-			store, err := board.Open(filepath.Join(t.TempDir(), "orchestration.db"))
+			store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "orchestration.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -339,7 +339,7 @@ func TestOrchestrationIndependentReviewClosesThroughProductionScheduler(t *testi
 func TestUnsupportedProjectRejectedWithoutSchedulingOrMutation(t *testing.T) {
 	scheduler, runner, _, graph, store := batchSchedulerFixture(t, 1)
 	// Historical rows predate the current project-creation boundary.
-	if err := store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec("DELETE FROM pwnmesh_project_orchestration WHERE project_id=?", graph.Project.ID)
 		return err
 	}); err != nil {

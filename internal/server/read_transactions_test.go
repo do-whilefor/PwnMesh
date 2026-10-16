@@ -19,7 +19,7 @@ func holdProjectWriter(t *testing.T, f *executionProtocolFixture) {
 	t.Helper()
 	started, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
-		done <- f.store.Do(context.Background(), func(tx *board.Tx) error {
+		done <- fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 			_, err := tx.Exec("UPDATE projects SET title='uncommitted title' WHERE id=?", f.project)
 			close(started)
 			<-release
@@ -176,7 +176,7 @@ func TestObservationalHEADRequestsDoNotMutateProjects(t *testing.T) {
 func TestObservationalStateDoesNotExpireLeasesButSchedulingDoes(t *testing.T) {
 	f, store := newSnapshotHTTPFixture(t)
 	old := store.Now().Add(-time.Hour).Format(time.RFC3339)
-	if err := store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec("UPDATE projects SET reason_worker='crashed',reason_trigger='initial',reason_started_at=?,reason_last_heartbeat_at=? WHERE id=?", old, old, f.project)
 		return err
 	}); err != nil {
@@ -205,7 +205,7 @@ func TestObservationalStateDoesNotExpireLeasesButSchedulingDoes(t *testing.T) {
 func TestSettingsWriteRetainsLeaseMaintenance(t *testing.T) {
 	f, store := newSnapshotHTTPFixture(t)
 	old := store.Now().Add(-time.Hour).Format(time.RFC3339)
-	if err := store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec("UPDATE projects SET reason_worker='crashed',reason_trigger='initial',reason_started_at=?,reason_last_heartbeat_at=? WHERE id=?", old, old, f.project)
 		return err
 	}); err != nil {

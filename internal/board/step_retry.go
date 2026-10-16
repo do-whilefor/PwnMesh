@@ -35,7 +35,7 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 	if !slices.ContainsFunc(s.Goals, func(goal Goal) bool { return goal.ID == step.GoalID && goal.Status == "open" }) {
 		return "", nil, false, Err(409, "retry requires an open task goal")
 	}
-	latest, err := sqlstore.LatestIntentExecution(t, s.Graph.Project.ID, id)
+	latest, err := sqlstore.LatestIntentExecution(t.transactionQueries, s.Graph.Project.ID, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil, false, Err(409, "Step has no execution to retry")
 	}
@@ -51,7 +51,7 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 	if err := t.CheckRepairRetry(latest.ProjectID, latest.ID); err != nil {
 		return "", nil, false, err
 	}
-	pending, err := sqlstore.OtherStepRetryPending(t, latest.ProjectID, latest.Intent, latest.ID)
+	pending, err := sqlstore.OtherStepRetryPending(t.transactionQueries, latest.ProjectID, latest.Intent, latest.ID)
 	if err != nil {
 		return "", nil, false, err
 	}
@@ -108,7 +108,7 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 }
 
 func (t *Tx) CheckRepairRetry(project, run string) error {
-	failureKind, err := sqlstore.ExecutionFailureKind(t, project, run)
+	failureKind, err := sqlstore.ExecutionFailureKind(t.transactionQueries, project, run)
 	if err != nil {
 		return err
 	}

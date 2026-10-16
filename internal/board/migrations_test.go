@@ -24,7 +24,7 @@ func TestStoreMigrationBaselineAndReopenMaintenance(t *testing.T) {
 	if err := store.Do(context.Background(), func(tx *Tx) error {
 		var version int
 		var name string
-		if err := tx.QueryRow("SELECT version,name,applied_at FROM pwnmesh_schema_migrations WHERE version=4").Scan(&version, &name, &appliedAt); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT version,name,applied_at FROM pwnmesh_schema_migrations WHERE version=4").Scan(&version, &name, &appliedAt); err != nil {
 			return err
 		}
 		if version != 4 || name != "normalized-state-records" || appliedAt == "" {
@@ -38,7 +38,7 @@ func TestStoreMigrationBaselineAndReopenMaintenance(t *testing.T) {
 			return err
 		}
 		putQueryExecution(t, tx, Execution{ProjectID: "proj_041", ID: "restored", Status: "succeeded"}, 7, "")
-		_, err := tx.Exec(`DELETE FROM counters WHERE name='project'; DELETE FROM scoped_counters;
+		_, err := tx.transactionQueries.Exec(`DELETE FROM counters WHERE name='project'; DELETE FROM scoped_counters;
 DELETE FROM settings; DELETE FROM pwnmesh_installation;
 DELETE FROM pwnmesh_ui_execution_changes; DELETE FROM pwnmesh_ui_execution_revisions;`)
 		return err
@@ -55,7 +55,7 @@ DELETE FROM pwnmesh_ui_execution_changes; DELETE FROM pwnmesh_ui_execution_revis
 	if err := store.Do(context.Background(), func(tx *Tx) error {
 		var count int
 		var after string
-		if err := tx.QueryRow("SELECT COUNT(*),MAX(applied_at) FROM pwnmesh_schema_migrations").Scan(&count, &after); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT COUNT(*),MAX(applied_at) FROM pwnmesh_schema_migrations").Scan(&count, &after); err != nil {
 			return err
 		}
 		if count != 4 || after != appliedAt {
@@ -68,7 +68,7 @@ DELETE FROM pwnmesh_ui_execution_changes; DELETE FROM pwnmesh_ui_execution_revis
 			t.Fatalf("versioned reopen did not repair fact counter: %q %v", id, err)
 		}
 		var generation, metadataVersion int
-		if err := tx.QueryRow("SELECT generation,metadata_version FROM pwnmesh_executions WHERE id='restored'").Scan(&generation, &metadataVersion); err != nil || generation != 7 || metadataVersion != 1 {
+		if err := tx.transactionQueries.QueryRow("SELECT generation,metadata_version FROM pwnmesh_executions WHERE id='restored'").Scan(&generation, &metadataVersion); err != nil || generation != 7 || metadataVersion != 1 {
 			t.Fatalf("versioned reopen changed execution metadata: generation=%d version=%d err=%v", generation, metadataVersion, err)
 		}
 		settings, err := tx.Settings()
@@ -76,10 +76,10 @@ DELETE FROM pwnmesh_ui_execution_changes; DELETE FROM pwnmesh_ui_execution_revis
 			t.Fatalf("versioned reopen did not restore default settings: %+v %v", settings, err)
 		}
 		var identity string
-		if err := tx.QueryRow("SELECT identity FROM pwnmesh_installation WHERE singleton=1").Scan(&identity); err != nil || len(identity) != 32 {
+		if err := tx.transactionQueries.QueryRow("SELECT identity FROM pwnmesh_installation WHERE singleton=1").Scan(&identity); err != nil || len(identity) != 32 {
 			t.Fatalf("versioned reopen did not reseed missing installation: %q %v", identity, err)
 		}
-		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_ui_execution_changes c JOIN pwnmesh_ui_execution_revisions r ON c.project_id=r.project_id WHERE c.execution_id='restored' AND c.revision<=r.revision").Scan(&count); err != nil || count != 1 {
+		if err := tx.transactionQueries.QueryRow("SELECT COUNT(*) FROM pwnmesh_ui_execution_changes c JOIN pwnmesh_ui_execution_revisions r ON c.project_id=r.project_id WHERE c.execution_id='restored' AND c.revision<=r.revision").Scan(&count); err != nil || count != 1 {
 			t.Fatalf("versioned reopen did not restore execution change projection: %d %v", count, err)
 		}
 		return nil
@@ -116,7 +116,7 @@ func TestStoreRejectsUnsupportedExecutionMetadataWithoutBackfill(t *testing.T) {
 		}
 		executionQueryTx(t, store, func(tx *Tx) {
 			putQueryExecution(t, tx, Execution{ID: "retained", Status: "succeeded"}, 7, "")
-			if _, err := tx.Exec("UPDATE pwnmesh_executions SET metadata_version=?; DELETE FROM settings", version); err != nil {
+			if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET metadata_version=?; DELETE FROM settings", version); err != nil {
 				t.Fatal(err)
 			}
 		})
@@ -134,7 +134,7 @@ func TestDomainReadsCurrentStoreAfterReopen(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = store.Do(context.Background(), func(tx *Tx) error {
-		_, err := tx.Exec(`
+		_, err := tx.transactionQueries.Exec(`
 INSERT INTO projects(id,title,status,created_at) VALUES('proj_041','Retained','active','then');
 INSERT INTO facts VALUES('f012','proj_041','Retained observation');
 INSERT INTO pwnmesh_project_metadata VALUES('proj_041','ctf');

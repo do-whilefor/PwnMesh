@@ -53,7 +53,7 @@ func TestUnsupportedProjectRemainsRejectedAfterDatabaseReopen(t *testing.T) {
 	for _, bootstrap := range []bool{false, true} {
 		t.Run(map[bool]string{false: "decide", true: "bootstrap"}[bootstrap], func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "historical.db")
-			store, err := board.Open(path)
+			store, err := openFixtureStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,7 +68,7 @@ func TestUnsupportedProjectRemainsRejectedAfterDatabaseReopen(t *testing.T) {
 			if err = store.Close(); err != nil {
 				t.Fatal(err)
 			}
-			store, err = board.Open(path)
+			store, err = openFixtureStore(t, path)
 			if err != nil {
 				t.Fatal(err)
 			}

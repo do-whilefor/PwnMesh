@@ -17,11 +17,11 @@ func (t *Tx) archiveRound(project string) error {
 		return err
 	}
 	generation := state.Graph.Project.Generation
-	if err = sqlstore.InsertRound(t, project, generation, t.Now); err != nil {
+	if err = sqlstore.InsertRound(t.transactionQueries, project, generation, t.Now); err != nil {
 		return err
 	}
 	save := func(kind, id string, raw []byte) error {
-		return sqlstore.InsertRoundEntry(t, project, generation, kind, id, raw)
+		return sqlstore.InsertRoundEntry(t.transactionQueries, project, generation, kind, id, raw)
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -45,13 +45,13 @@ func (t *Tx) archiveRound(project string) error {
 	}
 	// Stream records one by one rather than materializing every historical Job
 	// or all evidence-bearing events in an archive-sized in-memory slice.
-	err = sqlstore.VisitStateEvents(t, project, nil, 0, func(revision int64, event []byte) error {
+	err = sqlstore.VisitStateEvents(t.transactionQueries, project, nil, 0, func(revision int64, event []byte) error {
 		return save("event", strconv.FormatInt(revision, 10), event)
 	})
 	if err != nil {
 		return err
 	}
-	err = sqlstore.VisitActionReceipts(t, project, func(id, request, response string) error {
+	err = sqlstore.VisitActionReceipts(t.transactionQueries, project, func(id, request, response string) error {
 		// Keep even legacy request/response text byte-for-byte.
 		data, err := json.Marshal(map[string]string{"request": request, "response": response})
 		if err != nil {
@@ -62,7 +62,7 @@ func (t *Tx) archiveRound(project string) error {
 	if err != nil {
 		return err
 	}
-	return sqlstore.VisitExecutions(t, project, func(execution Execution) error {
+	return sqlstore.VisitExecutions(t.transactionQueries, project, func(execution Execution) error {
 		raw, err := json.Marshal(execution)
 		if err != nil {
 			return err
@@ -86,14 +86,14 @@ func (t *Tx) RoundHistory(project string, after int64, limit int) (RoundPage, er
 	if after < -1 || limit < 1 || limit > 100 {
 		return out, Err(422, "round history requires cursor >= -1 and limit between 1 and 100")
 	}
-	exists, err := sqlstore.ProjectExists(t, project)
+	exists, err := sqlstore.ProjectExists(t.transactionQueries, project)
 	if err != nil {
 		return out, err
 	}
 	if !exists {
 		return out, Err(404, "Project not found")
 	}
-	err = sqlstore.VisitRoundHistory(t, project, after, limit+1, func(generation int64, archivedAt string) error {
+	err = sqlstore.VisitRoundHistory(t.transactionQueries, project, after, limit+1, func(generation int64, archivedAt string) error {
 		if len(out.Items) == limit {
 			cursor := out.Items[len(out.Items)-1].Generation
 			out.NextCursor = &cursor
@@ -119,7 +119,7 @@ type RoundEntryPage struct {
 }
 
 func (t *Tx) requireRound(project string, generation int64) error {
-	exists, err := sqlstore.RoundExists(t, project, generation)
+	exists, err := sqlstore.RoundExists(t.transactionQueries, project, generation)
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,7 @@ func (t *Tx) RoundEntries(project string, generation, after int64, limit int) (R
 	if err := t.requireRound(project, generation); err != nil {
 		return out, err
 	}
-	err := sqlstore.VisitRoundEntries(t, project, generation, after, limit+1, func(rowID int64, kind, id string, size int64, checksum string) error {
+	err := sqlstore.VisitRoundEntries(t.transactionQueries, project, generation, after, limit+1, func(rowID int64, kind, id string, size int64, checksum string) error {
 		if len(out.Items) == limit {
 			cursor := out.Items[len(out.Items)-1].Cursor
 			out.NextCursor = &cursor
@@ -164,7 +164,7 @@ func (t *Tx) ReadRoundEntry(project string, generation, entry, offset int64, lim
 		return out, Err(422, "invalid archive entry; byte limit must be between 1 and 32768")
 	}
 	var err error
-	out.Data, out.TotalBytes, out.SHA256, err = sqlstore.ReadRoundEntry(t, project, generation, entry, offset, limit)
+	out.Data, out.TotalBytes, out.SHA256, err = sqlstore.ReadRoundEntry(t.transactionQueries, project, generation, entry, offset, limit)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, Err(404, "Archived entry not found")
 	}

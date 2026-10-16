@@ -10,11 +10,11 @@ import (
 // Continue must not grant blanket retries to unrelated failures or abandoned
 // directions. The marker survives dispatcher shutdown and cascades on restart.
 func (t *Tx) markPausedExecutions(g Graph) error {
-	return sqlstore.MarkPausedExecutions(t, g.Project.ID)
+	return sqlstore.MarkPausedExecutions(t.transactionQueries, g.Project.ID)
 }
 
 func (t *Tx) continuePausedExecutions(g Graph) error {
-	ids, err := sqlstore.PausedExecutionIDs(t, g.Project.ID)
+	ids, err := sqlstore.PausedExecutionIDs(t.transactionQueries, g.Project.ID)
 	if err != nil {
 		return err
 	}
@@ -59,5 +59,5 @@ func (t *Tx) continuePausedExecutions(g Graph) error {
 			return err
 		}
 	}
-	return sqlstore.DeletePausedExecutions(t, g.Project.ID)
+	return sqlstore.DeletePausedExecutions(t.transactionQueries, g.Project.ID)
 }

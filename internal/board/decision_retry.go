@@ -33,7 +33,7 @@ func automaticDecisionRetryEligible(kind, status, resultStatus, failureKind, fai
 // this retry key exhausts it, even after dispatcher restart. Human retry remains
 // a separate operation and does not replenish the automatic allowance.
 func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
-	current, failure, err := sqlstore.ExecutionSummaryWithFailure(t, e.ProjectID, e.ID)
+	current, failure, err := sqlstore.ExecutionSummaryWithFailure(t.transactionQueries, e.ProjectID, e.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Err(404, "Execution not found")
 	}
@@ -47,7 +47,7 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
 	if !automaticDecisionRetryEligible(current.Kind, status, failure.ResultStatus, failure.Kind, failure.Cause) {
 		return Err(409, "Decision failure does not allow automatic retry")
 	}
-	projectStatus, generation, leaseWorker, err := sqlstore.RetryProjectState(t, current.ProjectID)
+	projectStatus, generation, leaseWorker, err := sqlstore.RetryProjectState(t.transactionQueries, current.ProjectID)
 	if err != nil {
 		return err
 	}
@@ -78,14 +78,14 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
 			leaseWorker = &curator.Worker
 		}
 	}
-	attempts, err := sqlstore.ExecutionAttempts(t, current.Namespace, current.ProjectID, current.Kind, current.RetryKey, generation)
+	attempts, err := sqlstore.ExecutionAttempts(t.transactionQueries, current.Namespace, current.ProjectID, current.Kind, current.RetryKey, generation)
 	if err != nil {
 		return err
 	}
 	if attempts != 1 {
 		return Err(409, "Automatic decision retry allowance exhausted for this input")
 	}
-	pending, err := sqlstore.OtherDecisionRetryPending(t, current.ProjectID, current.ID, current.Kind, current.Kind == "curate", current.RetryKey, generation)
+	pending, err := sqlstore.OtherDecisionRetryPending(t.transactionQueries, current.ProjectID, current.ID, current.Kind, current.Kind == "curate", current.RetryKey, generation)
 	if err != nil {
 		return err
 	}
@@ -94,13 +94,13 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
 	}
 	// A caller may handle a failed grant and continue its transaction. Keep
 	// revocation, lease release and authorization indivisible in that case too.
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return err
 	}
 	defer t.finishManagement(&err)
 	// Terminal failures are already revoked. Revoke defensively and release
 	// only this attempt's lease in the same transaction as its one-use grant.
-	if err = sqlstore.RevokeRun(t, current.ProjectID, current.Lease); err != nil {
+	if err = sqlstore.RevokeRun(t.transactionQueries, current.ProjectID, current.Lease); err != nil {
 		return err
 	}
 	if leaseWorker != nil {
@@ -118,5 +118,5 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
 	if current.Status == "retry_requested" {
 		return nil
 	}
-	return sqlstore.SaveExecutionRetryGrant(t, current.ProjectID, current.ID, t.Now)
+	return sqlstore.SaveExecutionRetryGrant(t.transactionQueries, current.ProjectID, current.ID, t.Now)
 }

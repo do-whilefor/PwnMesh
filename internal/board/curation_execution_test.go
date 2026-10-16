@@ -34,7 +34,7 @@ func TestCurationSettlementFailureRollsBackBusinessCommitInsideCallerTransaction
 	e, input := f.curator("rollback")
 	before := f.state()
 	f.do(func(tx *Tx) error {
-		_, err := tx.Exec("CREATE TRIGGER reject_curation_settlement BEFORE UPDATE OF status ON pwnmesh_executions WHEN NEW.kind='curate' AND NEW.status='succeeded' BEGIN SELECT RAISE(FAIL,'synthetic settlement failure'); END")
+		_, err := tx.transactionQueries.Exec("CREATE TRIGGER reject_curation_settlement BEFORE UPDATE OF status ON pwnmesh_executions WHEN NEW.kind='curate' AND NEW.status='succeeded' BEGIN SELECT RAISE(FAIL,'synthetic settlement failure'); END")
 		return err
 	})
 	raw, _ := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}})
@@ -72,10 +72,10 @@ func legacyPendingCuration(f *orchestrationFixture, status string) (Execution, j
 		retained = json.RawMessage(`{"status":"success","text":"{\"accepted\":true,\"data\":{\"curated\":true}}","metrics":{"version":1}}`)
 	}
 	f.do(func(tx *Tx) error {
-		if _, err := tx.Exec("UPDATE pwnmesh_executions SET status=?,result=?,resumes=2 WHERE project_id='p' AND id=?", status, []byte(retained), e.ID); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status=?,result=?,resumes=2 WHERE project_id='p' AND id=?", status, []byte(retained), e.ID); err != nil {
 			return err
 		}
-		if _, err := tx.Exec("DELETE FROM pwnmesh_revoked_runs WHERE project_id='p' AND worker=?", e.Lease); err != nil {
+		if _, err := tx.transactionQueries.Exec("DELETE FROM pwnmesh_revoked_runs WHERE project_id='p' AND worker=?", e.Lease); err != nil {
 			return err
 		}
 		return nil // A lost dispatcher may also have released the old lease.
@@ -114,13 +114,13 @@ func TestLegacyCurationSettlementCannotCrossManagementBoundary(t *testing.T) {
 			f.do(func(tx *Tx) error {
 				switch boundary {
 				case "stopped":
-					_, err := tx.Exec("UPDATE projects SET status='stopped' WHERE id='p'")
+					_, err := tx.transactionQueries.Exec("UPDATE projects SET status='stopped' WHERE id='p'")
 					return err
 				case "generation":
 					_, err := tx.RestartProject("p", nil)
 					return err
 				case "revoked":
-					_, err := tx.Exec("INSERT INTO pwnmesh_revoked_runs(project_id,worker) VALUES('p',?)", e.Lease)
+					_, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_revoked_runs(project_id,worker) VALUES('p',?)", e.Lease)
 					return err
 				case "owner":
 					_, err := tx.ClaimCurator("p", "other@curator", "new input")

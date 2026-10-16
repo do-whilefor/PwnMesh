@@ -102,7 +102,7 @@ func TestRunningInvalidatedStepRetainsIndependentObservationUntilCancelled(t *te
 	}
 	var observed StateActionResult
 	f.tx(func(tx *Tx) error {
-		_, err := tx.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES('proj_001','fact',2) ON CONFLICT(project_id,kind) DO UPDATE SET value=MAX(value,2)")
+		_, err := tx.transactionQueries.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES('proj_001','fact',2) ON CONFLICT(project_id,kind) DO UPDATE SET value=MAX(value,2)")
 		return err
 	})
 	payload := json.RawMessage(`{"description":"An independent observation remains reproducible","scope":"synthetic fixture","observed_at":"2026-09-22T10:00:00Z","evidence":[{"run_id":"execute-one","path":"/runs/execute-one/evidence.txt","excerpt":"independent original evidence"}]}`)

@@ -183,7 +183,7 @@ func TestLegacyCommittedCurationSettlesBeforeBackendAndRecoveryChecks(t *testing
 			if _, err := runner.curate(context.Background(), run.Job); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.Do(context.Background(), func(tx *board.Tx) error {
+			if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 				if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='running',result=NULL,resumes=2 WHERE project_id=? AND id=?", graph.Project.ID, run.Job.RunID); err != nil {
 					return err
 				}

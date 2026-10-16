@@ -41,7 +41,7 @@ func TestStepAdmissionReadsOnlyTargetAndLiveOwnerMetadata(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := sqlstore.SaveStateMetadata(tx, "p", `{"steps":[{"id":"owner","write_paths":["/workspace/shared"]},{"id":"waiting","write_paths":["/workspace/shared/file"]}]}`, 0, 0); err != nil {
+		if err := sqlstore.SaveStateMetadata(tx.transactionQueries, "p", `{"steps":[{"id":"owner","write_paths":["/workspace/shared"]},{"id":"waiting","write_paths":["/workspace/shared/file"]}]}`, 0, 0); err != nil {
 			t.Fatal(err)
 		}
 		tx.transactionQueries = scopedStepMetadataQueries{tx.transactionQueries}
@@ -68,7 +68,7 @@ func TestStepAdmissionPreservesDuplicateMetadataPolicies(t *testing.T) {
 		}}); err != nil {
 			t.Fatal(err)
 		}
-		if err := sqlstore.SaveStateMetadata(tx, "p", `{"steps":[{"id":"owner","write_paths":["/workspace/old"]},{"id":"waiting"},{"id":"waiting","write_paths":["/workspace/shared/file"]},{"id":"owner","write_paths":["/workspace/shared"]},{"id":"waiting","write_paths":["/workspace/unrelated"],"status":"abandoned"},{"id":"unrelated","priority":"not decoded"}]}`, 0, 0); err != nil {
+		if err := sqlstore.SaveStateMetadata(tx.transactionQueries, "p", `{"steps":[{"id":"owner","write_paths":["/workspace/old"]},{"id":"waiting"},{"id":"waiting","write_paths":["/workspace/shared/file"]},{"id":"owner","write_paths":["/workspace/shared"]},{"id":"waiting","write_paths":["/workspace/unrelated"],"status":"abandoned"},{"id":"unrelated","priority":"not decoded"}]}`, 0, 0); err != nil {
 			t.Fatal(err)
 		}
 		tx.transactionQueries = scopedStepMetadataQueries{tx.transactionQueries}
@@ -155,7 +155,7 @@ func TestStepWriteClaimsSerializeAcrossStoresWithoutBlockingIndependentWork(t *t
 				if err := tx.StepHeartbeatReady("p", ids[n], ""); err != nil {
 					return err
 				}
-				_, err := tx.Exec("UPDATE intents SET worker=?,last_heartbeat_at=? WHERE project_id='p' AND id=?", "writer@"+ids[n], tx.Now, ids[n])
+				_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=?,last_heartbeat_at=? WHERE project_id='p' AND id=?", "writer@"+ids[n], tx.Now, ids[n])
 				return err
 			})
 		}(n)
@@ -205,7 +205,7 @@ func TestStepWriteClaimsSerializeAcrossStoresWithoutBlockingIndependentWork(t *t
 		return err
 	})
 	f.do(func(tx *Tx) error {
-		_, err := tx.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", ids[winner])
+		_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", ids[winner])
 		if err != nil {
 			return err
 		}
@@ -259,7 +259,7 @@ func TestStepWritesRetainPendingReservationAfterLeaseEnds(t *testing.T) {
 					if err := tx.RevokeRuns("p"); err != nil {
 						return err
 					}
-					_, err := tx.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", writer)
+					_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", writer)
 					return err
 				})
 			case "expire":

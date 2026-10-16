@@ -29,7 +29,7 @@ func retrySuccessor(f *orchestrationFixture, previous Execution, label string) E
 	f.t.Helper()
 	// Simulate the dispatcher releasing the old lease only after cleanup.
 	f.do(func(tx *Tx) error {
-		_, err := tx.Exec("UPDATE intents SET worker=NULL WHERE project_id=? AND id=? AND worker=?", previous.ProjectID, previous.Intent, previous.Lease)
+		_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=NULL WHERE project_id=? AND id=? AND worker=?", previous.ProjectID, previous.Intent, previous.Lease)
 		return err
 	})
 	e := dependencyRun(f, label, previous.Intent)
@@ -121,12 +121,12 @@ func TestMainRetryRetainsLeaseAndInputsUntilCleanupThenConsumesOnce(t *testing.T
 	third.Job, _ = json.Marshal(job)
 	f.do(func(tx *Tx) error {
 		// Even with a new claim, the consumed previous_run_id is unusable.
-		_, err := tx.Exec("UPDATE intents SET worker=? WHERE project_id=? AND id=?", third.Lease, "p", failed.Intent)
+		_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=? WHERE project_id=? AND id=?", third.Lease, "p", failed.Intent)
 		if err != nil {
 			return err
 		}
 		requireAPIStatus(t, tx.RegisterExecution(third), 409)
-		_, err = tx.Exec("UPDATE intents SET worker=? WHERE project_id=? AND id=?", next.Lease, "p", failed.Intent)
+		_, err = tx.transactionQueries.Exec("UPDATE intents SET worker=? WHERE project_id=? AND id=?", next.Lease, "p", failed.Intent)
 		return err
 	})
 	newFact := f.fact(next, "new-success")
@@ -218,7 +218,7 @@ func TestMainRetryRequiresCurrentTerminalRunAndValidPrerequisites(t *testing.T) 
 				}
 				if mode == "wrong-generation" {
 					f.do(func(tx *Tx) error {
-						_, err := tx.Exec("UPDATE pwnmesh_executions SET generation=generation+1 WHERE project_id=? AND id=?", "p", e.ID)
+						_, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET generation=generation+1 WHERE project_id=? AND id=?", "p", e.ID)
 						return err
 					})
 				}
@@ -238,7 +238,7 @@ func TestMainRetryRequiresCurrentTerminalRunAndValidPrerequisites(t *testing.T) 
 							}
 						}
 						raw, _ := json.Marshal(d)
-						return sqlstore.UpdateStateMetadata(tx, "p", string(raw))
+						return sqlstore.UpdateStateMetadata(tx.transactionQueries, "p", string(raw))
 					})
 				}
 			}
@@ -389,7 +389,7 @@ func TestMainRetryWaitsForOtherPendingAttemptAcrossNamespaces(t *testing.T) {
 	// Reproduce pre-existing overlapping data left by an older dispatcher or
 	// manual lease release. A new grant must fail closed across namespaces.
 	f.do(func(tx *Tx) error {
-		_, err := tx.Exec("UPDATE pwnmesh_executions SET status='running',namespace='other-dispatcher' WHERE project_id=? AND id=?", "p", old.ID)
+		_, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status='running',namespace='other-dispatcher' WHERE project_id=? AND id=?", "p", old.ID)
 		return err
 	})
 	err := f.store.Do(context.Background(), func(tx *Tx) error {

@@ -91,7 +91,7 @@ func TestExecutionAssetsPublishFinishAndFrozenHTTPReads(t *testing.T) {
 	if err = store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	reopened, err := board.Open(databasePath)
+	reopened, err := openFixtureStore(t, databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}

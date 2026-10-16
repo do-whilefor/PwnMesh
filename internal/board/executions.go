@@ -16,7 +16,7 @@ import (
 type Execution = model.Execution
 
 func (t *Tx) Execution(project, id string) (Execution, error) {
-	e, err := sqlstore.Execution(t, project, id)
+	e, err := sqlstore.Execution(t.transactionQueries, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Execution not found")
 	}
@@ -138,7 +138,7 @@ func (t *Tx) RegisterExecution(e Execution) error {
 		}
 		grant = &previous
 	}
-	blocked, err := sqlstore.ExecutionRetryKeyRecorded(t, e.ProjectID, e.Namespace, e.RetryKey)
+	blocked, err := sqlstore.ExecutionRetryKeyRecorded(t.transactionQueries, e.ProjectID, e.Namespace, e.RetryKey)
 	if err != nil {
 		return err
 	}
@@ -149,7 +149,7 @@ func (t *Tx) RegisterExecution(e Execution) error {
 	// registration and its review transition.
 	e.Status, e.Result, e.Resumes = "prepared", nil, 0
 	e.CreatedAt, e.UpdatedAt = t.Now, t.Now
-	err = sqlstore.InsertExecution(t, e, metadata, job.PreviousRunID)
+	err = sqlstore.InsertExecution(t.transactionQueries, e, metadata, job.PreviousRunID)
 	if err == nil && !controlKind(e.Kind) {
 		err = t.reviewExecutionTransition(e, "prepared")
 	}
@@ -207,7 +207,7 @@ func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage)
 	}
 	updated := current
 	updated.Status, updated.Result, updated.UpdatedAt = status, result, t.Now
-	err = sqlstore.SaveExecutionOutcome(t, updated, slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status))
+	err = sqlstore.SaveExecutionOutcome(t.transactionQueries, updated, slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status))
 	if err == nil && !controlKind(current.Kind) && slices.Contains([]string{"failed", "rejected", "cancelled"}, status) {
 		err = t.recordExecutionFailure(current, status, failure)
 		if err == nil {
@@ -307,14 +307,14 @@ func (t *Tx) ResumeExecution(e Execution) error {
 	if err = t.Save(g); err != nil {
 		return err
 	}
-	return sqlstore.AddExecutionResume(t, e.ProjectID, e.ID, t.Now, resume)
+	return sqlstore.AddExecutionResume(t.transactionQueries, e.ProjectID, e.ID, t.Now, resume)
 }
 
 // CheckNewStepLimit counts every direction this decision already created,
 // including subsequently abandoned steps. Tool submissions and the final
 // structured result share one registered budget.
 func (t *Tx) CheckNewStepLimit(project, run string) error {
-	raw, err := sqlstore.LatestExecutionJob(t, project, run, "reason")
+	raw, err := sqlstore.LatestExecutionJob(t.transactionQueries, project, run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil // Legacy clients may use leases without execution registration.
 	}
@@ -332,7 +332,7 @@ func (t *Tx) CheckNewStepLimit(project, run string) error {
 	if job.Budget.MaxIntents <= 0 {
 		return Err(422, "registered decision has no valid direction budget")
 	}
-	count, err := sqlstore.CreatedDirectionCount(t, project, run)
+	count, err := sqlstore.CreatedDirectionCount(t.transactionQueries, project, run)
 	if err != nil {
 		return err
 	}

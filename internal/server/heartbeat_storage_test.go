@@ -18,7 +18,7 @@ func TestLeaseUpdatesWriteOnlyLeaseColumns(t *testing.T) {
 	f, store := newSnapshotHTTPFixture(t)
 	intent := f.newIntent()
 	before := f.state()
-	if err := store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		for _, table := range []string{"facts", "hints", "intents", "intent_sources"} {
 			if _, err := tx.Exec("CREATE TRIGGER reject_lease_insert_" + table + " BEFORE INSERT ON " + table + " BEGIN SELECT RAISE(ABORT,'lease rewrote graph'); END"); err != nil {
 				return err
@@ -53,7 +53,7 @@ func BenchmarkHeartbeat(b *testing.B) {
 	for _, size := range []struct{ intents, description, sources int }{{16, 128, 1}, {128, 128, 1}, {512, 128, 1}, {128, 8192, 1}, {128, 128, 16}, {128, 8192, 16}} {
 		for _, kind := range []string{"reason", "intent"} {
 			b.Run(fmt.Sprintf("%s/intents=%d/description=%d/sources=%d", kind, size.intents, size.description, size.sources), func(b *testing.B) {
-				store, err := board.Open(filepath.Join(b.TempDir(), "heartbeat.db"))
+				store, err := openFixtureStore(b, filepath.Join(b.TempDir(), "heartbeat.db"))
 				if err != nil {
 					b.Fatal(err)
 				}

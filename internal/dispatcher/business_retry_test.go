@@ -65,7 +65,7 @@ func (r *businessRetryRunner) Run(ctx context.Context, _ config.Worker, j protoc
 }
 
 func TestSchedulerBusinessRetryRequiresDecisionAndConsumesOneGrant(t *testing.T) {
-	store, err := board.Open(filepath.Join(t.TempDir(), "retry.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "retry.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

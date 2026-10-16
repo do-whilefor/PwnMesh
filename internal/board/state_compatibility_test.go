@@ -62,7 +62,7 @@ func TestNormalizedStatePreservesCanonicalInput(t *testing.T) {
 				return err
 			}
 			snapshotID = ref.ID
-			return sqlstore.SaveStateMetadata(tx, "p", metadata, 4, 2)
+			return sqlstore.SaveStateMetadata(tx.transactionQueries, "p", metadata, 4, 2)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -126,7 +126,7 @@ func TestCompactStepMetadataLifecycleAndReopen(t *testing.T) {
 			t.Fatalf("unexpected Step projection: %+v", step)
 		}
 		f.tx(func(tx *Tx) error {
-			raw, _, _, err := sqlstore.StateMetadata(tx, "proj_001")
+			raw, _, _, err := sqlstore.StateMetadata(tx.transactionQueries, "proj_001")
 			if err != nil {
 				return err
 			}
@@ -163,7 +163,7 @@ func TestCompactStepMetadataLifecycleAndReopen(t *testing.T) {
 	f.action("step", "priority", map[string]any{"action": "priority", "id": id, "priority": 19, "reason": "Prioritize observation"})
 	check("open", 19, "Prioritize observation")
 	f.tx(func(tx *Tx) error {
-		_, err := tx.Exec("UPDATE intents SET worker='runner@current',last_heartbeat_at=? WHERE project_id='proj_001' AND id=?", tx.Now, id)
+		_, err := tx.transactionQueries.Exec("UPDATE intents SET worker='runner@current',last_heartbeat_at=? WHERE project_id='proj_001' AND id=?", tx.Now, id)
 		return err
 	})
 	check("running", 19, "Prioritize observation")
@@ -172,12 +172,12 @@ func TestCompactStepMetadataLifecycleAndReopen(t *testing.T) {
 	completedID := f.action("step", "add-completed", stepInput("Second task", []string{"origin"}, "goal", 3)).ID
 	var databasePath string
 	f.tx(func(tx *Tx) error {
-		if _, err := tx.Exec("UPDATE intents SET worker='runner@completed',to_fact_id='f001',concluded_at=? WHERE project_id='proj_001' AND id=?", tx.Now, completedID); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE intents SET worker='runner@completed',to_fact_id='f001',concluded_at=? WHERE project_id='proj_001' AND id=?", tx.Now, completedID); err != nil {
 			return err
 		}
 		var sequence int
 		var name string
-		return tx.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &databasePath)
+		return tx.transactionQueries.QueryRow("PRAGMA database_list").Scan(&sequence, &name, &databasePath)
 	})
 	before := f.state()
 	if before.Steps[1].Status != "completed" || Value(before.Steps[1].Result) != "f001" || Value(before.Steps[1].Worker) != "runner@completed" {
@@ -213,11 +213,11 @@ func TestNormalizedFactProjectionPreservesOrderAndRelationPrecedence(t *testing.
 			return err
 		}
 		const raw = `{"facts":[{"id":"f002","description":"Second observation","status":"valid"},{"id":"f001","description":"First observation","status":"valid"},{"id":"f001","description":"Duplicate must not replace the first","status":"refuted"},{"id":"missing","description":"Unlinked record","status":"valid"}],"fact_relations":[{"kind":"refutes","target":"f001","source":"f002"},{"kind":"narrows","target":"f001","source":"f002"}]}`
-		if err := sqlstore.SaveStateMetadata(tx, "observations", raw, 4, 2); err != nil {
+		if err := sqlstore.SaveStateMetadata(tx.transactionQueries, "observations", raw, 4, 2); err != nil {
 			return err
 		}
 		var header string
-		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='observations'").Scan(&header); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='observations'").Scan(&header); err != nil {
 			return err
 		}
 		state, err := tx.State("observations")
@@ -235,7 +235,7 @@ func TestNormalizedFactProjectionPreservesOrderAndRelationPrecedence(t *testing.
 			t.Fatalf("normalized fact projection changed: %+v", state.FactRecords)
 		}
 		var saved string
-		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='observations'").Scan(&saved); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='observations'").Scan(&saved); err != nil {
 			return err
 		}
 		if saved != header || state.Revision != 4 || state.DecisionRevision != 2 {
@@ -256,7 +256,7 @@ func TestNormalizedFactMatchesProjectionAndFrozenInput(t *testing.T) {
 	version := DecisionStateVersion(before)
 	var ref *InputSnapshot
 	f.do(func(tx *Tx) error {
-		raw, _, _, err := sqlstore.StateMetadata(tx, "p")
+		raw, _, _, err := sqlstore.StateMetadata(tx.transactionQueries, "p")
 		if err != nil {
 			return err
 		}
@@ -268,7 +268,7 @@ func TestNormalizedFactMatchesProjectionAndFrozenInput(t *testing.T) {
 			return err
 		}
 		var base Fact
-		if err := tx.QueryRow("SELECT id,description FROM facts WHERE project_id='p' AND id=?", id).Scan(&base.ID, &base.Description); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT id,description FROM facts WHERE project_id='p' AND id=?", id).Scan(&base.ID, &base.Description); err != nil {
 			return err
 		}
 		if len(decoded.Facts) != 1 || decoded.Facts[0].ID != base.ID || decoded.Facts[0].Description != base.Description || !reflect.DeepEqual(decoded.Facts[0], before.FactRecords[len(before.FactRecords)-1]) {

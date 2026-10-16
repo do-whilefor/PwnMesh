@@ -8,7 +8,7 @@ import (
 )
 
 func (t *Tx) stateData(project string) (stateData, int64, int64, error) {
-	raw, revision, decision, err := sqlstore.StateMetadata(t, project)
+	raw, revision, decision, err := sqlstore.StateMetadata(t.transactionQueries, project)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return stateData{}, revision, decision, err
 	}
@@ -28,15 +28,43 @@ func (t *Tx) State(project string) (State, error) {
 	return t.projectState(g, d, revision, decision)
 }
 
+// projectionInputs is local to one transaction and project generation. Pure
+// prospective projections may reuse it while only metadata changes.
+type projectionInputs struct {
+	runs           []ExecutionSummary
+	assets         []Asset
+	anchors        []AssetAnchor
+	failureReasons map[string]string
+}
+
+func (t *Tx) loadProjectionInputs(g Graph) (projectionInputs, error) {
+	runs, err := sqlstore.LatestStepExecutions(t.transactionQueries, g.Project.ID)
+	if err != nil {
+		return projectionInputs{}, err
+	}
+	assets, anchors, err := sqlstore.ProjectAssets(t.transactionQueries, g.Project.ID, g.Project.Generation)
+	return projectionInputs{runs: runs, assets: assets, anchors: anchors}, err
+}
+
+func (inputs projectionInputs) build(g Graph, d stateData, revision, decision int64) State {
+	s := projection.Build(g, d, revision, decision, inputs.runs)
+	for n := range s.Steps {
+		if reason, ok := inputs.failureReasons[s.Steps[n].ID]; ok && s.Steps[n].Status == "failed" {
+			s.Steps[n].Reason = reason
+		}
+	}
+	return projection.WithAssets(s, inputs.assets, inputs.anchors)
+}
+
 // Project pending and persisted metadata using the same transaction snapshot.
 func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State, error) {
-	runs, err := sqlstore.LatestStepExecutions(t, g.Project.ID)
+	inputs, err := t.loadProjectionInputs(g)
 	if err != nil {
 		return State{}, err
 	}
-	s := projection.Build(g, d, revision, decision, runs)
-	leases := make(map[string]string, len(runs))
-	for _, run := range runs {
+	s := inputs.build(g, d, revision, decision)
+	leases := make(map[string]string, len(inputs.runs))
+	for _, run := range inputs.runs {
 		leases[run.Intent] = run.Lease
 	}
 	for n := range s.Steps {
@@ -44,18 +72,14 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 		if step.Status != "failed" {
 			continue
 		}
-		detail, err := sqlstore.ExecutionFailureReason(t, g.Project.ID, leases[step.ID])
+		detail, err := sqlstore.ExecutionFailureReason(t.transactionQueries, g.Project.ID, leases[step.ID])
 		if err == nil && detail != "" {
 			step.Reason = detail
 		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return State{}, err
 		}
 	}
-	assets, anchors, err := sqlstore.ProjectAssets(t, g.Project.ID, g.Project.Generation)
-	if err != nil {
-		return State{}, err
-	}
-	return projection.WithAssets(s, assets, anchors), nil
+	return s, nil
 }
 
 func (t *Tx) StepAvailable(project, id string) error {

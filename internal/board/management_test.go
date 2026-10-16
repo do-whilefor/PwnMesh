@@ -49,7 +49,7 @@ func TestManagementOperationsOwnProjectLifecycle(t *testing.T) {
 			t.Fatalf("management changed unrelated state or lost human-input revision: %+v", state)
 		}
 		var raw string
-		if err = tx.QueryRow("SELECT event FROM pwnmesh_state_events WHERE project_id=?", id).Scan(&raw); err != nil {
+		if err = tx.transactionQueries.QueryRow("SELECT event FROM pwnmesh_state_events WHERE project_id=?", id).Scan(&raw); err != nil {
 			return err
 		}
 		var event StateEvent
@@ -73,7 +73,7 @@ func TestManagementOperationsOwnProjectLifecycle(t *testing.T) {
 			return err
 		}
 		var count int
-		err = tx.QueryRow("SELECT (SELECT COUNT(*) FROM facts)+(SELECT COUNT(*) FROM hints)+(SELECT COUNT(*) FROM pwnmesh_state_events)").Scan(&count)
+		err = tx.transactionQueries.QueryRow("SELECT (SELECT COUNT(*) FROM facts)+(SELECT COUNT(*) FROM hints)+(SELECT COUNT(*) FROM pwnmesh_state_events)").Scan(&count)
 		if count != 0 {
 			t.Fatalf("project deletion retained dependent rows: %d", count)
 		}
@@ -157,7 +157,7 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 			}
 			if operation == "status" {
 				f.do(func(tx *Tx) error {
-					_, err := tx.Exec(`CREATE TRIGGER reject_management_status BEFORE UPDATE OF status ON projects WHEN NEW.status='stopped' BEGIN SELECT RAISE(ABORT,'status persistence failed'); END`)
+					_, err := tx.transactionQueries.Exec(`CREATE TRIGGER reject_management_status BEFORE UPDATE OF status ON projects WHEN NEW.status='stopped' BEGIN SELECT RAISE(ABORT,'status persistence failed'); END`)
 					return err
 				})
 			}
@@ -174,7 +174,7 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 					if err := tx.ExecutionStatus(retry, "retry_requested", nil); err != nil {
 						return err
 					}
-					if _, err := tx.Exec("INSERT INTO pwnmesh_paused_executions(project_id,execution_id) VALUES('p',?)", pending.ID); err != nil {
+					if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_paused_executions(project_id,execution_id) VALUES('p',?)", pending.ID); err != nil {
 						return err
 					}
 					triggers := map[string]string{
@@ -182,7 +182,7 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 						"restart_reset":   "BEFORE INSERT ON pwnmesh_project_rounds",
 						"terminate":       "BEFORE INSERT ON pwnmesh_project_termination",
 					}
-					_, err := tx.Exec("CREATE TRIGGER reject_management_lifecycle " + triggers[operation] + " BEGIN SELECT RAISE(ABORT,'lifecycle persistence failed'); END")
+					_, err := tx.transactionQueries.Exec("CREATE TRIGGER reject_management_lifecycle " + triggers[operation] + " BEGIN SELECT RAISE(ABORT,'lifecycle persistence failed'); END")
 					return err
 				})
 			}
@@ -196,13 +196,13 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 					return "", err
 				}
 				var projects, facts, hints, intents, revoked, paused, events, counters, scopedCount, scopedValue int
-				err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM projects),(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM hints),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM pwnmesh_revoked_runs),(SELECT COUNT(*) FROM pwnmesh_paused_executions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT COALESCE(SUM(value),0) FROM counters),(SELECT COUNT(*) FROM scoped_counters),(SELECT COALESCE(SUM(value),0) FROM scoped_counters)`).Scan(&projects, &facts, &hints, &intents, &revoked, &paused, &events, &counters, &scopedCount, &scopedValue)
+				err = tx.transactionQueries.QueryRow(`SELECT (SELECT COUNT(*) FROM projects),(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM hints),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM pwnmesh_revoked_runs),(SELECT COUNT(*) FROM pwnmesh_paused_executions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT COALESCE(SUM(value),0) FROM counters),(SELECT COUNT(*) FROM scoped_counters),(SELECT COALESCE(SUM(value),0) FROM scoped_counters)`).Scan(&projects, &facts, &hints, &intents, &revoked, &paused, &events, &counters, &scopedCount, &scopedValue)
 				if err != nil {
 					return "", err
 				}
 				var rounds, entries, terminations, executionCount, uiRevision int
 				var executionBytes string
-				err = tx.QueryRow(`SELECT (SELECT COUNT(*) FROM pwnmesh_round_history),(SELECT COUNT(*) FROM pwnmesh_round_entries),(SELECT COUNT(*) FROM pwnmesh_project_termination),(SELECT COUNT(*) FROM pwnmesh_executions),(SELECT COALESCE(SUM(revision),0) FROM pwnmesh_ui_execution_revisions),(SELECT COALESCE(json_group_array(json_object('id',id,'status',status,'job',CAST(job AS TEXT),'result',CAST(result AS TEXT),'updated_at',updated_at)),'[]') FROM pwnmesh_executions ORDER BY rowid)`).Scan(&rounds, &entries, &terminations, &executionCount, &uiRevision, &executionBytes)
+				err = tx.transactionQueries.QueryRow(`SELECT (SELECT COUNT(*) FROM pwnmesh_round_history),(SELECT COUNT(*) FROM pwnmesh_round_entries),(SELECT COUNT(*) FROM pwnmesh_project_termination),(SELECT COUNT(*) FROM pwnmesh_executions),(SELECT COALESCE(SUM(revision),0) FROM pwnmesh_ui_execution_revisions),(SELECT COALESCE(json_group_array(json_object('id',id,'status',status,'job',CAST(job AS TEXT),'result',CAST(result AS TEXT),'updated_at',updated_at)),'[]') FROM pwnmesh_executions ORDER BY rowid)`).Scan(&rounds, &entries, &terminations, &executionCount, &uiRevision, &executionBytes)
 				return fmt.Sprintf("%s|%d,%d,%d,%d,%d,%d,%d,%d,%d,%d|%d,%d,%d,%d,%d|%s", raw, projects, facts, hints, intents, revoked, paused, events, counters, scopedCount, scopedValue, rounds, entries, terminations, executionCount, uiRevision, executionBytes), err
 			}
 			var before string

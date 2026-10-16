@@ -52,11 +52,11 @@ func (t *Tx) PendingExecutions(namespace string, after int64, limit int) (Execut
 	if namespace == "" || after < 0 || limit < 1 || limit > 100 {
 		return ExecutionPage{Items: []ExecutionSummary{}}, Err(422, "namespace, nonnegative after and limit between 1 and 100 are required")
 	}
-	return sqlstore.PendingExecutions(t, namespace, after, limit)
+	return sqlstore.PendingExecutions(t.transactionQueries, namespace, after, limit)
 }
 
 func (t *Tx) GetExecutionSummary(namespace, project, id string) (ExecutionSummary, error) {
-	e, err := sqlstore.ExecutionSummary(t, namespace, project, id)
+	e, err := sqlstore.ExecutionSummary(t.transactionQueries, namespace, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Execution not found")
 	}
@@ -67,7 +67,7 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 	var out ExecutionCheck
 	// Existing pending work and human grants remain visible across generations;
 	// recovery is responsible for cancelling stale pending work.
-	admission, err := sqlstore.ReadExecutionAdmission(t, sqlstore.ExecutionAdmissionFilter{
+	admission, err := sqlstore.ReadExecutionAdmission(t.transactionQueries, sqlstore.ExecutionAdmissionFilter{
 		ProjectID: q.ProjectID, Namespace: q.Namespace, Generation: q.Generation,
 		ExecutionCandidate: sqlstore.ExecutionCandidate{Kind: q.Kind, Intent: q.Intent, RetryKey: q.RetryKey},
 		AnyPendingIntent:   q.Kind == "reason", GrantMatchesInput: q.Kind == "curate",
@@ -83,7 +83,7 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 			return out, err
 		}
 	}
-	out.Attempts, err = sqlstore.ExecutionAttempts(t, q.Namespace, q.ProjectID, q.Kind, q.RetryKey, q.Generation)
+	out.Attempts, err = sqlstore.ExecutionAttempts(t.transactionQueries, q.Namespace, q.ProjectID, q.Kind, q.RetryKey, q.Generation)
 	if err != nil {
 		return out, err
 	}
@@ -91,13 +91,13 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 		// The state hash already binds its own generation. Old jobs without a
 		// Decision marker could carry a State whose graph differs from Job.Graph;
 		// repeated-input detection historically followed that State, not the job.
-		out.Repeated, err = sqlstore.ExecutionStateExists(t, q.Namespace, q.ProjectID, "reason", q.StateVersion)
+		out.Repeated, err = sqlstore.ExecutionStateExists(t.transactionQueries, q.Namespace, q.ProjectID, "reason", q.StateVersion)
 		if err != nil {
 			return out, err
 		}
 	}
 	if q.Kind == "reason" {
-		latest, err := sqlstore.LatestSucceededExecution(t, q.Namespace, q.ProjectID, "reason", q.Generation)
+		latest, err := sqlstore.LatestSucceededExecution(t.transactionQueries, q.Namespace, q.ProjectID, "reason", q.Generation)
 		if err == nil {
 			out.LatestDecision = &latest
 		} else if !errors.Is(err, sql.ErrNoRows) {
@@ -109,7 +109,7 @@ func (t *Tx) CheckExecutions(q ExecutionCheckQuery) (ExecutionCheck, error) {
 	}
 	// Extract only the small failure classification. Never materialize Result
 	// or Job just to decide whether this one candidate merits a retry request.
-	id, status, failure, err := sqlstore.ExecutionInputFailure(t, q.Namespace, q.ProjectID, q.Kind, q.RetryKey, q.Generation)
+	id, status, failure, err := sqlstore.ExecutionInputFailure(t.transactionQueries, q.Namespace, q.ProjectID, q.Kind, q.RetryKey, q.Generation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, nil
 	}
@@ -148,7 +148,7 @@ func (t *Tx) ScheduleExecutionChecks(project, namespace string, steps []Schedule
 		}
 		candidates = append(candidates, sqlstore.ExecutionCandidate{Kind: "explore", Intent: step.ID, RetryKey: "explore:" + step.ID})
 	}
-	admissions, err := sqlstore.ReadExecutionAdmissions(t, project, namespace, candidates)
+	admissions, err := sqlstore.ReadExecutionAdmissions(t.transactionQueries, project, namespace, candidates)
 	if admissions == nil {
 		return nil, err
 	}

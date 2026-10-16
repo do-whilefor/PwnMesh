@@ -127,7 +127,7 @@ func TestProjectSummariesPreserveCountsMetadataAndOrder(t *testing.T) {
 			"UPDATE projects SET reason_worker='',reason_trigger=NULL,reason_started_at=NULL,reason_last_heartbeat_at=NULL WHERE id='a-second-tie'",
 			"UPDATE projects SET reason_worker=NULL,reason_trigger='ignored',reason_started_at='ignored',reason_last_heartbeat_at='ignored' WHERE id='early'",
 		} {
-			if _, err := tx.Exec(query); err != nil {
+			if _, err := tx.transactionQueries.Exec(query); err != nil {
 				return err
 			}
 		}
@@ -180,7 +180,7 @@ func TestProjectSummariesSeeCurrentTransactionAndReopenedDatabase(t *testing.T) 
 			"INSERT INTO hints(id,project_id,content,creator,created_at) VALUES('h001','legacy','Hint','user','now')",
 			"DELETE FROM facts WHERE project_id='legacy'",
 		} {
-			if _, err := tx.Exec(query); err != nil {
+			if _, err := tx.transactionQueries.Exec(query); err != nil {
 				return err
 			}
 		}
@@ -261,14 +261,14 @@ func TestObservedProjectSummariesMatchExpiryWithoutChangingStoredLeases(t *testi
 		if after := assertProjectSummaries(t, tx); !reflect.DeepEqual(before, after) {
 			t.Fatal("observed summaries changed persisted leases")
 		}
-		if _, err := tx.Exec("SAVEPOINT summary_expiry"); err != nil {
+		if _, err := tx.transactionQueries.Exec("SAVEPOINT summary_expiry"); err != nil {
 			t.Fatal(err)
 		}
 		if err := tx.ExpireProject(""); err != nil {
 			t.Fatal(err)
 		}
 		want := assertProjectSummaries(t, tx)
-		if _, err := tx.Exec("ROLLBACK TO summary_expiry; RELEASE summary_expiry"); err != nil {
+		if _, err := tx.transactionQueries.Exec("ROLLBACK TO summary_expiry; RELEASE summary_expiry"); err != nil {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(observed, want) {

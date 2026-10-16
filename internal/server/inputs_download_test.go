@@ -31,7 +31,7 @@ func TestInputDownloadHeadReadsMetadataOnly(t *testing.T) {
 	input := uploadFixture(t, f, "metadata.bin", payload, http.StatusCreated)
 	// Reading the payload expression fails; metadata remains fully readable.
 	// This detects payload reads even when HEAD discards their response body.
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec(`ALTER TABLE pwnmesh_input_files RENAME TO input_download_payload;
 CREATE VIEW pwnmesh_input_files AS SELECT project_id,id,name,size,sha256,created_at,
  json_extract('invalid json','$') AS data FROM input_download_payload;`)
@@ -142,7 +142,7 @@ func TestInputDownloadRemovesStagingOnFailure(t *testing.T) {
 				r.Header.Set("Range", "bytes=4-5")
 				wantStatus = http.StatusRequestedRangeNotSatisfiable
 			case "digest":
-				if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+				if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 					_, err := tx.Exec("UPDATE pwnmesh_input_files SET data=X'00FE01' WHERE project_id=? AND id=?", f.project, input.ID)
 					return err
 				}); err != nil {

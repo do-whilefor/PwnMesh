@@ -22,7 +22,12 @@ func TestUnsupportedProjectDownloadPreservesStoredBytes(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec("UPDATE pwnmesh_project_orchestration SET version=0 WHERE project_id=?", f.project)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+		_, err := tx.Exec("UPDATE pwnmesh_project_orchestration SET version=0 WHERE project_id=?", f.project)
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -30,7 +35,7 @@ func TestUnsupportedProjectDownloadPreservesStoredBytes(t *testing.T) {
 	for _, method := range []string{"GET", "HEAD"} {
 		f.request(method, f.base()+"/inputs/"+file.ID, nil, false, http.StatusConflict, nil)
 	}
-	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		var data []byte
 		if err := tx.QueryRow("SELECT data FROM pwnmesh_input_files WHERE project_id=? AND id=?", f.project, file.ID).Scan(&data); err != nil {
 			return err
@@ -109,38 +114,40 @@ func TestRetiredExecutionCannotResumeApplyOrRetryInCurrentProject(t *testing.T) 
 	f := newExecutionProtocolFixture(t)
 	f.register("explore")
 	var original board.Execution
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		e, err := tx.Execution(f.project, f.run)
-		if err != nil {
-			return err
-		}
-		var job map[string]any
-		if err = json.Unmarshal(e.Job, &job); err != nil {
-			return err
-		}
-		job["result_contract_version"] = 1
-		raw, _ := json.Marshal(job)
-		if _, err = tx.Exec("UPDATE pwnmesh_executions SET job=? WHERE project_id=? AND id=?", raw, f.project, f.run); err != nil {
-			return err
-		}
+	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+		var err error
 		original, err = tx.Execution(f.project, f.run)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var job map[string]any
+	if err := json.Unmarshal(original.Job, &job); err != nil {
+		t.Fatal(err)
+	}
+	job["result_contract_version"] = 1
+	raw, _ := json.Marshal(job)
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+		_, err := tx.Exec("UPDATE pwnmesh_executions SET job=? WHERE project_id=? AND id=?", raw, f.project, f.run)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	original.Job = raw
+
 	for _, op := range []string{"resume", "status", "apply", "retry"} {
 		f.request("POST", f.base()+"/executions/"+f.run+"/"+op, map[string]any{"status": "running"}, op != "retry", http.StatusConflict, nil)
 	}
 	// Even the idempotent apply path must reject a retired protocol before
 	// returning an already-settled status.
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec("UPDATE pwnmesh_executions SET status='succeeded' WHERE project_id=? AND id=?", f.project, f.run)
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
 	f.request("POST", f.base()+"/executions/"+f.run+"/apply", map[string]any{}, true, http.StatusConflict, nil)
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec("UPDATE pwnmesh_executions SET status=? WHERE project_id=? AND id=?", original.Status, f.project, f.run)
 		return err
 	}); err != nil {

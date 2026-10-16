@@ -95,7 +95,7 @@ type updateRequestFixture struct {
 
 func newUpdateRequestFixture(t *testing.T) *updateRequestFixture {
 	t.Helper()
-	store, err := board.Open(filepath.Join(t.TempDir(), "updates.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "updates.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

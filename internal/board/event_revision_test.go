@@ -12,14 +12,14 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 			id := f.action("step", "add", stepInput("Observe fixture", []string{"origin"}, "goal", 0)).ID
 			fence := ExecutionFence{Run: "worker@event", Lease: "explore", Intent: id}
 			f.tx(func(tx *Tx) error {
-				_, err := tx.Exec("UPDATE intents SET worker=?,last_heartbeat_at=? WHERE project_id='proj_001' AND id=?", fence.Run, tx.Now, id)
+				_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=?,last_heartbeat_at=? WHERE project_id='proj_001' AND id=?", fence.Run, tx.Now, id)
 				return err
 			})
 			fact := ""
 			if op == "conclusion" {
 				f.tx(func(tx *Tx) error {
 					// f001/f002 in this fixture were seeded without counters.
-					if _, err := tx.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES('proj_001','fact',2)"); err != nil {
+					if _, err := tx.transactionQueries.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES('proj_001','fact',2)"); err != nil {
 						return err
 					}
 					raw := json.RawMessage(`{"description":"Observed response","scope":"fixture","observed_at":"2026-09-22T10:00:00Z","evidence":[{"run_id":"worker@event","path":"evidence/response.txt","excerpt":"response"}]}`)
@@ -34,15 +34,15 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 			before := f.state()
 			f.tx(func(tx *Tx) error {
 				var raw string
-				if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
+				if err := tx.transactionQueries.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
 					return err
 				}
 				// Retain even unknown future fields and formatting on version writes.
 				raw = "{ \"future_metadata\": {\"preserve\":true}, " + raw[1:]
-				if _, err := tx.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id='proj_001'", raw); err != nil {
+				if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id='proj_001'", raw); err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`CREATE TRIGGER guard_metadata BEFORE UPDATE OF data ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'event rewrote metadata'); END`); err != nil {
+				if _, err := tx.transactionQueries.Exec(`CREATE TRIGGER guard_metadata BEFORE UPDATE OF data ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'event rewrote metadata'); END`); err != nil {
 					return err
 				}
 				if op == "conclusion" {
@@ -51,7 +51,7 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 						`CREATE TRIGGER guard_conclusion_facts BEFORE INSERT ON facts BEGIN SELECT RAISE(ABORT,'completion rewrote facts'); END`,
 						`CREATE TRIGGER guard_conclusion_sources BEFORE INSERT ON intent_sources BEGIN SELECT RAISE(ABORT,'completion rewrote sources'); END`,
 					} {
-						if _, err := tx.Exec(statement); err != nil {
+						if _, err := tx.transactionQueries.Exec(statement); err != nil {
 							return err
 						}
 					}
@@ -77,7 +77,7 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 					}
 				}
 				var after string
-				if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&after); err != nil {
+				if err := tx.transactionQueries.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&after); err != nil {
 					return err
 				}
 				if after != raw {

@@ -196,7 +196,7 @@ func (t *Tx) CurationExecutionReceipt(project string, fence ExecutionFence) (Sta
 	if fence.Run == "" || fence.Lease != "curate" || fence.Intent != "" {
 		return StateActionResult{}, "", Err(403, "Curation receipt requires its curator identity")
 	}
-	status, err := sqlstore.CuratorExecutionStatus(t, project, fence.Run)
+	status, err := sqlstore.CuratorExecutionStatus(t.transactionQueries, project, fence.Run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return StateActionResult{}, "", Err(403, "Curation receipt requires a registered curator execution")
 	}

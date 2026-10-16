@@ -47,7 +47,7 @@ func TestTimelineContinuesAfterThousandEventsAndKeepsLegacyFacts(t *testing.T) {
 			result, _ := json.Marshal(map[string]string{"reason": fmt.Sprintf("event-%04d", n)})
 			// Older diagnostic events can have a payload without a result.
 			event, _ := json.Marshal(StateEvent{Revision: int64(n), Op: "execution_failed", ID: "legacy-step", CreatedAt: tx.Now, Payload: result})
-			if _, err := tx.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES('proj_001',?,?)", n, string(event)); err != nil {
+			if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES('proj_001',?,?)", n, string(event)); err != nil {
 				return err
 			}
 		}

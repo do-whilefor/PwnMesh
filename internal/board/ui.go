@@ -91,7 +91,7 @@ func (t *Tx) ProjectExecutionChanges(project string, generation, after, cursor, 
 	if identity.Generation != generation {
 		return out, Err(409, "Project round changed; refresh before reading execution changes")
 	}
-	latest, err := sqlstore.LatestExecutionRevision(t, project)
+	latest, err := sqlstore.LatestExecutionRevision(t.transactionQueries, project)
 	if err != nil {
 		return out, err
 	}
@@ -104,7 +104,7 @@ func (t *Tx) ProjectExecutionChanges(project string, generation, after, cursor, 
 	// An initial snapshot has no cached rows to remove, so old-round tombstones
 	// must not make a new round reload every prior execution's deletion.
 	used, last, count := 128, max(after, cursor), 0
-	err = sqlstore.VisitExecutionChanges(t, project, max(after, cursor), out.Through, after > 0, limit+1, func(change sqlstore.ExecutionChangeRow) (bool, error) {
+	err = sqlstore.VisitExecutionChanges(t.transactionQueries, project, max(after, cursor), out.Through, after > 0, limit+1, func(change sqlstore.ExecutionChangeRow) (bool, error) {
 		var entry ExecutionView
 		var raw []byte
 		var err error
@@ -143,7 +143,7 @@ func (t *Tx) ProjectExecutionPage(project string, after, through int64, limit in
 	if after < 0 || through < 0 || (through != 0 && after > through) || limit < 1 || limit > 100 {
 		return out, Err(422, "invalid execution page boundary (limit must be 1-100)")
 	}
-	exists, err := sqlstore.ProjectExists(t, project)
+	exists, err := sqlstore.ProjectExists(t.transactionQueries, project)
 	if err != nil {
 		return out, err
 	}
@@ -151,13 +151,13 @@ func (t *Tx) ProjectExecutionPage(project string, after, through int64, limit in
 		return out, Err(404, "Project not found")
 	}
 	if through == 0 {
-		out.Through, err = sqlstore.LatestExecutionRow(t, project)
+		out.Through, err = sqlstore.LatestExecutionRow(t.transactionQueries, project)
 		if err != nil {
 			return out, err
 		}
 	}
 	used, last := 128, after
-	err = sqlstore.VisitExecutionViews(t, project, after, out.Through, limit+1, func(row sqlstore.ExecutionViewRow) (bool, error) {
+	err = sqlstore.VisitExecutionViews(t.transactionQueries, project, after, out.Through, limit+1, func(row sqlstore.ExecutionViewRow) (bool, error) {
 		entry := executionView(row)
 		raw, err := json.Marshal(entry)
 		if err != nil {
@@ -188,7 +188,7 @@ type ProjectIdentity struct {
 func (t *Tx) ProjectIdentity(project string) (ProjectIdentity, error) {
 	var identity ProjectIdentity
 	var err error
-	identity.ID, identity.Generation, err = sqlstore.ProjectIdentity(t, project)
+	identity.ID, identity.Generation, err = sqlstore.ProjectIdentity(t.transactionQueries, project)
 	if errors.Is(err, sql.ErrNoRows) {
 		err = Err(404, "Project not found")
 	}

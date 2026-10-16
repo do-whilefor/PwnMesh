@@ -17,5 +17,5 @@ func (t *Tx) StateChanges(project string, after, through int64) ([]StateChange, 
 	if after < 0 || through < after {
 		return nil, Err(422, "invalid change revision interval")
 	}
-	return sqlstore.StateChanges(t, project, after, through, 1000)
+	return sqlstore.StateChanges(t.transactionQueries, project, after, through, 1000)
 }

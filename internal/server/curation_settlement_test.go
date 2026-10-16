@@ -21,13 +21,18 @@ func TestLegacyCurationReceiptReadIsPureAndApplySettlesWithoutRecovery(t *testin
 			if status == "result_pending" {
 				retained, _ = json.Marshal(protocol.Result{Status: "success", Text: `{"accepted":true,"data":{"curated":true}}`, Metrics: &protocol.DecisionMetrics{Version: 1}})
 			}
-			if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+			if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 				if _, err := tx.Exec("UPDATE pwnmesh_executions SET status=?,result=?,resumes=2 WHERE project_id=? AND id=?", status, []byte(retained), f.project, f.run); err != nil {
 					return err
 				}
 				if _, err := tx.Exec("DELETE FROM pwnmesh_revoked_runs WHERE project_id=? AND worker=?", f.project, f.lease); err != nil {
 					return err
 				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
 				_, err := tx.ClaimCurator(f.project, f.lease, "legacy delivery")
 				return err
 			}); err != nil {

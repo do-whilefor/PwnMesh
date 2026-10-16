@@ -119,33 +119,22 @@ func authorizeFixtureSteps(t *testing.T, scheduler *Scheduler, project string, p
 func testExecutions(t *testing.T, store *board.Store) []board.Execution {
 	t.Helper()
 	var executions []board.Execution
-	err := store.Do(context.Background(), func(tx *board.Tx) error {
-		rows, err := tx.Query("SELECT project_id,id FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", "pwnmesh")
+	err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+		rows, err := tx.Query("SELECT project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,result,resumes,created_at,updated_at FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", "pwnmesh")
 		if err != nil {
 			return err
 		}
-		var identities [][2]string
+		defer rows.Close()
 		for rows.Next() {
-			var identity [2]string
-			if err := rows.Scan(&identity[0], &identity[1]); err != nil {
-				rows.Close()
+			var execution board.Execution
+			var job, result []byte
+			if err := rows.Scan(&execution.ProjectID, &execution.ID, &execution.Namespace, &execution.Backend, &execution.Kind, &execution.Intent, &execution.Lease, &job, &execution.RetryKey, &execution.Status, &result, &execution.Resumes, &execution.CreatedAt, &execution.UpdatedAt); err != nil {
 				return err
 			}
-			identities = append(identities, identity)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		for _, identity := range identities {
-			execution, err := tx.Execution(identity[0], identity[1])
-			if err != nil {
-				return err
-			}
+			execution.Job, execution.Result = job, result
 			executions = append(executions, execution)
 		}
-		return nil
+		return rows.Err()
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +161,7 @@ func registerLegacyExecution(t *testing.T, store *board.Store, execution board.E
 
 // Seed observations in current storage without discarding other normalized
 // metadata. Existing revisions never move backward while adding fixture data.
-func seedFixtureFacts(tx *board.Tx, project string, revision int64, facts ...board.FactRecord) error {
+func seedFixtureFacts(tx *fixtureSQLTx, project string, revision int64, facts ...board.FactRecord) error {
 	if _, err := tx.Exec(`INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,'{"facts":[]}',?,?)
 ON CONFLICT(project_id) DO UPDATE SET data=json_set(pwnmesh_state.data,'$.facts',json('[]')),
  revision=MAX(pwnmesh_state.revision,excluded.revision),decision_revision=MAX(pwnmesh_state.decision_revision,excluded.decision_revision)`, project, revision, revision); err != nil {

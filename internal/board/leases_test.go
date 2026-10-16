@@ -21,7 +21,7 @@ func TestLeaseOperationsPreserveBusinessStateAndOtherOwners(t *testing.T) {
 			`CREATE TRIGGER guard_lease_state BEFORE UPDATE ON pwnmesh_state BEGIN SELECT RAISE(ABORT,'lease rewrote state'); END`,
 			`CREATE TRIGGER guard_lease_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'lease published event'); END`,
 		} {
-			if _, err := tx.Exec(statement); err != nil {
+			if _, err := tx.transactionQueries.Exec(statement); err != nil {
 				return err
 			}
 		}

@@ -52,7 +52,7 @@ func TestDecisionPreparationQueriesItsCapturedInputRevision(t *testing.T) {
 
 func TestNewDecisionDoesNotReadCompletedJobSnapshot(t *testing.T) {
 	template, _, _, _, _ := batchSchedulerFixture(t, 1)
-	store, err := board.Open(filepath.Join(t.TempDir(), "fgs.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "fgs.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestNewDecisionDoesNotReadCompletedJobSnapshot(t *testing.T) {
 	// Simulate archived/unavailable historical inputs. The graph, immutable
 	// registration metadata and outcome still exist; new planning must not
 	// deserialize this completed run or fall back to a private transcript.
-	if err := store.Do(ctx, func(tx *board.Tx) error {
+	if err := fixtureSQL(store).Do(ctx, func(tx *fixtureSQLTx) error {
 		result, err := tx.Exec("UPDATE pwnmesh_executions SET job='{}' WHERE project_id=? AND kind='reason' AND status='succeeded'", graph.Project.ID)
 		if err != nil {
 			return err

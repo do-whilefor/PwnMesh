@@ -28,7 +28,7 @@ func TestScheduleCacheTracksLeasesMetadataAndRollback(t *testing.T) {
 			if err := tx.Save(Graph{Project: Project{ID: id, Title: id, Status: "active", CreatedAt: tx.Now}, Intents: []Intent{{ID: "work", Description: "work", CreatedAt: tx.Now}}}); err != nil {
 				t.Fatal(err)
 			}
-			if err := sqlstore.SaveStateMetadata(tx, id, `{"steps":[{"id":"work","write_paths":["/workspace/out"]}]}`, 0, 0); err != nil {
+			if err := sqlstore.SaveStateMetadata(tx.transactionQueries, id, `{"steps":[{"id":"work","write_paths":["/workspace/out"]}]}`, 0, 0); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := tx.ScheduleInput(id, 0, ""); err != nil {
@@ -39,24 +39,24 @@ func TestScheduleCacheTracksLeasesMetadataAndRollback(t *testing.T) {
 		if err != nil || !first.Steps[0].Ready || !reflect.DeepEqual(first.Steps[0].WritePaths, []string{"/workspace/out"}) {
 			t.Fatalf("cached admission fields changed: %+v, %v", first, err)
 		}
-		if _, err := tx.Exec("UPDATE intents SET worker='run',last_heartbeat_at=? WHERE project_id='p'", tx.Now); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE intents SET worker='run',last_heartbeat_at=? WHERE project_id='p'", tx.Now); err != nil {
 			t.Fatal(err)
 		}
 		var count int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_schedule_cache WHERE project_id='other'").Scan(&count); err != nil || count != 1 {
+		if err := tx.transactionQueries.QueryRow("SELECT COUNT(*) FROM pwnmesh_schedule_cache WHERE project_id='other'").Scan(&count); err != nil || count != 1 {
 			t.Fatalf("one project invalidated another: count=%d, %v", count, err)
 		}
 		running, err := tx.ScheduleInput("p", 0, first.StateVersion)
 		if err != nil || running.Steps[0].Ready || !running.Steps[0].Running || running.StateVersion != first.StateVersion {
 			t.Fatalf("lease changed decision identity or left stale readiness: %+v, %v", running, err)
 		}
-		if _, err := tx.Exec("SAVEPOINT schedule_test"); err != nil {
+		if _, err := tx.transactionQueries.Exec("SAVEPOINT schedule_test"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec("UPDATE projects SET title='temporary' WHERE id='p'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE projects SET title='temporary' WHERE id='p'"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec("ROLLBACK TO schedule_test; RELEASE schedule_test"); err != nil {
+		if _, err := tx.transactionQueries.Exec("ROLLBACK TO schedule_test; RELEASE schedule_test"); err != nil {
 			t.Fatal(err)
 		}
 		tx.transactionQueries = boundedScheduleQueries{tx.transactionQueries}
@@ -70,7 +70,7 @@ func TestScheduleCacheTracksLeasesMetadataAndRollback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := sqlstore.UpdateStateMetadata(tx, "p", `{"steps":[{"id":"work","priority":7,"write_paths":["/workspace/new"]}]}`); err != nil {
+		if err := sqlstore.UpdateStateMetadata(tx.transactionQueries, "p", `{"steps":[{"id":"work","priority":7,"write_paths":["/workspace/new"]}]}`); err != nil {
 			t.Fatal(err)
 		}
 		_, err = tx.ScheduleInput("p", 0, before.StateVersion)
@@ -82,7 +82,7 @@ func TestScheduleCacheTracksLeasesMetadataAndRollback(t *testing.T) {
 		if err != nil || after.Steps[0].Priority != 7 || !reflect.DeepEqual(after.Steps[0].WritePaths, []string{"/workspace/new"}) {
 			t.Fatalf("metadata update left stale scheduling fields: %+v, %v", after, err)
 		}
-		if _, err := tx.Exec("DELETE FROM projects WHERE id='p'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("DELETE FROM projects WHERE id='p'"); err != nil {
 			t.Fatal(err)
 		}
 		_, err = tx.ScheduleInput("p", 0, "")

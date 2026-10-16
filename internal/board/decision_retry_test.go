@@ -21,7 +21,7 @@ func TestAutomaticDecisionRetryRollsBackHandledGrantFailure(t *testing.T) {
 				execution = Execution{ProjectID: "p", ID: "failed", Status: "failed", Result: json.RawMessage(`{"status":"failed","failure_kind":"transport"}`)}
 				executionQueryTx(t, store, func(tx *Tx) {
 					putQueryExecution(t, tx, execution, 0, "")
-					if _, err := tx.Exec("UPDATE projects SET reason_worker='planner@failed',reason_trigger='fixture',reason_started_at='started',reason_last_heartbeat_at='heartbeat' WHERE id='p'"); err != nil {
+					if _, err := tx.transactionQueries.Exec("UPDATE projects SET reason_worker='planner@failed',reason_trigger='fixture',reason_started_at='started',reason_last_heartbeat_at='heartbeat' WHERE id='p'"); err != nil {
 						t.Fatal(err)
 					}
 				})
@@ -41,10 +41,10 @@ func TestAutomaticDecisionRetryRollsBackHandledGrantFailure(t *testing.T) {
 				project = graph.Project
 				// Legacy terminal rows may lack a revocation. Defensive revocation
 				// and lease release must roll back when their grant cannot be saved.
-				if _, err := tx.Exec("DELETE FROM pwnmesh_revoked_runs WHERE project_id=? AND worker=?", "p", original.Lease); err != nil {
+				if _, err := tx.transactionQueries.Exec("DELETE FROM pwnmesh_revoked_runs WHERE project_id=? AND worker=?", "p", original.Lease); err != nil {
 					t.Fatal(err)
 				}
-				if _, err := tx.Exec(`CREATE TRIGGER reject_retry_grant BEFORE UPDATE OF status ON pwnmesh_executions WHEN NEW.status='retry_requested' BEGIN SELECT RAISE(ABORT,'retry grant unavailable'); END`); err != nil {
+				if _, err := tx.transactionQueries.Exec(`CREATE TRIGGER reject_retry_grant BEFORE UPDATE OF status ON pwnmesh_executions WHEN NEW.status='retry_requested' BEGIN SELECT RAISE(ABORT,'retry grant unavailable'); END`); err != nil {
 					t.Fatal(err)
 				}
 			})
@@ -54,7 +54,7 @@ func TestAutomaticDecisionRetryRollsBackHandledGrantFailure(t *testing.T) {
 					t.Fatalf("expected injected grant failure, got %v", err)
 				}
 				// Handling this error must still permit an unrelated outer write.
-				_, err = tx.Exec("UPDATE projects SET title='outer write' WHERE id='p'")
+				_, err = tx.transactionQueries.Exec("UPDATE projects SET title='outer write' WHERE id='p'")
 				return err
 			}); err != nil {
 				t.Fatal(err)

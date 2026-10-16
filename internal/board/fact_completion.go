@@ -37,7 +37,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 	}
 	// A final Fact, its receipt and the Step completion event must roll back
 	// together even when the enclosing caller handles a rejected conclusion.
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return Conclusion{}, err
 	}
 	defer t.finishManagement(&err)
@@ -77,7 +77,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 			return Conclusion{}, Err(409, "Step already concluded")
 		}
 		i.To, i.Worker, i.Heartbeat, i.ConcludedAt = Ptr(factID), Ptr(fence.Run), Ptr(t.Now), Ptr(t.Now)
-		if err = sqlstore.SaveIntentConclusion(t, project, *i); err != nil {
+		if err = sqlstore.SaveIntentConclusion(t.transactionQueries, project, *i); err != nil {
 			return Conclusion{}, err
 		}
 		result := Conclusion{Fact: Fact{ID: fact.ID, Description: fact.Description}, Intent: *i}
@@ -88,7 +88,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 		payload, _ := json.Marshal(map[string]string{"fact_id": factID})
 		encoded, _ := json.Marshal(result)
 		event, _ := json.Marshal(StateEvent{Revision: revision, Op: "step_completed", ID: fence.Intent, RunID: fence.Run, CreatedAt: t.Now, Payload: payload, Result: encoded})
-		err = sqlstore.InsertStateEvent(t, project, revision, string(event))
+		err = sqlstore.InsertStateEvent(t.transactionQueries, project, revision, string(event))
 		return result, err
 	}
 	return Conclusion{}, Err(404, "Step not found")

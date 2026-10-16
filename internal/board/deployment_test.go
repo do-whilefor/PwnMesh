@@ -114,11 +114,11 @@ func TestDispatcherLeaseValidationDoesNotChangeOwnership(t *testing.T) {
 			requireAPIStatus(t, err, invalid.status)
 		}
 		var count int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_dispatchers").Scan(&count); err != nil || count != 1 {
+		if err := tx.transactionQueries.QueryRow("SELECT COUNT(*) FROM pwnmesh_dispatchers").Scan(&count); err != nil || count != 1 {
 			t.Fatalf("rejected operation created a namespace: %d, %v", count, err)
 		}
 		var current, expires string
-		if err := tx.QueryRow("SELECT holder,expires_at FROM pwnmesh_dispatchers WHERE namespace='test'").Scan(&current, &expires); err != nil || current != holder || expires != "2026-01-01T00:00:30Z" {
+		if err := tx.transactionQueries.QueryRow("SELECT holder,expires_at FROM pwnmesh_dispatchers WHERE namespace='test'").Scan(&current, &expires); err != nil || current != holder || expires != "2026-01-01T00:00:30Z" {
 			t.Fatalf("rejected operation changed the owner or expiry: %q, %q, %v", current, expires, err)
 		}
 		return nil // Rejections must be safe even when the caller handles them.

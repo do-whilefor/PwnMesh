@@ -322,7 +322,7 @@ func TestInputBatchKeyReplaysDurableReceiptWithoutDuplicatingInstructions(t *tes
 	first := inputBatchRequest(t, f, body, contentType, http.StatusCreated)
 	// Preserve the request digest produced before staging paths became open
 	// descriptors, so retained receipts still replay across this change.
-	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		var digest string
 		err := tx.QueryRow("SELECT request_sha256 FROM pwnmesh_input_batches WHERE project_id=? AND idempotency_key=?", f.project, "supplement-1").Scan(&digest)
 		if err == nil && digest != "7bb2bfccc6fe05c336ea75961014e17509435d5e6858690f766510b808f9a6cf" {
@@ -336,7 +336,7 @@ func TestInputBatchKeyReplaysDurableReceiptWithoutDuplicatingInstructions(t *tes
 
 	// A lost acknowledgement can be retried after a server restart. Multipart
 	// boundaries and insignificant content whitespace must not alter identity.
-	reopened, err := board.Open(database)
+	reopened, err := openFixtureStore(t, database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -363,7 +363,7 @@ func TestInputBatchKeyReplaysDurableReceiptWithoutDuplicatingInstructions(t *tes
 		t.Fatal("project lifecycle changes lost the original upload acknowledgement")
 	}
 	f.request("DELETE", f.base(), nil, false, http.StatusNoContent, nil)
-	if err := reopened.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(reopened).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		var count int
 		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_input_batches").Scan(&count); err != nil {
 			return err
@@ -402,7 +402,7 @@ func TestInputBatchTextOnlyRetryDoesNotDuplicateInstructions(t *testing.T) {
 
 func TestInputBatchTextOnlyCannotModifyUnsupportedProject(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec("DELETE FROM pwnmesh_project_orchestration WHERE project_id=?", f.project)
 		return err
 	}); err != nil {
@@ -436,7 +436,7 @@ func TestInputBatchTextOnlyCannotModifyUnsupportedProject(t *testing.T) {
 	if !reflect.DeepEqual(before, after) || !reflect.DeepEqual(events, afterEvents) {
 		t.Fatal("text-only upload changed an unsupported project")
 	}
-	if err := f.store.View(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		var count int
 		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_input_batches WHERE project_id=?", f.project).Scan(&count); err != nil {
 			return err

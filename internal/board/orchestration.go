@@ -144,7 +144,7 @@ func (t *Tx) curationNeeded(s State) (bool, error) {
 	// another scan solely because an unsupported conclusion remains retained.
 	completed, curators := map[string]bool{}, map[string]bool{}
 	relations := map[FactRelation]bool{}
-	err := sqlstore.VisitCurationEvents(t, s.Graph.Project.ID, s.Curation.ThroughRevision, func(event sqlstore.CurationEvent) error {
+	err := sqlstore.VisitCurationEvents(t.transactionQueries, s.Graph.Project.ID, s.Curation.ThroughRevision, func(event sqlstore.CurationEvent) error {
 		switch event.Op {
 		case "step_completed":
 			completed[event.ID] = true
@@ -200,7 +200,7 @@ func CurationRetryKey(s State) string { return "curate:" + DecisionStateVersion(
 // Receipt reads remain available after the live lease ends. The HTTP layer
 // checks that the caller possesses the registered immutable run identity.
 func (t *Tx) CurationReceipt(project, run string) (StateActionResult, error) {
-	response, err := sqlstore.CurationResponse(t, project, run)
+	response, err := sqlstore.CurationResponse(t.transactionQueries, project, run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return StateActionResult{}, Err(404, "Curation receipt not found")
 	}

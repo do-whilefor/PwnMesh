@@ -71,7 +71,7 @@ func TestUserInputEventFailureRollsBackGraphAndRevision(t *testing.T) {
 	f := newPlanFixture(t)
 	before, _ := json.Marshal(f.state())
 	f.tx(func(tx *Tx) error {
-		_, err := tx.Exec("CREATE TRIGGER reject_legacy_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT, 'event unavailable'); END")
+		_, err := tx.transactionQueries.Exec("CREATE TRIGGER reject_legacy_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT, 'event unavailable'); END")
 		return err
 	})
 	err := f.store.Do(context.Background(), func(tx *Tx) error {

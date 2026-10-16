@@ -16,7 +16,7 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 		return current, nil
 	}
 	project := current.Graph.Project.ID
-	id, raw, err := sqlstore.ExecutionInputByLease(t, project, fence.Run, "reason")
+	id, raw, err := sqlstore.ExecutionInputByLease(t.transactionQueries, project, fence.Run, "reason")
 	if errors.Is(err, sql.ErrNoRows) {
 		return current, nil
 	}
@@ -43,10 +43,10 @@ func (t *Tx) DecisionReadState(current State, fence ExecutionFence, refresh bool
 		if err != nil {
 			return State{}, err
 		}
-		err = sqlstore.SaveDecisionReadView(t, project, id, DecisionStateVersion(current), raw)
+		err = sqlstore.SaveDecisionReadView(t.transactionQueries, project, id, DecisionStateVersion(current), raw)
 		return current, err
 	}
-	version, raw, err = sqlstore.DecisionReadView(t, project, id)
+	version, raw, err = sqlstore.DecisionReadView(t.transactionQueries, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		if job.InputSnapshot != nil {
 			return t.ReadInputSnapshot(project, job.InputSnapshot.ID)

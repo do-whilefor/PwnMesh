@@ -29,15 +29,15 @@ func (t *Tx) StateAction(project string, fence ExecutionFence, action StateActio
 	}
 	// The record, its asset anchors and the receipt form one write. Preserve
 	// this boundary even when an outer caller handles a failed action itself.
-	if _, err = t.Exec("SAVEPOINT pwnmesh_state_action"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_state_action"); err != nil {
 		return out, err
 	}
 	defer func() {
 		if err != nil {
-			_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_state_action")
+			_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_state_action")
 			err = errors.Join(err, rollbackErr)
 		}
-		_, releaseErr := t.Exec("RELEASE pwnmesh_state_action")
+		_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_state_action")
 		err = errors.Join(err, releaseErr)
 	}()
 	if action.Op == "curate" {
@@ -106,7 +106,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if err != nil {
 		return StateActionResult{}, err
 	}
-	oldRequest, oldResponse, err := sqlstore.ActionReceipt(t, project, action.IdempotencyKey)
+	oldRequest, oldResponse, err := sqlstore.ActionReceipt(t.transactionQueries, project, action.IdempotencyKey)
 	if err == nil {
 		if oldRequest != string(canonical) {
 			return StateActionResult{}, Err(409, "idempotency key was used for a different action")
@@ -119,7 +119,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		return StateActionResult{}, err
 	}
 	if action.Op == "curate" {
-		committed, err := sqlstore.HasCurationReceipt(t, project, fence.Run)
+		committed, err := sqlstore.HasCurationReceipt(t.transactionQueries, project, fence.Run)
 		if err != nil {
 			return StateActionResult{}, err
 		}
@@ -187,7 +187,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 			var raw []byte
 			raw, err = json.Marshal(d)
 			if err == nil {
-				err = sqlstore.SaveStateMetadata(t, project, string(raw), s.Revision, s.DecisionRevision)
+				err = sqlstore.SaveStateMetadata(t.transactionQueries, project, string(raw), s.Revision, s.DecisionRevision)
 			}
 		}
 		if err != nil {
@@ -224,7 +224,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	out.AssetIDs = current.AssetIDs(action.Op, id)
 	out.Committed = action.Op == "curate"
 	response, _ := json.Marshal(out)
-	if err = sqlstore.InsertActionReceipt(t, project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
+	if err = sqlstore.InsertActionReceipt(t.transactionQueries, project, action.IdempotencyKey, string(canonical), string(response)); err != nil {
 		return StateActionResult{}, err
 	}
 	if !changed {
@@ -232,7 +232,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 		return out, nil
 	}
 	event, _ := json.Marshal(StateEvent{Revision: s.Revision, Op: action.Op, ID: id, RunID: fence.Run, CreatedAt: t.Now, Payload: action.Payload, Result: resultJSON})
-	err = sqlstore.InsertStateEvent(t, project, s.Revision, string(event))
+	err = sqlstore.InsertStateEvent(t.transactionQueries, project, s.Revision, string(event))
 	if err == nil {
 		*snapshot = current
 	}
@@ -290,7 +290,7 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 	// new record only when its immutable SQL Fact was inserted from this same
 	// value; a stale allocation counter must not create two observations for
 	// one ID. Limit conflict handling to the primary key, not other failures.
-	inserted, err := sqlstore.InsertFact(t, s.Graph.Project.ID, Fact{ID: id, Description: f.Description})
+	inserted, err := sqlstore.InsertFact(t.transactionQueries, s.Graph.Project.ID, Fact{ID: id, Description: f.Description})
 	if err != nil {
 		return "", nil, err
 	}
@@ -455,7 +455,7 @@ func (t *Tx) upsertFinding(s State, d *stateData, fence ExecutionFence, raw json
 }
 
 func (t *Tx) stateID(project, kind, prefix string) (string, error) {
-	return sqlstore.NextScopedID(t, project, kind, prefix)
+	return sqlstore.NextScopedID(t.transactionQueries, project, kind, prefix)
 }
 
 func (t *Tx) changeGoal(s State, d *stateData, raw json.RawMessage) (string, any, bool, error) {
@@ -698,12 +698,12 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 					continue
 				}
 				if i.Worker != nil {
-					if err := sqlstore.RevokeRun(t, s.Graph.Project.ID, *i.Worker); err != nil {
+					if err := sqlstore.RevokeRun(t.transactionQueries, s.Graph.Project.ID, *i.Worker); err != nil {
 						return "", nil, false, err
 					}
 				}
 				i.Worker, current.Worker, i.ConcludedAt = nil, nil, Ptr(t.Now)
-				if err := sqlstore.AbandonIntent(t, s.Graph.Project.ID, i.ID, t.Now); err != nil {
+				if err := sqlstore.AbandonIntent(t.transactionQueries, s.Graph.Project.ID, i.ID, t.Now); err != nil {
 					return "", nil, false, err
 				}
 			}

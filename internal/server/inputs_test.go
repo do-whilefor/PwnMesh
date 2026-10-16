@@ -139,7 +139,7 @@ func TestUploadedInputsRoundTripDedupeIsolationAndDeletion(t *testing.T) {
 	f.request("POST", "/projects", map[string]any{"title": "Other", "origin": "Input", "goal": "Check"}, false, 201, &other)
 	f.request("GET", "/projects/"+other.Project.ID+"/inputs/"+input.ID, nil, false, 404, nil)
 	f.request("DELETE", f.base(), nil, false, 204, nil)
-	err := store.Do(context.Background(), func(tx *board.Tx) error {
+	err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		var count int
 		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_input_files").Scan(&count); err != nil {
 			return err

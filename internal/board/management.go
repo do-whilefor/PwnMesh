@@ -50,7 +50,7 @@ func (t *Tx) CreateProject(input ProjectInput) (out Graph, err error) {
 			return Graph{}, Err(422, "hint content and creator must be non-empty strings")
 		}
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return Graph{}, err
 	}
 	defer t.finishManagement(&err)
@@ -109,7 +109,7 @@ func (t *Tx) SetProjectStatus(project, status string, expected *int64) (out Proj
 	if expected != nil && *expected != g.Project.Generation {
 		return Project{}, Err(409, "Project round changed; refresh before changing status")
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return Project{}, err
 	}
 	defer t.finishManagement(&err)
@@ -130,7 +130,7 @@ func (t *Tx) AddProjectHint(project string, input HintInput, run string) (out Hi
 	if g.Project.Status != "active" && g.Project.Status != "stopped" && g.Project.Status != "completed" {
 		return Hint{}, Err(403, "Project is "+g.Project.Status)
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return Hint{}, err
 	}
 	defer t.finishManagement(&err)
@@ -170,7 +170,7 @@ func (t *Tx) ReopenProject(project, description, creator, run string) (out Reope
 	if len(old.From) == 0 {
 		return Reopened{}, Err(409, "Completion intent is missing its source facts")
 	}
-	if _, err = t.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
 		return Reopened{}, err
 	}
 	defer t.finishManagement(&err)
@@ -185,7 +185,7 @@ func (t *Tx) ReopenProject(project, description, creator, run string) (out Reope
 	if err != nil {
 		return Reopened{}, err
 	}
-	if err = sqlstore.DeleteIntent(t, project, old.ID); err != nil {
+	if err = sqlstore.DeleteIntent(t.transactionQueries, project, old.ID); err != nil {
 		return Reopened{}, err
 	}
 	fact := Fact{ID: fid, Description: description}
@@ -202,9 +202,9 @@ func (t *Tx) ReopenProject(project, description, creator, run string) (out Reope
 // handling one rejection must not commit its counters, leases or partial input.
 func (t *Tx) finishManagement(resultErr *error) {
 	if *resultErr != nil {
-		_, rollbackErr := t.Exec("ROLLBACK TO pwnmesh_management")
+		_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_management")
 		*resultErr = errors.Join(*resultErr, rollbackErr)
 	}
-	_, releaseErr := t.Exec("RELEASE pwnmesh_management")
+	_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_management")
 	*resultErr = errors.Join(*resultErr, releaseErr)
 }

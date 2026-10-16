@@ -18,7 +18,7 @@ func TestExecutionWritesRollbackWithReviewEvents(t *testing.T) {
 	})
 	grantMainRetry(f, "review-retry", previous)
 	f.do(func(tx *Tx) error {
-		_, err := tx.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", step)
+		_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=NULL WHERE project_id='p' AND id=?", step)
 		return err
 	})
 	next := dependencyRun(f, "new-review", step)
@@ -36,7 +36,7 @@ func TestExecutionWritesRollbackWithReviewEvents(t *testing.T) {
 			if enabled {
 				query = `CREATE TRIGGER reject_review_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'event refused'); END`
 			}
-			_, err := tx.Exec(query)
+			_, err := tx.transactionQueries.Exec(query)
 			return err
 		})
 	}

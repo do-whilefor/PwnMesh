@@ -16,7 +16,7 @@ func TestTitleUpdatesOnlyTitleAndPreservesState(t *testing.T) {
 	f.request("POST", f.base()+"/hints", map[string]string{"content": "Keep this requirement", "creator": "user"}, false, http.StatusCreated, nil)
 	before, events := f.state(), storedEvents(f)
 	version := board.DecisionStateVersion(before)
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		for _, table := range []string{"facts", "hints", "intents", "intent_sources", "pwnmesh_project_orchestration"} {
 			if _, err := tx.Exec("CREATE TRIGGER reject_title_insert_" + table + " BEFORE INSERT ON " + table + " BEGIN SELECT RAISE(ABORT,'title rewrote graph'); END"); err != nil {
 				return err

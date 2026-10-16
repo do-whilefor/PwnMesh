@@ -13,7 +13,7 @@ import (
 // success. It cannot change the outcome, input, receipt or lease. The completed
 // execution identity authorizes this write even after its lease was revoked.
 func (t *Tx) RecordExecutionObservation(project, run string, fence ExecutionFence, metrics json.RawMessage) error {
-	e, err := sqlstore.ExecutionResult(t, project, run)
+	e, err := sqlstore.ExecutionResult(t.transactionQueries, project, run)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Err(404, "Execution not found")
 	}
@@ -55,5 +55,5 @@ func (t *Tx) RecordExecutionObservation(project, run string, fence ExecutionFenc
 	if err != nil {
 		return err
 	}
-	return sqlstore.SaveExecutionObservation(t, project, run, raw)
+	return sqlstore.SaveExecutionObservation(t.transactionQueries, project, run, raw)
 }

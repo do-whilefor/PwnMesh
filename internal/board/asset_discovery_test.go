@@ -34,7 +34,7 @@ func TestStepResultAssetDiscoverySurvivesSnapshotAndRestart(t *testing.T) {
 	var snapshot *InputSnapshot
 	f.do(func(tx *Tx) (err error) {
 		var stored int
-		if err = tx.QueryRow("SELECT count(*) FROM pwnmesh_asset_anchors WHERE project_id=? AND node_kind='fact' AND node_id=?", "p", fact).Scan(&stored); err != nil {
+		if err = tx.transactionQueries.QueryRow("SELECT count(*) FROM pwnmesh_asset_anchors WHERE project_id=? AND node_kind='fact' AND node_id=?", "p", fact).Scan(&stored); err != nil {
 			return err
 		}
 		if stored != 0 {

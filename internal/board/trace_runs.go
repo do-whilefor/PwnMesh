@@ -27,7 +27,7 @@ func (t *Tx) TraceRuns(project string, generation int64, offset, limit int, runI
 		return nil, Err(409, "trace input belongs to a previous project round")
 	}
 	out := []TraceRun{}
-	err = sqlstore.VisitTraceRuns(t, project, generation, offset, limit, runID, func(run TraceRun) error {
+	err = sqlstore.VisitTraceRuns(t.transactionQueries, project, generation, offset, limit, runID, func(run TraceRun) error {
 		var job struct {
 			RunID     string  `json:"run_id"`
 			Kind      string  `json:"kind"`

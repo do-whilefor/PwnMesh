@@ -16,9 +16,9 @@ type Store struct {
 type transactionQueries = sqlstore.Queries
 
 type Tx struct {
-	transactionQueries
-	Now      string
-	readOnly bool
+	transactionQueries sqlstore.Queries
+	Now                string
+	readOnly           bool
 }
 
 func Open(path string) (*Store, error) {

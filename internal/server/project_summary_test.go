@@ -36,7 +36,7 @@ func TestProjectListSummariesHideExpiredLeasesWithoutWritingOrLoadingGraph(t *te
 	}
 	// The list must not depend on graph edges or hydrate a full graph merely
 	// to count its nodes. A full Load would fail after this table is removed.
-	if err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 		_, err := tx.Exec("DROP TABLE intent_sources")
 		return err
 	}); err != nil {

@@ -23,12 +23,12 @@ func (t *Tx) FreezeInput(state State) (out *InputSnapshot, err error) {
 	if err != nil {
 		return nil, err
 	}
-	err = sqlstore.SaveInputSnapshot(t, ref.ProjectID, ref.ID, metadata, raw)
+	err = sqlstore.SaveInputSnapshot(t.transactionQueries, ref.ProjectID, ref.ID, metadata, raw)
 	return ref, err
 }
 
 func (t *Tx) InputSnapshotMetadata(project, id string) (*InputSnapshot, error) {
-	raw, err := sqlstore.ReadInputSnapshotMetadata(t, project, id)
+	raw, err := sqlstore.ReadInputSnapshotMetadata(t.transactionQueries, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Err(404, "Input snapshot not found")
 	}
@@ -51,7 +51,7 @@ func (t *Tx) ReadInputSnapshot(project, id string) (State, error) {
 }
 
 func (t *Tx) readInputSnapshotBytes(project, id string) ([]byte, error) {
-	raw, err := sqlstore.ReadInputSnapshot(t, project, id)
+	raw, err := sqlstore.ReadInputSnapshot(t.transactionQueries, project, id)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, Err(404, "Input snapshot not found")
 	}
@@ -89,7 +89,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 	if offset < 0 {
 		return SchedulePage{}, Err(422, "invalid scheduling offset")
 	}
-	header, count, err := sqlstore.ScheduleHeader(t, project)
+	header, count, err := sqlstore.ScheduleHeader(t.transactionQueries, project)
 	if err == nil {
 		var page SchedulePage
 		if err := json.Unmarshal(header, &page); err != nil {
@@ -101,7 +101,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 		if offset > count {
 			return SchedulePage{}, Err(422, "invalid scheduling offset")
 		}
-		page.Steps, err = sqlstore.ScheduleSteps(t, project, offset, 100)
+		page.Steps, err = sqlstore.ScheduleSteps(t.transactionQueries, project, offset, 100)
 		if err == nil && len(page.Steps) != min(100, count-offset) {
 			return SchedulePage{}, errors.New("incomplete scheduling projection")
 		}
@@ -150,7 +150,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 		if err != nil {
 			return SchedulePage{}, err
 		}
-		if err := sqlstore.SaveSchedule(t, project, header, steps); err != nil {
+		if err := sqlstore.SaveSchedule(t.transactionQueries, project, header, steps); err != nil {
 			return SchedulePage{}, err
 		}
 	}

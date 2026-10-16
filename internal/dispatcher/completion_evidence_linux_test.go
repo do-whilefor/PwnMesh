@@ -27,7 +27,7 @@ import (
 func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T) {
 	for _, accepted := range []bool{false, true} {
 		t.Run(fmt.Sprintf("accepted=%t", accepted), func(t *testing.T) {
-			store, err := board.Open(filepath.Join(t.TempDir(), "completion.db"))
+			store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "completion.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -60,8 +60,11 @@ func TestCompletionReviewOmissionsReachProviderThroughEvidencePages(t *testing.T
 				if err := tx.Save(current); err != nil {
 					return err
 				}
-				return seedFixtureFacts(tx, graph.Project.ID, 1, fact)
+				return nil
 			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := fixtureSQL(store).Do(ctx, func(tx *fixtureSQLTx) error { return seedFixtureFacts(tx, graph.Project.ID, 1, fact) }); err != nil {
 				t.Fatal(err)
 			}
 			lease := Lease{Run: "fixture@completion", Kind: "reason"}

@@ -45,7 +45,7 @@ func (*coldStartRunner) Projects(context.Context) ([]string, error)    { return 
 func TestNewProjectsStartWithDecideAndRespectExecuteLimits(t *testing.T) {
 	for _, directions := range []int{1, 3} {
 		t.Run(fmt.Sprintf("directions_%d", directions), func(t *testing.T) {
-			store, err := board.Open(filepath.Join(t.TempDir(), "cold-start.db"))
+			store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "cold-start.db"))
 			if err != nil {
 				t.Fatal(err)
 			}

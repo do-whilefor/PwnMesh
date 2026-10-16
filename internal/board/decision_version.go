@@ -65,7 +65,7 @@ func DecisionJobVersion(raw json.RawMessage) (string, error) {
 // must supply one. Lease and source checks remain independent.
 func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expected string) error {
 	if fence.Lease == "curate" {
-		_, raw, err := sqlstore.ExecutionInputByLease(t, state.Graph.Project.ID, fence.Run, "curate")
+		_, raw, err := sqlstore.ExecutionInputByLease(t.transactionQueries, state.Graph.Project.ID, fence.Run, "curate")
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return Err(403, "curation requires a registered input snapshot")
@@ -81,7 +81,7 @@ func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expect
 		}
 	}
 	if fence.Lease == "reason" {
-		_, raw, err := sqlstore.ExecutionInputByLease(t, state.Graph.Project.ID, fence.Run, "reason")
+		_, raw, err := sqlstore.ExecutionInputByLease(t.transactionQueries, state.Graph.Project.ID, fence.Run, "reason")
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}

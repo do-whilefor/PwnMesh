@@ -43,7 +43,7 @@ func TestAssetStepIdentityReplayAndSeparateStorage(t *testing.T) {
 	}
 	f.tx(func(tx *Tx) error {
 		var raw string
-		if err := tx.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT data FROM pwnmesh_state WHERE project_id='proj_001'").Scan(&raw); err != nil {
 			return err
 		}
 		if strings.Contains(raw, `"assets"`) || strings.Contains(raw, `"asset_anchors"`) || strings.Contains(raw, "example.com") {
@@ -116,7 +116,7 @@ func TestAssetSnapshotProjectAndGenerationIsolation(t *testing.T) {
 			t.Fatal("live asset writes changed immutable snapshot")
 		}
 		var raw []byte
-		if err = tx.QueryRow("SELECT data FROM pwnmesh_round_entries WHERE project_id='proj_001' AND generation=0 AND kind='state'").Scan(&raw); err != nil {
+		if err = tx.transactionQueries.QueryRow("SELECT data FROM pwnmesh_round_entries WHERE project_id='proj_001' AND generation=0 AND kind='state'").Scan(&raw); err != nil {
 			return err
 		}
 		var archived State
@@ -127,7 +127,7 @@ func TestAssetSnapshotProjectAndGenerationIsolation(t *testing.T) {
 			t.Fatal("round archive lost asset provenance")
 		}
 		var count int
-		if err = tx.QueryRow("SELECT count(*) FROM pwnmesh_assets WHERE project_id='proj_001'").Scan(&count); err == nil && count != 1 {
+		if err = tx.transactionQueries.QueryRow("SELECT count(*) FROM pwnmesh_assets WHERE project_id='proj_001'").Scan(&count); err == nil && count != 1 {
 			t.Fatal("new round duplicated stable asset identity")
 		}
 		return err
@@ -137,7 +137,7 @@ func TestAssetSnapshotProjectAndGenerationIsolation(t *testing.T) {
 func TestAssetFailureRollsBackOriginalActionAndIndexes(t *testing.T) {
 	f := newPlanFixture(t)
 	f.tx(func(tx *Tx) error {
-		_, err := tx.Exec(`CREATE TRIGGER reject_assets BEFORE INSERT ON pwnmesh_asset_anchors BEGIN SELECT RAISE(ABORT,'unavailable'); END`)
+		_, err := tx.transactionQueries.Exec(`CREATE TRIGGER reject_assets BEFORE INSERT ON pwnmesh_asset_anchors BEGIN SELECT RAISE(ABORT,'unavailable'); END`)
 		return err
 	})
 	input := stepInput("Inspect", []string{"origin"}, "goal", 0)
@@ -159,13 +159,13 @@ func TestAssetFailureRollsBackOriginalActionAndIndexes(t *testing.T) {
 	}
 	f.tx(func(tx *Tx) error {
 		var count int
-		if err := tx.QueryRow("SELECT (SELECT count(*) FROM pwnmesh_assets)+(SELECT count(*) FROM pwnmesh_asset_anchors)+(SELECT count(*) FROM pwnmesh_state_actions)").Scan(&count); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT (SELECT count(*) FROM pwnmesh_assets)+(SELECT count(*) FROM pwnmesh_asset_anchors)+(SELECT count(*) FROM pwnmesh_state_actions)").Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 {
 			t.Fatal("failed action leaked asset catalog or receipt")
 		}
-		_, err := tx.Exec("DROP TRIGGER reject_assets")
+		_, err := tx.transactionQueries.Exec("DROP TRIGGER reject_assets")
 		return err
 	})
 	if result := f.action("step", "atomic", input); result.ID != "i001" {
@@ -182,7 +182,7 @@ func TestAssetDecisionPreviewAndFailedBatchDoNotLeakIndexes(t *testing.T) {
 			return err
 		}
 		var count int
-		if err = tx.QueryRow("SELECT (SELECT count(*) FROM pwnmesh_assets)+(SELECT count(*) FROM pwnmesh_asset_anchors)").Scan(&count); err != nil {
+		if err = tx.transactionQueries.QueryRow("SELECT (SELECT count(*) FROM pwnmesh_assets)+(SELECT count(*) FROM pwnmesh_asset_anchors)").Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 {
@@ -193,7 +193,7 @@ func TestAssetDecisionPreviewAndFailedBatchDoNotLeakIndexes(t *testing.T) {
 		if _, err = tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, invalid); err == nil {
 			t.Fatal("invalid batch accepted")
 		}
-		if err = tx.QueryRow("SELECT (SELECT count(*) FROM pwnmesh_assets)+(SELECT count(*) FROM pwnmesh_asset_anchors)").Scan(&count); err != nil {
+		if err = tx.transactionQueries.QueryRow("SELECT (SELECT count(*) FROM pwnmesh_assets)+(SELECT count(*) FROM pwnmesh_asset_anchors)").Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 {

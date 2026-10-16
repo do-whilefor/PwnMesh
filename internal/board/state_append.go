@@ -27,5 +27,5 @@ func (t *Tx) saveAppendedState(project string, d stateData, op string, record []
 	if op == "candidate" {
 		kind, position = "candidates", len(d.Candidates)-1
 	}
-	return sqlstore.AppendStateRecord(t, project, string(raw), kind, position, record, revision, decision)
+	return sqlstore.AppendStateRecord(t.transactionQueries, project, string(raw), kind, position, record, revision, decision)
 }

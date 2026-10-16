@@ -2,12 +2,56 @@ package board
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"pwnmesh/internal/board/model"
 )
+
+type curationProjectionQueries struct {
+	transactionQueries
+	executionReads, assetReads int
+}
+
+func (q *curationProjectionQueries) Query(query string, args ...any) (*sql.Rows, error) {
+	if strings.Contains(query, "FROM intents i JOIN pwnmesh_executions") {
+		q.executionReads++
+	}
+	if strings.Contains(query, "FROM pwnmesh_asset_anchors n JOIN pwnmesh_assets") {
+		q.assetReads++
+	}
+	return q.transactionQueries.Query(query, args...)
+}
+
+func TestCurationProspectiveCorrectionsLoadProjectionInputsOnce(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	producer := f.worker("projection-inputs", "")
+	old, middle, fresh := f.fact(producer, "old"), f.fact(producer, "middle"), f.fact(producer, "fresh")
+	curator, input := f.curator("projection-curator")
+	raw, _ := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{
+		{Kind: "refutes", Source: fresh, Target: old, Reason: "A fresh independent observation corrects the old one"},
+		{Kind: "refutes", Source: fresh, Target: middle, Reason: "The same observation also corrects the intermediate result"},
+	}})
+	f.do(func(tx *Tx) error {
+		data, _, _, err := tx.stateData("p")
+		if err != nil {
+			return err
+		}
+		queries := &curationProjectionQueries{transactionQueries: tx.transactionQueries}
+		tx.transactionQueries = queries
+		_, _, err = tx.curate(input, &data, curator.Fence(), raw)
+		if err != nil {
+			return err
+		}
+		if queries.executionReads != 1 || queries.assetReads != 1 || len(data.FactRelations) != 2 {
+			t.Fatalf("prospective corrections reloaded stable inputs: executions=%d assets=%d relations=%d", queries.executionReads, queries.assetReads, len(data.FactRelations))
+		}
+		return nil
+	})
+}
 
 func TestPartialCurationWithRelationRetainsCoveredGroupProgress(t *testing.T) {
 	for _, withRelation := range []bool{false, true} {

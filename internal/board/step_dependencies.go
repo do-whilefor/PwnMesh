@@ -81,7 +81,7 @@ func (t *Tx) stepDependencyResults(s State, id string) ([]DependencyResult, erro
 		}
 		// Binding needs runtime identity only, not the upstream Worker's saved
 		// input or local DAG result, which can be much larger than this graph.
-		run, status, intent, err := sqlstore.ExecutionIdentityByLease(t, s.Graph.Project.ID, fact.RunID)
+		run, status, intent, err := sqlstore.ExecutionIdentityByLease(t.transactionQueries, s.Graph.Project.ID, fact.RunID)
 		if err != nil || status != "succeeded" || intent != upstream {
 			return nil, Err(409, "Step dependency "+upstream+" has no successful producing run")
 		}

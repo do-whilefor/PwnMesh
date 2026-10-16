@@ -131,11 +131,11 @@ func putQueryExecution(t *testing.T, tx *Tx, e Execution, generation int64, vers
 	if e.Job == nil {
 		e.Job = json.RawMessage(`{"graph":{}}`)
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO projects(id,title,status,created_at) VALUES(?,'fixture','active',?)`, e.ProjectID, tx.Now); err != nil {
+	if _, err := tx.transactionQueries.Exec(`INSERT OR IGNORE INTO projects(id,title,status,created_at) VALUES(?,'fixture','active',?)`, e.ProjectID, tx.Now); err != nil {
 		t.Fatal(err)
 	}
 	e.Backend, e.Lease, e.UpdatedAt = "planner", "planner@"+e.ID, e.CreatedAt
-	err := sqlstore.InsertExecution(tx, e, ExecutionSummary{Generation: generation, InputRevision: 10, DecisionRevision: 9, StateVersion: version, HasState: version != "", FactCount: 3, HintCount: 2, OpenCount: 1}, "")
+	err := sqlstore.InsertExecution(tx.transactionQueries, e, ExecutionSummary{Generation: generation, InputRevision: 10, DecisionRevision: 9, StateVersion: version, HasState: version != "", FactCount: 3, HintCount: 2, OpenCount: 1}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,12 +156,12 @@ func TestDecisionReadViewMigrationPrunesOnlyUnusableExecutions(t *testing.T) {
 			}
 			putQueryExecution(t, tx, e, 0, "")
 			if status == "revoked" {
-				if _, err := tx.Exec("INSERT INTO pwnmesh_revoked_runs VALUES('p','planner@revoked')"); err != nil {
+				if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_revoked_runs VALUES('p','planner@revoked')"); err != nil {
 					t.Fatal(err)
 				}
 			}
 			// Recreate views retained by an older server, before lifecycle cleanup.
-			if _, err := tx.Exec("INSERT INTO pwnmesh_decision_read_views VALUES('p',?,'pinned','{}')", status); err != nil {
+			if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_decision_read_views VALUES('p',?,'pinned','{}')", status); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -175,12 +175,12 @@ func TestDecisionReadViewMigrationPrunesOnlyUnusableExecutions(t *testing.T) {
 	}
 	executionQueryTx(t, store, func(tx *Tx) {
 		var count int
-		if err := tx.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views").Scan(&count); err != nil || count != 4 {
+		if err := tx.transactionQueries.QueryRow("SELECT count(*) FROM pwnmesh_decision_read_views").Scan(&count); err != nil || count != 4 {
 			t.Fatalf("migration retained %d views, want four recoverable executions: %v", count, err)
 		}
 		for _, status := range []string{"prepared", "running", "retryable", "result_pending"} {
 			var version string
-			if err := tx.QueryRow("SELECT state_version FROM pwnmesh_decision_read_views WHERE execution_id=?", status).Scan(&version); err != nil || version != "pinned" {
+			if err := tx.transactionQueries.QueryRow("SELECT state_version FROM pwnmesh_decision_read_views WHERE execution_id=?", status).Scan(&version); err != nil || version != "pinned" {
 				t.Fatalf("migration lost the %s pinned view: %s %v", status, version, err)
 			}
 		}
@@ -196,7 +196,7 @@ func TestExecutionPendingKeysetExcludesHistoryAndKeepsCleanup(t *testing.T) {
 		for n := 0; n < 105; n++ {
 			putQueryExecution(t, tx, Execution{ID: fmt.Sprintf("run-%03d", n), Status: statuses[n%len(statuses)], CreatedAt: fmt.Sprintf("%03d", 105-n)}, int64(n%3), "")
 		}
-		if _, err := tx.Exec("UPDATE projects SET status='completed' WHERE id='p'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE projects SET status='completed' WHERE id='p'"); err != nil {
 			t.Fatal(err)
 		}
 		page, err := tx.PendingExecutions("ns", 0, 100)
@@ -212,7 +212,7 @@ func TestExecutionPendingKeysetExcludesHistoryAndKeepsCleanup(t *testing.T) {
 			}
 		}
 		// A transition between pages must not shift an offset and skip a run.
-		if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='cancelled' WHERE id='run-000'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status='cancelled' WHERE id='run-000'"); err != nil {
 			t.Fatal(err)
 		}
 		next, err := tx.PendingExecutions("ns", page.NextCursor, 100)
@@ -300,7 +300,7 @@ func TestScheduleExecutionChecksSkipUnavailableHistory(t *testing.T) {
 		boot := Intent{ID: "boot", Description: "bootstrap", Creator: "dispatcher.bootstrap", From: []string{"origin"}, Worker: Ptr("worker")}
 		projected := scheduleSteps(append(intents, boot), steps)
 		// An all-history page does not query the registry at all.
-		if _, err := tx.Exec("DROP TABLE pwnmesh_executions"); err != nil {
+		if _, err := tx.transactionQueries.Exec("DROP TABLE pwnmesh_executions"); err != nil {
 			t.Fatal(err)
 		}
 		checks, err := tx.ScheduleExecutionChecks("p", "ns", projected)
@@ -333,7 +333,7 @@ func TestScheduleChecksReadOnlyStepMetadataAndKeepOrphanReservations(t *testing.
 			t.Fatal(err)
 		}
 		metadata := `{"steps":[{"id":"orphan","write_paths":["/workspace/old"]},{"id":"orphan","status":"abandoned","write_paths":["/workspace/shared"]},{"id":"blocked","write_paths":["/workspace/shared/file"]},{"id":"free","write_paths":["/workspace/other"]}],"facts":[{"id":"observation","status":"valid"}]}`
-		if err := sqlstore.SaveStateMetadata(tx, "p", metadata, 0, 0); err != nil {
+		if err := sqlstore.SaveStateMetadata(tx.transactionQueries, "p", metadata, 0, 0); err != nil {
 			t.Fatal(err)
 		}
 		putQueryExecution(t, tx, Execution{ID: "orphan-run", Kind: "explore", Intent: "orphan", Status: "running"}, 0, "")
@@ -369,14 +369,14 @@ func TestExecutionCheckPreservesGrantsPendingAndAttemptAllowance(t *testing.T) {
 		if err != nil || !check.Blocked || !check.Repeated || check.Attempts != 1 || check.AutomaticRetryID != "failed" {
 			t.Fatalf("initial check=%+v err=%v", check, err)
 		}
-		if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='running' WHERE id='old-generation'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status='running' WHERE id='old-generation'"); err != nil {
 			t.Fatal(err)
 		}
 		check, err = tx.CheckExecutions(q)
 		if err != nil || !check.Pending || check.AutomaticRetryID != "" {
 			t.Fatalf("stale pending work authorized an automatic successor: %+v err=%v", check, err)
 		}
-		if _, err := tx.Exec("UPDATE pwnmesh_executions SET status='failed' WHERE id='old-generation'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status='failed' WHERE id='old-generation'"); err != nil {
 			t.Fatal(err)
 		}
 		putQueryExecution(t, tx, Execution{ID: "grant", Status: "retry_requested", RetryKey: "different-input"}, 2, "")
@@ -389,7 +389,7 @@ func TestExecutionCheckPreservesGrantsPendingAndAttemptAllowance(t *testing.T) {
 		if err != nil || !check.Pending || !check.Blocked || check.AutomaticRetryID != "" {
 			t.Fatalf("cross-key pending lost: %+v err=%v", check, err)
 		}
-		if _, err = tx.Exec("UPDATE pwnmesh_executions SET status='retried' WHERE id IN ('grant','pending')"); err != nil {
+		if _, err = tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET status='retried' WHERE id IN ('grant','pending')"); err != nil {
 			t.Fatal(err)
 		}
 		putQueryExecution(t, tx, Execution{ID: "human-successor", Status: "retried"}, 2, "same")
@@ -421,7 +421,7 @@ func TestExecutionCheckLatestBaselineAndRepeatedUseMetadata(t *testing.T) {
 		putQueryExecution(t, tx, Execution{ID: "failed-nonlatest", Status: "cancelled", RetryKey: "different"}, 3, "repeated-state")
 		// After metadata capture, compact reads must not depend on any Job or
 		// historical Result being available or decodable.
-		if _, err := tx.Exec("UPDATE pwnmesh_executions SET job='unavailable',result='unavailable'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET job='unavailable',result='unavailable'"); err != nil {
 			t.Fatal(err)
 		}
 		check, err := tx.CheckExecutions(ExecutionCheckQuery{ProjectID: "p", Namespace: "ns", Generation: 4, Kind: "reason", RetryKey: "new-key", StateVersion: "repeated-state"})
@@ -500,10 +500,10 @@ func TestAutomaticDecisionRetryUsesMetadataAndScopesAttempts(t *testing.T) {
 		putQueryExecution(t, tx, Execution{ID: "step", Kind: "explore", Intent: "i1", RetryKey: key, Status: "failed"}, 0, "")
 		putQueryExecution(t, tx, Execution{ID: "foreign", Namespace: "other", RetryKey: key, Status: "failed", Result: failure}, 0, "same")
 		// Restoring a previous Job is unnecessary when authorizing a new run.
-		if _, err := tx.Exec("UPDATE pwnmesh_executions SET job='unavailable' WHERE id='failed'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_executions SET job='unavailable' WHERE id='failed'"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := tx.Exec("UPDATE projects SET reason_worker='planner@failed',reason_trigger='test' WHERE id='p'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE projects SET reason_worker='planner@failed',reason_trigger='test' WHERE id='p'"); err != nil {
 			t.Fatal(err)
 		}
 		check, err := tx.CheckExecutions(ExecutionCheckQuery{ProjectID: "p", Namespace: "ns", Kind: "reason", RetryKey: key})
@@ -524,7 +524,7 @@ func TestAutomaticDecisionRetryUsesMetadataAndScopesAttempts(t *testing.T) {
 			t.Fatalf("grant did not revoke original lease: %v", err)
 		}
 		var reason *string
-		if err := tx.QueryRow("SELECT reason_worker FROM projects WHERE id='p'").Scan(&reason); err != nil || reason != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT reason_worker FROM projects WHERE id='p'").Scan(&reason); err != nil || reason != nil {
 			t.Fatalf("grant did not release original lease: %v", err)
 		}
 		putQueryExecution(t, tx, Execution{ID: "successor", RetryKey: key, Status: "failed", Result: failure}, 0, "same")
@@ -538,7 +538,7 @@ func TestExecutionRegistrationValidatesMetadataBeforeConsumingRetry(t *testing.T
 	s := executionQueryStore(t)
 	executionQueryTx(t, s, func(tx *Tx) {
 		putQueryExecution(t, tx, Execution{ID: "original", Status: "retry_requested", Job: json.RawMessage(`unavailable`)}, 0, "")
-		if _, err := tx.Exec("UPDATE projects SET reason_worker='planner@successor',reason_trigger='retry' WHERE id='p'"); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE projects SET reason_worker='planner@successor',reason_trigger='retry' WHERE id='p'"); err != nil {
 			t.Fatal(err)
 		}
 		e := Execution{ProjectID: "p", ID: "successor", Namespace: "ns", Backend: "planner", Kind: "reason", Lease: "planner@successor", RetryKey: "reason:key",

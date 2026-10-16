@@ -35,7 +35,7 @@ func seedCurationGroups(f *orchestrationFixture, groups, notes int, source strin
 		if err != nil {
 			return err
 		}
-		return sqlstore.SaveStateMetadata(tx, "p", string(raw), revision+1, decision+1)
+		return sqlstore.SaveStateMetadata(tx.transactionQueries, "p", string(raw), revision+1, decision+1)
 	})
 }
 

@@ -36,7 +36,7 @@ func TestBulkSourceReadUsesProjectIndexAndKeepsProjectsSeparate(t *testing.T) {
 		if len(g.Intents) != 1 || !reflect.DeepEqual(g.Intents[0].From, from) {
 			t.Fatalf("other project's same-ID sources leaked: %+v", g.Intents)
 		}
-		rows, err := tx.Query("EXPLAIN QUERY PLAN SELECT intent_id,fact_id FROM intent_sources WHERE project_id=? ORDER BY rowid", "proj_001")
+		rows, err := tx.transactionQueries.Query("EXPLAIN QUERY PLAN SELECT intent_id,fact_id FROM intent_sources WHERE project_id=? ORDER BY rowid", "proj_001")
 		if err != nil {
 			return err
 		}
@@ -64,12 +64,12 @@ func TestLoadPreservesInterleavedSourceOrderAndEmptyCollections(t *testing.T) {
 	f := newPlanFixture(t)
 	f.tx(func(tx *Tx) error {
 		for _, id := range []string{"empty", "first", "second"} {
-			if _, err := tx.Exec("INSERT INTO intents(id,project_id,description,creator,created_at) VALUES(?,'proj_001',?,'fixture',?)", id, id, tx.Now); err != nil {
+			if _, err := tx.transactionQueries.Exec("INSERT INTO intents(id,project_id,description,creator,created_at) VALUES(?,'proj_001',?,'fixture',?)", id, id, tx.Now); err != nil {
 				return err
 			}
 		}
 		for _, pair := range [][2]string{{"second", "f002"}, {"first", "f001"}, {"second", "origin"}, {"first", "f002"}} {
-			if _, err := tx.Exec("INSERT INTO intent_sources(intent_id,project_id,fact_id) VALUES(?,'proj_001',?)", pair[0], pair[1]); err != nil {
+			if _, err := tx.transactionQueries.Exec("INSERT INTO intent_sources(intent_id,project_id,fact_id) VALUES(?,'proj_001',?)", pair[0], pair[1]); err != nil {
 				return err
 			}
 		}
@@ -92,13 +92,13 @@ func TestEventReadsPreserveExistenceBoundariesAndLimit(t *testing.T) {
 	f.tx(func(tx *Tx) error {
 		for revision := int64(1); revision <= 1003; revision++ {
 			raw, _ := json.Marshal(StateEvent{Revision: revision, Op: "step", ID: "i001"})
-			if _, err := tx.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES('proj_001',?,?)", revision, string(raw)); err != nil {
+			if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES('proj_001',?,?)", revision, string(raw)); err != nil {
 				return err
 			}
 		}
 		// Event discovery depends only on the project and event index. Unrelated
 		// graph data must never be read just to establish project existence.
-		if _, err := tx.Exec("DROP TABLE facts"); err != nil {
+		if _, err := tx.transactionQueries.Exec("DROP TABLE facts"); err != nil {
 			return err
 		}
 		events, err := tx.StateEvents("proj_001", 1)

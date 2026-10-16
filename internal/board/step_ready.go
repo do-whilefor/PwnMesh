@@ -49,7 +49,7 @@ func (t *Tx) stepReadyState(s State, id, lease string) error {
 			if premiseErr == nil || lease == "" {
 				return premiseErr
 			}
-			running, err := sqlstore.RunningStepExecution(t, project, id, lease)
+			running, err := sqlstore.RunningStepExecution(t.transactionQueries, project, id, lease)
 			if err != nil {
 				return err
 			}

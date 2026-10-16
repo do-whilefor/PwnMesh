@@ -19,7 +19,7 @@ func newFindingFixture(t *testing.T) *findingFixture {
 	f := &findingFixture{planFixture: newPlanFixture(t)}
 	f.executor("evidence-one")
 	f.tx(func(tx *Tx) error {
-		_, err := tx.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES('proj_001','fact',2)")
+		_, err := tx.transactionQueries.Exec("INSERT INTO scoped_counters(project_id,kind,value) VALUES('proj_001','fact',2)")
 		return err
 	})
 	for n, fact := range []*FactRecord{&f.first, &f.second} {

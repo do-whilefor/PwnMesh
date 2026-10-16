@@ -42,11 +42,11 @@ func TestGrowingInputSnapshotsShareRetainedEvidence(t *testing.T) {
 			fullBytes += len(raw)
 		}
 		var storedBytes int
-		if err := tx.QueryRow("SELECT COALESCE(SUM(length(state)),0) FROM pwnmesh_input_snapshots WHERE project_id='p'").Scan(&storedBytes); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT COALESCE(SUM(length(state)),0) FROM pwnmesh_input_snapshots WHERE project_id='p'").Scan(&storedBytes); err != nil {
 			return err
 		}
 		var chunkBytes int
-		if err := tx.QueryRow("SELECT COALESCE(SUM(length(data)),0) FROM pwnmesh_snapshot_chunks WHERE project_id='p'").Scan(&chunkBytes); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT COALESCE(SUM(length(data)),0) FROM pwnmesh_snapshot_chunks WHERE project_id='p'").Scan(&chunkBytes); err != nil {
 			return err
 		}
 		if storedBytes+chunkBytes >= fullBytes/2 {
@@ -87,7 +87,7 @@ func TestCurrentInlineInputSnapshotRemainsReadable(t *testing.T) {
 	digest := sha256.Sum256(raw)
 	id := hex.EncodeToString(digest[:])
 	f.do(func(tx *Tx) error {
-		if _, err := tx.Exec("INSERT INTO pwnmesh_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", "p", id, []byte(`{}`), raw); err != nil {
+		if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", "p", id, []byte(`{}`), raw); err != nil {
 			return err
 		}
 		got, err := tx.ReadInputSnapshot("p", id)
@@ -110,7 +110,7 @@ func TestChunkedInputSnapshotFailsClosedOnMissingOrCorruptStorage(t *testing.T) 
 					return err
 				}
 				var stored []byte
-				if err := tx.QueryRow("SELECT state FROM pwnmesh_input_snapshots WHERE project_id='p' AND id=?", ref.ID).Scan(&stored); err != nil {
+				if err := tx.transactionQueries.QueryRow("SELECT state FROM pwnmesh_input_snapshots WHERE project_id='p' AND id=?", ref.ID).Scan(&stored); err != nil {
 					return err
 				}
 				// Decode the persisted format independently of the storage implementation.
@@ -128,13 +128,13 @@ func TestChunkedInputSnapshotFailsClosedOnMissingOrCorruptStorage(t *testing.T) 
 						if err := tx.Save(Graph{Project: Project{ID: "other", Title: "Other", Status: "active", CreatedAt: tx.Now}}); err != nil {
 							return err
 						}
-						if _, err := tx.Exec("INSERT INTO pwnmesh_snapshot_chunks(project_id,sha256,data) SELECT 'other',sha256,data FROM pwnmesh_snapshot_chunks WHERE project_id='p'"); err != nil {
+						if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_snapshot_chunks(project_id,sha256,data) SELECT 'other',sha256,data FROM pwnmesh_snapshot_chunks WHERE project_id='p'"); err != nil {
 							return err
 						}
 					}
-					_, err = tx.Exec("DELETE FROM pwnmesh_snapshot_chunks WHERE project_id='p' AND sha256=?", manifest.Chunks[0])
+					_, err = tx.transactionQueries.Exec("DELETE FROM pwnmesh_snapshot_chunks WHERE project_id='p' AND sha256=?", manifest.Chunks[0])
 				case "corrupt":
-					_, err = tx.Exec("UPDATE pwnmesh_snapshot_chunks SET data='modified' WHERE project_id='p' AND sha256=?", manifest.Chunks[0])
+					_, err = tx.transactionQueries.Exec("UPDATE pwnmesh_snapshot_chunks SET data='modified' WHERE project_id='p' AND sha256=?", manifest.Chunks[0])
 				case "manifest", "length":
 					if fault == "manifest" {
 						manifest.Chunks[0] = "invalid"
@@ -142,7 +142,7 @@ func TestChunkedInputSnapshotFailsClosedOnMissingOrCorruptStorage(t *testing.T) 
 						manifest.Bytes = int(^uint(0) >> 1)
 					}
 					encoded, _ := json.Marshal(manifest)
-					_, err = tx.Exec("UPDATE pwnmesh_input_snapshots SET state=? WHERE project_id='p' AND id=?", append([]byte(snapshotChunkPrefix), encoded...), ref.ID)
+					_, err = tx.transactionQueries.Exec("UPDATE pwnmesh_input_snapshots SET state=? WHERE project_id='p' AND id=?", append([]byte(snapshotChunkPrefix), encoded...), ref.ID)
 				}
 				if err != nil {
 					return err
@@ -161,14 +161,14 @@ func TestFailedSnapshotManifestDoesNotLeaveOrphanChunks(t *testing.T) {
 	state := f.state()
 	state.Graph.Facts = append(state.Graph.Facts, Fact{ID: "large", Description: strings.Repeat("retained artifact bytes ", 2048)})
 	f.do(func(tx *Tx) error {
-		if _, err := tx.Exec("CREATE TRIGGER reject_snapshot BEFORE INSERT ON pwnmesh_input_snapshots BEGIN SELECT RAISE(FAIL,'synthetic snapshot failure'); END"); err != nil {
+		if _, err := tx.transactionQueries.Exec("CREATE TRIGGER reject_snapshot BEFORE INSERT ON pwnmesh_input_snapshots BEGIN SELECT RAISE(FAIL,'synthetic snapshot failure'); END"); err != nil {
 			return err
 		}
 		if _, err := tx.FreezeInput(state); err == nil || !strings.Contains(err.Error(), "synthetic snapshot failure") {
 			t.Fatalf("expected manifest insertion failure: %v", err)
 		}
 		var count int
-		if err := tx.QueryRow("SELECT COUNT(*) FROM pwnmesh_snapshot_chunks").Scan(&count); err != nil {
+		if err := tx.transactionQueries.QueryRow("SELECT COUNT(*) FROM pwnmesh_snapshot_chunks").Scan(&count); err != nil {
 			return err
 		}
 		if count != 0 {

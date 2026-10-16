@@ -26,7 +26,7 @@ import (
 func TestCompletionAssessmentProductionBridgeCompletesOrKeepsMissingCoverage(t *testing.T) {
 	for _, scenario := range []string{"accepted", "negative", "new_hint", "commit_race", "two_flags_optional", "two_flags_missing_submission", "two_flags_missing_report"} {
 		t.Run(scenario, func(t *testing.T) {
-			store, err := board.Open(filepath.Join(t.TempDir(), "assessment.db"))
+			store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "assessment.db"))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -88,11 +88,16 @@ func TestCompletionAssessmentProductionBridgeCompletesOrKeepsMissingCoverage(t *
 				if err = tx.Save(g); err != nil {
 					return err
 				}
-				if err = seedFixtureFacts(tx, graph.Project.ID, 2, facts...); err != nil {
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := fixtureSQL(store).Do(ctx, func(tx *fixtureSQLTx) error {
+				if err := seedFixtureFacts(tx, graph.Project.ID, 2, facts...); err != nil {
 					return err
 				}
 				data, _ := json.Marshal(board.CurationProgress{ThroughRevision: 2})
-				_, err = tx.Exec("UPDATE pwnmesh_state SET data=json_set(data,'$.curation',json(?)) WHERE project_id=?", string(data), graph.Project.ID)
+				_, err := tx.Exec("UPDATE pwnmesh_state SET data=json_set(data,'$.curation',json(?)) WHERE project_id=?", string(data), graph.Project.ID)
 				return err
 			}); err != nil {
 				t.Fatal(err)

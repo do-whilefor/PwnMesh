@@ -14,7 +14,7 @@ func TestInputUploadHandledFailureRollsBackFileAndInstruction(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	before, _ := json.Marshal(f.state())
 	f.do(func(tx *Tx) error {
-		_, err := tx.Exec(`CREATE TRIGGER fail_upload_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'upload event failed'); END`)
+		_, err := tx.transactionQueries.Exec(`CREATE TRIGGER fail_upload_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'upload event failed'); END`)
 		return err
 	})
 	f.do(func(tx *Tx) error {
@@ -37,14 +37,14 @@ func TestInputUploadHandledFailureRollsBackFileAndInstruction(t *testing.T) {
 	f.do(func(tx *Tx) error {
 		for _, table := range []string{"pwnmesh_input_files", "pwnmesh_state_events", "scoped_counters"} {
 			var count int
-			if err := tx.QueryRow("SELECT COUNT(*) FROM " + table + " WHERE project_id='p'").Scan(&count); err != nil {
+			if err := tx.transactionQueries.QueryRow("SELECT COUNT(*) FROM " + table + " WHERE project_id='p'").Scan(&count); err != nil {
 				return err
 			}
 			if count != 0 {
 				t.Fatalf("handled upload failure retained %d rows in %s", count, table)
 			}
 		}
-		if _, err := tx.Exec("DROP TRIGGER fail_upload_event"); err != nil {
+		if _, err := tx.transactionQueries.Exec("DROP TRIGGER fail_upload_event"); err != nil {
 			return err
 		}
 		_, err := tx.AddInput("p", "capture.bin", []byte{0, 255, 13, 10})
@@ -71,7 +71,7 @@ func TestInputCopyChecksStoredBytesBeforePublication(t *testing.T) {
 			if err != nil || metadata != file || !bytes.Equal(copied.Bytes(), tc.payload) {
 				t.Fatalf("verified copy changed metadata or bytes: %+v %v %v", metadata, copied.Bytes(), err)
 			}
-			if _, err := tx.Exec("UPDATE pwnmesh_input_files SET sha256='corrupt' WHERE project_id='p' AND id=?", file.ID); err != nil {
+			if _, err := tx.transactionQueries.Exec("UPDATE pwnmesh_input_files SET sha256='corrupt' WHERE project_id='p' AND id=?", file.ID); err != nil {
 				return err
 			}
 			if _, err := tx.CopyInputData("p", file.ID, io.Discard); err == nil || !strings.Contains(err.Error(), "digest mismatch") {

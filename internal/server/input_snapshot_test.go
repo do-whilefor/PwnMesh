@@ -21,7 +21,7 @@ func newSnapshotHTTPFixture(t *testing.T, databasePath ...string) (*executionPro
 	if len(databasePath) != 0 {
 		path = databasePath[0]
 	}
-	store, err := board.Open(path)
+	store, err := openFixtureStore(t, path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestSnapshotReadFailsClosedWhenStoredInputIsMissingOrCorrupt(t *testing.T) 
 			_, job := prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
 			// Fault-inject unavailable storage after genuine HTTP preparation;
 			// the read must fail instead of rebuilding input from current FGS.
-			if err := store.Do(context.Background(), func(tx *board.Tx) error {
+			if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
 				_, err := tx.Exec(tc.query, f.project, job.InputSnapshot.ID)
 				return err
 			}); err != nil {

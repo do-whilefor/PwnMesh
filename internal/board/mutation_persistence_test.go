@@ -27,7 +27,7 @@ func TestStateFactIDCollisionRollsBackWithoutSplittingObservation(t *testing.T) 
 	var beforeMetadata string
 	var beforeActions, beforeEvents int
 	f.do(func(tx *Tx) error {
-		return tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events) FROM pwnmesh_state WHERE project_id='p'`).Scan(&beforeMetadata, &beforeActions, &beforeEvents)
+		return tx.transactionQueries.QueryRow(`SELECT data,(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events) FROM pwnmesh_state WHERE project_id='p'`).Scan(&beforeMetadata, &beforeActions, &beforeEvents)
 	})
 	err := f.store.Do(context.Background(), func(tx *Tx) error {
 		_, err := tx.StateAction("p", e.Fence(), StateAction{Op: "fact", IdempotencyKey: "new-observation", Payload: payload})
@@ -43,7 +43,7 @@ func TestStateFactIDCollisionRollsBackWithoutSplittingObservation(t *testing.T) 
 	f.do(func(tx *Tx) error {
 		var metadata string
 		var actions, events int
-		if err := tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events) FROM pwnmesh_state WHERE project_id='p'`).Scan(&metadata, &actions, &events); err != nil {
+		if err := tx.transactionQueries.QueryRow(`SELECT data,(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events) FROM pwnmesh_state WHERE project_id='p'`).Scan(&metadata, &actions, &events); err != nil {
 			return err
 		}
 		if metadata != beforeMetadata || actions != beforeActions || events != beforeEvents {
@@ -68,7 +68,7 @@ func TestStateNodeAddsWriteOnlyNewNode(t *testing.T) {
 					`CREATE TRIGGER guard_intent BEFORE INSERT ON intents WHEN NEW.id != 'i017' BEGIN SELECT RAISE(ABORT,'unrelated intent write'); END`,
 					`CREATE TRIGGER guard_sources BEFORE INSERT ON intent_sources WHEN NEW.intent_id != 'i017' BEGIN SELECT RAISE(ABORT,'unrelated source write'); END`,
 				} {
-					if _, err := tx.Exec(statement); err != nil {
+					if _, err := tx.transactionQueries.Exec(statement); err != nil {
 						return err
 					}
 				}
@@ -116,7 +116,7 @@ func TestStateNodeFailureRollsBackAllPersistence(t *testing.T) {
 					}
 					var metadata string
 					var facts, records, intents, sources, actions, events, factCounter, intentCounter int
-					if err = tx.QueryRow(`SELECT data,(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM pwnmesh_fact_metadata),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM intent_sources),(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='fact'),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='intent') FROM pwnmesh_state WHERE project_id=?`, stateBenchmarkProject, stateBenchmarkProject, stateBenchmarkProject).Scan(&metadata, &facts, &records, &intents, &sources, &actions, &events, &factCounter, &intentCounter); err != nil {
+					if err = tx.transactionQueries.QueryRow(`SELECT data,(SELECT COUNT(*) FROM facts),(SELECT COUNT(*) FROM pwnmesh_fact_metadata),(SELECT COUNT(*) FROM intents),(SELECT COUNT(*) FROM intent_sources),(SELECT COUNT(*) FROM pwnmesh_state_actions),(SELECT COUNT(*) FROM pwnmesh_state_events),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='fact'),(SELECT value FROM scoped_counters WHERE project_id=? AND kind='intent') FROM pwnmesh_state WHERE project_id=?`, stateBenchmarkProject, stateBenchmarkProject, stateBenchmarkProject).Scan(&metadata, &facts, &records, &intents, &sources, &actions, &events, &factCounter, &intentCounter); err != nil {
 						return err
 					}
 					encoded, err := json.Marshal(state)
@@ -129,7 +129,7 @@ func TestStateNodeFailureRollsBackAllPersistence(t *testing.T) {
 			}
 			before := snapshot()
 			if err := f.store.Do(context.Background(), func(tx *Tx) error {
-				_, err := tx.Exec(`CREATE TRIGGER reject_node_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'event unavailable'); END`)
+				_, err := tx.transactionQueries.Exec(`CREATE TRIGGER reject_node_event BEFORE INSERT ON pwnmesh_state_events BEGIN SELECT RAISE(ABORT,'event unavailable'); END`)
 				return err
 			}); err != nil {
 				t.Fatal(err)
@@ -155,7 +155,7 @@ func TestAbandonWritesOnlyTargetIntentAndRevokesOwner(t *testing.T) {
 	f := newPlanFixture(t)
 	id := f.action("step", "add", stepInput("Observe fixture", []string{"origin"}, "goal", 0)).ID
 	f.tx(func(tx *Tx) error {
-		if _, err := tx.Exec("UPDATE intents SET worker='worker@abandon',last_heartbeat_at=? WHERE project_id='proj_001' AND id=?", tx.Now, id); err != nil {
+		if _, err := tx.transactionQueries.Exec("UPDATE intents SET worker='worker@abandon',last_heartbeat_at=? WHERE project_id='proj_001' AND id=?", tx.Now, id); err != nil {
 			return err
 		}
 		for _, statement := range []string{
@@ -163,7 +163,7 @@ func TestAbandonWritesOnlyTargetIntentAndRevokesOwner(t *testing.T) {
 			`CREATE TRIGGER guard_abandon_facts BEFORE INSERT ON facts BEGIN SELECT RAISE(ABORT,'abandon rewrote facts'); END`,
 			`CREATE TRIGGER guard_abandon_sources BEFORE INSERT ON intent_sources BEGIN SELECT RAISE(ABORT,'abandon rewrote sources'); END`,
 		} {
-			if _, err := tx.Exec(statement); err != nil {
+			if _, err := tx.transactionQueries.Exec(statement); err != nil {
 				return err
 			}
 		}
@@ -200,13 +200,13 @@ func TestEvidenceConclusionHandledEventFailureRollsBackAllWrites(t *testing.T) {
 				state, _ := json.Marshal(f.state())
 				var receipts, events, counter int
 				f.do(func(tx *Tx) error {
-					return tx.QueryRow(`SELECT (SELECT COUNT(*) FROM pwnmesh_state_actions WHERE project_id='p'),(SELECT COUNT(*) FROM pwnmesh_state_events WHERE project_id='p'),COALESCE((SELECT value FROM scoped_counters WHERE project_id='p' AND kind='fact'),0)`).Scan(&receipts, &events, &counter)
+					return tx.transactionQueries.QueryRow(`SELECT (SELECT COUNT(*) FROM pwnmesh_state_actions WHERE project_id='p'),(SELECT COUNT(*) FROM pwnmesh_state_events WHERE project_id='p'),COALESCE((SELECT value FROM scoped_counters WHERE project_id='p' AND kind='fact'),0)`).Scan(&receipts, &events, &counter)
 				})
 				return fmt.Sprintf("%s|%d,%d,%d", state, receipts, events, counter)
 			}
 			before := snapshot()
 			f.do(func(tx *Tx) error {
-				_, err := tx.Exec(`CREATE TRIGGER fail_conclusion_event BEFORE INSERT ON pwnmesh_state_events WHEN json_extract(NEW.event,'$.op')='step_completed' BEGIN SELECT RAISE(ABORT,'conclusion event failed'); END`)
+				_, err := tx.transactionQueries.Exec(`CREATE TRIGGER fail_conclusion_event BEFORE INSERT ON pwnmesh_state_events WHEN json_extract(NEW.event,'$.op')='step_completed' BEGIN SELECT RAISE(ABORT,'conclusion event failed'); END`)
 				return err
 			})
 			f.do(func(tx *Tx) error {
@@ -220,13 +220,13 @@ func TestEvidenceConclusionHandledEventFailureRollsBackAllWrites(t *testing.T) {
 			}
 			f.do(func(tx *Tx) error {
 				var timeout int
-				if err := tx.QueryRow("SELECT intent_timeout FROM settings WHERE rowid=1").Scan(&timeout); err != nil {
+				if err := tx.transactionQueries.QueryRow("SELECT intent_timeout FROM settings WHERE rowid=1").Scan(&timeout); err != nil {
 					return err
 				}
 				if timeout != 30 {
 					t.Fatal("handled conclusion failure rolled back unrelated work")
 				}
-				if _, err := tx.Exec("DROP TRIGGER fail_conclusion_event"); err != nil {
+				if _, err := tx.transactionQueries.Exec("DROP TRIGGER fail_conclusion_event"); err != nil {
 					return err
 				}
 				result, err := tx.ConcludeEvidenceStep("p", e.Fence(), factID, payload)

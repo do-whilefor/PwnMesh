@@ -107,7 +107,7 @@ func (r *pipelineGateRunner) Run(ctx context.Context, _ config.Worker, job proto
 
 func pipelineFixture(t *testing.T, slots int, extra bool) (*Scheduler, *pipelineGateRunner, *board.Store, board.Graph, context.Context) {
 	t.Helper()
-	store, err := board.Open(filepath.Join(t.TempDir(), "pipeline.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "pipeline.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

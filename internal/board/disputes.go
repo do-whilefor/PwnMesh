@@ -18,7 +18,7 @@ func currentDisputeReviewSteps(dispute Dispute) ([]string, error) {
 
 func (t *Tx) reopenDispute(s State, dispute *Dispute, renew bool) error {
 	for _, step := range dispute.ReviewStepIDs {
-		if err := sqlstore.RevokePendingStepRuns(t, s.Graph.Project.ID, step, s.Graph.Project.Generation); err != nil {
+		if err := sqlstore.RevokePendingStepRuns(t.transactionQueries, s.Graph.Project.ID, step, s.Graph.Project.Generation); err != nil {
 			return err
 		}
 	}
@@ -156,7 +156,7 @@ func (t *Tx) validateReviewStep(s State, d *stateData, id string) error {
 		}
 		attempts := 0
 		for _, stepID := range reviews {
-			count, err := sqlstore.IntentExecutionCount(t, s.Graph.Project.ID, stepID)
+			count, err := sqlstore.IntentExecutionCount(t.transactionQueries, s.Graph.Project.ID, stepID)
 			if err != nil {
 				return err
 			}
@@ -181,7 +181,7 @@ func (t *Tx) validateReviewExecution(e Execution) error {
 	}
 	count := 0
 	for _, id := range reviews {
-		attempts, err := sqlstore.IntentExecutionCount(t, e.ProjectID, id)
+		attempts, err := sqlstore.IntentExecutionCount(t.transactionQueries, e.ProjectID, id)
 		if err != nil {
 			return err
 		}
@@ -282,7 +282,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 				// transition alone invalidates a live, uncommitted planner, preserve
 				// its outstanding planning signal under a fresh input retry key.
 				// Already stale or committed planners cannot renew that allowance.
-				decisionChanged, err = sqlstore.PendingDecisionExecution(t, sqlstore.DecisionExecutionInput{
+				decisionChanged, err = sqlstore.PendingDecisionExecution(t.transactionQueries, sqlstore.DecisionExecutionInput{
 					ProjectID: e.ProjectID, Lease: planner.Worker, Generation: before.Graph.Project.Generation,
 					DecisionRevision: before.DecisionRevision, StateVersion: DecisionStateVersion(before),
 				})
@@ -296,7 +296,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 		if err != nil {
 			return err
 		}
-		if err = sqlstore.UpdateStateMetadata(t, e.ProjectID, string(raw)); err != nil {
+		if err = sqlstore.UpdateStateMetadata(t.transactionQueries, e.ProjectID, string(raw)); err != nil {
 			return err
 		}
 		// Without an invalidated in-flight plan, authorized startup is execution
@@ -308,7 +308,7 @@ func (t *Tx) reviewExecutionTransition(e Execution, status string) error {
 		result, _ := json.Marshal(dispute)
 		payload, _ := json.Marshal(map[string]string{"step_id": e.Intent, "status": status})
 		event, _ := json.Marshal(StateEvent{Revision: revision, Op: "dispute", ID: dispute.ID, RunID: e.Lease, CreatedAt: t.Now, Payload: payload, Result: result})
-		return sqlstore.InsertStateEvent(t, e.ProjectID, revision, string(event))
+		return sqlstore.InsertStateEvent(t.transactionQueries, e.ProjectID, revision, string(event))
 	}
 	return nil
 }
