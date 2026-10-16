@@ -396,8 +396,7 @@ func (s *Set) grep(ctx context.Context, raw json.RawMessage) (string, error) {
 	}
 	args = append(args, "--", a.Pattern, s.path(a.Path))
 	out, err := s.run(ctx, 30*time.Second, "rg", args...)
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 && out == "" {
+	if out == "" && onlyNoMatchExit(err) {
 		return "No matches", nil
 	}
 	return out, err
@@ -411,12 +410,36 @@ func (s *Set) find(ctx context.Context, raw json.RawMessage) (string, error) {
 		return "", err
 	}
 	out, err := s.run(ctx, 30*time.Second, "rg", "--files", "--hidden", "--glob", a.Pattern, "--", s.path(a.Path))
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 && out == "" {
+	if out == "" && onlyNoMatchExit(err) {
 		return "No matches", nil
 	}
 	return out, err
 }
+
+// Process, capture and file errors may be joined with ripgrep's exit status.
+// Normalize no matches only when every retained cause is that expected status.
+func onlyNoMatchExit(err error) bool {
+	switch failure := err.(type) {
+	case *exec.ExitError:
+		return failure.ExitCode() == 1
+	case interface{ Unwrap() []error }:
+		causes := failure.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !onlyNoMatchExit(cause) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return onlyNoMatchExit(failure.Unwrap())
+	default:
+		return false
+	}
+}
+
 func (s *Set) ls(ctx context.Context, raw json.RawMessage) (string, error) {
 	var a struct {
 		Path string `json:"path"`
