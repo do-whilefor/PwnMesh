@@ -23,7 +23,7 @@ type InputFile = model.InputFile
 
 // Upload acknowledgements survive project restarts just like the original
 // user inputs. Replaying one must not append a second instruction or event.
-func (t *Tx) InputBatchReceipt(project, key, requestSHA256 string) ([]InputFile, bool, error) {
+func (t *Tx) inputBatchReceipt(project, key, requestSHA256 string) ([]InputFile, bool, error) {
 	if key == "" {
 		return nil, false, nil
 	}
@@ -42,7 +42,7 @@ func (t *Tx) InputBatchReceipt(project, key, requestSHA256 string) ([]InputFile,
 	return inputs, true, err
 }
 
-func (t *Tx) SaveInputBatchReceipt(project, key, requestSHA256 string, inputs []InputFile) error {
+func (t *Tx) saveInputBatchReceipt(project, key, requestSHA256 string, inputs []InputFile) error {
 	if key == "" {
 		return nil
 	}

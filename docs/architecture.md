@@ -88,7 +88,10 @@ validation. Storage retains snapshots, executions, receipts, events and archives
 Scheduling uses a disposable paged projection, invalidated transactionally when
 source state changes; cached results never replace admission checks.
 
-Uploads spool network bytes before opening a database transaction. Downloads
+Batch uploads spool network bytes before opening a database transaction. Board
+owns batch identity, receipt replay and file/hint admission in one savepoint;
+fresh submissions verify staged sizes and digests. HTTP owns staging descriptors,
+and receipt replay never reads their bytes. Downloads
 verify staged contents under one snapshot and release the database before
 serving clients. Restart archives the round and revokes work atomically before
 resetting current state. Inputs, assets, snapshots and history survive; generation

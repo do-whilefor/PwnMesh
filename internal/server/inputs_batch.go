@@ -34,13 +34,7 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, b.Err(422, "Expected multipart form with input files"))
 		return
 	}
-	type stagedFile struct {
-		Name   string `json:"name"`
-		Size   int64  `json:"size"`
-		SHA256 string `json:"sha256"`
-		file   *os.File
-	}
-	files := []stagedFile{}
+	files := []b.InputBatchFile{}
 	var total int64
 	var content, key string
 	contentSeen, keySeen := false, false
@@ -98,7 +92,11 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			total += size
-			files = append(files, stagedFile{Name: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), file: file})
+			if _, err = file.Seek(0, io.SeekStart); err != nil {
+				writeError(w, r, err)
+				return
+			}
+			files = append(files, b.InputBatchFile{Name: name, Size: size, SHA256: hex.EncodeToString(hash.Sum(nil)), Data: file})
 		case "content":
 			if _, hasFilename := params["filename"]; contentSeen || hasFilename {
 				writeError(w, r, b.Err(422, "Expected at most one text content field"))
@@ -127,7 +125,7 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			key = string(raw)
-			if !validInputBatchKey(key) {
+			if key == "" || len(key) > 128 {
 				writeError(w, r, b.Err(422, "Idempotency key must contain 1 to 128 ASCII letters, digits, underscores or hyphens"))
 				return
 			}
@@ -136,57 +134,11 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if len(files) == 0 && content == "" {
-		writeError(w, r, b.Err(422, "Expected input files or non-empty content"))
-		return
-	}
-	// Bind semantic input, excluding temporary paths and multipart boundaries.
-	// File order is preserved because it also determines the receipt's order.
-	canonical, _ := json.Marshal(struct {
-		Files   []stagedFile `json:"files"`
-		Content string       `json:"content"`
-	}{files, content})
-	digest := sha256.Sum256(canonical)
-	requestSHA256 := hex.EncodeToString(digest[:])
-	inputs := make([]b.InputFile, 0, len(files))
+	var inputs []b.InputFile
 	err = s.Store.Do(r.Context(), func(t *b.Tx) error {
-		project := r.PathValue("pid")
-		graph, err := t.Load(project)
-		if err != nil {
-			return err
-		}
-		// Multipart requests do not pass through wrap. Text-only batches also
-		// skip AddInput, so enforce the current project protocol here.
-		if graph.Project.OrchestrationVersion != 1 {
-			return b.Err(409, "Unsupported project protocol; create a new project to continue")
-		}
-		if saved, found, err := t.InputBatchReceipt(project, key, requestSHA256); found || err != nil {
-			inputs = saved
-			return err
-		}
-		for _, file := range files {
-			if _, err := file.file.Seek(0, io.SeekStart); err != nil {
-				return err
-			}
-			data := make([]byte, file.Size)
-			if _, err := io.ReadFull(file.file, data); err != nil {
-				return err
-			}
-			if err := file.file.Close(); err != nil {
-				return err
-			}
-			input, err := t.AddInput(project, file.Name, data)
-			if err != nil {
-				return err
-			}
-			inputs = append(inputs, input)
-		}
-		if content != "" {
-			if _, _, err := s.hint(t, &request{fields: map[string]any{"content": content, "creator": "user"}}, r); err != nil {
-				return err
-			}
-		}
-		return t.SaveInputBatchReceipt(project, key, requestSHA256, inputs)
+		var err error
+		inputs, err = t.AddInputBatch(r.PathValue("pid"), files, content, key)
+		return err
 	})
 	if err != nil {
 		writeError(w, r, err)
@@ -196,18 +148,6 @@ func (s *Server) uploadInputBatch(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(inputs)
-}
-
-func validInputBatchKey(key string) bool {
-	if len(key) == 0 || len(key) > 128 {
-		return false
-	}
-	for _, ch := range key {
-		if !(ch >= 'a' && ch <= 'z' || ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_' || ch == '-') {
-			return false
-		}
-	}
-	return true
 }
 
 func inputBatchReadError(err error) error {
