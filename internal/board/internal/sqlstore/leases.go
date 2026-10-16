@@ -26,6 +26,11 @@ func SaveIntentLease(q Queries, project, intent, worker, heartbeat string) error
 	return err
 }
 
+func SaveCuratorLease(q Queries, project string, reason model.Reason) error {
+	_, err := q.Exec("UPDATE pwnmesh_project_orchestration SET curator_worker=?,curator_trigger=?,curator_started_at=?,curator_heartbeat=? WHERE project_id=?", reason.Worker, reason.Trigger, reason.StartedAt, reason.Heartbeat, project)
+	return err
+}
+
 func ReleaseIntentLease(q Queries, project, intent string) error {
 	_, err := q.Exec("UPDATE intents SET worker=NULL WHERE project_id=? AND id=?", project, intent)
 	return err

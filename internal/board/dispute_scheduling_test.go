@@ -79,10 +79,14 @@ func TestExecutionWritesRollbackWithReviewEvents(t *testing.T) {
 	before = f.state()
 	setEventFailure(true)
 	err := f.store.Do(context.Background(), func(tx *Tx) error {
-		return tx.ExecutionStatus(next, "failed", json.RawMessage(`{"status":"failed","error":"review interrupted"}`))
+		err := tx.ExecutionStatus(next, "failed", json.RawMessage(`{"status":"failed","error":"review interrupted"}`))
+		if err == nil || !strings.Contains(err.Error(), "event refused") {
+			t.Fatalf("outcome did not reach its failure event: %v", err)
+		}
+		return tx.UpdateSettings(Settings{IntentTimeout: 40, ReasonTimeout: 40})
 	})
-	if err == nil || !strings.Contains(err.Error(), "event refused") {
-		t.Fatalf("outcome did not reach its failure event: %v", err)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if after := f.state(); !reflect.DeepEqual(after, before) {
 		t.Fatal("failed outcome event retained failure/review state or revisions")
@@ -102,6 +106,68 @@ func TestExecutionWritesRollbackWithReviewEvents(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+func TestExecutionOutcomeHandledFailureRollsBackEveryTransition(t *testing.T) {
+	for _, failure := range []struct{ name, trigger, status string }{
+		{"revocation", `BEFORE INSERT ON pwnmesh_revoked_runs`, "failed"},
+		{"failure_event", `BEFORE INSERT ON pwnmesh_state_events WHEN json_extract(NEW.event,'$.op')='execution_failed'`, "rejected"},
+		{"review_event", `BEFORE INSERT ON pwnmesh_state_events WHEN json_extract(NEW.event,'$.op')='dispute'`, "cancelled"},
+	} {
+		t.Run(failure.name, func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			dispute, _, _ := f.conflict()
+			e := f.worker("review", f.step("review outcome", dispute.ID))
+			before := f.state()
+			var original Execution
+			f.do(func(tx *Tx) error {
+				var err error
+				original, err = tx.Execution("p", e.ID)
+				if err != nil {
+					return err
+				}
+				_, err = tx.transactionQueries.Exec("CREATE TRIGGER reject_outcome " + failure.trigger + " BEGIN SELECT RAISE(ABORT,'outcome unavailable'); END")
+				return err
+			})
+			result := json.RawMessage(`{"status":"failed","error":"review interrupted"}`)
+			f.do(func(tx *Tx) error {
+				if err := tx.ExecutionStatus(e, failure.status, result); err == nil || !strings.Contains(err.Error(), "outcome unavailable") {
+					t.Fatalf("outcome did not reach injected failure: %v", err)
+				}
+				return tx.UpdateSettings(Settings{IntentTimeout: 40, ReasonTimeout: 40})
+			})
+			if after := f.state(); !reflect.DeepEqual(before, after) {
+				t.Fatal("handled outcome failure retained state or revision changes")
+			}
+			f.do(func(tx *Tx) error {
+				stored, err := tx.Execution("p", e.ID)
+				if err != nil || !reflect.DeepEqual(stored, original) {
+					t.Fatalf("handled outcome failure retained execution changes: %+v, %v", stored, err)
+				}
+				revoked, err := tx.RunRevoked("p", e.Lease)
+				if err != nil || revoked {
+					t.Fatalf("handled outcome failure retained revocation: %v, %v", revoked, err)
+				}
+				events, err := tx.StateEvents("p", before.Revision)
+				if err != nil || len(events) != 0 {
+					t.Fatalf("handled outcome failure retained events: %+v, %v", events, err)
+				}
+				settings, err := tx.Settings()
+				if err != nil || settings.IntentTimeout != 40 {
+					t.Fatalf("outcome rolled back unrelated caller work: %+v, %v", settings, err)
+				}
+				_, err = tx.transactionQueries.Exec("DROP TRIGGER reject_outcome")
+				return err
+			})
+			for range 2 {
+				f.do(func(tx *Tx) error { return tx.ExecutionStatus(e, failure.status, result) })
+			}
+			after := f.state()
+			if after.Revision != before.Revision+2 || after.Disputes[0].Status != "uncertain" {
+				t.Fatalf("retry did not commit exactly one failure and review transition: %+v", after)
+			}
+		})
+	}
 }
 
 func TestReviewStartDoesNotRequestDecisionButPreservesVersionAndEvents(t *testing.T) {

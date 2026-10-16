@@ -219,14 +219,18 @@ func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage)
 	}
 	updated := current
 	updated.Status, updated.Result, updated.UpdatedAt = status, result, t.Now
-	err = sqlstore.SaveExecutionOutcome(t.transactionQueries, updated, slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status))
-	if err == nil && !controlKind(current.Kind) && slices.Contains([]string{"failed", "rejected", "cancelled"}, status) {
-		err = t.recordExecutionFailure(current, status, failure)
-		if err == nil {
-			err = t.reviewExecutionTransition(current, status)
+	return sqlstore.Atomic(t.transactionQueries, func() error {
+		if err := sqlstore.SaveExecutionOutcome(t.transactionQueries, updated, slices.Contains([]string{"failed", "rejected", "cancelled", "succeeded"}, status)); err != nil {
+			return err
 		}
-	}
-	return err
+		if !controlKind(current.Kind) && slices.Contains([]string{"failed", "rejected", "cancelled"}, status) {
+			if err := t.recordExecutionFailure(current, status, failure); err != nil {
+				return err
+			}
+			return t.reviewExecutionTransition(current, status)
+		}
+		return nil
+	})
 }
 
 // Resume reclaims only an unowned or same-owner lease. A human stop or another
@@ -297,8 +301,7 @@ func (t *Tx) ResumeExecution(e Execution) error {
 			}
 		}
 		found := false
-		for n := range g.Intents {
-			i := &g.Intents[n]
+		for _, i := range g.Intents {
 			if i.ID != e.Intent {
 				continue
 			}
@@ -309,17 +312,28 @@ func (t *Tx) ResumeExecution(e Execution) error {
 			if i.Worker != nil && *i.Worker != e.Lease {
 				return Err(409, "Another execution owns the step")
 			}
-			i.Worker = Ptr(e.Lease)
-			i.Heartbeat = Ptr(t.Now)
 		}
 		if !found {
 			return Err(404, "Step not found")
 		}
 	}
-	if err = t.Save(g); err != nil {
-		return err
-	}
-	return sqlstore.AddExecutionResume(t.transactionQueries, e.ProjectID, e.ID, t.Now, resume)
+	// Reclaiming authority and consuming recovery allowance are one operation.
+	// Only the selected lease changes; retained graph content stays untouched.
+	return sqlstore.Atomic(t.transactionQueries, func() error {
+		var err error
+		switch e.Kind {
+		case "reason":
+			err = sqlstore.SaveReasonLease(t.transactionQueries, e.ProjectID, g.Project.Reason)
+		case "curate":
+			err = sqlstore.SaveCuratorLease(t.transactionQueries, e.ProjectID, *g.Project.Curator)
+		default:
+			err = sqlstore.SaveIntentLease(t.transactionQueries, e.ProjectID, e.Intent, e.Lease, t.Now)
+		}
+		if err != nil {
+			return err
+		}
+		return sqlstore.AddExecutionResume(t.transactionQueries, e.ProjectID, e.ID, t.Now, resume)
+	})
 }
 
 // CheckNewStepLimit counts every direction this decision already created,
