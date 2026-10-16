@@ -33,6 +33,9 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 	if json.Unmarshal(e.Job, &j) != nil || j.Repair != nil || j.State != nil || j.InputSnapshot != nil || j.Decision != nil || len(j.InputView) != 0 || len(j.DependencyResults) != 0 || j.PreparationKey != "" || j.Graph.Project.ID != e.ProjectID || len(j.Graph.Facts)+len(j.Graph.Intents)+len(j.Graph.Hints) != 0 {
 		return Prepared{}, b.Err(422, "prepare requires a small job template without graph data")
 	}
+	if err := j.Budget.ValidateTimeouts(); err != nil {
+		return Prepared{}, b.Err(422, err.Error())
+	}
 	if (j.Kind == "reason" || j.Kind == "curate") && j.Intent != nil {
 		return Prepared{}, b.Err(422, "Control preparation must not carry an intent")
 	}

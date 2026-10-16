@@ -48,6 +48,9 @@ Execution clients depend on `board/model`, not aggregate Board or SQLite. Board
 composes policy and mutations; its private store persists values in the caller's
 transaction. Pure projections neither query storage nor mutate their inputs.
 Runtime status comes from authoritative execution records.
+Configuration, execution admission and Worker preflight reject timeout seconds
+that overflow runtime durations. Lease settings and Dispatcher reads enforce the
+same limit; zero execution timeout still disables that deadline.
 
 ## State and transactions
 

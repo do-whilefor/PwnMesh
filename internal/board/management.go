@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"pwnmesh/internal/board/internal/sqlstore"
+	"pwnmesh/internal/board/model"
 )
 
 // ProjectInput contains human input; Board owns initial identities and state.
@@ -34,6 +35,9 @@ func (t *Tx) RequireCurrentProject(project string) error {
 func (t *Tx) UpdateSettings(settings Settings) error {
 	if settings.IntentTimeout < 5 || settings.ReasonTimeout < 5 {
 		return Err(422, "timeouts must be integers greater than or equal to 5")
+	}
+	if int64(settings.IntentTimeout) > model.MaxDurationSeconds || int64(settings.ReasonTimeout) > model.MaxDurationSeconds {
+		return Err(422, "lease timeouts exceed the supported duration")
 	}
 	return sqlstore.WriteSettings(t.transactionQueries, settings)
 }

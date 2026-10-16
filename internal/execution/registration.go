@@ -5,6 +5,7 @@ package execution
 import (
 	"encoding/json"
 	b "pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
 )
 
 // Execution inputs always use the live evidence protocol.
@@ -43,19 +44,23 @@ func requireCurrentExecution(e b.Execution) error {
 // Production registrations receive the job built by server-side preparation.
 func Register(t *b.Tx, e b.Execution, fence b.ExecutionFence) (b.Execution, error) {
 	var job struct {
-		RunID                 string          `json:"run_id"`
-		Kind                  string          `json:"kind"`
-		Graph                 b.Graph         `json:"graph"`
-		Intent                *b.Intent       `json:"intent"`
-		Workspace             string          `json:"workspace"`
-		GraphRPC              json.RawMessage `json:"graph_rpc"`
-		ResultContractVersion json.RawMessage `json:"result_contract_version"`
+		RunID                 string           `json:"run_id"`
+		Kind                  string           `json:"kind"`
+		Graph                 b.Graph          `json:"graph"`
+		Intent                *b.Intent        `json:"intent"`
+		Workspace             string           `json:"workspace"`
+		GraphRPC              json.RawMessage  `json:"graph_rpc"`
+		ResultContractVersion json.RawMessage  `json:"result_contract_version"`
+		Budget                model.TaskBudget `json:"budget"`
 	}
 	if json.Unmarshal(e.Job, &job) != nil || e.ID == "" || e.Namespace == "" || e.Backend == "" || e.Lease == "" || e.RetryKey == "" || job.RunID != e.ID || job.Kind != e.Kind || job.Graph.Project.ID != e.ProjectID || job.Workspace == "" {
 		return b.Execution{}, b.Err(422, "Invalid execution identity")
 	}
 	if err := validateExecutionProtocol(job.GraphRPC, job.ResultContractVersion); err != nil {
 		return b.Execution{}, err
+	}
+	if err := job.Budget.ValidateTimeouts(); err != nil {
+		return b.Execution{}, b.Err(422, err.Error())
 	}
 	if !b.ValidExecutionID(e.ID) || len(e.Namespace) > 128 || len(e.Backend) > 256 || len(e.RetryKey) > 1024 || e.Lease != e.Backend+"@"+e.ID {
 		return b.Execution{}, b.Err(422, "Invalid execution identity")

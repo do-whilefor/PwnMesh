@@ -19,6 +19,41 @@ import (
 	"pwnmesh/internal/process"
 )
 
+func TestWorkerRejectsInvalidBudgetBeforeSessionEffects(t *testing.T) {
+	const overflow = int((1<<63-1)/time.Second) + 1
+	for name, run := range map[string]func(context.Context, Job, Options) (Result, error){"worker": Run, "session": runSession} {
+		for _, tc := range []struct {
+			name     string
+			timeout  int
+			conclude int
+		}{
+			{"execution overflow", overflow, 1}, {"conclusion overflow", 0, overflow},
+			{"negative execution", -1, 1}, {"negative conclusion", 0, -1},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				job := outcomeJob(t, "explore")
+				job.Budget.Timeout, job.Budget.ConcludeTimeout = tc.timeout, tc.conclude
+				runDir := filepath.Join(t.TempDir(), "uncreated-run")
+				calls := 0
+				p := scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+					calls++
+					return agent.Text("assistant", incompleteOutput), nil
+				})
+				_, err := run(context.Background(), job, Options{Provider: p, RunDir: runDir, Output: sessionTestBridge(job, runDir)})
+				if err == nil || !strings.Contains(err.Error(), "timeout") {
+					t.Errorf("invalid budget was not rejected by preflight: %v", err)
+				}
+				if calls != 0 {
+					t.Errorf("invalid budget reached provider %d times", calls)
+				}
+				if _, err := os.Stat(runDir); !os.IsNotExist(err) {
+					t.Errorf("invalid budget created session files: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestSessionReleasePreservesCancellationMeaning(t *testing.T) {
 	t.Setenv("PWNMESH_LAUNCH_TOKEN", "")
 	for _, tc := range []struct {

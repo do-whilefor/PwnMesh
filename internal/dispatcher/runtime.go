@@ -10,14 +10,24 @@ import (
 )
 
 func (s *Scheduler) loadLeaseTimeout(ctx context.Context) error {
+	if s.Config.Runtime.Interval <= 0 || int64(s.Config.Runtime.Interval) > board.MaxDurationSeconds/2 {
+		return errors.New("heartbeat interval must be positive seconds within the supported duration")
+	}
 	var settings board.Settings
 	if err := s.Client.Do(ctx, "GET", "/settings", nil, &settings, nil); err != nil {
 		return err
 	}
-	s.leaseTimeout = time.Duration(min(settings.IntentTimeout, settings.ReasonTimeout)) * time.Second
-	if s.leaseTimeout <= time.Duration(s.Config.Runtime.Interval)*time.Second {
+	if settings.IntentTimeout < 5 || settings.ReasonTimeout < 5 {
+		return errors.New("server lease timeouts must be at least 5 seconds")
+	}
+	if int64(settings.IntentTimeout) > board.MaxDurationSeconds || int64(settings.ReasonTimeout) > board.MaxDurationSeconds {
+		return errors.New("server lease timeouts exceed the supported duration")
+	}
+	timeout := time.Duration(min(settings.IntentTimeout, settings.ReasonTimeout)) * time.Second
+	if timeout <= time.Duration(s.Config.Runtime.Interval)*time.Second {
 		return errors.New("heartbeat interval must be shorter than each server lease timeout")
 	}
+	s.leaseTimeout = timeout
 	return nil
 }
 

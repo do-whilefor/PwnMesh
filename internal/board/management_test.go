@@ -7,7 +7,36 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestSettingsRejectTimeoutOverflowWithoutMutation(t *testing.T) {
+	const maxSeconds = int((1<<63 - 1) / time.Second)
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Do(context.Background(), func(tx *Tx) error {
+		before, err := tx.Settings()
+		if err != nil {
+			return err
+		}
+		for _, invalid := range []Settings{{IntentTimeout: maxSeconds + 1, ReasonTimeout: 30}, {IntentTimeout: 30, ReasonTimeout: maxSeconds + 1}} {
+			requireAPIStatus(t, tx.UpdateSettings(invalid), 422)
+			after, err := tx.Settings()
+			if err != nil {
+				return err
+			}
+			if after != before {
+				t.Fatalf("invalid timeouts changed stored settings: %+v", after)
+			}
+		}
+		return tx.UpdateSettings(Settings{IntentTimeout: maxSeconds, ReasonTimeout: maxSeconds})
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestManagementOperationsOwnProjectLifecycle(t *testing.T) {
 	store, err := Open(":memory:")

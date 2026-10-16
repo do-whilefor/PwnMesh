@@ -3,9 +3,12 @@ package execution
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +16,68 @@ import (
 	"pwnmesh/internal/board/model"
 	"pwnmesh/internal/protocol"
 )
+
+func TestExecutionRejectsOverflowingBudgetsBeforeMutation(t *testing.T) {
+	const overflow = int((1<<63-1)/time.Second) + 1
+	for _, operation := range []string{"prepare", "register"} {
+		for _, field := range []string{"timeout", "conclude_timeout"} {
+			t.Run(operation+"/"+field, func(t *testing.T) {
+				store, template := useCaseFixture(t)
+				var job protocol.Job
+				if err := json.Unmarshal(template.Job, &job); err != nil {
+					t.Fatal(err)
+				}
+				if field == "timeout" {
+					job.Budget.Timeout = overflow
+				} else {
+					job.Budget.ConcludeTimeout = overflow
+				}
+				if operation == "register" {
+					job.State = &model.State{Graph: job.Graph}
+					job.Decision = &model.DecisionContext{Version: 2, StateVersion: model.DecisionStateVersion(*job.State)}
+				}
+				template.Job, _ = json.Marshal(job)
+				template.RetryKey = "reason:test"
+				ctx := context.Background()
+				var snapshotID string
+				if err := store.Do(ctx, func(tx *b.Tx) error {
+					state, err := tx.State(template.ProjectID)
+					if err != nil {
+						return err
+					}
+					raw, err := json.Marshal(state)
+					if err != nil {
+						return err
+					}
+					sum := sha256.Sum256(raw)
+					snapshotID = hex.EncodeToString(sum[:])
+					if operation == "prepare" {
+						_, err = PrepareRun(tx, template, template.Fence())
+					} else {
+						_, err = Register(tx, template, template.Fence())
+					}
+					if !hasStatus(err, 422) || !strings.Contains(err.Error(), "timeout") {
+						t.Errorf("overflowing budget was not rejected: %v", err)
+					}
+					return nil // A handled validation error must leave no registered run.
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.View(ctx, func(tx *b.Tx) error {
+					if _, err := tx.Execution(template.ProjectID, template.ID); !hasStatus(err, 404) {
+						t.Errorf("invalid budget retained an execution: %v", err)
+					}
+					if _, err := tx.InputSnapshotMetadata(template.ProjectID, snapshotID); !hasStatus(err, 404) {
+						t.Errorf("invalid budget froze an input snapshot: %v", err)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
+	}
+}
 
 func useCaseFixture(t *testing.T) (*b.Store, b.Execution) {
 	t.Helper()

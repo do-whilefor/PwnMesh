@@ -2,11 +2,42 @@ package config
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
+
+func TestConfigRejectsTimeoutDurationOverflow(t *testing.T) {
+	const maxSeconds = int64((1<<63 - 1) / time.Second)
+	for _, tc := range []struct {
+		name string
+		set  func(*Config, int)
+		max  int64
+	}{
+		{"interval", func(c *Config, n int) { c.Runtime.Interval = n }, maxSeconds / 2},
+		{"health", func(c *Config, n int) { c.Runtime.HealthTimeout = n }, maxSeconds},
+		{"reason", func(c *Config, n int) { c.Tasks.Reason.Timeout = n }, maxSeconds},
+		{"curate", func(c *Config, n int) { c.Tasks.Curate.Timeout = n }, maxSeconds},
+		{"execute", func(c *Config, n int) { c.Tasks.Explore.Timeout = n }, maxSeconds},
+		{"conclusion", func(c *Config, n int) { c.Tasks.Explore.ConcludeTimeout = n }, maxSeconds},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := coldStartConfig()
+			c.ModelSettingsPath = filepath.Join(t.TempDir(), "absent.json")
+			tc.set(&c, int(tc.max+1))
+			if err := c.Validate(); err == nil {
+				t.Errorf("accepted overflowing %s seconds: %d", tc.name, tc.max+1)
+			}
+			tc.set(&c, int(tc.max))
+			if err := c.Validate(); err != nil {
+				t.Fatalf("rejected representable %s duration: %v", tc.name, err)
+			}
+		})
+	}
+}
 
 func TestRoleReasoningPoliciesValidateAndSurviveJobSerialization(t *testing.T) {
 	c := coldStartConfig()

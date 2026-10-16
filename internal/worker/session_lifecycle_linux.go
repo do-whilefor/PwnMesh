@@ -43,9 +43,6 @@ func prepareSession(parent context.Context, j *Job, o *Options) error {
 	if !protocol.ControlJob(*j) && j.Intent == nil {
 		return errors.New("job requires an intent")
 	}
-	if j.Budget.Timeout < 0 || j.Budget.ConcludeTimeout < 0 {
-		return errors.New("task budgets must not be negative")
-	}
 	if !protocol.ControlJob(*j) && j.Budget.ConcludeTimeout <= 0 {
 		return errors.New("conclude timeout must be positive")
 	}

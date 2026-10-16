@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -13,6 +14,37 @@ import (
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/protocol"
 )
+
+func TestLoadLeaseTimeoutRejectsOverflowWithoutCachingIt(t *testing.T) {
+	const overflow = int((1<<63-1)/time.Second) + 1
+	for name, tc := range map[string]struct {
+		settings board.Settings
+		interval int
+	}{
+		"intent":         {board.Settings{IntentTimeout: overflow, ReasonTimeout: 30}, 1},
+		"reason":         {board.Settings{IntentTimeout: 30, ReasonTimeout: overflow}, 1},
+		"both":           {board.Settings{IntentTimeout: overflow, ReasonTimeout: overflow}, 1},
+		"negative lease": {board.Settings{IntentTimeout: -overflow, ReasonTimeout: 30}, 1},
+		"below minimum":  {board.Settings{IntentTimeout: 4, ReasonTimeout: 30}, 1},
+		"interval":       {board.Settings{IntentTimeout: 30, ReasonTimeout: 30}, overflow},
+		"zero interval":  {board.Settings{IntentTimeout: 30, ReasonTimeout: 30}, 0},
+		"short lease":    {board.Settings{IntentTimeout: 5, ReasonTimeout: 5}, 5},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(tc.settings)
+			}))
+			defer server.Close()
+			s := &Scheduler{Config: config.Config{Runtime: config.Runtime{Interval: tc.interval}}, Client: &Client{Base: server.URL}}
+			if err := s.loadLeaseTimeout(context.Background()); err == nil {
+				t.Fatal("accepted an overflowing server lease timeout")
+			}
+			if s.leaseTimeout != 0 {
+				t.Fatalf("invalid settings poisoned the cached lease timeout: %s", s.leaseTimeout)
+			}
+		})
+	}
+}
 
 func TestHeartbeatRenewsWithNarrowLeaseSlack(t *testing.T) {
 	for _, timeout := range []time.Duration{1500 * time.Millisecond, 2 * time.Second} {

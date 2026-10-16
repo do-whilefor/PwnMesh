@@ -181,7 +181,7 @@ func TestDispatcherStartupFailuresReleaseOwnershipBeforeScheduling(t *testing.T)
 				if !errors.Is(err, tc.cleanupError) {
 					t.Fatalf("startup returned %v, want cleanup error", err)
 				}
-			} else if err == nil || err.Error() != "heartbeat interval must be shorter than each server lease timeout" {
+			} else if err == nil || err.Error() != "server lease timeouts must be at least 5 seconds" {
 				t.Fatalf("startup returned %v, want invalid lease interval", err)
 			}
 			wantRequests := []string{"GET /deployment", "POST /dispatchers/pwnmesh/claim", "GET /settings", "POST /dispatchers/pwnmesh/release"}

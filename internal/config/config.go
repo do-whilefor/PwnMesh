@@ -123,9 +123,13 @@ func (c *Config) Validate() error {
 	if c.Runtime.Interval <= 0 || c.Runtime.MaxWorkers <= 0 || c.Runtime.MaxProjects <= 0 || c.Runtime.MaxProjectWorkers <= 0 || c.Runtime.HealthTimeout <= 0 {
 		return fmt.Errorf("invalid runtime limits")
 	}
+	// Heartbeat fallback and slack checks use twice the configured interval.
+	if int64(c.Runtime.Interval) > model.MaxDurationSeconds/2 || int64(c.Runtime.HealthTimeout) > model.MaxDurationSeconds {
+		return fmt.Errorf("runtime timeouts exceed the supported duration")
+	}
 	for _, t := range []Task{c.Tasks.Reason, c.Tasks.Curate, c.Tasks.Explore} {
-		if t.Timeout < 0 {
-			return fmt.Errorf("task timeout must be nonnegative (0 disables the execution deadline)")
+		if err := t.ValidateTimeouts(); err != nil {
+			return err
 		}
 		if !slices.Contains([]string{"", "low", "high", "max"}, t.ReasoningEffort) {
 			return fmt.Errorf("task reasoning_effort must be low, high or max, or omitted to inherit the backend setting")

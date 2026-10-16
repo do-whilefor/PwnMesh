@@ -65,7 +65,7 @@ func validateWorkerProtocol(j Job) error {
 	if j.Kind == "reason" && (j.Decision == nil || j.Decision.Version != 2) {
 		return errors.New("reason requires decision protocol 2")
 	}
-	return nil
+	return j.Budget.ValidateTimeouts()
 }
 
 // runSession keeps process ownership around recovery, execution and settlement.
