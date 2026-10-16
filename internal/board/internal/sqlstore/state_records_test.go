@@ -24,6 +24,63 @@ func (q *metadataTrimQueries) Exec(query string, args ...any) (sql.Result, error
 	return q.Queries.Exec(query, args...)
 }
 
+func TestStateAppendPreservesHistoryAndRollsBackRejectedPositions(t *testing.T) {
+	for _, kind := range []string{"facts", "candidates"} {
+		t.Run(kind, func(t *testing.T) {
+			store := actionReceiptStore(t)
+			initial := `{"facts":[{"id":"f1","retained":9007199254740993}],"candidates":[{"id":"c1","retained":"original"}],"steps":[{"id":"step"}],"curation":{"through_revision":1}}`
+			header := `{"facts":[],"candidates":[],"steps":[],"curation":{"through_revision":1}}`
+			if err := store.Do(context.Background(), func(q Queries) error {
+				if err := SaveStateMetadata(q, "p", initial, 1, 1); err != nil {
+					return err
+				}
+				for _, table := range []string{"pwnmesh_fact_metadata", "pwnmesh_state_records"} {
+					if _, err := q.Exec("CREATE TRIGGER guard_append_" + table + " BEFORE UPDATE ON " + table + " BEGIN SELECT RAISE(ABORT,'immutable history was rewritten'); END"); err != nil {
+						return err
+					}
+				}
+				if err := AppendStateRecord(q, "p", header, kind, 1, []byte(`{"id":"second"}`), 2, 2); err != nil {
+					return err
+				}
+				before, revision, decision, err := StateMetadata(q, "p")
+				if err != nil {
+					return err
+				}
+				if revision != 2 || decision != 2 {
+					t.Fatal("append lost revisions")
+				}
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal(before, &fields); err != nil {
+					return err
+				}
+				if !strings.Contains(string(fields["facts"]), "9007199254740993") || !strings.Contains(string(fields["candidates"]), "original") || string(fields["steps"]) != `[{"id":"step"}]` {
+					t.Fatalf("append changed retained metadata: %s", before)
+				}
+				// Handling a rejected append inside the transaction must not retain
+				// its header/revision, nor let a stale position overwrite history.
+				for _, attempt := range []struct {
+					position int
+					revision int64
+				}{{1, 3}, {3, 3}, {2, 2}} {
+					if err := AppendStateRecord(q, "p", header, kind, attempt.position, []byte(`{"id":"rejected"}`), attempt.revision, 9); err == nil {
+						t.Fatal("accepted stale revision or non-tail position")
+					}
+					after, rev, dec, err := StateMetadata(q, "p")
+					if err != nil {
+						return err
+					}
+					if string(after) != string(before) || rev != revision || dec != decision {
+						t.Fatal("rejected append retained partial state")
+					}
+				}
+				return AppendStateRecord(q, "p", header, kind, 2, []byte(`{"id":"third"}`), 3, 3)
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestStateMetadataTrimsOnlyRetainedTailRecords(t *testing.T) {
 	store := actionReceiptStore(t)
 	const initial = `{"steps":[{"id":"first"}],"facts":[{"id":"first"}]}`

@@ -73,6 +73,49 @@ func SaveStateMetadata(q Queries, project, raw string, revision, decision int64)
 	})
 }
 
+// AppendStateRecord stores a single immutable observation or producer judgment.
+// The caller supplies its already-read ordinal and small normalized header; a
+// stale revision or append position fails atomically rather than replacing rows.
+func AppendStateRecord(q Queries, project, header, kind string, position int, record []byte, revision, decision int64) error {
+	if (kind != "facts" && kind != "candidates") || position < 0 || !json.Valid(record) {
+		return errors.New("invalid state append")
+	}
+	fields, err := storedStateFields([]byte(header))
+	if err != nil {
+		return err
+	}
+	if !emptyStateArray(fields[kind]) {
+		return errors.New("state append requires an array marker")
+	}
+	return writeStateMetadata(q, func() error {
+		result, err := q.Exec(`INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?)
+			ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision
+			WHERE pwnmesh_state.revision=?`, project, header, revision, decision, revision-1)
+		if err != nil {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return errors.Join(errors.New("state append revision changed"), err)
+		}
+		if kind == "facts" {
+			result, err = q.Exec(`INSERT INTO pwnmesh_fact_metadata(project_id,position,data)
+				SELECT ?,?,? WHERE ?=COALESCE((SELECT MAX(position)+1 FROM pwnmesh_fact_metadata WHERE project_id=?),0)`,
+				project, position, string(record), position, project)
+		} else {
+			result, err = q.Exec(`INSERT INTO pwnmesh_state_records(project_id,kind,position,data,record_id)
+				SELECT ?,?,?,?,'' WHERE ?=COALESCE((SELECT MAX(position)+1 FROM pwnmesh_state_records WHERE project_id=? AND kind=?),0)`,
+				project, kind, position, string(record), position, project, kind)
+		}
+		if err != nil {
+			return err
+		}
+		if n, err := result.RowsAffected(); err != nil || n != 1 {
+			return errors.Join(errors.New("state append position changed"), err)
+		}
+		return nil
+	})
+}
+
 func UpdateStateMetadata(q Queries, project, raw string) error {
 	remainder, facts, err := splitStateFacts(raw)
 	if err != nil {

@@ -172,22 +172,27 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if err != nil {
 		return StateActionResult{}, err
 	}
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return StateActionResult{}, err
+	}
 	if changed {
 		s.Revision++
 		if action.Op == "fact" || action.Op == "finding" || action.Op == "candidate" || action.Op == "curate" || (action.Op == "fact_relation" && fence.Lease != "reason") {
 			s.DecisionRevision++
 		}
-		raw, err := json.Marshal(d)
+		if action.Op == "fact" || action.Op == "candidate" {
+			err = t.saveAppendedState(project, d, action.Op, resultJSON, s.Revision, s.DecisionRevision)
+		} else {
+			var raw []byte
+			raw, err = json.Marshal(d)
+			if err == nil {
+				err = sqlstore.SaveStateMetadata(t, project, string(raw), s.Revision, s.DecisionRevision)
+			}
+		}
 		if err != nil {
 			return StateActionResult{}, err
 		}
-		if err = sqlstore.SaveStateMetadata(t, project, string(raw), s.Revision, s.DecisionRevision); err != nil {
-			return StateActionResult{}, err
-		}
-	}
-	resultJSON, err := json.Marshal(result)
-	if err != nil {
-		return StateActionResult{}, err
 	}
 	var current State
 	if action.Op == "fact" || action.Op == "candidate" {
