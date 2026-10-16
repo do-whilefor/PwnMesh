@@ -398,9 +398,8 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 	}
 	slices.SortFunc(checkpoint.Nodes, func(a, b NodeState) int { return cmp.Compare(a.ID, b.ID) })
 	resumed := false
-	if raw, readErr := os.ReadFile(filepath.Join(options.Dir, "graph.json")); readErr == nil {
-		var saved Checkpoint
-		if json.Unmarshal(raw, &saved) != nil || saved.SchemaVersion != 1 || saved.RunID != checkpoint.RunID || saved.Version != checkpoint.Version || saved.InputSHA256 != checkpoint.InputSHA256 || len(saved.Nodes) == 0 || len(saved.Nodes) > len(checkpoint.Nodes) || !slices.Contains([]string{"running", "succeeded", "failed", "interrupted"}, saved.Status) {
+	if saved, readErr := ReadCheckpoint(ctx, options.Dir); readErr == nil {
+		if saved.SchemaVersion != 1 || saved.RunID != checkpoint.RunID || saved.Version != checkpoint.Version || saved.InputSHA256 != checkpoint.InputSHA256 || len(saved.Nodes) == 0 || len(saved.Nodes) > len(checkpoint.Nodes) || !slices.Contains([]string{"running", "succeeded", "failed", "interrupted"}, saved.Status) {
 			return checkpoint, errors.New("graph checkpoint identity, definition or input mismatch")
 		}
 		extending := len(saved.Nodes) < len(checkpoint.Nodes)

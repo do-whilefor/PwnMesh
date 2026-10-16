@@ -65,7 +65,7 @@ func validateSharedResources(scope Scope, spec Spec) error {
 		}
 		for _, resource := range node.Resources {
 			path, isPath := resourcePath(resource, scope.Workspace)
-			if !isPath || !pathContains(scope.Workspace, path) || pathContains(scope.RunDir, path) {
+			if !isPath || !pathContains(scope.Workspace, path) && !pathContains(path, scope.Workspace) || pathContains(scope.RunDir, path) {
 				continue
 			}
 			allowed := false

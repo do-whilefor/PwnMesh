@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,6 +26,9 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, agents *AgentExe
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&spec); err != nil {
 		return "", err
+	}
+	if err := decoder.Decode(new(json.RawMessage)); err != io.EOF {
+		return "", errors.New("run_graph requires exactly one JSON value")
 	}
 	if err := validateCommandGraph(&spec); err != nil {
 		return "", err
@@ -82,6 +86,14 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, agents *AgentExe
 			}
 			node.Verify = func(ctx context.Context, _ workergraph.Input, out workergraph.Output) error {
 				return reused.Verify(ctx, out)
+			}
+			// Importing a preflight-verified receipt has no new external effect.
+			// Recovery re-verifies its bytes; it never invokes the source node.
+			node.Reconcile = func(ctx context.Context, _ workergraph.Input, _ workergraph.NodeState) (workergraph.Output, error) {
+				if err := ctx.Err(); err != nil {
+					return workergraph.Output{}, err
+				}
+				return reused.Output(), nil
 			}
 			definition.Nodes = append(definition.Nodes, node)
 			continue

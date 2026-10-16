@@ -119,3 +119,103 @@ func TestInterruptedReuseChecksWholeSuccessfulClosureAndResources(t *testing.T) 
 		t.Fatalf("independent successful subgraph rejected: %v", err)
 	}
 }
+
+func TestInterruptedImportReconcilesWithoutReplayingSource(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "retained-source", true: "changed-source"}[changed], func(t *testing.T) {
+			scope, dir, _ := reuseSource(t, false)
+			scope.RunDir = dir
+			sourcePath := filepath.Join(dir, "graph-tools", "original", "graph.json")
+			sourceBefore, err := os.ReadFile(sourcePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			spec := Spec{Key: "import", Nodes: []Node{{ID: "saved", Kind: "reuse", Resources: []string{}, ReuseFrom: &Reuse{Key: "original", Node: "download"}}}}
+			if _, err := commandGraphCall(t, context.Background(), scope, dir, spec); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "graph-tools", spec.Key, "graph.json")
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var saved workergraph.Checkpoint
+			if err := json.Unmarshal(raw, &saved); err != nil {
+				t.Fatal(err)
+			}
+			// Recreate the durable boundary after intent but before receipt commit.
+			saved.Status, saved.Nodes[0].Status = "interrupted", "running"
+			saved.Nodes[0].Output = workergraph.Output{}
+			saved.Nodes[0].FinishedAt = time.Time{}
+			raw, err = json.Marshal(saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if changed {
+				if err := os.WriteFile(filepath.Join(dir, "graph-tools", "original", "nodes", "download", "stdout.log"), []byte("changed"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			resumed, err := commandGraphCall(t, context.Background(), scope, dir, spec)
+			if changed {
+				after, readErr := os.ReadFile(path)
+				if err == nil || readErr != nil || !bytes.Equal(raw, after) {
+					t.Fatalf("changed source reached recovery: err=%v read=%v changed=%t", err, readErr, !bytes.Equal(raw, after))
+				}
+			} else if err != nil || resumed.Status != "succeeded" || resumed.Nodes[0].Status != "succeeded" || resumed.Nodes[0].Attempt != 1 || resumed.Nodes[0].InputSHA256 != saved.Nodes[0].InputSHA256 {
+				t.Fatalf("receipt import could not reconcile: %+v %v", resumed, err)
+			}
+			sourceAfter, _ := os.ReadFile(sourcePath)
+			effects, _ := os.ReadFile(filepath.Join(scope.Workspace, "effects"))
+			if !bytes.Equal(sourceBefore, sourceAfter) || string(effects) != "once\n" {
+				t.Fatal("import recovery rewrote or replayed its source")
+			}
+		})
+	}
+}
+
+func TestInterruptedCommandStillRequiresInspection(t *testing.T) {
+	scope, dir, saved := reuseSource(t, false)
+	saved.Status, saved.Nodes[0].Status = "interrupted", "running"
+	saved.Nodes[0].Output = workergraph.Output{}
+	saved.Nodes[0].FinishedAt = time.Time{}
+	raw, err := json.Marshal(saved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "graph-tools", "original", "graph.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	spec := Spec{Key: "original", Parallelism: 1, Nodes: []Node{{ID: "download", Command: `printf 'once\n' >> "$PWNMESH_WORKSPACE/effects"; printf '{"version":1}\n' > result.json; printf 'downloaded\n'`, Resources: []string{}, Artifacts: []string{"result.json"}}}}
+	if _, err := commandGraphCall(t, context.Background(), scope, dir, spec); err == nil || !strings.Contains(err.Error(), "reconciliation required") {
+		t.Fatalf("uncertain command was accepted: %v", err)
+	}
+	after, _ := os.ReadFile(path)
+	effects, _ := os.ReadFile(filepath.Join(scope.Workspace, "effects"))
+	if !bytes.Equal(raw, after) || string(effects) != "once\n" {
+		t.Fatal("uncertain command checkpoint changed or effects replayed")
+	}
+}
+
+func TestSnapshotAcceptsLargeRetainedDiagnostic(t *testing.T) {
+	scope := scopeFor(graphScope(t), t.TempDir())
+	diagnostic := strings.Repeat("x", (8<<20)+1)
+	spec := Spec{Key: "large", Nodes: []Node{{ID: "agent", Kind: "agent", Task: "Observe", Resources: []string{}, Optional: true}}}
+	raw, err := marshalCommandGraphCall(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Run(context.Background(), scope, raw, &AgentExecutor{Run: func(context.Context, AgentNode) (workergraph.Output, error) {
+		return workergraph.Output{}, errors.New(diagnostic)
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	saved, _, err := readCommandSnapshot(context.Background(), scope, spec.Key, filepath.Join(scope.RunDir, "graph-tools", spec.Key))
+	if err != nil || len(saved.Nodes) != 1 || saved.Nodes[0].Error != diagnostic {
+		t.Fatalf("inspection rejected an accepted checkpoint: %v", err)
+	}
+}

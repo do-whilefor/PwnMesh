@@ -20,12 +20,8 @@ import (
 // Reuse and shared-evidence handoff must interpret the same durable definition
 // and input bindings. Reading a snapshot never replays work or changes a graph.
 func readCommandSnapshot(ctx context.Context, scope Scope, key, dir string) (workergraph.Checkpoint, map[string]Node, error) {
-	var checkpoint workergraph.Checkpoint
-	raw, err := readCommandGraphFile(ctx, filepath.Join(dir, "graph.json"), 8<<20)
+	checkpoint, err := workergraph.ReadCheckpoint(ctx, dir)
 	if err != nil {
-		return checkpoint, nil, err
-	}
-	if err := json.Unmarshal(raw, &checkpoint); err != nil {
 		return checkpoint, nil, err
 	}
 	if len(checkpoint.Nodes) == 0 || len(checkpoint.Nodes) > 64 {

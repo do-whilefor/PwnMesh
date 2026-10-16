@@ -70,6 +70,26 @@ func commandNodeValue(t *testing.T, checkpoint workergraph.Checkpoint, id string
 	return workergraph.NodeState{}, Output{}
 }
 
+func TestGraphRejectsTrailingJSONBeforeEffects(t *testing.T) {
+	for _, suffix := range []string{` {}`, ` garbage`} {
+		t.Run(suffix, func(t *testing.T) {
+			scope := scopeFor(graphScope(t), t.TempDir())
+			raw := json.RawMessage(`{"key":"framing","nodes":[{"id":"child","kind":"agent","task":"Observe","resources":[],"inputs":[]}]}` + suffix)
+			calls := 0
+			_, err := Run(context.Background(), scope, raw, &AgentExecutor{Run: func(context.Context, AgentNode) (workergraph.Output, error) {
+				calls++
+				return workergraph.Output{}, errors.New("unexpected execution")
+			}})
+			if err == nil || calls != 0 {
+				t.Fatalf("trailing input reached execution: err=%v calls=%d", err, calls)
+			}
+			if _, err := os.Stat(filepath.Join(scope.RunDir, "graph-tools")); !os.IsNotExist(err) {
+				t.Fatal("invalid JSON created graph state")
+			}
+		})
+	}
+}
+
 func TestCommandGraphJSONArtifactAndStdoutExcludeStderr(t *testing.T) {
 	// Exercise the dependency file, array shape, artifact and log contract
 	// through actual producer/consumer execution rather than tutorial wording.

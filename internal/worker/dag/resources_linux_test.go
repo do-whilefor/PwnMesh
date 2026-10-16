@@ -71,3 +71,35 @@ func TestSharedResourceWorkspaceAliasesAndStepWriteScope(t *testing.T) {
 		t.Fatal("sibling path prefixes conflict")
 	}
 }
+
+func TestWorkspaceAncestorResourcesFailBeforeExecution(t *testing.T) {
+	for _, resource := range []string{"parent", "root", "normalized-parent", "workspace"} {
+		t.Run(resource, func(t *testing.T) {
+			root := t.TempDir()
+			workspace := filepath.Join(root, "project")
+			scope := scopeFor(graphScope(t), filepath.Join(workspace, ".runs", "one"))
+			scope.Workspace, scope.SharedWritesBound = workspace, true
+			scope.WritePaths = []string{filepath.Join(workspace, "reports")}
+			if err := os.MkdirAll(scope.RunDir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := map[string]string{"parent": root, "root": "/", "normalized-parent": workspace + "/../", "workspace": workspace}[resource]
+			spec := Spec{Key: "ancestor", Nodes: []Node{{ID: "writer", Kind: "agent", Task: "Write a shared result", Resources: []string{"path:" + path}}}}
+			raw, err := marshalCommandGraphCall(spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			_, err = Run(context.Background(), scope, raw, &AgentExecutor{Run: func(context.Context, AgentNode) (workergraph.Output, error) {
+				calls++
+				return workergraph.Output{}, nil
+			}})
+			if err == nil || !strings.Contains(err.Error(), "write_paths") || calls != 0 {
+				t.Fatalf("ancestor escaped scoped admission: err=%v calls=%d", err, calls)
+			}
+			if _, err := os.Stat(filepath.Join(scope.RunDir, "graph-tools")); !os.IsNotExist(err) {
+				t.Fatal("rejected scope created graph state")
+			}
+		})
+	}
+}
