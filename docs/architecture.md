@@ -67,6 +67,10 @@ updated graph and metadata, refreshing execution and assets before projection.
 State reads and control version checks still process the full state. Short
 benchmarks do not establish a latency or throughput guarantee.
 
+Frozen snapshot chunks are read in ordered pages of at most 128 entries. Each
+page bounds chunk payloads to 2 MiB while retaining repeated identities, exact
+bytes, digest checks and the caller's read snapshot.
+
 Failed Step diagnostics load in one project-scoped event query per state read,
 preserving the latest reason for each lease. Reads without failed Steps skip it.
 

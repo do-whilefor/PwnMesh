@@ -11,6 +11,7 @@ import (
 const snapshotChunkPrefix = "PwnMesh snapshot chunks v1\n"
 const snapshotChunkMin = 1 << 10
 const snapshotChunkMax = 16 << 10
+const snapshotReadPageChunks = 128
 
 type snapshotManifest struct {
 	Bytes  int      `json:"bytes"`
@@ -83,25 +84,65 @@ func decodeInputSnapshot(q Queries, project string, stored []byte) ([]byte, erro
 		return nil, errors.New("invalid input snapshot chunk bounds")
 	}
 	var raw bytes.Buffer
-	for n, id := range manifest.Chunks {
-		digest, err := hex.DecodeString(id)
-		if err != nil || len(digest) != sha256.Size {
-			return nil, errors.New("invalid input snapshot chunk identity")
+	for start := 0; start < count; start += snapshotReadPageChunks {
+		if err := appendSnapshotChunkPage(q, project, manifest, start, &raw); err != nil {
+			return nil, err
 		}
-		var chunk []byte
-		if err := q.QueryRow("SELECT data FROM pwnmesh_snapshot_chunks WHERE project_id=? AND sha256=? AND length(data)<=?", project, id, snapshotChunkMax).Scan(&chunk); err != nil {
-			return nil, errors.New("input snapshot chunk is missing or oversized")
-		}
-		actual := sha256.Sum256(chunk)
-		if !bytes.Equal(digest, actual[:]) || len(chunk) == 0 || n < count-1 && len(chunk) < snapshotChunkMin || len(chunk) > manifest.Bytes-raw.Len() {
-			return nil, errors.New("input snapshot chunk digest or size mismatch")
-		}
-		raw.Write(chunk)
 	}
 	if raw.Len() != manifest.Bytes {
 		return nil, errors.New("input snapshot chunk length mismatch")
 	}
 	return raw.Bytes(), nil
+}
+
+// Bound each ordered join to 128 chunks, limiting chunk payloads in any SQLite
+// sort buffer to 2 MiB. Manifest positions retain duplicate identities and order;
+// a left join makes missing and oversized chunks visible instead of skipping them.
+func appendSnapshotChunkPage(q Queries, project string, manifest snapshotManifest, start int, raw *bytes.Buffer) error {
+	ids := manifest.Chunks[start:min(start+snapshotReadPageChunks, len(manifest.Chunks))]
+	digests := make([][]byte, len(ids))
+	for n, id := range ids {
+		digest, err := hex.DecodeString(id)
+		if err != nil || len(digest) != sha256.Size {
+			return errors.New("invalid input snapshot chunk identity")
+		}
+		digests[n] = digest
+	}
+	encoded, err := json.Marshal(ids)
+	if err != nil {
+		return err
+	}
+	rows, err := q.Query(`SELECT entry.key,chunk.data FROM json_each(?) AS entry
+LEFT JOIN pwnmesh_snapshot_chunks AS chunk ON chunk.project_id=? AND chunk.sha256=entry.value AND length(chunk.data)<=?
+ORDER BY entry.key`, string(encoded), project, snapshotChunkMax)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	n := 0
+	for rows.Next() {
+		var position int
+		var chunk []byte
+		if err := rows.Scan(&position, &chunk); err != nil {
+			return err
+		}
+		if position != n || n >= len(ids) || chunk == nil {
+			return errors.New("input snapshot chunk is missing or oversized")
+		}
+		actual := sha256.Sum256(chunk)
+		if !bytes.Equal(digests[n], actual[:]) || len(chunk) == 0 || start+n < len(manifest.Chunks)-1 && len(chunk) < snapshotChunkMin || len(chunk) > manifest.Bytes-raw.Len() {
+			return errors.New("input snapshot chunk digest or size mismatch")
+		}
+		raw.Write(chunk)
+		n++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if n != len(ids) {
+		return errors.New("input snapshot chunk is missing or oversized")
+	}
+	return nil
 }
 
 // SaveInputSnapshot retains chunks and their manifest in the caller's transaction.
