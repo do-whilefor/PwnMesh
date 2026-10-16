@@ -39,8 +39,8 @@ type AssetAnchor struct {
 }
 
 // AssetAncestors returns syntax-defined parent identities without inventing
-// observations, resolving DNS, or merging distinct endpoints. Callers select
-// only parents already present in their bound catalog.
+// observations, resolving DNS, or merging distinct endpoints. These IDs can
+// select a neighborhood without claiming the parents exist in the catalog.
 func AssetAncestors(asset Asset) []string {
 	if asset.Kind != "endpoint" && asset.Kind != "service" {
 		return nil

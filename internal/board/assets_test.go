@@ -260,6 +260,46 @@ func TestAssetFindingUsesCurrentSupportWithoutPromotingEvidence(t *testing.T) {
 	}
 }
 
+func TestFindingAssetsStayBoundToCuratedCandidateRevision(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	producer := f.worker("producer", "")
+	fact := f.fact(producer, "observed")
+	payload := map[string]any{
+		"claim": "The fixture is reachable", "scope": "controlled fixture", "status": "verified",
+		"sources": []string{fact}, "reason": "Retained observation",
+		"assets": []AssetSpec{{Kind: "host", Value: "original.example.test"}},
+	}
+	first := f.action(producer.Fence(), "candidate", "first", payload, "")
+	curator, input := f.curator("first-curation")
+	f.curate(curator, input, CurateGroup{CandidateIDs: []string{first.ID}, Status: "verified", Reason: "Reviewed observation"})
+	before := f.state()
+	findingID := before.Findings[0].ID
+	if !before.Findings[0].SupportValid || !slices.Equal(before.AssetIDs("finding", findingID), first.AssetIDs) {
+		t.Fatal("initial finding lost its supported candidate association")
+	}
+
+	payload["supersedes"] = first.ID
+	payload["assets"] = []AssetSpec{{Kind: "host", Value: "replacement.example.test"}}
+	second := f.action(producer.Fence(), "candidate", "replacement", payload, "")
+	unchanged := f.state()
+	if !reflect.DeepEqual(before.Findings, unchanged.Findings) || !slices.Equal(unchanged.AssetIDs("finding", findingID), first.AssetIDs) {
+		t.Fatal("an uncurated candidate replacement changed the existing finding's asset membership")
+	}
+	if err := unchanged.ValidateFactSources(unchanged.Findings[0].Sources, true); err != nil {
+		t.Fatal(err)
+	}
+
+	curator, input = f.curator("replacement-curation")
+	f.curate(curator, input, CurateGroup{CandidateIDs: []string{second.ID}, Status: "verified", Reason: "Reviewed replacement"})
+	after := f.state()
+	if !slices.Equal(after.AssetIDs("finding", findingID), second.AssetIDs) {
+		t.Fatal("recuration retained an association from the retired candidate")
+	}
+	if !slices.Equal(after.AssetIDs("candidate", first.ID), first.AssetIDs) || !slices.Contains(after.Findings[0].CandidateIDs, first.ID) {
+		t.Fatal("recuration erased historical candidate provenance")
+	}
+}
+
 func TestConcurrentAssetActionsReuseProjectIdentity(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	second, err := Open(f.path)

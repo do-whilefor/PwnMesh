@@ -285,8 +285,11 @@ func graphItemsPage[T any](s model.State, r GraphRequest, version string, record
 	items := make([]json.RawMessage, end-start)
 	for index := start; index < end; index++ {
 		var record any = records[index]
-		if candidate, ok := record.(model.Candidate); ok {
-			record = s.CandidateView(candidate)
+		switch value := record.(type) {
+		case model.Candidate:
+			record = s.CandidateView(value)
+		case model.Asset:
+			record = graphAssetView(value)
 		}
 		raw, err := json.Marshal(record)
 		if err != nil {

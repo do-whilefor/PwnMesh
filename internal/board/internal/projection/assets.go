@@ -36,9 +36,18 @@ func WithAssets(s model.State, assets []model.Asset, anchors []model.AssetAnchor
 	}
 	// A finding's association follows its present support references. It is a
 	// read projection, not a new claim or evidence-strength decision.
-	active := map[string]model.Candidate{}
-	for _, candidate := range s.ActiveCandidates() {
-		active[candidate.ID] = candidate
+	candidates := map[string]model.Candidate{}
+	retiredAt := map[string]int64{}
+	for _, candidate := range s.Candidates {
+		if candidate.Generation != s.Graph.Project.Generation || candidate.Revision > s.Revision {
+			continue
+		}
+		candidates[candidate.ID] = candidate
+		if candidate.Supersedes != "" {
+			if revision, exists := retiredAt[candidate.Supersedes]; !exists || candidate.Revision < revision {
+				retiredAt[candidate.Supersedes] = candidate.Revision
+			}
+		}
 	}
 	for _, finding := range s.Findings {
 		ids := []string{}
@@ -46,8 +55,11 @@ func WithAssets(s model.State, assets []model.Asset, anchors []model.AssetAnchor
 			ids = append(ids, byNode[nodeKey{"fact", source}]...)
 		}
 		for _, candidateID := range finding.CandidateIDs {
-			candidate, ok := active[candidateID]
-			if !ok || candidate.Revision > finding.CuratedRevision || !candidateAssetsSupportFinding(s, candidate, finding) {
+			candidate, ok := candidates[candidateID]
+			retirement, retired := retiredAt[candidateID]
+			// Producer revisions cannot change a Finding's associations before
+			// curation, but current invalid evidence must still be excluded.
+			if !ok || candidate.Revision > finding.CuratedRevision || retired && retirement <= finding.CuratedRevision || !candidateAssetsSupportFinding(s, candidate, finding) {
 				continue
 			}
 			ids = append(ids, byNode[nodeKey{"candidate", candidateID}]...)
