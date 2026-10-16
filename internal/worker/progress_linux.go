@@ -70,7 +70,7 @@ func (p toolProgress) validate(lastSequence uint64) error {
 
 func readOnlyObservation(name string) bool {
 	switch name {
-	case "read", "grep", "find", "ls", "read_graph", "read_snapshot", "read_evidence", "cvss31", "read_pentest_skill", "read_audit_skill":
+	case "read", "grep", "find", "ls", "read_graph", "read_snapshot", "read_evidence", "read_worker_trace", "cvss31", "read_pentest_skill", "read_audit_skill":
 		return true
 	default:
 		return false

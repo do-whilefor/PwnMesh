@@ -157,6 +157,8 @@ phases, and request policy does not change the session checkpoint schema.
 Native parallel tool groups run at most 16 callbacks at once, preserving result
 order and serial/terminal barriers. Cancellation settles queued calls without
 starting their tools.
+Worker progress treats trace reads as observations, so repeating an unchanged
+trace cannot replenish the continuation allowance as a mutation would.
 
 Journals and checkpoints precede side effects. Recovery checks durable receipts
 before additional model or tool calls. Acceptance reads an identity-bound

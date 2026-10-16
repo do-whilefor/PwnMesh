@@ -44,7 +44,7 @@ func TestToolProgressStopsRepeatedErrorsAndUnchangedReads(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		fail bool
-	}{{"probe", true}, {"read", false}, {"read_snapshot", false}, {"read_pentest_skill", false}, {"read_audit_skill", false}} {
+	}{{"probe", true}, {"read", false}, {"read_snapshot", false}, {"read_worker_trace", false}, {"read_worker_trace", true}, {"read_pentest_skill", false}, {"read_audit_skill", false}} {
 		t.Run(tc.name, func(t *testing.T) {
 			job, dir := outcomeJob(t, "explore"), t.TempDir()
 			job.Budget.Timeout = 0 // The progress bound works without a task timeout.
@@ -254,15 +254,20 @@ func TestToolProgressCheckpointIdempotenceAndBoundedObservations(t *testing.T) {
 }
 
 func TestToolProgressReadRecheckAfterMutationIsUseful(t *testing.T) {
-	var progress toolProgress
-	for _, history := range [][]agent.Message{
-		settledObservation(1, "read", `{}`, "same", false),
-		settledObservation(3, "write", `{}`, "done", false),
-		settledObservation(5, "read", `{}`, "same", false),
-	} {
-		if useful, err := progress.settle(history); err != nil || !useful || progress.Repeated != 0 {
-			t.Fatalf("mutation/read verification did not count as progress: useful=%t state=%+v err=%v", useful, progress, err)
-		}
+	for _, name := range []string{"read", "read_worker_trace"} {
+		t.Run(name, func(t *testing.T) {
+			var progress toolProgress
+			for _, history := range [][]agent.Message{
+				settledObservation(1, name, `{}`, "same", false),
+				settledObservation(3, "write", `{}`, "done", false),
+				settledObservation(5, name, `{}`, "same", false),
+				settledObservation(7, name, `{}`, "changed", false),
+			} {
+				if useful, err := progress.settle(history); err != nil || !useful || progress.Repeated != 0 {
+					t.Fatalf("mutation/read verification did not count as progress: useful=%t state=%+v err=%v", useful, progress, err)
+				}
+			}
+		})
 	}
 }
 
