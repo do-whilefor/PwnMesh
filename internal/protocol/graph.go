@@ -19,19 +19,20 @@ const MaxGraphRPCBytes = 128 << 10
 const MaxGraphPageBytes = MaxGraphRPCBytes - 1024
 
 type GraphRequest struct {
-	RequestID       string                     `json:"request_id"`
-	Op              string                     `json:"op"`
-	Section         string                     `json:"section,omitempty"`
-	Offset          int                        `json:"offset,omitempty"`
-	ByteOffset      *int                       `json:"byte_offset,omitempty"`
-	RecordVersion   string                     `json:"record_version,omitempty"`
-	Limit           int                        `json:"limit,omitempty"`
-	ExpectedVersion string                     `json:"expected_version,omitempty"`
-	IDs             []string                   `json:"ids,omitempty"`
-	AssetIDs        []string                   `json:"asset_ids,omitempty"`
-	Action          model.StateAction          `json:"action,omitempty"`
-	Batch           *model.DecisionBatch       `json:"batch,omitempty"`
-	Updates         *model.ExecuteUpdateCursor `json:"updates,omitempty"`
+	RequestID         string                     `json:"request_id"`
+	Op                string                     `json:"op"`
+	Section           string                     `json:"section,omitempty"`
+	Offset            int                        `json:"offset,omitempty"`
+	ByteOffset        *int                       `json:"byte_offset,omitempty"`
+	RecordVersion     string                     `json:"record_version,omitempty"`
+	Limit             int                        `json:"limit,omitempty"`
+	ExpectedVersion   string                     `json:"expected_version,omitempty"`
+	IDs               []string                   `json:"ids,omitempty"`
+	AssetIDs          []string                   `json:"asset_ids,omitempty"`
+	AssetNeighborhood bool                       `json:"asset_neighborhood,omitempty"`
+	Action            model.StateAction          `json:"action,omitempty"`
+	Batch             *model.DecisionBatch       `json:"batch,omitempty"`
+	Updates           *model.ExecuteUpdateCursor `json:"updates,omitempty"`
 }
 
 type GraphRequestEvent struct {
@@ -349,11 +350,12 @@ func GraphRecordVersion(raw []byte) string {
 }
 
 func graphDetails(s model.State, r GraphRequest, version string) (any, error) {
-	if r.Section == "evidence" {
-		for _, fact := range s.FactRecords {
-			if fact.ID == r.IDs[0] {
-				return graphItemsPage(s, r, version, fact.Evidence, nil)
+	for _, fact := range s.FactRecords {
+		if fact.ID == r.IDs[0] {
+			if r.Section == "sources" {
+				return graphItemsPage(s, r, version, fact.DerivedFrom, nil)
 			}
+			return graphItemsPage(s, r, version, fact.Evidence, nil)
 		}
 	}
 	for _, finding := range s.Findings {
@@ -462,7 +464,7 @@ func compactGraphRecord(section string, raw json.RawMessage) (json.RawMessage, e
 		// restorations to the original record, just like scalar continuations.
 		record["record_bytes"], _ = json.Marshal(len(raw))
 		record["record_version"], _ = json.Marshal(GraphRecordVersion(raw))
-		record["read_more"], _ = json.Marshal("Omitted support is not absent. Use the same read tool with section evidence or sources, ids:[this record's id], offset:0; follow next_offset until absent. Sources pages apply to Findings and Candidates.")
+		record["read_more"], _ = json.Marshal("Omitted support is not absent. Use the same read tool with section evidence or sources, ids:[this record's id], offset:0; follow next_offset until absent. Sources pages return Fact derived_from or Finding/Candidate sources.")
 	}
 	return json.Marshal(record)
 }
@@ -537,7 +539,7 @@ type GraphItemsPage struct {
 
 func validateGraphIDs(r GraphRequest) error {
 	if (r.Section == "evidence" || r.Section == "sources") && len(r.IDs) != 1 {
-		return errors.New("evidence and sources pages require exactly one record ID; evidence accepts Fact or Finding IDs, sources accepts a Finding ID")
+		return errors.New("evidence and sources pages require exactly one record ID (Fact, Finding or Candidate)")
 	}
 	if len(r.IDs) > 50 {
 		return errors.New("at most 50 graph IDs are allowed")

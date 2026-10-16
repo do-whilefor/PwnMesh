@@ -64,8 +64,8 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 			pending("unknown_event")
 		}
 	}
-	// Follow only explicit corrective sources, never producers, consumers, or
-	// ordinary newly published facts. Cap the traversal even for corrupt cycles.
+	// Follow explicit derivations and corrective sources, never a common producer
+	// or ordinary newly published facts. Cap traversal even for corrupt cycles.
 	const maxNodes = 256
 	selected := map[string]bool{}
 	queue := []string{}
@@ -85,12 +85,19 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 		add(id)
 	}
 	byTarget := map[string][]int{}
+	derivations := map[string][]string{}
+	for _, fact := range current.FactRecords {
+		derivations[fact.ID] = fact.DerivedFrom
+	}
 	for i, relation := range current.FactRelations {
 		if executeCorrection(relation.Kind) {
 			byTarget[relation.Target] = append(byTarget[relation.Target], i)
 		}
 	}
 	for i := 0; i < len(queue); i++ {
+		for _, source := range derivations[queue[i]] {
+			add(source)
+		}
 		for _, index := range byTarget[queue[i]] {
 			add(current.FactRelations[index].Source)
 		}

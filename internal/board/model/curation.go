@@ -25,11 +25,21 @@ type Candidate struct {
 }
 
 type CurationProgress struct {
-	Generation      int64            `json:"generation"`
-	ThroughRevision int64            `json:"through_revision"`
-	RunID           string           `json:"run_id,omitempty"`
-	UpdatedAt       string           `json:"updated_at,omitempty"`
-	Request         *CurationRequest `json:"request,omitempty"`
+	Generation      int64                  `json:"generation"`
+	ThroughRevision int64                  `json:"through_revision"`
+	RunID           string                 `json:"run_id,omitempty"`
+	UpdatedAt       string                 `json:"updated_at,omitempty"`
+	Request         *CurationRequest       `json:"request,omitempty"`
+	RequestReview   *CurationRequestReview `json:"request_review,omitempty"`
+}
+
+// CurationRequestReview records why an explicit reconciliation request ended
+// or still needs evidence. Revision is assigned by the server.
+type CurationRequestReview struct {
+	Revision       int64    `json:"revision,omitempty"`
+	Disposition    string   `json:"disposition"`
+	CheckedSources []string `json:"checked_sources"`
+	Reason         string   `json:"reason"`
 }
 
 type Dispute struct {
@@ -56,10 +66,18 @@ type CurationRequest struct {
 
 func (s State) PendingCurationRequest() *CurationRequest {
 	request := s.Curation.Request
-	if request == nil || s.Curation.Generation != s.Graph.Project.Generation || request.Revision <= s.Curation.ThroughRevision || request.Revision > s.Revision {
+	if request == nil || s.Curation.Generation != s.Graph.Project.Generation || request.Revision > s.Revision {
+		return nil
+	}
+	if request.Revision <= s.Curation.ThroughRevision && !s.CurationRequestNeedsEvidence() {
 		return nil
 	}
 	return request
+}
+
+func (s State) CurationRequestNeedsEvidence() bool {
+	r, review := s.Curation.Request, s.Curation.RequestReview
+	return r != nil && review != nil && review.Revision == r.Revision && review.Disposition == "needs_review"
 }
 
 // CandidateView adds read-only grouping and source validity to a projection.

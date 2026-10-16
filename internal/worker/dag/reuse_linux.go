@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/process"
@@ -24,11 +25,13 @@ type Reuse struct {
 }
 
 type ReuseReceipt struct {
-	Key              string `json:"key"`
-	Node             string `json:"node"`
-	Kind             string `json:"kind"`
-	DefinitionSHA256 string `json:"definition_sha256"`
-	InputSHA256      string `json:"input_sha256"`
+	Key                 string `json:"key"`
+	Node                string `json:"node"`
+	Kind                string `json:"kind"`
+	DefinitionSHA256    string `json:"definition_sha256"`
+	InputSHA256         string `json:"input_sha256"`
+	ExecutionStartedAt  string `json:"execution_started_at,omitempty"`
+	ExecutionFinishedAt string `json:"execution_finished_at,omitempty"`
 }
 
 type commandReuse struct {
@@ -212,9 +215,10 @@ func prepareCommandReuses(ctx context.Context, scope Scope, spec Spec) (map[stri
 	slices.Sort(keys)
 	keys = slices.Compact(keys)
 	type sourceGraph struct {
-		dir   string
-		nodes map[string]workergraph.NodeState
-		specs map[string]Node
+		dir        string
+		nodes      map[string]workergraph.NodeState
+		specs      map[string]Node
+		checkpoint workergraph.Checkpoint
 	}
 	sources := map[string]sourceGraph{}
 	for _, key := range keys {
@@ -235,14 +239,11 @@ func prepareCommandReuses(ctx context.Context, scope Scope, spec Spec) (map[stri
 		if err != nil {
 			return fail(err)
 		}
-		if !slices.Contains([]string{"failed", "succeeded"}, checkpoint.Status) || len(checkpoint.Nodes) == 0 || len(checkpoint.Nodes) > 64 {
-			return fail(errors.New("reuse source graph must be terminal"))
+		if !slices.Contains([]string{"failed", "succeeded", "interrupted"}, checkpoint.Status) || len(checkpoint.Nodes) == 0 || len(checkpoint.Nodes) > 64 {
+			return fail(errors.New("reuse source graph must be settled or interrupted; inspect its graph.json before recovery"))
 		}
-		source := sourceGraph{dir: dir, nodes: map[string]workergraph.NodeState{}, specs: specs}
+		source := sourceGraph{dir: dir, nodes: map[string]workergraph.NodeState{}, specs: specs, checkpoint: checkpoint}
 		for _, node := range checkpoint.Nodes {
-			if node.Status == "running" || node.Status == "pending" {
-				return fail(errors.New("reuse source has unresolved operations"))
-			}
 			nodeSpec := specs[node.ID]
 			if nodeSpec.Kind == "reuse" || nodeSpec.ReuseFrom != nil {
 				return fail(errors.New("reuse source definition is invalid or recursive"))
@@ -265,7 +266,11 @@ func prepareCommandReuses(ctx context.Context, scope Scope, spec Spec) (map[stri
 		if !ok || state.Status != "succeeded" {
 			return fail(errors.New("reuse source node must have succeeded"))
 		}
-		result[node.ID] = &commandReuse{SourceNode: state, SourceSpec: source.specs[state.ID], SourceDir: filepath.Join(source.dir, "nodes", state.ID), receipt: ReuseReceipt{Key: node.ReuseFrom.Key, Node: state.ID, Kind: state.Kind, DefinitionSHA256: state.DefinitionSHA256, InputSHA256: state.InputSHA256}}
+		if err := validateInterruptedReuse(scope, source.checkpoint, source.specs, state.ID); err != nil {
+			return fail(err)
+		}
+		result[node.ID] = &commandReuse{SourceNode: state, SourceSpec: source.specs[state.ID], SourceDir: filepath.Join(source.dir, "nodes", state.ID), receipt: ReuseReceipt{Key: node.ReuseFrom.Key, Node: state.ID, Kind: state.Kind, DefinitionSHA256: state.DefinitionSHA256, InputSHA256: state.InputSHA256,
+			ExecutionStartedAt: state.StartedAt.UTC().Format(time.RFC3339Nano), ExecutionFinishedAt: state.FinishedAt.UTC().Format(time.RFC3339Nano)}}
 	}
 	return result, cleanup, nil
 }
@@ -281,8 +286,46 @@ func (r *commandReuse) Output() workergraph.Output {
 
 func (r *commandReuse) Verify(ctx context.Context, out workergraph.Output) error {
 	expected := r.Output()
+	// Old receipts have no execution-window fields. Preserve their exact bytes
+	// in checkpoints while checking every original identity and artifact field.
+	var value Output
+	if json.Unmarshal(out.Value, &value) == nil && value.ReusedFrom != nil && value.ReusedFrom.ExecutionStartedAt == "" && value.ReusedFrom.ExecutionFinishedAt == "" {
+		var legacy Output
+		_ = json.Unmarshal(expected.Value, &legacy)
+		legacy.ReusedFrom.ExecutionStartedAt, legacy.ReusedFrom.ExecutionFinishedAt = "", ""
+		expected.Value, _ = json.Marshal(legacy)
+	}
 	if !bytes.Equal(expected.Value, out.Value) || !slices.Equal(expected.Artifacts, out.Artifacts) {
 		return errors.New("reused node output or provenance changed")
 	}
 	return verifyCommandNodeOutput(ctx, r.SourceDir, r.SourceSpec, r.SourceNode.Output)
+}
+
+// The source lock excludes a live graph runner. Declarations remain a trust
+// boundary: this proves graph/resource independence, not shell isolation.
+func validateInterruptedReuse(scope Scope, checkpoint workergraph.Checkpoint, specs map[string]Node, id string) error {
+	states := make(map[string]workergraph.NodeState, len(checkpoint.Nodes))
+	var unresolved []string
+	for _, node := range checkpoint.Nodes {
+		states[node.ID] = node
+		if node.Status == "running" || node.Status == "pending" {
+			unresolved = append(unresolved, node.ID)
+		}
+	}
+	if len(unresolved) == 0 {
+		return nil
+	}
+	closure := nodeAncestors(specs, id)
+	closure[id] = true
+	for member := range closure {
+		if states[member].Status != "succeeded" {
+			return fmt.Errorf("reuse %s requires a successful dependency subgraph; inspect node %s in graph.json and nodes/%s before recovery", id, member, member)
+		}
+		for _, unknown := range unresolved {
+			if member == unknown || nodeAncestors(specs, member)[unknown] || nodeAncestors(specs, unknown)[member] || resourcesConflict(specs[member].Resources, specs[unknown].Resources, scope.Workspace) {
+				return fmt.Errorf("reuse %s is influenced by unresolved node %s through dependencies or declared resources; inspect graph.json and nodes/%s; uncertain effects cannot be replayed", id, unknown, unknown)
+			}
+		}
+	}
+	return nil
 }

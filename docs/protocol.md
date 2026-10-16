@@ -40,6 +40,83 @@ checks and mutation/receipt writes share a transaction.
 Steps and project completion use decision batches; Step completion uses the
 registered result contract. Retired direct intent/completion routes return `404`.
 
+## Observations and coordinated checks
+
+Fact publication and final Fact handoff accept optional immutable `derived_from`:
+at most 32 unique, nonempty observation Fact IDs, each at most 256 bytes. The
+sources must already exist and be effective; `origin`, forward references and
+`null` are not accepted. Omit the field for independent raw observations.
+Derivation participates in support invalidation, context/evidence traversal and
+completion checks. Fact `sources` read pages return these explicit derivation IDs;
+stored observations and frozen inputs are never rewritten by a later correction.
+
+Decide's Step-add payload accepts optional `assessment: {claim, scope}`. The claim
+normalizes whitespace and scope trims outer whitespace. This contract is immutable
+and is checked against every Candidate from that Step using the same identity
+rule as Finding grouping. Opposing judgments use the same proposition and scope
+with different `status` values; negating the claim creates a different proposition.
+Steps without an assessment retain free-form Candidate publication.
+
+## Explicit curation requests
+
+When the bound input contains an unreviewed pending curation request, a Curate commit requires
+`request_review` with `disposition`, `checked_sources` and a nonempty `reason`.
+Checked sources must contain every requested Fact exactly once and no others.
+The server binds the review to the request revision; an optional supplied revision
+must match. An empty `groups` array alone cannot acknowledge the request.
+
+`resolved` and justified `no_change` dispositions permit acknowledgement without
+invented relations or Findings. The request clears only when all pending groups
+are covered; a partial commit retains its original scan boundary and request.
+`needs_review` retains the unresolved review, request and completion blocker while
+allowing evidence-gathering work. Unrelated Curate commits may omit `request_review`
+and must preserve that unresolved review. It remains visible in curation progress
+and planner context.
+
+Decide may explicitly request another review of an unresolved question. The new
+request must include every original source ID and may add effective observation
+sources. Original source identities may remain even if a later correction made
+them ineffective, so the disagreement can still be reviewed. An unrelated request
+cannot replace the unresolved question; a different unreviewed pending request
+also cannot be replaced. Reviews, effects and receipts commit atomically.
+
+## Asset reads
+
+Asset identity remains the exact normalized host, service or endpoint identity.
+`asset_ids` filters match those identities by default. Add
+`asset_neighborhood: true` to include existing ancestors and descendants:
+host/service/endpoint containment is derived from URL syntax, never DNS or target
+behavior. Selecting an endpoint includes its known service and host, not sibling
+endpoints; selecting a service includes its endpoints and host, not other services.
+The option requires `asset_ids` and is supported on the same asset-filterable
+sections. It creates no catalog entries. Preserve both filters while paging.
+
+Read `anchors` to distinguish provenance. An anchor with `discovery_step_id`
+means an untagged result was discovered through that producing Step's declared
+target. Explicit result assets override this fallback, even when different.
+Discovery does not establish observed scope, support validity or permission;
+inspect the Fact and retained evidence. These derived anchors are frozen with
+snapshots and do not leak into a restarted round.
+
+## Local DAG declarations and retained evidence
+
+Every `run_graph` node declares `resources`; `[]` asserts independent effects.
+Plain resource keys conflict by equality. Path-shaped keys and `path:NAME` use
+lexically normalized paths relative to the workspace, with parent/child overlap
+checks. Conflicting nodes must be explicitly ordered. Declared shared workspace
+outputs must fall within the registered Step's `write_paths`; ordinary artifacts
+remain private to the node directory. Declarations are advisory coordination,
+not a filesystem sandbox or a guarantee against undeclared shell side effects.
+
+`verified_evidence[].verified_at` records byte verification. The response's legacy
+`observed_at` is an alias of verification time. `execution_started_at` and
+`execution_finished_at` identify the original execution window, including in
+`reused_from` provenance. Verification/reuse does not establish target freshness.
+Reuse from an interrupted graph requires a successful, verified dependency
+subgraph independent of all pending/running nodes and their declared resources.
+Source locks, definition/input identity and artifact checks still apply; uncertain
+effects, unfinished outputs and recursive reuse are not accepted.
+
 ## RPC and serialization
 
 Graph RPC is limited to 128 KiB; pages reserve 1 KiB for the envelope. Requests

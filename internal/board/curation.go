@@ -25,9 +25,10 @@ type CurateGroup struct {
 }
 
 type CuratePayload struct {
-	ThroughRevision int64            `json:"through_revision"`
-	Groups          []CurateGroup    `json:"groups"`
-	Relations       []CurateRelation `json:"relations,omitempty"`
+	ThroughRevision int64                        `json:"through_revision"`
+	Groups          []CurateGroup                `json:"groups"`
+	Relations       []CurateRelation             `json:"relations,omitempty"`
+	RequestReview   *model.CurationRequestReview `json:"request_review,omitempty"`
 }
 
 const MaxCurationRelations = model.MaxCurationRelations
@@ -71,6 +72,11 @@ func (t *Tx) addCandidate(s State, d *stateData, fence ExecutionFence, raw json.
 	}
 	if !required(input.Claim, 16384) || !required(input.Scope, 4096) || !slices.Contains([]string{"candidate", "verified", "refuted"}, input.Status) || !required(input.Reason, 8192) {
 		return "", nil, Err(422, "candidate requires claim,scope,reason and an optional candidate/verified/refuted status")
+	}
+	for _, step := range s.Steps {
+		if step.ID == fence.Intent && step.Assessment != nil && model.FindingIdentity(input.Claim, input.Scope) != model.FindingIdentity(step.Assessment.Claim, step.Assessment.Scope) {
+			return "", nil, Err(422, "candidate claim and scope must match the assigned Step assessment; express the judgment using status")
+		}
 	}
 	if input.Supersedes != "" {
 		found := false
@@ -133,6 +139,10 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 	}
 	if revision != input.ThroughRevision {
 		return "", nil, Err(409, "curation boundary does not match its registered input")
+	}
+	review, err := validateCurationRequestReview(s, input.RequestReview)
+	if err != nil {
+		return "", nil, err
 	}
 	result := CurateResult{Findings: []Finding{}, Disputes: []Dispute{}}
 	touchedFindings, touchedDisputes := map[string]bool{}, map[string]bool{}
@@ -417,9 +427,11 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 	if remaining && !progressed {
 		return "", nil, Err(409, "curation must cover at least one pending reconciliation group")
 	}
-	progress := CurationProgress{Generation: s.Graph.Project.Generation, ThroughRevision: input.ThroughRevision, RunID: fence.Run, UpdatedAt: t.Now}
+	progress := CurationProgress{Generation: s.Graph.Project.Generation, ThroughRevision: input.ThroughRevision, RunID: fence.Run, UpdatedAt: t.Now, RequestReview: review}
 	if remaining {
 		progress.ThroughRevision, progress.Request = d.Curation.ThroughRevision, d.Curation.Request
+	} else if review != nil && review.Disposition == "needs_review" {
+		progress.Request = d.Curation.Request
 	}
 	d.Curation = progress
 	result.Curation = d.Curation

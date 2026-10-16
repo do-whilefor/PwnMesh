@@ -10,6 +10,12 @@ import (
 )
 
 func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runErr error) {
+	started := time.Now()
+	defer func() {
+		if attrs := controlOutcomeAttrs(t, outcome, runErr, started, time.Now()); attrs != nil {
+			slog.LogAttrs(context.Background(), slog.LevelInfo, "control task finished", attrs...)
+		}
+	}()
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
 	leaseCtx, stopLease := context.WithCancel(ctx)

@@ -178,14 +178,15 @@ func TestPartialCurationRetainsRequestAndRejectsNonprogressingBatch(t *testing.T
 	f.action(f.planner, "curation_request", "request", map[string]any{"sources": []string{fact}, "reason": "Review both pending groups before accepting the observations"}, "")
 	e, input := capacityCurator(f, "partial-request")
 	group := CurateGroup{GroupKey: model.FindingIdentity("Capacity claim 0", "fixture"), Status: "candidate", Reason: "Retain the complete first group"}
-	f.curate(e, input, group)
+	review := &CurationRequestReview{Disposition: "no_change", CheckedSources: []string{fact}, Reason: "Retain the original observation; reconcile the pending interpretations separately"}
+	f.action(e.Fence(), "curate", e.ID+":curate", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{group}, RequestReview: review}, DecisionStateVersion(input))
 	partial := f.state()
 	if partial.PendingCurationRequest() == nil || partial.Curation.ThroughRevision != input.Curation.ThroughRevision {
 		t.Fatal("partial curation acknowledged the complete request")
 	}
 	e, input = capacityCurator(f, "remaining-request")
 	for _, groups := range [][]CurateGroup{{}, {group}, {{GroupKey: group.GroupKey, CandidateIDs: []string{"capacity_0_0"}, Status: "candidate", Reason: "Ambiguous selector"}}} {
-		raw, _ := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: groups})
+		raw, _ := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: groups, RequestReview: review})
 		err := f.store.Do(context.Background(), func(tx *Tx) error {
 			_, err := tx.StateAction("p", e.Fence(), StateAction{Op: "curate", IdempotencyKey: "no-progress", Payload: raw, ExpectedVersion: DecisionStateVersion(input)})
 			return err
@@ -194,7 +195,7 @@ func TestPartialCurationRetainsRequestAndRejectsNonprogressingBatch(t *testing.T
 			t.Fatal("accepted an ambiguous or nonprogressing partial batch")
 		}
 	}
-	f.curate(e, input, CurateGroup{GroupKey: model.FindingIdentity("Capacity claim 1", "fixture"), Status: "candidate", Reason: "Finish the remaining group"})
+	f.action(e.Fence(), "curate", e.ID+":curate", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{{GroupKey: model.FindingIdentity("Capacity claim 1", "fixture"), Status: "candidate", Reason: "Finish the remaining group"}}, RequestReview: review}, DecisionStateVersion(input))
 	if final := f.state(); final.PendingCurationRequest() != nil || len(final.PendingCurationCandidateIDs()) != 0 {
 		t.Fatal("the final batch did not acknowledge the complete request")
 	}

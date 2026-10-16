@@ -15,7 +15,11 @@ type Scope struct {
 	RunID     string
 	RunDir    string
 	Workspace string
-	Identity  func(runDir string) (json.RawMessage, error)
+	// WritePaths is the bound Step's advisory shared-output contract. It never
+	// authorizes or sandboxes arbitrary shell operations.
+	WritePaths        []string
+	SharedWritesBound bool
+	Identity          func(runDir string) (json.RawMessage, error)
 }
 
 func (s Scope) identity(runDir string) (json.RawMessage, error) {

@@ -56,12 +56,15 @@ type Output struct {
 }
 
 type Evidence struct {
-	NodeID          string `json:"node_id"`
-	Path            string `json:"path"`
-	SHA256          string `json:"sha256"`
-	PreviewComplete bool   `json:"preview_complete"`
-	StartLine       int    `json:"start_line,omitempty"`
-	EndLine         int    `json:"end_line,omitempty"`
+	NodeID              string `json:"node_id"`
+	Path                string `json:"path"`
+	SHA256              string `json:"sha256"`
+	PreviewComplete     bool   `json:"preview_complete"`
+	StartLine           int    `json:"start_line,omitempty"`
+	EndLine             int    `json:"end_line,omitempty"`
+	VerifiedAt          string `json:"verified_at,omitempty"`
+	ExecutionStartedAt  string `json:"execution_started_at,omitempty"`
+	ExecutionFinishedAt string `json:"execution_finished_at,omitempty"`
 }
 
 func validateCommandGraph(spec *Spec) error {
@@ -110,7 +113,7 @@ func validateCommandGraph(spec *Spec) error {
 			return fmt.Errorf("%s node timeout must be 1..%d seconds", n.Kind, limit)
 		}
 		for _, resource := range n.Resources {
-			if strings.TrimSpace(resource) == "" || len(resource) > 128 {
+			if strings.TrimSpace(resource) == "" || resource == "path:" || len(resource) > 128 {
 				return errors.New("invalid shared resource key")
 			}
 		}
@@ -186,10 +189,8 @@ func validateCommandGraph(spec *Spec) error {
 			if ancestors[a.ID][b.ID] || ancestors[b.ID][a.ID] {
 				continue
 			}
-			for _, resource := range a.Resources {
-				if slices.Contains(b.Resources, resource) {
-					return fmt.Errorf("shared resource %q requires ordered nodes %s and %s", resource, a.ID, b.ID)
-				}
+			if resourcesConflict(a.Resources, b.Resources, "") {
+				return fmt.Errorf("shared resource requires ordered nodes %s and %s", a.ID, b.ID)
 			}
 		}
 	}

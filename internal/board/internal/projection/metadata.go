@@ -22,6 +22,7 @@ type Metadata struct {
 // Persist only abandonment; other statuses are projected from the authoritative
 // Intent and execution records.
 type StepMetadata struct {
+	Assessment *model.Assessment   `json:"assessment,omitempty"`
 	Repair     *artifactcheck.Spec `json:"repair,omitempty"`
 	ID         string              `json:"id"`
 	GoalID     string              `json:"goal_id"`

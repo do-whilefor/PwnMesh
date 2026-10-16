@@ -189,7 +189,15 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if err != nil {
 		return StateActionResult{}, err
 	}
-	current, err := t.State(project)
+	var current State
+	if action.Op == "fact" || action.Op == "candidate" {
+		// These append paths already updated this call's graph and metadata.
+		// Reload execution/assets for projection, without reading and decoding
+		// the same graph and metadata again. Other mutations retain readback.
+		current, err = t.projectState(s.Graph, d, s.Revision, s.DecisionRevision)
+	} else {
+		current, err = t.State(project)
+	}
 	if err != nil {
 		return StateActionResult{}, err
 	}
@@ -228,11 +236,12 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 
 func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json.RawMessage) (string, any, error) {
 	var input struct {
-		Description string        `json:"description"`
-		Scope       string        `json:"scope"`
-		ObservedAt  string        `json:"observed_at"`
-		Evidence    []EvidenceRef `json:"evidence"`
-		Assets      []AssetSpec   `json:"assets"`
+		Description string          `json:"description"`
+		Scope       string          `json:"scope"`
+		ObservedAt  string          `json:"observed_at"`
+		Evidence    []EvidenceRef   `json:"evidence"`
+		Assets      []AssetSpec     `json:"assets"`
+		DerivedFrom json.RawMessage `json:"derived_from"`
 	}
 	if err := decodeAction(raw, &input); err != nil {
 		return "", nil, err
@@ -251,6 +260,18 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 	if err = validateEvidence(input.Evidence, fence.Run, nil, true); err != nil {
 		return "", nil, err
 	}
+	derivedFrom, err := model.ParseFactDerivation(input.DerivedFrom)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(derivedFrom) > 0 {
+		if s.Graph.Project.OrchestrationVersion != 1 {
+			return "", nil, Err(422, "derived_from requires orchestration version 1")
+		}
+		if err = s.ValidateFactSources(derivedFrom, true); err != nil {
+			return "", nil, err
+		}
+	}
 	assets, err := normalizeActionAssets(input.Assets)
 	if err != nil {
 		return "", nil, err
@@ -259,7 +280,7 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 	if err != nil {
 		return "", nil, err
 	}
-	f := FactRecord{ID: id, Description: strings.TrimSpace(input.Description), Scope: strings.TrimSpace(input.Scope), ObservedAt: observed.UTC().Format(time.RFC3339Nano), Evidence: input.Evidence, Status: "valid", RunID: fence.Run, SourceStepID: fence.Intent}
+	f := FactRecord{ID: id, Description: strings.TrimSpace(input.Description), Scope: strings.TrimSpace(input.Scope), ObservedAt: observed.UTC().Format(time.RFC3339Nano), Evidence: input.Evidence, Status: "valid", RunID: fence.Run, SourceStepID: fence.Intent, DerivedFrom: derivedFrom}
 	// The duplicated base fields are required by rollback readers. Accept a
 	// new record only when its immutable SQL Fact was inserted from this same
 	// value; a stale allocation counter must not create two observations for
@@ -508,6 +529,7 @@ func (t *Tx) changeGoal(s State, d *stateData, raw json.RawMessage) (string, any
 
 func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.RawMessage) (string, any, bool, error) {
 	var input struct {
+		Assessment  *model.Assessment   `json:"assessment"`
 		Action      string              `json:"action"`
 		ID          string              `json:"id"`
 		GoalID      string              `json:"goal_id"`
@@ -529,6 +551,13 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		return "", nil, false, Err(422, "step priority must be between 0 and 1000000")
 	}
 	if input.Action == "add" {
+		if input.Assessment != nil {
+			if !required(input.Assessment.Claim, 16384) || !required(input.Assessment.Scope, 4096) {
+				return "", nil, false, Err(422, "assessment requires a canonical claim and scope")
+			}
+			input.Assessment.Claim = strings.Join(strings.Fields(input.Assessment.Claim), " ")
+			input.Assessment.Scope = strings.TrimSpace(input.Assessment.Scope)
+		}
 		assets, err := normalizeActionAssets(input.Assets)
 		if err != nil {
 			return "", nil, false, err
@@ -570,6 +599,9 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 			}
 		}
 		if existing, ok := matchingRepairStep(*s, input.GoalID, input.From, input.Description, input.DependsOn, input.Repair, writePaths, assetIDs(assets)); ok {
+			if (existing.Assessment == nil) != (input.Assessment == nil) || existing.Assessment != nil && *existing.Assessment != *input.Assessment {
+				return "", nil, false, Err(409, "matching task has a different assessment contract; describe the new check explicitly")
+			}
 			if existing.DisputeID != input.DisputeID {
 				return "", nil, false, Err(409, "matching task has a different dispute binding")
 			}
@@ -583,6 +615,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 			return "", nil, false, err
 		}
 		step := Step{ID: id, From: input.From, GoalID: input.GoalID, Description: strings.TrimSpace(input.Description), Status: "open", Priority: input.Priority, CreatedAt: t.Now, DisputeID: input.DisputeID, DependsOn: append([]string(nil), input.DependsOn...), WritePaths: writePaths, Repair: input.Repair}
+		step.Assessment = input.Assessment
 		if input.DisputeID != "" {
 			for n := range d.Disputes {
 				if d.Disputes[n].ID == input.DisputeID {
@@ -600,6 +633,9 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 			err = t.addAssetAnchors(s.Graph.Project.ID, s.Graph.Project.Generation, "step", id, assets)
 		}
 		return id, step, true, err
+	}
+	if input.Assessment != nil {
+		return "", nil, false, Err(422, "assessment is an immutable step add contract")
 	}
 	if input.Assets != nil {
 		return "", nil, false, Err(422, "assets is an immutable step add contract")

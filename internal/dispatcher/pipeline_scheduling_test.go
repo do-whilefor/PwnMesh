@@ -367,6 +367,9 @@ func TestExplicitCurationRequestPausesWorkUntilAcknowledgedOrTerminal(t *testing
 			if (state.PendingCurationRequest() != nil) != reject {
 				t.Fatal("only successful curation may acknowledge the original request")
 			}
+			if !reject && (state.Curation.RequestReview == nil || state.Curation.RequestReview.Disposition != "no_change" || len(state.Curation.RequestReview.CheckedSources) != 1) {
+				t.Fatal("successful explicit reconciliation did not review the retained observation")
+			}
 			if ok, err := s.dispatch(ctx, graph.Project.ID); !ok || err != nil {
 				t.Fatalf("acknowledged correction held ready work: %v %v", ok, err)
 			}

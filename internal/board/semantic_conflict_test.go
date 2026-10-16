@@ -42,6 +42,7 @@ func TestDifferentlyWordedConflictBlocksDependentAcceptance(t *testing.T) {
 	}
 	curator, input := f.curator("compare-evidence")
 	f.action(curator.Fence(), "curate", "invalidate-unsupported-account", CuratePayload{
+		RequestReview: &CurationRequestReview{Disposition: "resolved", CheckedSources: []string{fa, fb}, Reason: "Compared authentication scope in both original responses"},
 		ThroughRevision: input.Revision, Groups: []CurateGroup{},
 		Relations: []CurateRelation{{Kind: "refutes", Source: fb, Target: fa, Reason: "The retained anonymous response contradicts the claimed authentication requirement for this exact endpoint and window"}},
 	}, DecisionStateVersion(input))

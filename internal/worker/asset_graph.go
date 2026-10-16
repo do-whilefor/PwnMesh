@@ -19,6 +19,7 @@ func assetFinishSchema(raw json.RawMessage) json.RawMessage {
 	}
 	fact := schema["properties"].(map[string]any)["fact"].(map[string]any)
 	fact["properties"].(map[string]any)["assets"] = assetInputSchema()
+	fact["properties"].(map[string]any)["derived_from"] = factDerivationSchema()
 	result, err := json.Marshal(schema)
 	if err != nil {
 		panic(err)

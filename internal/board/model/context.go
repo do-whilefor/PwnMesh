@@ -275,7 +275,7 @@ func contextView(state State, stepID string, maxBytes int, curate bool) (json.Ra
 		}
 	}
 	// Bring correction sources near the evidence they supersede/refute.
-	decisionRelationClosure(state.FactRelations, relevant)
+	factSupportClosure(state.FactRecords, state.FactRelations, relevant)
 	facts := append([]FactRecord{}, state.FactRecords...)
 	sort.SliceStable(facts, func(i, j int) bool {
 		a, b := facts[i], facts[j]
@@ -492,7 +492,7 @@ func BuildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		if addSections([]ContextOverviewSection{
 			{Section: "assets", Total: len(state.Assets), Omitted: len(state.Assets), Limit: 20, Items: []ContextOverviewNode{}},
 			{Section: "anchors", Total: len(state.AssetAnchors), Omitted: len(state.AssetAnchors), Limit: 20, Items: []ContextOverviewNode{}},
-		}, " Read assets/anchors or filter read_graph by asset_ids to discover related work; an asset association is not evidence or test coverage.") {
+		}, " Read assets/anchors or filter read_graph by asset_ids to discover related work; discovery_step_id marks a producing Step's target, not an observed association. asset_neighborhood includes syntax-defined parents/children. Associations are not evidence or test coverage.") {
 			assetSection = index
 		}
 	}
@@ -562,7 +562,7 @@ func BuildContextOverview(state State, maxBytes int, curationCandidates map[stri
 		if corrected[fact.ID] {
 			priority = 1
 		}
-		add(2, priority, i, ContextOverviewNode{ID: fact.ID, Status: fact.Status, SupportInvalid: fact.SupportInvalid}, fact.Description, nil)
+		add(2, priority, i, ContextOverviewNode{ID: fact.ID, Status: fact.Status, SupportInvalid: fact.SupportInvalid}, fact.Description, fact.DerivedFrom)
 	}
 	for i, finding := range state.Findings {
 		priority := 3

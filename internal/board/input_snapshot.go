@@ -125,7 +125,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 		return SchedulePage{}, Err(422, "invalid scheduling offset")
 	}
 	p := SchedulePage{ProtocolVersion: ScheduleProtocolVersion, Project: s.Graph.Project, FactCount: len(s.Graph.Facts), HintCount: len(s.Graph.Hints), OpenCount: s.Graph.OpenCount(), Revision: s.Revision, DecisionRevision: s.DecisionRevision, StateVersion: version, RetryKey: DecisionRetryKey(s.Graph, s.DecisionRevision)}
-	p.CurationRequested = s.PendingCurationRequest() != nil
+	p.CurationRequested = s.PendingCurationRequest() != nil && !s.CurationRequestNeedsEvidence()
 	if p.CurationNeeded, err = t.curationNeeded(s); err != nil {
 		return SchedulePage{}, err
 	}

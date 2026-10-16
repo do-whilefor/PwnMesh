@@ -19,8 +19,8 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 		kind   string
 		fields string
 	}{
-		{"reason", "action assets condition depends_on description dispute_id from goal_id id latest_run_id parent_id priority reason repair sources write_paths"},
-		{"explore", "assets claim description evidence observed_at reason scope sources status supersedes"},
+		{"reason", "action assessment assets condition depends_on description dispute_id from goal_id id latest_run_id parent_id priority reason repair sources write_paths"},
+		{"explore", "assets claim derived_from description evidence observed_at reason scope sources status supersedes"},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			opts := Options{Tools: []agent.Tool{}}
@@ -46,11 +46,11 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 				fields = append(fields, name)
 				want := "string"
 				switch name {
-				case "from", "sources", "evidence", "depends_on", "write_paths", "assets":
+				case "from", "sources", "evidence", "depends_on", "write_paths", "assets", "derived_from":
 					want = "array"
 				case "priority":
 					want = "integer"
-				case "repair":
+				case "repair", "assessment":
 					want = "object"
 				}
 				if field.Type != want {
@@ -89,6 +89,7 @@ func TestGraphActionSchemaPreservesOperationPayloads(t *testing.T) {
 		{"reason", "goal", `{"action":"achieve","id":"g001","reason":"Verified","sources":["fact001"]}`},
 		{"reason", "goal", `{"action":"withdraw","id":"g001","reason":"No longer needed"}`},
 		{"reason", "step", `{"action":"add","from":["origin"],"description":"Inspect","goal_id":"g001","priority":1000000}`},
+		{"reason", "step", `{"action":"add","from":["origin"],"description":"Check access","assessment":{"claim":"Anonymous access succeeds","scope":"GET /record"}}`},
 		{"reason", "step", `{"action":"add","from":["origin"],"description":"Write report","write_paths":["/workspace/report.json"],"depends_on":["i001"]}`},
 		{"reason", "step", `{"action":"abandon","id":"i001","reason":"Covered"}`},
 		{"reason", "step", `{"action":"priority","id":"i001","reason":"First","priority":0}`},

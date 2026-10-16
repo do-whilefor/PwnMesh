@@ -67,11 +67,12 @@ func (d *decisionDraft) observeGraphRead(section, raw string) {
 
 func graphReadArguments(raw json.RawMessage, op string) (GraphRequest, error) {
 	var input struct {
-		Section  string   `json:"section"`
-		IDs      []string `json:"ids"`
-		AssetIDs []string `json:"asset_ids"`
-		Offset   int      `json:"offset"`
-		Limit    int      `json:"limit"`
+		Section           string   `json:"section"`
+		IDs               []string `json:"ids"`
+		AssetIDs          []string `json:"asset_ids"`
+		AssetNeighborhood bool     `json:"asset_neighborhood"`
+		Offset            int      `json:"offset"`
+		Limit             int      `json:"limit"`
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -81,7 +82,7 @@ func graphReadArguments(raw json.RawMessage, op string) (GraphRequest, error) {
 	if decoder.Decode(new(any)) != io.EOF {
 		return GraphRequest{}, errors.New("graph read requires one JSON object")
 	}
-	return GraphRequest{Op: op, Section: input.Section, IDs: input.IDs, AssetIDs: input.AssetIDs, Offset: input.Offset, Limit: input.Limit}, nil
+	return GraphRequest{Op: op, Section: input.Section, IDs: input.IDs, AssetIDs: input.AssetIDs, AssetNeighborhood: input.AssetNeighborhood, Offset: input.Offset, Limit: input.Limit}, nil
 }
 
 // Read transport pages under one state fence. The caller records only the

@@ -132,7 +132,6 @@ func TestCommandGraphReusePreflightRejectsChangesBeforeAnyExecution(t *testing.T
 		}},
 		{"unresolved", func(_ *testing.T, _ string, c *workergraph.Checkpoint) { c.Nodes[0].Status = "running" }},
 		{"pending", func(_ *testing.T, _ string, c *workergraph.Checkpoint) { c.Nodes[0].Status = "pending" }},
-		{"interrupted", func(_ *testing.T, _ string, c *workergraph.Checkpoint) { c.Status = "interrupted" }},
 		{"artifact-list", func(_ *testing.T, _ string, c *workergraph.Checkpoint) {
 			c.Nodes[0].Output.Artifacts = c.Nodes[0].Output.Artifacts[:1]
 		}},
@@ -249,6 +248,32 @@ func TestCommandGraphReuseRejectsRecursiveImportsAndChangedProvenance(t *testing
 	output.Value, _ = json.Marshal(value)
 	if err := imported.Verify(context.Background(), output); err == nil {
 		t.Fatal("changed provenance accepted")
+	}
+	output = imported.Output()
+	if err := json.Unmarshal(output.Value, &value); err != nil {
+		t.Fatal(err)
+	}
+	value.ReusedFrom.ExecutionFinishedAt = "2000-01-01T00:00:00Z"
+	output.Value, _ = json.Marshal(value)
+	if err := imported.Verify(context.Background(), output); err == nil {
+		t.Fatal("changed original execution time accepted")
+	}
+	output = imported.Output()
+	if err := json.Unmarshal(output.Value, &value); err != nil {
+		t.Fatal(err)
+	}
+	value.ReusedFrom.ExecutionStartedAt, value.ReusedFrom.ExecutionFinishedAt = "", ""
+	output.Value, _ = json.Marshal(value)
+	before := bytes.Clone(output.Value)
+	if err := imported.Verify(context.Background(), output); err != nil {
+		t.Fatalf("legacy receipt without optional timestamps rejected: %v", err)
+	}
+	if !bytes.Equal(output.Value, before) {
+		t.Fatal("legacy verification rewrote durable output")
+	}
+	output.Value = append(bytes.Clone(before[:len(before)-1]), []byte(`,"unbound":"ignored"}`)...)
+	if err := imported.Verify(context.Background(), output); err == nil {
+		t.Fatal("legacy timestamp compatibility discarded unbound output fields")
 	}
 }
 

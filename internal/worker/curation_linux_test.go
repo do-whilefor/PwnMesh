@@ -27,6 +27,33 @@ func curationJob(t *testing.T) Job {
 	return j
 }
 
+func TestCuratorPreservesExplicitRequestReview(t *testing.T) {
+	j := curationJob(t)
+	j.State.Curation.Request = &board.CurationRequest{Sources: []string{"fact_a"}, Reason: "Inspect original response", Revision: 7}
+	var submitted board.CuratePayload
+	opts := Options{RunDir: t.TempDir()}
+	opts.Output = &draftTestBridge{dir: opts.RunDir, handle: func(request GraphRequest) (any, error) {
+		if err := json.Unmarshal(request.Action.Payload, &submitted); err != nil {
+			return nil, err
+		}
+		return board.StateActionResult{Committed: true, StateVersion: board.DecisionStateVersion(*j.State)}, nil
+	}}
+	if err := ConfigureRuntimeTools(j, &opts); err != nil {
+		t.Fatal(err)
+	}
+	raw := json.RawMessage(`{"op":"curate","payload":{"groups":[],"request_review":{"disposition":"needs_review","checked_sources":["fact_a"],"reason":"An independent observation is still needed"}}}`)
+	action := snapshotRuntimeTool(t, opts, "graph_action")
+	if err := agent.ValidateArguments(action.Schema, raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := action.Execute(context.Background(), raw); err != nil {
+		t.Fatal(err)
+	}
+	if submitted.ThroughRevision != 7 || submitted.RequestReview == nil || submitted.RequestReview.Disposition != "needs_review" || len(submitted.RequestReview.CheckedSources) != 1 || submitted.RequestReview.CheckedSources[0] != "fact_a" || submitted.RequestReview.Reason != "An independent observation is still needed" {
+		t.Fatalf("runtime dropped or changed the request review: %+v", submitted)
+	}
+}
+
 func TestCuratorRejectsMixedOrMismatchedInput(t *testing.T) {
 	for name, mutate := range map[string]func(*Job){
 		"legacy":    func(j *Job) { j.Graph.Project.OrchestrationVersion = 0 },

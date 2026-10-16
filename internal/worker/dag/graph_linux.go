@@ -29,6 +29,9 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(co
 	if err := validateCommandGraph(&spec); err != nil {
 		return "", err
 	}
+	if err := validateSharedResources(scope, spec); err != nil {
+		return "", err
+	}
 	identity, err := scope.identity(scope.RunDir)
 	if err != nil {
 		return "", err
@@ -144,13 +147,14 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(co
 		ElapsedMS      float64           `json:"elapsed_ms"`
 		Nodes          []NodeView        `json:"nodes"`
 		ObservedAt     string            `json:"observed_at"`
+		VerifiedAt     string            `json:"verified_at"`
 		Verification   string            `json:"verification"`
 		Evidence       []Evidence        `json:"verified_evidence"`
 		EvidenceErrors map[string]string `json:"evidence_errors,omitempty"`
 		Error          string            `json:"error,omitempty"`
 	}{Key: spec.Key, Status: checkpoint.Status, ElapsedMS: float64(time.Since(started)) / float64(time.Millisecond), Nodes: commandGraphViews(checkpoint.Nodes),
 		ObservedAt:   time.Now().UTC().Format(time.RFC3339Nano),
-		Verification: "Only verified_evidence entries passed final regular-file, no-symlink, full-file SHA-256 and stdout-preview checks after successful node execution. Node statuses describe execution history; evidence_errors identify outputs that changed or became unreadable before handoff. This verifies retained bytes, not task meaning or Step acceptance.",
+		Verification: "verified_at (legacy observed_at) is retained-byte verification time, never re-observation of the target. execution_started_at/execution_finished_at retain the original execution window, including reuse. Only verified_evidence passed final regular-file, no-symlink, full-file SHA-256 and stdout-preview checks. Node statuses describe execution history; evidence_errors identify changed or unreadable outputs. This verifies bytes, not task meaning or Step acceptance.",
 		Evidence:     []Evidence{}, EvidenceErrors: map[string]string{}}
 	for _, node := range checkpoint.Nodes {
 		if runErr != nil {
@@ -180,7 +184,13 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(co
 			response.EvidenceErrors[node.ID] = "stdout changed after node verification"
 			continue
 		}
-		ref := Evidence{NodeID: node.ID, Path: artifact.Path, SHA256: artifact.SHA256}
+		original := node
+		if reused := reuses[node.ID]; reused != nil {
+			original = reused.SourceNode
+		}
+		ref := Evidence{NodeID: node.ID, Path: artifact.Path, SHA256: artifact.SHA256,
+			VerifiedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+			ExecutionStartedAt: original.StartedAt.UTC().Format(time.RFC3339Nano), ExecutionFinishedAt: original.FinishedAt.UTC().Format(time.RFC3339Nano)}
 		// Completeness and hashing come from the same streaming read. A large
 		// unchanged file remains verified, but needs an explicit excerpt.
 		if preview.Complete {
@@ -196,6 +206,8 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(co
 	if runErr != nil {
 		response.Error = runErr.Error()
 	}
+	response.VerifiedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	response.ObservedAt = response.VerifiedAt // Keep the legacy name as an explicit alias.
 	encoded, err := json.Marshal(response)
 	return string(encoded), errors.Join(runErr, err)
 }

@@ -22,6 +22,7 @@ type stepMetadata = projection.StepMetadata
 
 func stepMetadataFrom(step Step) stepMetadata {
 	metadata := stepMetadata{ID: step.ID, GoalID: step.GoalID, Priority: step.Priority, Reason: step.Reason, DisputeID: step.DisputeID, DependsOn: append([]string(nil), step.DependsOn...), WritePaths: append([]string(nil), step.WritePaths...), Repair: step.Repair}
+	metadata.Assessment = step.Assessment
 	if step.Status == "abandoned" {
 		metadata.Status = "abandoned"
 	}

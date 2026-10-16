@@ -62,7 +62,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 	if fact == nil {
 		return Conclusion{}, Err(404, "conclusion fact does not exist")
 	}
-	if fact.Legacy || fact.Status != "valid" || fact.SourceStepID != fence.Intent || len(fact.Evidence) == 0 {
+	if fact.Legacy || fact.Status != "valid" || fact.SupportInvalid || fact.SourceStepID != fence.Intent || len(fact.Evidence) == 0 {
 		return Conclusion{}, Err(409, "conclusion requires an effective evidence-backed observation from this Step")
 	}
 	if s.Graph.Project.OrchestrationVersion == 1 && !runMatches(fence.Run, fact.RunID) {

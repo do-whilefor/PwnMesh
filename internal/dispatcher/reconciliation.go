@@ -140,7 +140,9 @@ func (s *Scheduler) reap() {
 				}
 				s.decisionRevisions[g.Project.ID] = f.Task.Job.DecisionRevision
 			}
-			slog.Info("task finished", "project", f.Task.Job.Graph.Project.ID, "run", f.Task.Job.RunID, "task", f.Task.Job.Kind, "outcome", f.Outcome, "error", f.Err)
+			if f.Task.Job.Kind != "reason" && f.Task.Job.Kind != "curate" {
+				slog.Info("task finished", "project", f.Task.Job.Graph.Project.ID, "run", f.Task.Job.RunID, "task", f.Task.Job.Kind, "outcome", f.Outcome, "error", f.Err)
+			}
 		default:
 			goto cleanup
 		}

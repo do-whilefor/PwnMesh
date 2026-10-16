@@ -14,11 +14,12 @@ func graphReadSchema() json.RawMessage {
 	sections := []string{"overview", "facts", "goals", "steps", "findings", "relations", "hints", "evidence", "sources", "candidates", "disputes", "assets", "anchors", "history"}
 	raw, _ := json.Marshal(map[string]any{
 		"type": "object", "properties": map[string]any{
-			"section":   map[string]any{"type": "string", "description": "Record sections support listing. evidence and sources require exactly one ID to select its support.", "enum": sections},
-			"ids":       map[string]any{"type": "array", "description": "Exactly one owning record ID is required for evidence or sources. Evidence accepts Fact/Finding/Candidate IDs; sources accepts Finding/Candidate IDs. Other sections may omit IDs to list records.", "items": map[string]any{"type": "string"}, "maxItems": 50, "uniqueItems": true},
-			"asset_ids": map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "maxItems": 32, "uniqueItems": true, "description": "Match any of these assets in assets/anchors/facts/steps/findings/candidates/history. Combine with ids to narrow records; preserve filters while paging."},
-			"offset":    map[string]any{"type": "integer", "minimum": 0},
-			"limit":     map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
+			"section":            map[string]any{"type": "string", "description": "Record sections support listing. evidence and sources require exactly one ID to select its support.", "enum": sections},
+			"ids":                map[string]any{"type": "array", "description": "Exactly one owning record ID (Fact, Finding or Candidate) is required for evidence or sources. Fact sources returns derived_from. Other sections may omit IDs to list records.", "items": map[string]any{"type": "string"}, "maxItems": 50, "uniqueItems": true},
+			"asset_ids":          map[string]any{"type": "array", "items": map[string]any{"type": "string", "minLength": 1, "maxLength": 256}, "maxItems": 32, "uniqueItems": true, "description": "Match any of these assets in assets/anchors/facts/steps/findings/candidates/history. Combine with ids to narrow records; preserve filters while paging."},
+			"asset_neighborhood": map[string]any{"type": "boolean", "description": "Optional with asset_ids: include existing syntax-defined host/service/endpoint ancestors and descendants, never siblings or DNS aliases. Read anchors for discovery_step_id provenance; association is not evidence."},
+			"offset":             map[string]any{"type": "integer", "minimum": 0},
+			"limit":              map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
 		}, "required": []string{"section"}, "additionalProperties": false,
 	})
 	return raw
@@ -44,6 +45,7 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 		properties["latest_run_id"] = map[string]any{"type": "string", "description": "Required for step retry; copy the target Step's latest_run_id to bind the observed failed attempt."}
 		properties["dispute_id"] = map[string]any{"type": "string", "description": "Assign an independent review Step with a new execution. Include both sides' raw sources and a specific question in description."}
 		properties["repair"] = artifactcheck.Schema()
+		properties["assessment"] = map[string]any{"type": "object", "description": "Optional immutable step add contract. Give coordinated checks the same canonical proposition and scope; producers use that exact claim/scope with verified/refuted/candidate status.", "properties": map[string]any{"claim": text, "scope": text}, "required": []string{"claim", "scope"}, "additionalProperties": false}
 		properties["assets"] = assetInputSchema()
 		properties["depends_on"] = map[string]any{
 			"type": "array", "items": text, "uniqueItems": true,
@@ -54,21 +56,22 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 			"items":       map[string]any{"type": "string", "minLength": 1, "maxLength": 4096},
 			"description": "Optional immutable step add output files or directories under /workspace, outside /workspace/.pwnmesh. Declare shared writes; overlapping scopes run sequentially. repair.path is included automatically.",
 		}
-		properties["sources"] = map[string]any{"type": "array", "items": text, "description": "Goal achievement support. For curation_request, provide 1-32 unique published, effective observation Fact IDs; never origin, goal or draft aliases. The server validates current support."}
+		properties["sources"] = map[string]any{"type": "array", "items": text, "description": "Goal achievement support. For curation_request, provide 1-32 unique published, effective observation Fact IDs; never origin, goal or draft aliases. Reopening needs_review must retain its original source IDs, even if invalidated; additional sources must be effective."}
 		properties["reason"] = map[string]any{"type": "string", "description": "Explain the action. For curation_request, state the concrete evidence conflict or merge requiring Curate; its payload uses only sources and reason."}
 		return map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
 	}
 	if kind != "curate" {
 		return map[string]any{"type": "object", "properties": map[string]any{
-			"assets":      assetInputSchema(),
-			"description": text,
-			"reason":      text,
-			"sources":     map[string]any{"type": "array", "items": text},
-			"scope":       map[string]any{"type": "string", "description": factScopeDescription},
-			"observed_at": map[string]any{"type": "string", "format": "date-time"},
-			"claim":       text,
-			"status":      map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}, "description": "Optional producer judgment; omitted means a tentative candidate, never a shared conclusion."},
-			"supersedes":  map[string]any{"type": "string", "description": "Optional active Candidate ID from this run with the same claim and scope. Supply current support; earlier evidence, reasoning and judgment remain in history."},
+			"assets":       assetInputSchema(),
+			"description":  text,
+			"reason":       text,
+			"sources":      map[string]any{"type": "array", "items": text},
+			"scope":        map[string]any{"type": "string", "description": factScopeDescription},
+			"observed_at":  map[string]any{"type": "string", "format": "date-time"},
+			"derived_from": factDerivationSchema(),
+			"claim":        text,
+			"status":       map[string]any{"type": "string", "enum": []string{"candidate", "verified", "refuted"}, "description": "Optional producer judgment; omitted means a tentative candidate, never a shared conclusion."},
+			"supersedes":   map[string]any{"type": "string", "description": "Optional active Candidate ID from this run with the same claim and scope. Supply current support; earlier evidence, reasoning and judgment remain in history."},
 			"evidence": map[string]any{"type": "array", "items": map[string]any{
 				"type": "object", "description": evidenceSelectionDescription, "properties": map[string]any{
 					"path": text,
@@ -82,6 +85,11 @@ func orchestrationPayloadSchema(kind string) map[string]any {
 		}}
 	}
 	return map[string]any{"type": "object", "properties": map[string]any{
+		"request_review": map[string]any{"type": "object", "description": "Required for an unreviewed explicit curation request. Record its outcome and every requested source. An existing needs_review stays blocked until Decide requests a new review; omit this field when processing unrelated groups.", "properties": map[string]any{
+			"disposition":     map[string]any{"type": "string", "enum": []string{"resolved", "no_change", "needs_review"}},
+			"checked_sources": map[string]any{"type": "array", "items": text, "minItems": 1, "maxItems": 32, "uniqueItems": true},
+			"reason":          text,
+		}, "required": []string{"disposition", "checked_sources", "reason"}, "additionalProperties": false},
 		"relations": map[string]any{"type": "array", "maxItems": board.MaxCurationRelations, "items": map[string]any{
 			"type": "object", "properties": map[string]any{
 				"kind":   map[string]any{"type": "string", "enum": []string{"supersedes", "refutes", "narrows"}},

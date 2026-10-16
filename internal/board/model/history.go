@@ -120,6 +120,7 @@ func (s State) History() []HistoryEntry {
 	for cursor := 0; cursor < len(pending); cursor++ {
 		member := pending[cursor]
 		if member.Kind == "fact" {
+			keepFacts(facts[member.ID].DerivedFrom)
 			keep("step", producers[member.ID])
 			// Ambiguous legacy ownership is not inferred for membership, but
 			// none of its possible producers should disappear from hot work.

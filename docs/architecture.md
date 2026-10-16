@@ -49,6 +49,11 @@ receipts in one immediate write transaction. Multiwrite operations use local
 savepoints so handled failures cannot retain partial changes. Server calls Board
 operations and never runs SQL. Store owns commit and rollback.
 
+Fact and Candidate writes reuse the graph and metadata already updated within
+the operation, refreshing execution and asset data before projection. Other
+mutations retain their normal state readback. Short mutation benchmarks show
+lower allocation costs; they do not establish a latency or throughput guarantee.
+
 `Store.View` uses query-only WAL readers for consistent snapshots. Observational
 reads account for lease expiry without clearing authority or reserving the
 writer. Planner reads that pin a view and decision previews still need a writer.
@@ -69,6 +74,39 @@ Empty databases initialize the current schema. Existing databases must have the
 complete schema version `4` and ledger; older or nonempty unversioned databases
 are rejected without an implicit upgrade. See [supported formats](formats.md).
 
+## Blackboard and discovery
+
+The shared Board records authorized Steps, immutable observations and explicit
+support. A Worker's local DAG coordinates execution and retained files; finishing
+a DAG does not publish a shared Fact or complete a Step. Explicit `derived_from`
+edges connect computed observations to their source Facts. Corrections invalidate
+their derived descendants and supported Step results, without invalidating
+independent raw observations merely because they share a producer or asset.
+
+Decide may give coordinated Steps an immutable `assessment` with a canonical
+claim and scope. Their Candidates use that proposition and express agreement or
+disagreement through status. This supports deterministic reconciliation without
+fuzzy claim merging. Free-form Facts remain available.
+
+An explicit curation request requires a committed review of every requested
+source. Curate can resolve it, justify no change, or retain it as `needs_review`.
+A resolved/no-change request clears only after all pending groups are covered;
+partial commits retain its request and scan boundary. `needs_review` still blocks
+completion but permits evidence-gathering Steps and unrelated curation without
+discarding its review. Decide can explicitly request another review while keeping
+all original source identities, including ones later invalidated, and optionally
+adding effective observations. An unrelated request cannot erase the unresolved
+question.
+
+Assets are discovery identities, not evidence, dependencies, permissions or
+coverage. A completed Step's untagged result can be found through its declared
+assets using projected anchors marked with `discovery_step_id`. Explicit Fact
+assets take precedence; this fallback is not stored as an observed association
+or propagated into a Finding's support. Exact asset lookup remains the default.
+Optional neighborhood reads include existing syntax-defined ancestors and
+descendants, without DNS resolution, identity merging or sibling expansion.
+These projections and their provenance are bound to the read snapshot and round.
+
 ## Execution and recovery
 
 Dispatcher recovers registered executions before admitting fresh work. It
@@ -88,7 +126,25 @@ committed transcript. Per-run tools and drafts stay separate from durable state.
 The local DAG executes command and Agent nodes through `workergraph`, retaining
 dependency files and verified artifact receipts. Worker supplies execution
 identity and the Agent callback; DAG does not import Worker or a provider.
+Ordinary outputs stay in run/node directories. Declared path resources are
+compared after lexical normalization, including parent/child overlaps; conflicting
+nodes require dependency ordering. Shared workspace declarations must fit the
+Step's registered `write_paths`. These declarations coordinate cooperating work;
+they do not constrain arbitrary shell access or resolve filesystem aliases.
+
+Reuse checks retained bytes and original execution identity. An interrupted graph
+can supply a verified successful subgraph only when it is independent of every
+unresolved node through dependencies and declared resources. Uncertain effects
+are never replayed. Evidence reports verification time separately from the
+original execution window; reuse does not observe a mutable target again.
 See [recovery](recovery.md) for interruption and retry semantics.
+
+Control writes retain the full state-version comparison and completion checks.
+Concurrent observations can still make a control attempt stale. Structured
+`control task finished` logs report outcome, stale classification, input revision,
+generation, resume count and local attempt wall time without input/error bodies.
+Join existing decision observations by run ID for model metrics. Attempt wall
+time includes startup and cleanup; it is not model time or a billing estimate.
 
 ## Browser
 

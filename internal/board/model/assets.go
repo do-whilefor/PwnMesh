@@ -33,6 +33,34 @@ type AssetAnchor struct {
 	AssetID  string `json:"asset_id"`
 	NodeKind string `json:"node_kind"`
 	NodeID   string `json:"node_id"`
+	// DiscoveryStepID marks a result found through its producing Step's target,
+	// not an observed association or evidence about that target.
+	DiscoveryStepID string `json:"discovery_step_id,omitempty"`
+}
+
+// AssetAncestors returns syntax-defined parent identities without inventing
+// observations, resolving DNS, or merging distinct endpoints. Callers select
+// only parents already present in their bound catalog.
+func AssetAncestors(asset Asset) []string {
+	if asset.Kind != "endpoint" && asset.Kind != "service" {
+		return nil
+	}
+	u, err := url.Parse(asset.Value)
+	if err != nil || u.Host == "" {
+		return nil
+	}
+	host, err := NormalizeAsset(AssetSpec{Kind: "host", Value: u.Hostname()})
+	if err != nil {
+		return nil
+	}
+	ids := []string{host.ID}
+	if asset.Kind == "endpoint" {
+		service, err := NormalizeAsset(AssetSpec{Kind: "service", Value: u.Scheme + "://" + u.Host})
+		if err == nil {
+			ids = append(ids, service.ID)
+		}
+	}
+	return ids
 }
 
 // NormalizeAsset only merges identities whose equivalence is defined by the

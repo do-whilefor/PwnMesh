@@ -41,6 +41,7 @@ type FactRecord struct {
 	SourceStepID   string        `json:"source_step_id,omitempty"`
 	Legacy         bool          `json:"legacy"`
 	SupportInvalid bool          `json:"support_invalid,omitempty"`
+	DerivedFrom    []string      `json:"derived_from,omitempty"`
 }
 type FactRelation struct {
 	Kind      string `json:"kind"`
@@ -60,7 +61,15 @@ type Goal struct {
 	CreatedAt    string   `json:"created_at"`
 	SupportValid bool     `json:"support_valid"`
 }
+
+// Assessment binds coordinated producers to one proposition and observation scope.
+type Assessment struct {
+	Claim string `json:"claim"`
+	Scope string `json:"scope"`
+}
+
 type Step struct {
+	Assessment     *Assessment         `json:"assessment,omitempty"`
 	Repair         *artifactcheck.Spec `json:"repair,omitempty"`
 	ID             string              `json:"id"`
 	From           []string            `json:"from"`

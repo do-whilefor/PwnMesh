@@ -3,6 +3,8 @@ package contract
 import (
 	"encoding/json"
 	"errors"
+
+	"pwnmesh/internal/board/model"
 )
 
 // Version two binds a completed exploration to one evidence-backed result.
@@ -34,10 +36,13 @@ func parseEvidenceResult(raw json.RawMessage) (Result, error) {
 	}
 	for key := range fact {
 		switch key {
-		case "description", "scope", "observed_at", "evidence", "assets":
+		case "description", "scope", "observed_at", "evidence", "assets", "derived_from":
 		default:
 			return Result{}, errors.New("unexpected fact field")
 		}
+	}
+	if _, err := model.ParseFactDerivation(fact["derived_from"]); err != nil {
+		return Result{}, err
 	}
 	if assets, exists := fact["assets"]; exists {
 		var items []map[string]json.RawMessage

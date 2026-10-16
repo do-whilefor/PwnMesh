@@ -176,7 +176,14 @@ func (r *orchestrationLoopRunner) curate(ctx context.Context, job protocol.Job) 
 	if job.State != nil || job.Intent != nil || job.InputSnapshot == nil || len(job.InputView) == 0 {
 		return protocol.Result{}, errors.New("curator lost its frozen snapshot input")
 	}
-	state := &board.State{Revision: job.InputSnapshot.Revision}
+	var view struct {
+		Project  board.Project          `json:"project"`
+		Curation board.CurationProgress `json:"curation"`
+	}
+	if err := json.Unmarshal(job.InputView, &view); err != nil {
+		return protocol.Result{}, err
+	}
+	state := &board.State{Graph: board.Graph{Project: view.Project}, Revision: job.InputSnapshot.Revision, Curation: view.Curation}
 	for _, query := range []struct {
 		section string
 		out     any
@@ -208,7 +215,23 @@ func (r *orchestrationLoopRunner) curate(ctx context.Context, job protocol.Job) 
 		}
 		groups = append(groups, group)
 	}
-	payload, _ := json.Marshal(board.CuratePayload{ThroughRevision: state.Revision, Groups: groups})
+	input := board.CuratePayload{ThroughRevision: state.Revision, Groups: groups}
+	if request := state.PendingCurationRequest(); request != nil {
+		for _, source := range request.Sources {
+			found := false
+			for _, fact := range state.FactRecords {
+				found = found || fact.ID == source
+			}
+			if !found {
+				return protocol.Result{}, fmt.Errorf("curator did not read requested source %s", source)
+			}
+		}
+		input.RequestReview = &board.CurationRequestReview{Disposition: "no_change", CheckedSources: append([]string{}, request.Sources...), Reason: "The requested observations are retained and require no candidate reconciliation changes"}
+		if len(groups) > 0 {
+			input.RequestReview.Disposition, input.RequestReview.Reason = "resolved", "The submitted groups reconcile the requested observations"
+		}
+	}
+	payload, _ := json.Marshal(input)
 	value, err := r.graph(ctx, job, protocol.GraphRequest{Op: "graph_action", Action: board.StateAction{Op: "curate", IdempotencyKey: job.RunID + ":curate", ExpectedVersion: job.InputSnapshot.StateVersion, Payload: payload}})
 	if err != nil {
 		return protocol.Result{}, err

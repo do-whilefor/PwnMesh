@@ -22,8 +22,11 @@ func (s State) completionSources(from []string) map[string]bool {
 	for {
 		before := len(facts) + len(steps) + len(prerequisites)
 		for _, fact := range s.FactRecords {
-			if facts[fact.ID] && fact.SourceStepID != "" {
-				steps[fact.SourceStepID] = true
+			if facts[fact.ID] {
+				add(fact.DerivedFrom)
+				if fact.SourceStepID != "" {
+					steps[fact.SourceStepID] = true
+				}
 			}
 		}
 		for _, step := range s.Steps {

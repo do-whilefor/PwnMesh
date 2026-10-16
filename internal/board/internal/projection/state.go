@@ -72,6 +72,7 @@ func Build(g model.Graph, d Metadata, revision, decision int64, runs []model.Exe
 			step.Status = "completed"
 		}
 		if metadata, ok := metadataByID[i.ID]; ok {
+			step.Assessment = metadata.Assessment
 			step.GoalID, step.Priority, step.Reason = metadata.GoalID, metadata.Priority, metadata.Reason
 			step.DisputeID = metadata.DisputeID
 			step.Repair = metadata.Repair
@@ -115,9 +116,8 @@ func Build(g model.Graph, d Metadata, revision, decision int64, runs []model.Exe
 }
 
 // projectStepSupport derives current support while retaining historical Step
-// success and every original observation. Only a Step's accepted result Fact
-// carries its task prerequisites; other independently retained observations
-// keep their original meaning and can be assessed on their own evidence.
+// success and every original observation. Accepted results carry their Step's
+// prerequisites; other Facts carry only explicitly declared derivations.
 func projectStepSupport(s *model.State, latest map[string]model.ExecutionSummary, currentRuns map[string]bool) {
 	steps := map[string]*model.Step{}
 	facts := map[string]*model.FactRecord{}
@@ -133,17 +133,39 @@ func projectStepSupport(s *model.State, latest map[string]model.ExecutionSummary
 		facts[s.FactRecords[n].ID] = &s.FactRecords[n]
 	}
 	visited, valid := map[string]bool{}, map[string]bool{}
+	derivedVisited, derivedValid := map[string]bool{}, map[string]bool{}
 	var supports func(string) bool
 	var effective func(string, bool) bool
+	var derived func(string) bool
+	derived = func(id string) bool {
+		if derivedVisited[id] {
+			return derivedValid[id]
+		}
+		derivedVisited[id] = true
+		fact := facts[id]
+		if fact == nil {
+			return false
+		}
+		for _, source := range fact.DerivedFrom {
+			if !effective(source, true) {
+				return false
+			}
+		}
+		derivedValid[id] = true
+		return true
+	}
 	effective = func(id string, observation bool) bool {
 		fact := facts[id]
 		if fact == nil || (fact.Status != "valid" && !(id == "origin" && !observation)) {
 			return false
 		}
+		if observation && (fact.Legacy || len(fact.Evidence) == 0) {
+			return false
+		}
 		if owner := owners[id]; owner != "" {
 			return supports(owner)
 		}
-		return true
+		return derived(id)
 	}
 	supports = func(id string) bool {
 		if visited[id] {
@@ -160,6 +182,9 @@ func projectStepSupport(s *model.State, latest map[string]model.ExecutionSummary
 			execution := latest[id]
 			fact := facts[*step.Result]
 			if !currentRuns[id] || execution.Status != "succeeded" || fact == nil || fact.Legacy || fact.Status != "valid" || fact.SourceStepID != id || !runMatches(execution.Lease, fact.RunID) || len(fact.Evidence) == 0 {
+				return false
+			}
+			if !derived(*step.Result) {
 				return false
 			}
 		}
@@ -182,9 +207,9 @@ func projectStepSupport(s *model.State, latest map[string]model.ExecutionSummary
 	for n := range s.Steps {
 		s.Steps[n].SupportValid = supports(s.Steps[n].ID)
 	}
-	for id, owner := range owners {
-		if fact := facts[id]; fact != nil {
-			fact.SupportInvalid = !supports(owner)
+	for id, fact := range facts {
+		if owners[id] != "" || len(fact.DerivedFrom) > 0 {
+			fact.SupportInvalid = !effective(id, true)
 		}
 	}
 	for n := range s.Steps {

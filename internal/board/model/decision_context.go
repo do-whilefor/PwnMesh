@@ -151,7 +151,21 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 	}
 	// First find consumers affected by changed evidence. Do this before adding
 	// support sources: a shared origin must not pull in every historical plan.
-	decisionRelationClosure(current.FactRelations, selectedFacts)
+	for {
+		count := len(selectedFacts)
+		decisionRelationClosure(current.FactRelations, selectedFacts)
+		for _, fact := range current.FactRecords {
+			for _, source := range fact.DerivedFrom {
+				if selectedFacts[source] {
+					selectedFacts[fact.ID] = true
+					break
+				}
+			}
+		}
+		if len(selectedFacts) == count {
+			break
+		}
+	}
 	references := func(ids []string) bool {
 		for _, id := range ids {
 			if selectedFacts[id] && id != "origin" && id != "goal" {
@@ -237,7 +251,7 @@ func buildDecisionChanges(current State, baseline json.RawMessage, result *Decis
 				selectedFacts[source] = true
 			}
 		}
-		decisionRelationClosure(current.FactRelations, selectedFacts)
+		factSupportClosure(current.FactRecords, current.FactRelations, selectedFacts)
 		if count == len(selectedFacts)+len(selectedGoals)+len(selectedSteps)+len(selectedFindings)+len(selectedCandidates) {
 			break
 		}

@@ -7,6 +7,25 @@ import (
 	"testing"
 )
 
+func TestExplicitCurationRequestRejectsEmptyAcknowledgement(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	producer := f.worker("producer", "")
+	fact := f.fact(producer, "observation")
+	f.finish(producer, fact)
+	f.action(f.planner, "curation_request", "review", map[string]any{"sources": []string{fact}, "reason": "Check the original observation"}, "")
+	curator, input := f.curator("reviewer")
+	before := f.state()
+	raw, _ := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}})
+	err := f.store.Do(context.Background(), func(tx *Tx) error {
+		_, err := tx.StateAction("p", curator.Fence(), StateAction{Op: "curate", IdempotencyKey: "empty-review", Payload: raw, ExpectedVersion: DecisionStateVersion(input)})
+		return err
+	})
+	requireAPIStatus(t, err, 422)
+	if !reflect.DeepEqual(before, f.state()) || f.state().PendingCurationRequest() == nil {
+		t.Fatal("empty acknowledgement consumed an explicit request")
+	}
+}
+
 func TestExplicitCurationRequestMakesFactCorrectionReachable(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	first, second := f.worker("first", ""), f.worker("second", "")
@@ -35,7 +54,7 @@ func TestExplicitCurationRequestMakesFactCorrectionReachable(t *testing.T) {
 		t.Fatal("same pending request changed its boundary or evidence")
 	}
 	curator, input := f.curator("requested-correction")
-	f.action(curator.Fence(), "curate", "correct", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "supersedes", Source: correction, Target: old, Reason: "Original retained bytes confirm the later response replaces the old service observation"}}}, DecisionStateVersion(input))
+	f.action(curator.Fence(), "curate", "correct", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "supersedes", Source: correction, Target: old, Reason: "Original retained bytes confirm the later response replaces the old service observation"}}, RequestReview: &CurationRequestReview{Disposition: "resolved", CheckedSources: []string{old, correction}, Reason: "Compared both original responses and recorded the correction"}}, DecisionStateVersion(input))
 	f.finish(curator, "")
 	final := f.state()
 	if final.PendingCurationRequest() != nil || final.Curation.Request != nil || final.Curation.ThroughRevision != requested.Revision || len(final.FactRelations) != 1 || len(final.Candidates)+len(final.Findings) != 0 || final.ValidateFactSources([]string{old}, true) == nil {

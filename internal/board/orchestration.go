@@ -109,7 +109,7 @@ func (t *Tx) curationNeeded(s State) (bool, error) {
 	if s.Graph.Project.OrchestrationVersion != 1 {
 		return false, nil
 	}
-	if s.PendingCurationRequest() != nil {
+	if s.PendingCurationRequest() != nil && !s.CurationRequestNeedsEvidence() {
 		return true, nil
 	}
 	if len(s.PendingCurationCandidateIDs()) > 0 {

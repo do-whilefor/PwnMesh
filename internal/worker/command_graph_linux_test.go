@@ -14,9 +14,31 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	board "pwnmesh/internal/board/model"
 	"pwnmesh/internal/worker/dag"
 	"pwnmesh/internal/workergraph"
 )
+
+func TestCommandGraphScopeUsesOnlyBoundStepWritePaths(t *testing.T) {
+	j := Job{Workspace: "/workspace", Intent: &board.Intent{ID: "assigned"}, State: &board.State{Steps: []board.Step{
+		{ID: "assigned", WritePaths: []string{"/workspace/original"}},
+		{ID: "other", WritePaths: []string{"/workspace/unrelated"}},
+	}}}
+	scope := commandGraphScope(j, "/workspace/.pwnmesh/run")
+	if !scope.SharedWritesBound || !slices.Equal(scope.WritePaths, []string{"/workspace/original"}) {
+		t.Fatalf("lost bound Step writes: %+v", scope)
+	}
+	j.InputSnapshot = &board.InputSnapshot{}
+	j.InputView = json.RawMessage(`{"steps":[{"id":"assigned","write_paths":["/workspace/frozen"]}]}`)
+	scope = commandGraphScope(j, "/workspace/.pwnmesh/run")
+	if !slices.Equal(scope.WritePaths, []string{"/workspace/frozen"}) {
+		t.Fatalf("snapshot scope was replaced by state: %+v", scope)
+	}
+	j.InputView = json.RawMessage(`{"steps":[]}`)
+	if scope := commandGraphScope(j, "/workspace/.pwnmesh/run"); !scope.SharedWritesBound || len(scope.WritePaths) != 0 {
+		t.Fatalf("missing bound Step authorized mutable-state writes: %+v", scope)
+	}
+}
 
 func commandGraphCall(t *testing.T, ctx context.Context, job Job, dir string, spec dag.Spec) (workergraph.Checkpoint, error) {
 	t.Helper()

@@ -10,6 +10,9 @@ import (
 
 func validateGraphAssetFilter(r GraphRequest) error {
 	if len(r.AssetIDs) == 0 {
+		if r.AssetNeighborhood {
+			return errors.New("asset_neighborhood requires asset_ids")
+		}
 		return nil
 	}
 	if (r.Op != "" && r.Op != "read_graph" && r.Op != "read_snapshot") || !slices.Contains([]string{"assets", "anchors", "facts", "steps", "findings", "candidates", "history"}, r.Section) {
@@ -44,6 +47,30 @@ func graphAssetFilter(s model.State, r GraphRequest) (func(graphRecordIdentity) 
 			return nil, errors.New("asset is absent from this graph input")
 		}
 		selected[id] = true
+	}
+	if r.AssetNeighborhood {
+		// Expand each requested identity to its ancestors and descendants only.
+		// Newly selected parents do not broaden the query to sibling services or
+		// endpoints. Every returned identity already exists in this frozen State.
+		requested := make(map[string]bool, len(selected))
+		for id := range selected {
+			requested[id] = true
+		}
+		for _, asset := range s.Assets {
+			parents := model.AssetAncestors(asset)
+			if requested[asset.ID] {
+				for _, id := range parents {
+					if known[id] {
+						selected[id] = true
+					}
+				}
+			}
+			for _, id := range parents {
+				if requested[id] {
+					selected[asset.ID] = true
+				}
+			}
+		}
 	}
 	attached := map[string]bool{}
 	for _, anchor := range s.AssetAnchors {
