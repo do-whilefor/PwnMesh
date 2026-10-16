@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const maxParallelTools = 16
+
 type Loop struct {
 	Provider Provider
 	Tools    []Tool
@@ -334,10 +336,22 @@ func (l *Loop) execute(ctx context.Context, calls []Block, truncated bool) []Blo
 			continue
 		}
 		var wg sync.WaitGroup
-		for n := start; n < end; n++ {
+		jobs := make(chan int)
+		// Bound active callbacks and goroutines, not just tool execution.
+		// Queued cancelled calls still pass through run to settle their IDs.
+		for range min(end-start, maxParallelTools) {
 			wg.Add(1)
-			go func(n int) { defer wg.Done(); run(n) }(n)
+			go func() {
+				defer wg.Done()
+				for n := range jobs {
+					run(n)
+				}
+			}()
 		}
+		for n := start; n < end; n++ {
+			jobs <- n
+		}
+		close(jobs)
 		wg.Wait()
 		start = end
 	}

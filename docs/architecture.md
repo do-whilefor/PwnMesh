@@ -154,6 +154,9 @@ prior phase and cursor values.
 Worker translates durable phases into generic Agent request policy: pinned
 instructions and a tool-disable reason. The Agent loop does not know Worker
 phases, and request policy does not change the session checkpoint schema.
+Native parallel tool groups run at most 16 callbacks at once, preserving result
+order and serial/terminal barriers. Cancellation settles queued calls without
+starting their tools.
 
 Journals and checkpoints precede side effects. Recovery checks durable receipts
 before additional model or tool calls. Acceptance reads an identity-bound
