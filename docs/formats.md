@@ -11,12 +11,16 @@ formats are rejected without migration or replay; see [protocol](protocol.md).
 | Configuration | `PWNMESH_*` only; no `XLOOM_*` aliases; retired `runtime.execution` and `runtime.prompt_group` selectors are rejected |
 | Project | Orchestration version `1` |
 | Execution | Registered Job, live graph bridge, result contract `2`, Decide context `2`; roles `reason`, `explore`, `curate` |
+| Recovery environment | Version `2` digest covers provider settings, container settings and configured tool environment; provider tokens are excluded |
 | Worker session | Schema `1`, matching run, input, workspace and budget identity |
 | Acceptance | Schema `1` in `acceptance.json`; old `graph.json` alone is rejected before callbacks or writes |
 | Worker graph | Schema `1`, matching graph and per-node definition digests; missing bindings cannot be reconstructed |
 | Evidence | Validated `.pwnmesh/runs/.../evidence/` references; no `.xloom` fallback |
 
-New runs use immutable snapshots; current inline Jobs remain recoverable.
+New runs use immutable snapshots; current inline Jobs remain recoverable when
+their environment identity matches. Earlier environment digests cannot authorize
+unfinished runs because they omitted tool settings. Saved results and committed
+control receipts still settle without reexecution.
 Optional timing fields may be absent, but missing execution identity or evidence
 cannot be reconstructed. Planners publish through version `2` decision batches;
 retained version `1` decision jobs cannot use live reads or direct writes.

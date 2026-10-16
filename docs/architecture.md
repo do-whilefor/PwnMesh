@@ -48,6 +48,9 @@ Execution clients depend on `board/model`, not aggregate Board or SQLite. Board
 composes policy and mutations; its private store persists values in the caller's
 transaction. Pure projections neither query storage nor mutate their inputs.
 Runtime status comes from authoritative execution records.
+Configuration owns the tool environment shared by Docker delivery and recovery
+identity. Explicit empty values override image defaults; provider token rotation
+does not change identity. See [formats](formats.md) for the recovery fence.
 Configuration, execution admission and Worker preflight reject timeout seconds
 that overflow runtime durations. Lease settings and Dispatcher reads enforce the
 same limit; zero execution timeout still disables that deadline.
@@ -154,6 +157,9 @@ support; an uncurated replacement Candidate cannot silently erase it.
 Dispatcher recovers registered executions before admitting fresh work. It
 reconciles project generations, maintains leases and delivers saved results.
 Workers stop before dispatcher ownership is released.
+Startup reclaims old containers before model readiness checks. Background
+cleanup admits at most eight operations and rotates inactive projects so repeated
+failures cannot monopolize admission.
 
 Worker Session owns identity, transcript, checkpoints and atomic session
 replacement. Its private `phase` package decides transitions without filesystem

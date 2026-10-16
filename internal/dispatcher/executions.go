@@ -33,25 +33,27 @@ func (s *Scheduler) namespace() string {
 	return s.Config.Container.Namespace
 }
 func (s *Scheduler) environmentID(w config.Worker) string {
-	// Credentials are intentionally excluded; rotating a token must not change
-	// the task. Provider/model/container configuration is part of its identity.
+	tools, err := w.ToolEnvironment()
+	if err != nil {
+		return "" // Invalid environments cannot be admitted or recovered.
+	}
+	// Provider credentials rotate independently. Tool configuration is part of
+	// the assignment, including explicit empty overrides of image defaults.
 	env := map[string]string{}
 	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {
 		env[key] = w.Env[key]
 	}
-	// Keep existing identities stable when these newer settings are absent.
-	for _, key := range []string{"PWNMESH_CONTEXT_TOKENS", "PWNMESH_CONTEXT_TARGET_TOKENS", "PWNMESH_CONNECTION_MODE", "PWNMESH_PROXY_URL"} {
-		if value := w.Env[key]; value != "" {
-			env[key] = value
-		}
-	}
+	// Legacy hashes did not record tool values, even values since removed.
+	// They cannot authorize continuation; saved results bypass this fence.
 	return digest(struct {
+		Version int
 		Type    string
 		Image   string
 		Network string
 		Caps    []string
 		Env     map[string]string
-	}{w.Type, s.Config.Container.Image, s.Config.Container.Network, s.Config.Container.CapAdd, env})
+		Tools   map[string]string
+	}{2, w.Type, s.Config.Container.Image, s.Config.Container.Network, s.Config.Container.CapAdd, env, tools})
 }
 
 func (s *Scheduler) releaseIdleAdmissions() {
@@ -278,7 +280,8 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 					break
 				}
 			}
-			if t.Worker.Type != "go" || !slices.Contains(t.Worker.TaskTypes, e.Kind) || t.Job.EnvironmentID != s.environmentID(t.Worker) {
+			environment := s.environmentID(t.Worker)
+			if t.Worker.Type != "go" || !slices.Contains(t.Worker.TaskTypes, e.Kind) || environment == "" || t.Job.EnvironmentID != environment {
 				s.terminal(t, "failed", protocol.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
 				continue
 			}

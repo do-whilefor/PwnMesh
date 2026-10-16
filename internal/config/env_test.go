@@ -7,6 +7,27 @@ import (
 	"testing"
 )
 
+func TestToolEnvironmentPreservesOverridesAndOwnsItsValues(t *testing.T) {
+	input := map[string]string{"LANG": "", "PATH": "/tools", "HTTPS_PROXY": "http://legacy:8080", "ANTHROPIC_AUTH_TOKEN": "credential", "anthropic_custom": "private", "PWNMESH_LAUNCH_TOKEN": "launch", "PWNMESH_MODEL_BRIDGE": "override"}
+	before := maps.Clone(input)
+	env, err := (Worker{Env: input}).ToolEnvironment()
+	if err != nil || len(env) != 3 || env["PATH"] != "/tools" || env["HTTPS_PROXY"] != "http://legacy:8080" {
+		t.Fatalf("tool environment lost configured values or leaked reserved values: %v", err)
+	}
+	if value, exists := env["LANG"]; !exists || value != "" {
+		t.Fatal("empty override was discarded")
+	}
+	env["PATH"] = "changed"
+	if !maps.Equal(input, before) {
+		t.Fatal("derived tool environment changed the resolved worker settings")
+	}
+	for _, input := range []map[string]string{{"": "value"}, {"BAD=KEY": "value"}, {"LANG": "C\x00"}, {"PWNMESH_CONNECTION_MODE": "unknown"}, {"PWNMESH_CONNECTION_MODE": "proxy", "PWNMESH_PROXY_URL": "invalid"}} {
+		if _, err := (Worker{Env: input}).ToolEnvironment(); err == nil {
+			t.Fatal("invalid tool environment was accepted")
+		}
+	}
+}
+
 func TestWorkerGetenvUsesExactSettingNames(t *testing.T) {
 	for _, tc := range []struct {
 		name, key, legacyKey, value, legacyValue, want string

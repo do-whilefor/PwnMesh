@@ -407,6 +407,10 @@ func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, inte
 		}
 		return false, nil
 	}
+	environment := s.environmentID(*w)
+	if environment == "" {
+		return false, fmt.Errorf("worker %s has invalid tool environment", w.Name)
+	}
 	var bytes [16]byte
 	if _, err := crand.Read(bytes[:]); err != nil {
 		return false, err
@@ -429,7 +433,7 @@ func (s *Scheduler) launch(ctx context.Context, g board.Graph, kind string, inte
 	// Worker owns its execution budget and the separate conclusion deadline.
 	// A dispatcher deadline measured from container startup could abort before
 	// a long current turn reaches the boundary where soft conclusion begins.
-	t := &task{Job: protocol.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, EnvironmentID: s.environmentID(*w)}, Worker: *w, Lease: lease}
+	t := &task{Job: protocol.Job{RunID: id, Kind: kind, WorkerType: w.Type, Graph: g, Intent: intent, Budget: budget, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2, EnvironmentID: environment}, Worker: *w, Lease: lease}
 	if kind == "reason" {
 		t.Job.DecisionTrigger = trigger
 		t.urgentInput = s.reasonWaits[g.Project.ID].Urgent

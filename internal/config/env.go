@@ -1,16 +1,62 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"os"
 	"strings"
+
+	"pwnmesh/internal/provider"
 )
 
 // Getenv reads only this worker's environment. It never inherits dispatcher
 // process settings or resolves another setting name.
 func (w Worker) Getenv(key string) string {
 	return w.Env[key]
+}
+
+// ToolEnvironment is the configured Docker exec environment, excluding model
+// secrets and launch-only values. Identity and delivery share this policy.
+// Missing values inherit the image; explicit empty values override it.
+func (w Worker) ToolEnvironment() (map[string]string, error) {
+	env := map[string]string{}
+	mode := w.Env["PWNMESH_CONNECTION_MODE"]
+	for key, value := range w.Env {
+		if strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") || key == "PWNMESH_MODEL_BRIDGE" || key == "PWNMESH_LAUNCH_TOKEN" {
+			continue
+		}
+		if mode != "" {
+			switch strings.ToUpper(key) {
+			case "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY":
+				continue
+			}
+		}
+		if key == "" || strings.Contains(key, "=") || strings.ContainsRune(key+value, '\x00') {
+			return nil, errors.New("invalid worker environment")
+		}
+		env[key] = value
+	}
+	if mode == "" {
+		return env, nil
+	}
+	proxy := ""
+	if mode == "proxy" {
+		var err error
+		proxy, err = provider.ProxyURL(w.Env["PWNMESH_PROXY_URL"], true)
+		if err != nil {
+			return nil, err
+		}
+	} else if mode != "direct" {
+		return nil, errors.New("connection_mode must be direct or proxy")
+	}
+	for _, key := range []string{"HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"} {
+		env[key] = proxy
+	}
+	for _, key := range []string{"NO_PROXY", "no_proxy"} {
+		env[key] = "localhost,127.0.0.1,::1,server"
+	}
+	return env, nil
 }
 
 // resolveEnv keeps the input maps intact and applies worker overrides before
