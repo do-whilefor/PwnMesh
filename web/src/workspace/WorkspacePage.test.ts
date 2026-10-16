@@ -19,8 +19,15 @@ function project(id = 'project', generation = 1): ProjectView {
   return view;
 }
 
-test('workspace exposes three views and keyboard navigation cycles through them', async () => {
-  const wrapper = mount(WorkspacePage, {attachTo: document.body, props: {project: project(), disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+test('server review data keeps three workspace views and keyboard navigation cycles through them', async () => {
+  const current = project();
+  Object.assign(current.state!, {
+    candidates: [{id: 'note', claim: 'Retained judgment', status: 'verified', sources: ['fact']}],
+    disputes: [{id: 'review', finding_id: 'finding', candidate_ids: ['note'], status: 'open', question: 'Check evidence', reason: 'Conflicting observations', review_step_ids: [], review_fact_ids: []}],
+    curation: {generation: current.generation, through_revision: 1, request: {sources: ['fact'], reason: 'Review retained evidence', revision: 1}},
+    findings: [{id: 'finding', claim: 'Retained finding', candidate_ids: ['note'], dispute_id: 'review', curated_revision: 1}],
+  });
+  const wrapper = mount(WorkspacePage, {attachTo: document.body, props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
   try {
     expect(wrapper.findAll('[role="tab"]').map(tab => tab.attributes('data-view'))).toEqual(['graph', 'materials', 'result']);
     for (const [id, component] of [['materials', MaterialsView], ['result', ResultsView], ['graph', GraphCanvas]] as const) {

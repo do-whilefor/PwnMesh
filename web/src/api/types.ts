@@ -12,16 +12,9 @@ export interface EntityDTO {
 export interface GoalDTO extends EntityDTO { condition?: string }
 export interface StepDTO extends EntityDTO { description?: string }
 export interface FactDTO extends EntityDTO { description?: string; derived_from?: string[] }
-export interface FindingDTO extends EntityDTO { claim?: string; candidate_ids?: string[]; dispute_id?: string; curated_revision?: number }
+export interface FindingDTO extends EntityDTO { claim?: string }
 export interface AssetDTO { id: string; kind: 'host' | 'service' | 'endpoint'; value: string; method?: string }
 export interface AssetAnchorDTO { asset_id: string; node_kind: 'step' | 'fact' | 'candidate' | 'finding'; node_id: string; discovery_step_id?: string }
-export interface CandidateDTO extends EntityDTO { claim: string; supersedes?: string; generation?: number; revision?: number }
-export interface DisputeDTO { id: string; finding_id: string; candidate_ids: string[]; status: string; question: string; reason: string; review_step_ids: string[]; review_fact_ids: string[]; review_revision?: number; review_step_offset?: number }
-export interface CurationDTO {
-  generation: number; through_revision: number;
-  request?: { sources: string[]; reason: string; revision: number };
-  request_review?: { revision?: number; disposition: string; checked_sources: string[]; reason: string };
-}
 export interface FactRelationDTO { kind: string; source: string; target: string; reason?: string; run_id?: string; created_at?: string; description?: string }
 export interface ReasonDTO { worker?: string; trigger?: string; started_at?: string }
 export interface ProjectDTO {
@@ -34,7 +27,7 @@ export interface WorkspaceSnapshot {
   graph: { project: ProjectDTO; facts?: FactDTO[]; intents?: IntentDTO[]; hints?: HintDTO[] };
   goals: GoalDTO[]; steps: StepDTO[]; fact_records: FactDTO[]; findings: FindingDTO[]; fact_relations?: FactRelationDTO[];
   revision: number; decision_revision?: number;
-  assets?: AssetDTO[]; asset_anchors?: AssetAnchorDTO[]; candidates?: CandidateDTO[]; disputes?: DisputeDTO[]; curation?: CurationDTO;
+  assets?: AssetDTO[]; asset_anchors?: AssetAnchorDTO[];
 }
 export interface StateEventDTO { revision: number; op: string; id?: string; run_id?: string; created_at?: string; payload?: unknown; result?: unknown }
 export interface ExecutionDTO { id: string; project_id?: string; generation?: number; kind?: string; backend?: string; intent?: string; status?: string; resumes?: number; created_at?: string; updated_at?: string; started_at?: string; result?: { text?: string; error?: string; truncated?: boolean } | null }
