@@ -16,8 +16,16 @@ type AgentNode struct {
 	Key          string
 	Dir          string
 	Spec         Node
+	InputSHA256  string
 	dependencies []workergraph.NodeState
 	workspace    string
+}
+
+// AgentExecutor separates fresh execution from read-only reconciliation of a
+// committed child result. Reconcile must never resume an unfinished Agent.
+type AgentExecutor struct {
+	Run       func(context.Context, AgentNode) (workergraph.Output, error)
+	Reconcile func(context.Context, AgentNode) (workergraph.Output, error)
 }
 
 // PrepareInputs freezes declared dependency bytes and publishes their exact view.

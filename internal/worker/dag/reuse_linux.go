@@ -244,19 +244,11 @@ func prepareCommandReuses(ctx context.Context, scope Scope, spec Spec) (map[stri
 		}
 		source := sourceGraph{dir: dir, nodes: map[string]workergraph.NodeState{}, specs: specs, checkpoint: checkpoint}
 		for _, node := range checkpoint.Nodes {
-			nodeSpec := specs[node.ID]
-			if nodeSpec.Kind == "reuse" || nodeSpec.ReuseFrom != nil {
-				return fail(errors.New("reuse source definition is invalid or recursive"))
-			}
 			source.nodes[node.ID] = node
-			if node.Status == "succeeded" {
-				if err := verifyCommandNodeOutput(ctx, filepath.Join(dir, "nodes", node.ID), source.specs[node.ID], node.Output); err != nil {
-					return fail(fmt.Errorf("reuse source node %s verification: %w", node.ID, err))
-				}
-			}
 		}
 		sources[key] = source
 	}
+	verified := map[string]map[string]bool{}
 	for _, node := range spec.Nodes {
 		if node.Kind != "reuse" {
 			continue
@@ -268,6 +260,27 @@ func prepareCommandReuses(ctx context.Context, scope Scope, spec Spec) (map[stri
 		}
 		if err := validateInterruptedReuse(scope, source.checkpoint, source.specs, state.ID); err != nil {
 			return fail(err)
+		}
+		// The snapshot above validates the entire source's structure and identity.
+		// Only this dependency closure supplies the imported observation; unrelated
+		// damaged artifacts or imports must not prevent independent salvage.
+		closure := nodeAncestors(source.specs, state.ID)
+		closure[state.ID] = true
+		if verified[node.ReuseFrom.Key] == nil {
+			verified[node.ReuseFrom.Key] = map[string]bool{}
+		}
+		for member := range closure {
+			memberSpec := source.specs[member]
+			if memberSpec.Kind == "reuse" || memberSpec.ReuseFrom != nil {
+				return fail(errors.New("reuse dependency closure contains a recursive import"))
+			}
+			memberState := source.nodes[member]
+			if memberState.Status == "succeeded" && !verified[node.ReuseFrom.Key][member] {
+				if err := verifyCommandNodeOutput(ctx, filepath.Join(source.dir, "nodes", member), memberSpec, memberState.Output); err != nil {
+					return fail(fmt.Errorf("reuse source node %s verification: %w", member, err))
+				}
+				verified[node.ReuseFrom.Key][member] = true
+			}
 		}
 		result[node.ID] = &commandReuse{SourceNode: state, SourceSpec: source.specs[state.ID], SourceDir: filepath.Join(source.dir, "nodes", state.ID), receipt: ReuseReceipt{Key: node.ReuseFrom.Key, Node: state.ID, Kind: state.Kind, DefinitionSHA256: state.DefinitionSHA256, InputSHA256: state.InputSHA256,
 			ExecutionStartedAt: state.StartedAt.UTC().Format(time.RFC3339Nano), ExecutionFinishedAt: state.FinishedAt.UTC().Format(time.RFC3339Nano)}}

@@ -120,6 +120,106 @@ func TestMixedGraphOwnsIndependentLoopsAndParentRemainsOnlyPublisher(t *testing.
 	}
 }
 
+func TestAgentGraphReconcilesOnlyBoundTerminalReceipt(t *testing.T) {
+	for _, mutation := range []string{"none", "unfinished", "legacy", "run", "key", "node", "input", "journal", "stdout", "artifact", "terminal-output", "failed"} {
+		t.Run(mutation, func(t *testing.T) {
+			j, dir := graphWrapperJob(t), t.TempDir()
+			calls := 0
+			o := Options{RunDir: dir, graphProvider: func(string) (agent.Provider, error) {
+				return scenarioProvider(func(context.Context, []agent.Message, []agent.Definition, agent.Emit) (agent.Message, error) {
+					calls++
+					if err := os.WriteFile(filepath.Join(dir, "graph-tools", "terminal", "nodes", "child", "report.txt"), []byte("original report"), 0600); err != nil {
+						return agent.Message{}, err
+					}
+					return agent.Text("assistant", "Retained original account."), nil
+				}), nil
+			}}
+			spec := dag.Spec{Key: "terminal", Nodes: []dag.Node{{ID: "child", Kind: "agent", Task: "Return an account", Resources: []string{}, Artifacts: []string{"report.txt"}}}}
+			if _, err := mixedGraphCall(t, context.Background(), j, o, spec); err != nil {
+				t.Fatal(err)
+			}
+			graphDir := filepath.Join(dir, "graph-tools", spec.Key)
+			nodeDir := filepath.Join(graphDir, "nodes", "child")
+			sessionPath := filepath.Join(nodeDir, "session.json")
+			raw, err := os.ReadFile(sessionPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var session map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &session); err != nil {
+				t.Fatal(err)
+			}
+			switch mutation {
+			case "unfinished":
+				delete(session, "terminal_output")
+			case "legacy":
+				delete(session, "graph_input_sha256")
+			case "run":
+				session["run_id"] = json.RawMessage(`"other"`)
+			case "key":
+				session["graph_key"] = json.RawMessage(`"other"`)
+			case "node":
+				session["node_id"] = json.RawMessage(`"other"`)
+			case "input":
+				session["graph_input_sha256"] = json.RawMessage(`"changed"`)
+			case "failed":
+				session["error"] = json.RawMessage(`"failed after observation"`)
+			case "terminal-output":
+				session["terminal_output"] = json.RawMessage(`{}`)
+			case "journal":
+				if err := os.WriteFile(filepath.Join(nodeDir, "events.jsonl"), []byte("changed\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "stdout", "artifact":
+				name := "stdout.log"
+				if mutation == "artifact" {
+					name = "report.txt"
+				}
+				if err := os.WriteFile(filepath.Join(nodeDir, name), []byte("changed\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			raw, _ = json.Marshal(session)
+			if err := os.WriteFile(sessionPath, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			// Simulate a crash after the child session committed, before its graph receipt.
+			graphPath := filepath.Join(graphDir, "graph.json")
+			raw, err = os.ReadFile(graphPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var checkpoint workergraph.Checkpoint
+			if err := json.Unmarshal(raw, &checkpoint); err != nil {
+				t.Fatal(err)
+			}
+			checkpoint.Status = "interrupted"
+			checkpoint.Nodes[0].Status = "running"
+			checkpoint.Nodes[0].Output = workergraph.Output{}
+			checkpoint.Nodes[0].FinishedAt = time.Time{}
+			raw, _ = json.Marshal(checkpoint)
+			if err := os.WriteFile(graphPath, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			result, err := mixedGraphCall(t, context.Background(), j, o, spec)
+			if (err == nil) != (mutation == "none") || calls != 1 {
+				t.Fatalf("reconciliation mutation=%s status=%s err=%v calls=%d", mutation, result.Status, err, calls)
+			}
+			if mutation == "none" && result.Status != "succeeded" {
+				t.Fatalf("terminal Agent was not accepted: %+v", result)
+			}
+			retained, err := os.ReadFile(sessionPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original, _ := json.Marshal(session)
+			if !bytes.Equal(retained, original) {
+				t.Fatal("reconciliation rewrote the child session")
+			}
+		})
+	}
+}
+
 func TestAgentGraphRespectsParentDeadlineAndFailureRoute(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
 	// Check deadline inheritance, not disk/scheduler speed under race detection.

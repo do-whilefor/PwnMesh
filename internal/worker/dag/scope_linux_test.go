@@ -105,7 +105,7 @@ func TestAgentBoundaryFreezesInputsAndReusesWithoutCallingExecutor(t *testing.T)
 		return node.RetainOutput(ctx, "Retained report.txt", true)
 	}
 	for range 2 {
-		reply, err := Run(context.Background(), scope, raw, execute)
+		reply, err := Run(context.Background(), scope, raw, &AgentExecutor{Run: execute})
 		var state workergraph.Checkpoint
 		if err != nil || json.Unmarshal([]byte(reply), &state) != nil || state.Status != "succeeded" {
 			t.Fatalf("callback graph failed: %s %v", reply, err)

@@ -16,7 +16,7 @@ import (
 )
 
 // Run binds command and Agent nodes to the generic checkpoint scheduler.
-func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(context.Context, AgentNode) (workergraph.Output, error)) (string, error) {
+func Run(ctx context.Context, scope Scope, raw json.RawMessage, agents *AgentExecutor) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -69,6 +69,9 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(co
 		nodeSpec := specNode
 		nodeDir := filepath.Join(dir, "nodes", nodeSpec.ID)
 		node := commandNodeDefinition(nodeSpec)
+		agentNode := func(in workergraph.Input) AgentNode {
+			return AgentNode{Key: spec.Key, Dir: nodeDir, Spec: nodeSpec, InputSHA256: in.SHA256, dependencies: in.Dependencies, workspace: scope.Workspace}
+		}
 		if reused := reuses[nodeSpec.ID]; reused != nil {
 			node.Kind = reused.SourceNode.Kind
 			node.Run = func(ctx context.Context, _ workergraph.Input) (workergraph.Output, error) {
@@ -94,10 +97,10 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(co
 				return workergraph.Output{}, err
 			}
 			if nodeSpec.Kind == "agent" {
-				if runAgent == nil {
+				if agents == nil || agents.Run == nil {
 					return workergraph.Output{}, errors.New("agent node requires an executor")
 				}
-				return runAgent(ctx, AgentNode{Key: spec.Key, Dir: nodeDir, Spec: nodeSpec, dependencies: in.Dependencies, workspace: scope.Workspace})
+				return agents.Run(ctx, agentNode(in))
 			}
 			return executeCommandNode(ctx, scope.RunDir, scope.Workspace, nodeDir, nodeSpec, in.Dependencies)
 		}
@@ -132,8 +135,13 @@ func Run(ctx context.Context, scope Scope, raw json.RawMessage, runAgent func(co
 				return false, "", errors.New("condition dependency missing")
 			}
 		}
-		// No Reconcile callback: a crash after shell side effects but before the
-		// durable receipt requires inspection, never an automatic command replay.
+		if nodeSpec.Kind == "agent" && agents != nil && agents.Reconcile != nil {
+			node.Reconcile = func(ctx context.Context, in workergraph.Input, _ workergraph.NodeState) (workergraph.Output, error) {
+				return agents.Reconcile(ctx, agentNode(in))
+			}
+		}
+		// Commands have no Reconcile callback: uncertain effects require inspection.
+		// Agent recovery may only return an already committed terminal receipt.
 		definition.Nodes = append(definition.Nodes, node)
 	}
 	if err := storeCommandDefinitions(dir, spec, definition); err != nil {

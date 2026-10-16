@@ -48,8 +48,11 @@ type Output struct {
 // Input and its dependency results belong to one callback invocation. They do
 // not share mutable JSON bytes or artifact slices with concurrent callbacks.
 type Input struct {
-	NodeID       string
-	Attempt      int
+	NodeID  string
+	Attempt int
+	// SHA256 binds the semantic input, excluding attempts and timing. Adapters
+	// may retain it with their own terminal receipt for no-replay reconciliation.
+	SHA256       string
 	Initial      json.RawMessage
 	Value        json.RawMessage
 	Dependencies []NodeState
@@ -300,6 +303,7 @@ func nodeInput(node Node, state NodeState, initial json.RawMessage, states map[s
 	for _, dep := range node.DependsOn {
 		input.Dependencies = append(input.Dependencies, *states[dep.ID])
 	}
+	input.SHA256 = inputHash(input)
 	return input
 }
 
@@ -453,7 +457,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				continue
 			}
 			input := nodeInput(node, *state, options.Input, states)
-			if state.InputSHA256 != inputHash(input) {
+			if state.InputSHA256 != input.SHA256 {
 				return checkpoint, fmt.Errorf("node %s input binding changed", node.ID)
 			}
 			switch state.Status {
@@ -617,7 +621,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 					continue
 				}
 				input := nodeInput(node, *state, options.Input, states)
-				state.InputSHA256 = inputHash(input)
+				state.InputSHA256 = input.SHA256
 				if node.When != nil {
 					if err = persist(); err != nil {
 						aborted, terminalFailure, firstError = true, true, err

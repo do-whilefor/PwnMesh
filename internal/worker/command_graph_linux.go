@@ -74,7 +74,12 @@ func runCommandGraph(ctx context.Context, j Job, o Options, raw json.RawMessage)
 		ctx, cancel = context.WithDeadline(ctx, o.graphDeadline)
 		defer cancel()
 	}
-	return dag.Run(ctx, commandGraphScope(j, o.RunDir), raw, func(ctx context.Context, node dag.AgentNode) (workergraph.Output, error) {
-		return executeAgentNode(ctx, j, o, node)
+	return dag.Run(ctx, commandGraphScope(j, o.RunDir), raw, &dag.AgentExecutor{
+		Run: func(ctx context.Context, node dag.AgentNode) (workergraph.Output, error) {
+			return executeAgentNode(ctx, j, o, node)
+		},
+		Reconcile: func(ctx context.Context, node dag.AgentNode) (workergraph.Output, error) {
+			return reconcileAgentNode(ctx, j, node)
+		},
 	})
 }

@@ -77,6 +77,35 @@ func TestValidateSnapshotIsReadOnlyAndChecksBindings(t *testing.T) {
 	}
 }
 
+func TestCallbackInputReceiptSurvivesRecoveryTimingChanges(t *testing.T) {
+	var binding string
+	calls := 0
+	definition := Definition{Version: "receipt-v1", Nodes: []Node{
+		{ID: "source", Kind: "function", Run: successful, Verify: verified},
+		{ID: "child", Kind: "agent", DependsOn: []Dependency{{ID: "source"}},
+			Run: func(_ context.Context, input Input) (Output, error) {
+				calls++
+				binding = input.SHA256
+				return Output{}, ErrInterrupted
+			},
+			Verify: verified,
+			Reconcile: func(_ context.Context, input Input, saved NodeState) (Output, error) {
+				if len(binding) != 64 || input.SHA256 != binding || saved.InputSHA256 != binding {
+					return Output{}, errors.New("input receipt changed during recovery")
+				}
+				return Output{}, nil
+			}},
+	}}
+	options := fixtureOptions(t, 1)
+	if _, err := Run(context.Background(), definition, options); !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("expected interruption: %v", err)
+	}
+	checkpoint, err := Run(context.Background(), definition, options)
+	if err != nil || checkpoint.Status != "succeeded" || calls != 1 {
+		t.Fatalf("receipt recovery failed or replayed work: %+v %v calls=%d", checkpoint, err, calls)
+	}
+}
+
 func TestSavedNodeValidationRejectsBeforeCallbacks(t *testing.T) {
 	definition := Definition{Version: "saved-node-v1", Nodes: []Node{{ID: "source", Kind: "function", Run: successful, Verify: verified}}}
 	options := fixtureOptions(t, 1)

@@ -30,9 +30,9 @@ func interruptedReuseSource(t *testing.T, dependent bool) (Scope, workergraph.Ch
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Run(context.Background(), scope, raw, func(context.Context, AgentNode) (workergraph.Output, error) {
+	_, err = Run(context.Background(), scope, raw, &AgentExecutor{Run: func(context.Context, AgentNode) (workergraph.Output, error) {
 		return workergraph.Output{}, workergraph.ErrInterrupted
-	})
+	}})
 	if !errors.Is(err, workergraph.ErrInterrupted) {
 		t.Fatalf("source did not interrupt: %v", err)
 	}

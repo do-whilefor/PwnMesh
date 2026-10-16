@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -274,6 +275,72 @@ func TestCommandGraphReuseRejectsRecursiveImportsAndChangedProvenance(t *testing
 	output.Value = append(bytes.Clone(before[:len(before)-1]), []byte(`,"unbound":"ignored"}`)...)
 	if err := imported.Verify(context.Background(), output); err == nil {
 		t.Fatal("legacy timestamp compatibility discarded unbound output fields")
+	}
+}
+
+func TestCommandGraphReuseValidatesOnlyRequestedClosureArtifacts(t *testing.T) {
+	for _, dependency := range []bool{false, true} {
+		t.Run(fmt.Sprintf("dependency=%t", dependency), func(t *testing.T) {
+			scope, dir := graphScope(t), t.TempDir()
+			spec := Spec{Key: "original", Nodes: []Node{
+				{ID: "keep", Command: "printf keep", Resources: []string{}},
+				{ID: "damaged", Command: "printf damaged", Resources: []string{}},
+			}}
+			if dependency {
+				spec.Nodes[0].DependsOn = []workergraph.Dependency{{ID: "damaged"}}
+			}
+			if _, err := commandGraphCall(t, context.Background(), scope, dir, spec); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "graph-tools", "original", "nodes", "damaged", "stdout.log"), []byte("changed"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			request := Spec{Key: "salvage", Nodes: []Node{{ID: "keep", Kind: "reuse", Resources: []string{}, ReuseFrom: &Reuse{Key: "original", Node: "keep"}}}}
+			_, err := commandGraphCall(t, context.Background(), scope, dir, request)
+			if (err != nil) != dependency {
+				t.Fatalf("requested closure validation: dependency=%t err=%v", dependency, err)
+			}
+		})
+	}
+}
+
+func TestCommandGraphReuseFreshOriginalFromRepairGraph(t *testing.T) {
+	scope, dir, _ := reuseSource(t, false)
+	repair := Spec{Key: "repair", Nodes: []Node{
+		{ID: "imported", Kind: "reuse", Resources: []string{}, ReuseFrom: &Reuse{Key: "original", Node: "download"}},
+		{ID: "fresh", Command: "printf fresh", Resources: []string{}},
+		{ID: "derived", Command: "printf derived", Resources: []string{}, DependsOn: []workergraph.Dependency{{ID: "imported"}}},
+	}}
+	if _, err := commandGraphCall(t, context.Background(), scope, dir, repair); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{"fresh", "imported", "derived"} {
+		request := Spec{Key: "next-" + source, Nodes: []Node{{ID: "keep", Kind: "reuse", Resources: []string{}, ReuseFrom: &Reuse{Key: "repair", Node: source}}}}
+		_, err := commandGraphCall(t, context.Background(), scope, dir, request)
+		if (err == nil) != (source == "fresh") {
+			t.Fatalf("source %s: %v", source, err)
+		}
+	}
+}
+
+func TestCommandGraphReuseStillValidatesUnrelatedSourceDefinitions(t *testing.T) {
+	scope, dir := graphScope(t), t.TempDir()
+	spec := Spec{Key: "source", Nodes: []Node{
+		{ID: "keep", Command: "printf keep", Resources: []string{}},
+		{ID: "other", Command: "printf other", Resources: []string{}},
+	}}
+	checkpoint, err := commandGraphCall(t, context.Background(), scope, dir, spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _ := commandNodeValue(t, checkpoint, "other")
+	path := filepath.Join(dir, "graph-tools", "source", "definitions", other.DefinitionSHA256+".json")
+	if err := os.WriteFile(path, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	request := Spec{Key: "salvage", Nodes: []Node{{ID: "keep", Kind: "reuse", Resources: []string{}, ReuseFrom: &Reuse{Key: "source", Node: "keep"}}}}
+	if _, err := commandGraphCall(t, context.Background(), scope, dir, request); err == nil {
+		t.Fatal("unrelated definition corruption bypassed whole-source identity checks")
 	}
 }
 

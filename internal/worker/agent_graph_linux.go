@@ -24,16 +24,18 @@ import (
 // shared-graph tools, completion tool or recursive graph tool. Its checkpoint records the
 // original Loop state; uncertain side effects are never automatically replayed.
 type graphAgentSession struct {
-	RunID      string                   `json:"run_id"`
-	GraphKey   string                   `json:"graph_key"`
-	NodeID     string                   `json:"node_id"`
-	InputHash  string                   `json:"input_sha256"`
-	Deadline   time.Time                `json:"deadline"`
-	History    []agent.Message          `json:"history"`
-	Checkpoint *agent.ContextCheckpoint `json:"context_checkpoint,omitempty"`
-	Log        eventlog.Checkpoint      `json:"log_checkpoint"`
-	Result     string                   `json:"result,omitempty"`
-	Error      string                   `json:"error,omitempty"`
+	RunID            string                   `json:"run_id"`
+	GraphKey         string                   `json:"graph_key"`
+	NodeID           string                   `json:"node_id"`
+	InputHash        string                   `json:"input_sha256"`
+	GraphInputSHA256 string                   `json:"graph_input_sha256,omitempty"`
+	Deadline         time.Time                `json:"deadline"`
+	History          []agent.Message          `json:"history"`
+	Checkpoint       *agent.ContextCheckpoint `json:"context_checkpoint,omitempty"`
+	Log              eventlog.Checkpoint      `json:"log_checkpoint"`
+	Result           string                   `json:"result,omitempty"`
+	Error            string                   `json:"error,omitempty"`
+	TerminalOutput   *workergraph.Output      `json:"terminal_output,omitempty"`
 }
 
 func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode) (workergraph.Output, error) {
@@ -78,7 +80,7 @@ func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode)
 	}
 	digest := sha256.Sum256(append([]byte(prompt), deps...))
 	deadline, _ := ctx.Deadline()
-	state := graphAgentSession{RunID: j.RunID, GraphKey: key, NodeID: spec.ID, InputHash: hex.EncodeToString(digest[:]), Deadline: deadline}
+	state := graphAgentSession{RunID: j.RunID, GraphKey: key, NodeID: spec.ID, InputHash: hex.EncodeToString(digest[:]), GraphInputSHA256: node.InputSHA256, Deadline: deadline}
 	var logErr error
 	save := func(history []agent.Message, checkpoint *agent.ContextCheckpoint) error {
 		if logErr != nil {
@@ -132,6 +134,10 @@ func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode)
 	state.Result = text
 	if runErr != nil {
 		state.Error = runErr.Error()
+	} else {
+		// Only this final save certifies successful completion. Saved assistant
+		// history alone may precede tools, output retention or a failed save.
+		state.TerminalOutput = &out
 	}
 	if err := save(loop.History, loop.Checkpoint); err != nil {
 		return workergraph.Output{}, errors.Join(runErr, err)
@@ -141,6 +147,51 @@ func executeAgentNode(ctx context.Context, j Job, o Options, node dag.AgentNode)
 		// failure routes, without certifying files from an unsuccessful Agent.
 		out.Artifacts = nil
 		return out, fmt.Errorf("agent node failed; inspect %s: %w", filepath.Join(dir, "events.jsonl"), runErr)
+	}
+	return out, nil
+}
+
+// Reconciliation consumes an existing terminal receipt without starting a Loop,
+// changing its journal or retrying a tool. DAG verifies the returned artifacts
+// before accepting this result into its checkpoint.
+func reconcileAgentNode(ctx context.Context, j Job, node dag.AgentNode) (workergraph.Output, error) {
+	fail := func() (workergraph.Output, error) {
+		return workergraph.Output{}, errors.New("agent has no verified bound terminal receipt; inspect its session without replaying work")
+	}
+	resolved, err := filepath.EvalSymlinks(node.Dir)
+	if err != nil || resolved != node.Dir {
+		return fail()
+	}
+	raw, err := readEvidenceFile(ctx, filepath.Join(node.Dir, "session.json"), 32<<20)
+	if err != nil {
+		return workergraph.Output{}, err
+	}
+	var state graphAgentSession
+	if json.Unmarshal(raw, &state) != nil || state.RunID != j.RunID || state.GraphKey != node.Key || state.NodeID != node.Spec.ID ||
+		len(node.InputSHA256) != 64 || state.GraphInputSHA256 != node.InputSHA256 || state.TerminalOutput == nil || state.Error != "" || strings.TrimSpace(state.Result) == "" ||
+		state.Checkpoint == nil || state.Checkpoint.Version != agent.ContextCheckpointVersion || len(state.History) == 0 {
+		return fail()
+	}
+	last := state.History[len(state.History)-1]
+	if last.Role != "assistant" || hasToolCalls(last) || truncated(last) || last.Text() != state.Result || last.Sequence != state.Checkpoint.LastSequence {
+		return fail()
+	}
+	var committed agent.Message
+	if err := eventlog.VisitCommitted(ctx, filepath.Join(node.Dir, "events.jsonl"), state.Log, func(message agent.Message) error {
+		committed = message
+		return nil
+	}); err != nil {
+		return workergraph.Output{}, err
+	}
+	left, _ := json.Marshal(last)
+	right, _ := json.Marshal(committed)
+	if string(left) != string(right) {
+		return fail()
+	}
+	out := *state.TerminalOutput
+	digest := sha256.Sum256([]byte(state.Result))
+	if len(out.Artifacts) == 0 || out.Artifacts[0].Path != filepath.Join(node.Dir, "stdout.log") || out.Artifacts[0].SHA256 != hex.EncodeToString(digest[:]) {
+		return fail()
 	}
 	return out, nil
 }
