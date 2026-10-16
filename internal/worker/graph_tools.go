@@ -48,7 +48,9 @@ func newRoleRuntime(j Job, config Options, emit agent.Emit) (*roleRuntime, error
 	// Appending per-run closures must not overwrite a reused caller-owned
 	// backing array: that would route another Worker's reads/writes here.
 	o.Tools = slices.Clone(o.Tools)
-	request := configureGraphRequest(j, config, runtime)
+	request := configureGraphRequest(j, config, runtime, func(ctx context.Context, request GraphRequest) (string, error) {
+		return graphRPC(ctx, config.RunDir, config.Output, request)
+	})
 	runtime.request = request
 	if batchDecision(j) {
 		runtime.decision = &decisionDraft{closureProtocol: j.Decision.ClosureProtocol == 1, request: request}

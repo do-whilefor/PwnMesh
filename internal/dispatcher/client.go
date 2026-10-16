@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	board "pwnmesh/internal/board/model"
+	"pwnmesh/internal/protocol"
 	"strings"
 	"time"
 )
@@ -20,9 +21,18 @@ type Client struct {
 type ProtocolError struct {
 	Status int
 	Detail string
+	Code   string
 }
 
 func (e *ProtocolError) Error() string { return fmt.Sprintf("board HTTP %d: %s", e.Status, e.Detail) }
+
+func (e *ProtocolError) Unwrap() error {
+	if e.Code == "" {
+		// Compatibility for responses from a server predating error codes.
+		return protocol.LegacyGraphFailure(e.Error())
+	}
+	return &protocol.RPCError{Code: e.Code, Status: e.Status, Detail: e.Error()}
+}
 
 type Lease struct {
 	Run    string
@@ -60,7 +70,18 @@ func (c *Client) Do(ctx context.Context, method, path string, input, output any,
 	defer res.Body.Close()
 	if res.StatusCode >= 300 {
 		data, _ := io.ReadAll(io.LimitReader(res.Body, 4096))
-		return &ProtocolError{res.StatusCode, string(data)}
+		var failure struct {
+			Code json.RawMessage `json:"code"`
+		}
+		code := protocol.CodeRequestFailed
+		if json.Unmarshal(data, &failure) == nil {
+			if len(failure.Code) == 0 {
+				code = "" // Old server response; the compatibility adapter owns it.
+			} else if json.Unmarshal(failure.Code, &code) != nil || code == "" {
+				code = protocol.CodeRequestFailed
+			}
+		}
+		return &ProtocolError{Status: res.StatusCode, Detail: string(data), Code: code}
 	}
 	if output == nil {
 		_, err = io.Copy(io.Discard, res.Body)

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	b "pwnmesh/internal/board"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/web"
 )
 
@@ -245,7 +246,11 @@ func writeError(w http.ResponseWriter, r *http.Request, err error) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(ae.Status)
-	json.NewEncoder(w).Encode(map[string]any{"detail": ae.Detail})
+	code := ae.Code
+	if code == "" {
+		code = protocol.CodeRequestFailed
+	}
+	json.NewEncoder(w).Encode(map[string]any{"code": code, "detail": ae.Detail})
 }
 func (r *request) invalid(key, msg string) {
 	if r.err == nil {

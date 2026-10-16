@@ -22,7 +22,7 @@ import (
 
 // configureGraphRequest owns graph versions, snapshot routing and receipts.
 // Role tool assembly supplies the capabilities that may call this boundary.
-func configureGraphRequest(j Job, o Options, runtime *roleRuntime) func(context.Context, GraphRequest) (string, error) {
+func configureGraphRequest(j Job, o Options, runtime *roleRuntime, roundTrip func(context.Context, GraphRequest) (string, error)) func(context.Context, GraphRequest) (string, error) {
 	versioned := j.Kind == "reason" && j.Decision != nil || j.Kind == "curate"
 	// Version tracking belongs to the runtime, not model-generated arguments.
 	// Tool execution is serial, and the session saves it with the tool result.
@@ -47,7 +47,7 @@ func configureGraphRequest(j Job, o Options, runtime *roleRuntime) func(context.
 		// Keep the tool contract while serving new jobs through snapshot RPC.
 		if j.Kind == "curate" && j.InputSnapshot != nil && r.Op == "read_graph" {
 			if r.ExpectedVersion != "" && r.ExpectedVersion != j.InputSnapshot.StateVersion {
-				return "", errors.New("state_changed: read requires the immutable curation snapshot version")
+				return "", &protocol.RPCError{Code: board.CodeStateChanged, Status: 409, Detail: "state_changed: read requires the immutable curation snapshot version"}
 			}
 			r.Op = "read_snapshot"
 		}
@@ -94,7 +94,7 @@ func configureGraphRequest(j Job, o Options, runtime *roleRuntime) func(context.
 			}
 		}
 		started := time.Now()
-		raw, err := graphRPC(ctx, o.RunDir, o.Output, r)
+		raw, err := roundTrip(ctx, r)
 		if r.Op == "curate_receipt" {
 			var receipt board.StateActionResult
 			if err == nil && json.Unmarshal([]byte(raw), &receipt) == nil && receipt.Committed {
@@ -139,25 +139,11 @@ func configureGraphRequest(j Job, o Options, runtime *roleRuntime) func(context.
 	}
 }
 
-// The bridge preserves ProtocolError's HTTP status and JSON detail in its
-// error string. A user-supplied alias or validation message mentioning
-// state_changed is not evidence that a transaction was rejected as stale.
+// Recovery uses the authoritative code. Legacy response text is converted
+// once at the transport decoding boundary, never interpreted by role policy.
 func graphStateConflict(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := err.Error()
-	if strings.HasPrefix(message, "state_changed:") {
-		return true
-	}
-	const prefix = "board HTTP 409: "
-	if !strings.HasPrefix(message, prefix) {
-		return false
-	}
-	var response struct {
-		Detail string `json:"detail"`
-	}
-	return json.Unmarshal([]byte(strings.TrimPrefix(message, prefix)), &response) == nil && strings.HasPrefix(response.Detail, "state_changed:")
+	var failure *protocol.RPCError
+	return errors.As(err, &failure) && failure.Status == 409 && failure.Code == board.CodeStateChanged
 }
 
 func graphRPC(parent context.Context, runDir string, output io.Writer, r GraphRequest) (string, error) {
@@ -223,8 +209,11 @@ func readGraphResponse(name, id string) (string, error) {
 	if response.RequestID != id {
 		return "", errors.New("graph response request_id mismatch")
 	}
+	if response.Failure != nil {
+		return "", response.Failure
+	}
 	if response.Error != "" {
-		return "", errors.New(response.Error)
+		return "", protocol.LegacyGraphFailure(response.Error)
 	}
 	if len(response.Result) == 0 || !json.Valid(response.Result) {
 		return "", errors.New("graph response has no valid result")

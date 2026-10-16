@@ -290,7 +290,7 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 		if actionErr != nil {
 			var api *APIError
 			if errors.As(actionErr, &api) {
-				return out, &APIError{Status: api.Status, Detail: map[string]any{"action": n + 1, "op": action.Op, "error": api.Detail}}
+				return out, &APIError{Status: api.Status, Code: api.Code, Detail: map[string]any{"action": n + 1, "op": action.Op, "error": api.Detail}}
 			}
 			return out, fmt.Errorf("decision action %d (%s): %w", n+1, action.Op, actionErr)
 		}

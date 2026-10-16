@@ -1,8 +1,8 @@
 package server
 
 import (
+	"errors"
 	"net/http"
-	"strings"
 
 	b "pwnmesh/internal/board"
 	"pwnmesh/internal/protocol"
@@ -35,11 +35,11 @@ func (s *Server) graphRead(t *b.Tx, q *request, r *http.Request) (int, any, erro
 	}
 	page, err := protocol.GraphPage(state, read)
 	if err != nil {
-		status := http.StatusUnprocessableEntity
-		if strings.HasPrefix(err.Error(), "state_changed:") {
-			status = http.StatusConflict
+		var failure *protocol.RPCError
+		if errors.As(err, &failure) {
+			return 0, nil, b.CodedErr(failure.Status, failure.Code, failure.Detail)
 		}
-		return 0, nil, b.Err(status, err.Error())
+		return 0, nil, b.Err(http.StatusUnprocessableEntity, err.Error())
 	}
 	return http.StatusOK, page, nil
 }

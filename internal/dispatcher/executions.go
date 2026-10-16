@@ -300,7 +300,8 @@ func (s *Scheduler) recoverExecutions(ctx context.Context, states map[string]str
 			var pe *ProtocolError
 			if errors.As(err, &pe) && (pe.Status == 403 || pe.Status == 404 || pe.Status == 409) {
 				failure := "session_invalid"
-				if pe.Status == 409 && strings.Contains(pe.Detail, "Dispatcher recovery allowance exhausted") {
+				var rpcFailure *protocol.RPCError
+				if errors.As(err, &rpcFailure) && rpcFailure.Status == 409 && rpcFailure.Code == board.CodeRecoveryExhausted {
 					failure = "recovery_exhausted"
 				}
 				s.terminal(t, "failed", protocol.Result{Status: "failed", FailureKind: failure, Error: err.Error()})
@@ -450,8 +451,8 @@ func (s *Scheduler) resultDeliveryFailure(ctx context.Context, t *task, result p
 }
 
 func dependencyInvalidated(err error) bool {
-	var pe *ProtocolError
-	return errors.As(err, &pe) && pe.Status == 409 && strings.Contains(pe.Detail, "dependency_invalidated:")
+	var failure *protocol.RPCError
+	return errors.As(err, &failure) && failure.Status == 409 && failure.Code == board.CodeDependencyInvalidated
 }
 
 // Only roles whose entire write is bound to immutable input opt into early
@@ -472,14 +473,8 @@ func immutableInputVersion(t *task) string {
 }
 
 func decisionStateChanged(err error) bool {
-	var pe *ProtocolError
-	if !errors.As(err, &pe) || pe.Status != 409 {
-		return false
-	}
-	var response struct {
-		Detail string `json:"detail"`
-	}
-	return json.Unmarshal([]byte(pe.Detail), &response) == nil && strings.HasPrefix(response.Detail, "state_changed:")
+	var failure *protocol.RPCError
+	return errors.As(err, &failure) && failure.Status == 409 && failure.Code == board.CodeStateChanged
 }
 
 // A batch commits the graph and its execution result together. Prefer that

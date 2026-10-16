@@ -63,6 +63,7 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j prot
 		}
 		if err != nil {
 			response.Error = err.Error()
+			response.Failure = protocol.GraphFailure(err)
 			response.Result = nil
 		}
 		raw, err = json.Marshal(response)
@@ -72,6 +73,7 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j prot
 		if len(raw) > protocol.MaxGraphRPCBytes {
 			response.Result = nil
 			response.Error = "graph response exceeds 128 KiB; request a smaller page"
+			response.Failure = &protocol.RPCError{Code: "response_too_large", Detail: response.Error}
 			raw, _ = json.Marshal(response)
 		}
 		// A complete temporary file is uploaded before publishing the response.

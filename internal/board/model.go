@@ -23,5 +23,13 @@ func Ptr(s string) *string                { return model.Ptr(s) }
 func Value(s *string) string              { return model.Value(s) }
 func Err(status int, detail string) error { return model.Err(status, detail) }
 
+func CodedErr(status int, code, detail string) error { return model.CodedErr(status, code, detail) }
+
+const (
+	CodeStateChanged          = model.CodeStateChanged
+	CodeDependencyInvalidated = model.CodeDependencyInvalidated
+	CodeRecoveryExhausted     = model.CodeRecoveryExhausted
+)
+
 type HistoryMember = model.HistoryMember
 type HistoryEntry = model.HistoryEntry

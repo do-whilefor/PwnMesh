@@ -3,13 +3,34 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	b "pwnmesh/internal/board"
 	"pwnmesh/internal/protocol"
 )
+
+func TestHTTPErrorCodesComeFromAuthority(t *testing.T) {
+	for _, test := range []struct {
+		name, code string
+		err        error
+	}{
+		{"coded", b.CodeStateChanged, b.CodedErr(409, b.CodeStateChanged, "the view expired")},
+		{"display_text", protocol.CodeRequestFailed, b.Err(409, "state_changed: input supplied text")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			writeError(w, httptest.NewRequest("POST", "/state/read", nil), fmt.Errorf("request: %w", test.err))
+			var body struct{ Code, Detail string }
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 409 || body.Code != test.code || body.Detail != test.err.Error() {
+				t.Fatalf("lost authoritative error: status=%d body=%s err=%v", w.Code, w.Body.String(), err)
+			}
+		})
+	}
+}
 
 func TestGraphReadRoutesShareStrictRequestDecoding(t *testing.T) {
 	f, _ := prepareUpdateFixture(t, "snapshot")

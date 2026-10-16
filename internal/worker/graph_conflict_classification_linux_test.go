@@ -6,11 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/protocol"
 )
 
 func TestGraphStateConflictRequiresDefinitiveMarker(t *testing.T) {
@@ -34,12 +38,67 @@ func TestGraphStateConflictRequiresDefinitiveMarker(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var err error
 			if test.message != "" {
-				err = errors.New(test.message)
+				err = protocol.LegacyGraphFailure(test.message)
 			}
 			if got := graphStateConflict(err); got != test.want {
 				t.Fatalf("graphStateConflict(%v) = %v, want %v", err, got, test.want)
 			}
 		})
+	}
+}
+
+func TestGraphResponseCodesOverrideDisplayText(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response GraphResponse
+		want     bool
+	}{
+		{"coded", GraphResponse{Failure: &protocol.RPCError{Code: board.CodeStateChanged, Status: 409, Detail: "the read view expired"}}, true},
+		{"display_is_not_code", GraphResponse{Error: "state_changed: stale", Failure: &protocol.RPCError{Code: protocol.CodeRequestFailed, Status: 409, Detail: "state_changed: user text"}}, false},
+		{"wrong_status", GraphResponse{Failure: &protocol.RPCError{Code: board.CodeStateChanged, Status: 422, Detail: "stale"}}, false},
+		{"retained_response", GraphResponse{Error: `board HTTP 409: {"detail":"state_changed: old response"}`}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			test.response.RequestID = strings.Repeat("a", 32)
+			raw, err := json.Marshal(test.response)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "response.json")
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err = readGraphResponse(path, test.response.RequestID)
+			if err == nil || graphStateConflict(fmt.Errorf("bridge: %w", err)) != test.want {
+				t.Fatalf("wrong response classification: %v", err)
+			}
+		})
+	}
+	if graphStateConflict(errors.New("state_changed: arbitrary tool text")) {
+		t.Fatal("role policy parsed untyped display text")
+	}
+}
+
+func TestGraphRolePolicyUsesInjectedTransport(t *testing.T) {
+	job := draftRunJob(t)
+	version := strings.Repeat("b", 64)
+	runtime := &roleRuntime{graph: graphRuntimeState{Version: job.Decision.StateVersion}, decision: &decisionDraft{}}
+	calls := 0
+	request := configureGraphRequest(job, Options{}, runtime, func(_ context.Context, request GraphRequest) (string, error) {
+		calls++
+		if !protocol.ValidGraphRequestID(request.RequestID) || request.ExpectedVersion != runtime.graph.Version {
+			t.Fatalf("policy did not bind request before transport: %+v", request)
+		}
+		if calls == 1 {
+			return `{"state_version":"` + version + `"}`, nil
+		}
+		return "", &protocol.RPCError{Code: board.CodeStateChanged, Status: 409, Detail: "expired view without a marker"}
+	})
+	if _, err := request(context.Background(), GraphRequest{Op: "read_graph", Section: "facts"}); err != nil || runtime.graph.Version != version {
+		t.Fatalf("transport receipt did not update policy cursor: %v %+v", err, runtime.graph)
+	}
+	if _, err := request(context.Background(), GraphRequest{Op: "read_graph", Section: "facts"}); !graphStateConflict(err) || !runtime.decision.reread || calls != 2 {
+		t.Fatalf("coded conflict did not invalidate the draft: err=%v runtime=%+v calls=%d", err, runtime, calls)
 	}
 }
 

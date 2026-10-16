@@ -79,7 +79,7 @@ func (t *Tx) ReasonLease(project string, input LeaseOperation) (Project, error) 
 				return Project{}, err
 			}
 			if *input.ExpectedVersion != DecisionStateVersion(state) {
-				return Project{}, Err(409, "state_changed: decision input is no longer current; read the graph before deciding again")
+				return Project{}, CodedErr(409, CodeStateChanged, "state_changed: decision input is no longer current; read the graph before deciding again")
 			}
 		}
 		lease.Heartbeat = t.Now
@@ -135,7 +135,7 @@ func (t *Tx) IntentLease(project, intent string, input LeaseOperation) (Intent, 
 		}
 		if err = t.StepHeartbeatReady(project, intent, fence.Run); err != nil {
 			if current.Worker != nil {
-				return Intent{}, Err(409, "dependency_invalidated: "+err.Error())
+				return Intent{}, CodedErr(409, CodeDependencyInvalidated, "dependency_invalidated: "+err.Error())
 			}
 			return Intent{}, err
 		}

@@ -63,7 +63,7 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
 			return err
 		}
 		if state.Graph.Project.OrchestrationVersion != 1 || current.RetryKey != CurationRetryKey(state) || current.StateVersion != DecisionStateVersion(state) {
-			return Err(409, "state_changed: curation retry input is no longer current")
+			return CodedErr(409, CodeStateChanged, "state_changed: curation retry input is no longer current")
 		}
 		receipt, err := t.CurationReceipt(current.ProjectID, current.Lease)
 		var apiError *APIError

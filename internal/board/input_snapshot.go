@@ -96,7 +96,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 			return SchedulePage{}, err
 		}
 		if expected != "" && expected != page.StateVersion {
-			return SchedulePage{}, Err(409, "state_changed: scheduling input changed")
+			return SchedulePage{}, CodedErr(409, CodeStateChanged, "state_changed: scheduling input changed")
 		}
 		if offset > count {
 			return SchedulePage{}, Err(422, "invalid scheduling offset")
@@ -119,7 +119,7 @@ func (t *Tx) ScheduleInput(project string, offset int, expected string) (Schedul
 	}
 	version := DecisionStateVersion(s)
 	if expected != "" && expected != version {
-		return SchedulePage{}, Err(409, "state_changed: scheduling input changed")
+		return SchedulePage{}, CodedErr(409, CodeStateChanged, "state_changed: scheduling input changed")
 	}
 	if offset > len(s.Graph.Intents) {
 		return SchedulePage{}, Err(422, "invalid scheduling offset")

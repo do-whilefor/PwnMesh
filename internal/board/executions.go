@@ -134,7 +134,7 @@ func (t *Tx) RegisterExecution(e Execution) error {
 			return Err(409, "previous_run_id does not identify an available retry for this task")
 		}
 		if e.Kind == "curate" && (previous.RetryKey != e.RetryKey || previous.Generation != metadata.Generation || previous.StateVersion != metadata.StateVersion) {
-			return Err(409, "state_changed: curation retry grant belongs to a different input")
+			return CodedErr(409, CodeStateChanged, "state_changed: curation retry grant belongs to a different input")
 		}
 		grant = &previous
 	}
@@ -235,7 +235,7 @@ func (t *Tx) ResumeExecution(e Execution) error {
 		resume = 1
 	}
 	if resume != 0 && e.Resumes >= 2 {
-		return Err(409, "Dispatcher recovery allowance exhausted")
+		return CodedErr(409, CodeRecoveryExhausted, "Dispatcher recovery allowance exhausted")
 	}
 	g, err := t.Load(e.ProjectID)
 	if err != nil {

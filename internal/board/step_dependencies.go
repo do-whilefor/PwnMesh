@@ -115,21 +115,21 @@ func (t *Tx) CheckExecutionDependencies(e Execution) error {
 		return err
 	}
 	if _, err := checkReviewExecutionScope(s, e); err != nil {
-		return Err(409, "dependency_invalidated: "+err.Error())
+		return CodedErr(409, CodeDependencyInvalidated, "dependency_invalidated: "+err.Error())
 	}
 	if err = t.stepReadyState(s, e.Intent, ""); err != nil {
-		return Err(409, "dependency_invalidated: "+err.Error())
+		return CodedErr(409, CodeDependencyInvalidated, "dependency_invalidated: "+err.Error())
 	}
 	expected, err := t.stepDependencyResults(s, e.Intent)
 	if err != nil {
-		return Err(409, "dependency_invalidated: "+err.Error())
+		return CodedErr(409, CodeDependencyInvalidated, "dependency_invalidated: "+err.Error())
 	}
 	var job struct {
 		DependencyResults []DependencyResult  `json:"dependency_results"`
 		Repair            *artifactcheck.Spec `json:"repair"`
 	}
 	if json.Unmarshal(e.Job, &job) != nil || !slices.Equal(expected, job.DependencyResults) {
-		return Err(409, "dependency_invalidated: registered upstream results do not match current successful dependencies")
+		return CodedErr(409, CodeDependencyInvalidated, "dependency_invalidated: registered upstream results do not match current successful dependencies")
 	}
 	var repair *artifactcheck.Spec
 	for _, step := range s.Steps {

@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	board "pwnmesh/internal/board/model"
+	"pwnmesh/internal/protocol"
 )
 
 func (s *Scheduler) schedulePage(ctx context.Context, id string, query url.Values) (board.SchedulePage, error) {
@@ -40,7 +41,7 @@ func (s *Scheduler) scheduleInput(ctx context.Context, id string) (board.Schedul
 			input = page
 		} else {
 			if page.StateVersion != input.StateVersion || page.Project.Generation != input.Project.Generation {
-				return input, errors.New("state_changed: scheduling pages do not match")
+				return input, &protocol.RPCError{Code: board.CodeStateChanged, Status: 409, Detail: "state_changed: scheduling pages do not match"}
 			}
 			input.Steps = append(input.Steps, page.Steps...)
 			for key, check := range page.ExecutionChecks {

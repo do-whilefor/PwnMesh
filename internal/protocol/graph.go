@@ -44,6 +44,7 @@ type GraphResponse struct {
 	RequestID string          `json:"request_id"`
 	Result    json.RawMessage `json:"result,omitempty"`
 	Error     string          `json:"error,omitempty"`
+	Failure   *RPCError       `json:"failure,omitempty"`
 }
 
 func ValidGraphDigest(value string) bool {
@@ -148,7 +149,7 @@ func GraphPage(s model.State, r GraphRequest) (any, error) {
 	}
 	version := model.DecisionStateVersion(s)
 	if r.ExpectedVersion != "" && r.ExpectedVersion != version {
-		return nil, errors.New("state_changed: graph changed since the previous view; read overview and re-read affected evidence before deciding")
+		return nil, &RPCError{Code: model.CodeStateChanged, Status: 409, Detail: "state_changed: graph changed since the previous view; read overview and re-read affected evidence before deciding"}
 	}
 	if err := validateGraphOffsets(r); err != nil {
 		return nil, err
@@ -328,7 +329,7 @@ type GraphContentPage struct {
 func GraphRecordContent(r GraphRequest, version string, raw []byte) (GraphContentPage, error) {
 	recordVersion := GraphRecordVersion(raw)
 	if r.RecordVersion != "" && r.RecordVersion != recordVersion {
-		return GraphContentPage{}, errors.New("state_changed: record changed since the previous fragment; re-read this record from byte_offset 0")
+		return GraphContentPage{}, &RPCError{Code: model.CodeStateChanged, Status: 409, Detail: "state_changed: record changed since the previous fragment; re-read this record from byte_offset 0"}
 	}
 	start := *r.ByteOffset
 	if start > len(raw) || (start < len(raw) && !utf8.RuneStart(raw[start])) {

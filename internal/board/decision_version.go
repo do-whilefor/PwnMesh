@@ -96,7 +96,7 @@ func (t *Tx) CheckDecisionStateVersion(state State, fence ExecutionFence, expect
 		}
 	}
 	if expected != "" && expected != DecisionStateVersion(state) {
-		return Err(409, "state_changed: decision input is no longer current; read the graph before deciding again")
+		return CodedErr(409, CodeStateChanged, "state_changed: decision input is no longer current; read the graph before deciding again")
 	}
 	return nil
 }

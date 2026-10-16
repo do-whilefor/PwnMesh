@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,9 +13,60 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/dispatcher"
 	"pwnmesh/internal/modelrpc"
 	"pwnmesh/internal/protocol"
 )
+
+func TestGraphBridgePreservesDispatcherErrorCode(t *testing.T) {
+	for _, code := range []string{board.CodeStateChanged, protocol.CodeRequestFailed} {
+		t.Run(code, func(t *testing.T) {
+			var response protocol.GraphResponse
+			client := &Client{http: &http.Client{Transport: inputTestTransport(func(request *http.Request) (*http.Response, error) {
+				body := ""
+				switch {
+				case request.Method == "PUT" && strings.HasSuffix(request.URL.Path, "/archive"):
+					archive := tar.NewReader(request.Body)
+					for {
+						header, err := archive.Next()
+						if err != nil {
+							return nil, err
+						}
+						if header.Typeflag != tar.TypeReg {
+							continue
+						}
+						if err := json.NewDecoder(archive).Decode(&response); err != nil {
+							return nil, err
+						}
+						break
+					}
+				case request.Method == "POST" && strings.HasSuffix(request.URL.Path, "/exec"):
+					body = `{"Id":"publish"}`
+				case request.URL.Path == "/exec/publish/start":
+				case request.URL.Path == "/exec/publish/json":
+					body = `{"Running":false,"ExitCode":0}`
+				default:
+					t.Fatalf("unexpected publication: %s %s", request.Method, request.URL.Path)
+				}
+				return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}}
+			boardClient := &dispatcher.Client{Base: "http://board.test", HTTP: &http.Client{Transport: inputTestTransport(func(*http.Request) (*http.Response, error) {
+				body := `{"code":"` + code + `","detail":"state_changed: display text is not authority"}`
+				return &http.Response{StatusCode: 409, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}}
+			client.SetGraphHandler(func(ctx context.Context, _ protocol.Job, _ protocol.GraphRequest) (any, error) {
+				return nil, fmt.Errorf("read failed: %w", boardClient.Do(ctx, "POST", "/state/read", nil, nil, nil))
+			})
+			request := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_graph"}
+			if err := client.graphBridge(context.Background(), "fixture", "/workspace/.pwnmesh/runs/run", protocol.Job{Kind: "explore", GraphRPC: true})(request); err != nil {
+				t.Fatal(err)
+			}
+			if response.RequestID != request.RequestID || response.Failure == nil || response.Failure.Code != code || response.Failure.Status != 409 || len(response.Result) != 0 || response.Error == "" {
+				t.Fatalf("bridge flattened or changed failure: %+v", response)
+			}
+		})
+	}
+}
 
 func TestGraphBridgeDeliversOversizedSuccessfulActionAsAcknowledgement(t *testing.T) {
 	var published []byte
