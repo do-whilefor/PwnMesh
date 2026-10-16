@@ -54,6 +54,9 @@ operations and execution use cases without running SQL. Use cases accept the
 caller's `board.Tx`; its public API exposes domain operations only. Store owns
 commit and rollback.
 
+The private query adapter forwards the caller's context to every SQL statement,
+so cancellation can interrupt active database work as well as pool waiting.
+
 Fact and Candidate publication appends one immutable metadata row and updates
 the header atomically, without rewriting historical records. It reuses the
 updated graph and metadata, refreshing execution and assets before projection.

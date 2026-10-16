@@ -28,18 +28,19 @@ type Queries interface {
 
 type queries struct {
 	transaction *sql.Tx
+	ctx         context.Context
 }
 
 func (q queries) Exec(query string, args ...any) (sql.Result, error) {
-	return q.transaction.Exec(query, args...)
+	return q.transaction.ExecContext(q.ctx, query, args...)
 }
 
 func (q queries) Query(query string, args ...any) (*sql.Rows, error) {
-	return q.transaction.Query(query, args...)
+	return q.transaction.QueryContext(q.ctx, query, args...)
 }
 
 func (q queries) QueryRow(query string, args ...any) *sql.Row {
-	return q.transaction.QueryRow(query, args...)
+	return q.transaction.QueryRowContext(q.ctx, query, args...)
 }
 
 func Open(path string) (*Store, error) {
@@ -109,7 +110,7 @@ func (s *Store) View(ctx context.Context, fn func(Queries) error) error {
 		return err
 	}
 	defer t.Rollback()
-	if err := fn(queries{transaction: t}); err != nil {
+	if err := fn(queries{transaction: t, ctx: ctx}); err != nil {
 		return err
 	}
 	return t.Commit()
@@ -123,7 +124,7 @@ func (s *Store) Do(ctx context.Context, fn func(Queries) error) error {
 		return err
 	}
 	defer t.Rollback()
-	if err := fn(queries{transaction: t}); err != nil {
+	if err := fn(queries{transaction: t, ctx: ctx}); err != nil {
 		return err
 	}
 	return t.Commit()
