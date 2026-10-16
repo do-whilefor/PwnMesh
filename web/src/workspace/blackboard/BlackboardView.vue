@@ -4,6 +4,8 @@ import type { CandidateDTO, EntityDTO, WorkspaceSnapshot } from '@/api/types';
 import { blackboardView } from '../model/blackboard';
 import type { DetailRecord } from '../details/detail';
 import { selectionDetail } from '../details/detail';
+import { nodePresentation } from '../graph/graph-view';
+import type { NodeType } from '../graph/types';
 
 const props = defineProps<{ state: WorkspaceSnapshot }>();
 const emit = defineEmits<{ read: [record: DetailRecord]; locate: [key: string] }>();
@@ -13,8 +15,9 @@ const assets = computed(() => props.state.assets || []);
 watch([() => props.state.graph.project.id, () => props.state.graph.project.generation], () => assetID.value = '');
 watch(assets, value => { if (!value.some(asset => asset.id === assetID.value)) assetID.value = ''; });
 const title = (record: EntityDTO) => record.claim || record.description || record.id;
-function read(kind: string, record: EntityDTO) {
-  const detail = selectionDetail({id: record.id, type: kind, key: kind + ':' + record.id, label: title(record), raw: record}, 'node', {label: kind, statusLabel: record.status || 'Recorded'}, props.state);
+function read(kind: NodeType | 'candidate', record: EntityDTO) {
+  const presentation = kind === 'candidate' ? {label: kind, statusLabel: record.status || 'candidate'} : nodePresentation({type: kind, key: kind + ':' + record.id, status: record.status || 'unknown', sources: record.sources, supportValid: record.support_valid, raw: {support_invalid: record.support_invalid, invalid_sources: record.invalid_sources}}, null);
+  const detail = selectionDetail({id: record.id, type: kind, key: kind + ':' + record.id, label: title(record), raw: record}, 'node', presentation, props.state);
   if (kind === 'candidate') {
     detail.nodeKey = undefined;
     const candidate = record as CandidateDTO;

@@ -5,13 +5,14 @@ import type { WorkspaceSnapshot } from '@/api/types';
 import { blackboardView } from '../model/blackboard';
 import { selectionDetail } from '../details/detail';
 import BlackboardView from './BlackboardView.vue';
+import { nodePresentation } from '../graph/graph-view';
 
 function fixture(): WorkspaceSnapshot {
   return {
     graph: {project: {id: 'project', title: 'Evidence', status: 'active', generation: 2}}, revision: 4,
     goals: [], steps: [{id: 'work', description: 'Inspect endpoint'}],
-    fact_records: [{id: 'raw', description: 'Raw observation', status: 'refuted'}, {id: 'derived', description: 'Computed observation', derived_from: ['raw'], support_invalid: true}],
-    findings: [{id: 'finding', claim: 'Curated claim', support_valid: false}],
+    fact_records: [{id: 'raw', description: 'Raw observation', status: 'refuted'}, {id: 'derived', description: 'Computed observation', status: 'valid', derived_from: ['raw'], support_invalid: true}],
+    findings: [{id: 'finding', claim: 'Curated claim', status: 'verified', sources: ['derived'], support_valid: false}],
     candidates: [{id: 'note', claim: 'Producer claim', status: 'verified', reason: 'Saved bytes', sources: ['derived'], supersedes: 'earlier'}],
     disputes: [{id: 'dispute', finding_id: 'finding', candidate_ids: ['note'], status: 'open', question: 'Independent check required', reason: 'Conflicting observations', review_step_ids: ['review'], review_fact_ids: ['raw']}],
     assets: [{id: 'a', kind: 'endpoint', value: 'https://example.test/a', method: 'GET'}, {id: 'b', kind: 'endpoint', value: 'https://example.test/b', method: 'GET'}],
@@ -36,6 +37,19 @@ test('Fact details keep derived sources separate from discovery associations', (
   expect(detail.meta).toContainEqual({label: 'Derived from', value: 'raw'});
   expect(detail.meta.find(item => item.label === 'Asset associations')?.value).toContain('Discovery via Step work');
   expect(detail.evidence).toEqual([]);
+});
+
+test('blackboard details retain the canvas support warning for invalid Facts and Findings', async () => {
+  const state = fixture(), wrapper = mount(BlackboardView, {props: {state}});
+  try {
+    for (const [kind, record] of [['fact', state.fact_records[1]], ['finding', state.findings[0]]] as const) {
+      await wrapper.get(`[data-record="${kind}:${record.id}"] .record-title`).trigger('click');
+      const expected = nodePresentation({type: kind, status: record.status!, raw: {support_invalid: record.support_invalid, invalid_sources: record.invalid_sources}, sources: record.sources, supportValid: record.support_valid}, null);
+      expect(expected.status).toBe('invalid');
+      expect(wrapper.emitted('read')?.at(-1)?.[0]).toMatchObject({meta: expect.arrayContaining([{label: expect.any(String), value: expected.statusLabel}])});
+      expect(expected.statusLabel).not.toBe(record.status);
+    }
+  } finally { wrapper.unmount(); }
 });
 
 test('workspace presents judgments and reviews, preserves filters on refresh, and clears them on round change', async () => {
