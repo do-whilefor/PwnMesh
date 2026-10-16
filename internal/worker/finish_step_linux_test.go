@@ -465,7 +465,9 @@ func TestFinishStepRemainsDisabledDuringConclusionAndRepair(t *testing.T) {
 				}
 				return agent.Text("assistant", incompleteOutput), nil
 			})
-			loop := agent.Loop{Provider: provider, Tools: []agent.Tool{f.tool()}, StopResult: f.result, Concluding: phase == "conclude", Repairing: phase == "repair"}
+			loop := agent.Loop{Provider: provider, Tools: []agent.Tool{f.tool()}, StopResult: f.result}
+			runtime := &sessionRuntime{state: session{Concluding: phase == "conclude", Repairing: phase == "repair"}, loop: &loop}
+			runtime.applyPhase()
 			if _, err := loop.Run(context.Background(), "phase fixture"); err != nil {
 				t.Fatal(err)
 			}

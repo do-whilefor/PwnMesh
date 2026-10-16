@@ -135,7 +135,7 @@ func TestObservedRequestMeasuresOncePerPreparedTurn(t *testing.T) {
 			}
 			loop.BeforeRequest = func(ctx context.Context, loop *Loop) (context.Context, error) {
 				if requests == 1 {
-					loop.Concluding = true // Tool definitions must be measured anew.
+					loop.ToolsDisabledReason = "tools disabled" // Tool definitions must be measured anew.
 					return ctx, loop.AppendInstruction("use the evidence to conclude")
 				}
 				return nil, nil

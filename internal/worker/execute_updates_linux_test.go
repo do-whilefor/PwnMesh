@@ -452,7 +452,7 @@ func TestExecuteUpdateFrozenPhasesOnlyPersistDeferredStatus(t *testing.T) {
 				f.state.ConcludeDeadline = f.state.StartedAt.Add(time.Duration(f.job.Budget.ConcludeTimeout) * time.Second)
 			} else {
 				f.state.RepairCount, f.state.RepairPrompt = 1, "frozen repair"
-				f.loop.RepairPrompt = f.state.RepairPrompt
+				f.loop.PinnedInstructions = []string{f.state.RepairPrompt}
 			}
 			if err := f.save(f.loop.History); err != nil {
 				t.Fatal(err)

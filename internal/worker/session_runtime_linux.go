@@ -128,8 +128,6 @@ func (r *sessionRuntime) saveAgentState(history []agent.Message, checkpoint *age
 	}
 	if l != nil {
 		state.TaskPrompt = l.TaskPrompt
-		state.ConclusionPrompt = l.ConclusionPrompt
-		state.RepairPrompt = l.RepairPrompt
 	}
 	if err := state.save(o.RunDir, journal); err != nil {
 		*state = before

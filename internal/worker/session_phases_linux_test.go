@@ -4,6 +4,7 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,43 @@ import (
 
 	"pwnmesh/internal/agent"
 )
+
+func TestLoopPolicyCannotRewriteDurablePhaseInput(t *testing.T) {
+	job, dir := outcomeJob(t, "explore"), t.TempDir()
+	runtime, err := restoreSession(job, Options{RunDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.journal.Close()
+	runtime.state.Concluding, runtime.state.Repairing = true, true
+	runtime.state.ConclusionPrompt, runtime.state.RepairPrompt = "frozen conclusion", "frozen repair"
+	runtime.loop = &agent.Loop{TaskPrompt: "task initialized by Loop"}
+	runtime.applyPhase()
+	if runtime.loop.ToolsDisabledReason != "all tools are disabled during conclusion; use the supplied snapshot and session evidence" {
+		t.Fatal("conclusion no longer has the original policy precedence")
+	}
+	runtime.loop.PinnedInstructions[0] = "private request scratch"
+	if err := runtime.saveAgentState(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"task_prompt": "task initialized by Loop", "conclusion_prompt": "frozen conclusion", "repair_prompt": "frozen repair"} {
+		var got string
+		if json.Unmarshal(saved[key], &got) != nil || got != want {
+			t.Fatalf("durable %s changed: %s", key, saved[key])
+		}
+	}
+	if saved["pinned_instructions"] != nil || saved["tools_disabled_reason"] != nil {
+		t.Fatal("request policy leaked into the durable session schema")
+	}
+}
 
 func TestPhaseTransitionSaveFailureKeepsCommittedState(t *testing.T) {
 	for _, transition := range []string{"conclusion", "repair", "continuation", "conclusion input"} {
@@ -32,7 +70,7 @@ func TestPhaseTransitionSaveFailureKeepsCommittedState(t *testing.T) {
 				// boundary even when persisting its conservative input fails.
 				runtime.state.Concluding = true
 				runtime.state.ConcludeStartedAt, runtime.state.ConcludeDeadline = now, now.Add(30*time.Second)
-				runtime.loop.Concluding = true
+				runtime.applyPhase()
 			}
 			if err := os.WriteFile(filepath.Join(dir, "output-proof.txt"), []byte("must not be read before the boundary commits"), 0600); err != nil {
 				t.Fatal(err)
@@ -41,6 +79,8 @@ func TestPhaseTransitionSaveFailureKeepsCommittedState(t *testing.T) {
 				t.Fatal(err)
 			}
 			before := runtime.state
+			beforePolicy := runtime.loop.ToolsDisabledReason
+			beforeInstructions := append([]string(nil), runtime.loop.PinnedInstructions...)
 			beforeHistory := append([]agent.Message(nil), runtime.loop.History...)
 			beforeDisk, err := os.ReadFile(filepath.Join(dir, "session.json"))
 			if err != nil {
@@ -69,7 +109,7 @@ func TestPhaseTransitionSaveFailureKeepsCommittedState(t *testing.T) {
 			if !reflect.DeepEqual(runtime.state, before) {
 				t.Fatal("failed phase save consumed an allowance or changed the in-memory committed state")
 			}
-			if runtime.loop.Concluding != before.Concluding || runtime.loop.Repairing != before.Repairing || runtime.loop.RepairPrompt != before.RepairPrompt || runtime.loop.ConclusionPrompt != before.ConclusionPrompt || !reflect.DeepEqual(runtime.loop.History, beforeHistory) {
+			if runtime.loop.ToolsDisabledReason != beforePolicy || !reflect.DeepEqual(runtime.loop.PinnedInstructions, beforeInstructions) || !reflect.DeepEqual(runtime.loop.History, beforeHistory) {
 				t.Fatal("failed phase save changed the Loop or appended a phase instruction")
 			}
 			if _, err := os.Stat(filepath.Join(dir, "evidence")); !os.IsNotExist(err) {

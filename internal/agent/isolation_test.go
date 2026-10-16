@@ -63,12 +63,13 @@ func TestConcurrentLoopsOwnSeedHistoryAndRecoveryCheckpoint(t *testing.T) {
 	seed[0] = Text("user", "shared immutable origin")
 	seed[0].Sequence = 1
 	checkpoint := &ContextCheckpoint{Version: ContextCheckpointVersion, LastSequence: 1, LastCompaction: &CompactionCheckpoint{Quotes: []SummaryQuote{{Text: "original quote"}}, Usage: &Usage{InputTokens: 3}}}
+	instructions := []string{"shared immutable restriction"}
 	var wg sync.WaitGroup
 	for _, name := range []string{"agent-a", "agent-b"} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			loop := &Loop{History: seed, Checkpoint: checkpoint, Provider: observedProvider{generate: func(_ context.Context, messages []Message, _ []Definition, _ Emit) (Message, error) {
+			loop := &Loop{History: seed, Checkpoint: checkpoint, PinnedInstructions: instructions, Provider: observedProvider{generate: func(_ context.Context, messages []Message, _ []Definition, _ Emit) (Message, error) {
 				if messages[len(messages)-1].Text() != name {
 					t.Errorf("foreign agent prompt: %+v", messages)
 				}
@@ -79,10 +80,11 @@ func TestConcurrentLoopsOwnSeedHistoryAndRecoveryCheckpoint(t *testing.T) {
 			}
 			loop.Checkpoint.LastCompaction.Quotes[0].Text = name
 			loop.Checkpoint.LastCompaction.Usage.InputTokens = 99
+			loop.PinnedInstructions[0] = name
 		}()
 	}
 	wg.Wait()
-	if seed[0].Text() != "shared immutable origin" || !reflect.DeepEqual(seed[1:cap(seed)], make([]Message, cap(seed)-1)) || checkpoint.LastSequence != 1 || checkpoint.LastCompaction.Quotes[0].Text != "original quote" || checkpoint.LastCompaction.Usage.InputTokens != 3 {
+	if seed[0].Text() != "shared immutable origin" || !reflect.DeepEqual(seed[1:cap(seed)], make([]Message, cap(seed)-1)) || checkpoint.LastSequence != 1 || checkpoint.LastCompaction.Quotes[0].Text != "original quote" || checkpoint.LastCompaction.Usage.InputTokens != 3 || instructions[0] != "shared immutable restriction" {
 		t.Fatalf("seed mutated by a child session: %+v %+v", seed[:cap(seed)], checkpoint)
 	}
 }

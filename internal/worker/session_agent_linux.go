@@ -18,7 +18,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 	finish := func(r Result) (Result, error) { return runtime.finish(ctx, r) }
 	var err error
 	o = contextOptions(o)
-	l := &agent.Loop{Provider: o.Provider, Tools: runtime.roles.tools, History: state.History, Emit: emit,
+	l := &agent.Loop{Provider: o.Provider, Tools: runtime.roles.tools, History: state.History, TaskPrompt: state.TaskPrompt, Emit: emit,
 		Checkpoint: state.ContextCheckpoint, SaveState: runtime.saveAgentState,
 		ContextBytes: o.ContextBytes, ContextTokens: o.ContextTokens, ContextTargetTokens: o.ContextTargetTokens,
 		ObserveRequests: true, ContextData: state.ExecuteUpdates.contextData()}
@@ -35,8 +35,8 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 		if err != nil {
 			return finish(Result{Type: "result", Status: "failed", Conclude: true, Error: err.Error()})
 		}
-		if !containsInstruction(l.History, l.ConclusionPrompt) {
-			prompt = l.ConclusionPrompt
+		if !containsInstruction(l.History, state.ConclusionPrompt) {
+			prompt = state.ConclusionPrompt
 		}
 	}
 	if protocol.ControlJob(j) && (j.Budget.Timeout > 0 || !state.ReasonDeadline.IsZero()) {
@@ -47,7 +47,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 		runCtx = reasonCtx
 		phases.phaseCtx = reasonCtx
 	}
-	repairRecovery := state.phaseState().ResumeRepair(containsInstruction(l.History, l.RepairPrompt), runtime.infrastructureResume)
+	repairRecovery := state.phaseState().ResumeRepair(containsInstruction(l.History, state.RepairPrompt), runtime.infrastructureResume)
 	if repairRecovery != phase.NoRepairRecovery {
 		switch repairRecovery {
 		case phase.ReuseRepairRequest:
@@ -60,10 +60,10 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 			prompt, err = phases.startRepair(runCtx, &outputFailure{Reason: "interrupted_repair", Detail: "the previous repair request has no durable response"})
 		case phase.PrepareRepairRequest:
 			err = phases.prepareRepairHistory()
-			prompt = l.RepairPrompt
+			prompt = state.RepairPrompt
 		}
 		if err != nil {
-			return finish(Result{Type: "result", Status: "failed", Conclude: l.Concluding, Error: err.Error()})
+			return finish(Result{Type: "result", Status: "failed", Conclude: state.Concluding, Error: err.Error()})
 		}
 	}
 	if len(l.History) == 0 {
@@ -73,8 +73,8 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 				return Result{}, err
 			}
 		}
-		if l.Concluding {
-			prompt = l.ConclusionPrompt
+		if state.Concluding {
+			prompt = state.ConclusionPrompt
 		} else {
 			prompt, err = Prompt(j, false)
 		}
@@ -86,10 +86,10 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 			// A model turn may have been saved immediately before the worker crashed.
 			runCtx, prompt, err = l.OnTurnEnd(runCtx, l, last)
 			if err != nil {
-				return finish(Result{Type: "result", Status: "failed", Text: last.Text(), Conclude: l.Concluding, Error: err.Error()})
+				return finish(Result{Type: "result", Status: "failed", Text: last.Text(), Conclude: state.Concluding, Error: err.Error()})
 			}
 			if prompt == "" {
-				return finish(Result{Type: "result", Status: "success", Text: last.Text(), Conclude: l.Concluding})
+				return finish(Result{Type: "result", Status: "success", Text: last.Text(), Conclude: state.Concluding})
 			}
 		}
 	}
@@ -98,7 +98,7 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 	if len(l.History) > 0 && phases.shouldConclude() {
 		runCtx, err = phases.startConclusion()
 		if err == nil {
-			prompt = l.ConclusionPrompt
+			prompt = state.ConclusionPrompt
 		}
 		if err != nil {
 			return Result{}, err
@@ -118,10 +118,10 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	r := Result{Type: "result", Status: "success", Text: text, Conclude: l.Concluding}
+	r := Result{Type: "result", Status: "success", Text: text, Conclude: state.Concluding}
 	if _, committed := runtime.roles.stopResult(); runErr == nil && !committed {
 		if last, ok := lastAssistant(l.History); ok {
-			if problem := outputProblem(j, l.Concluding, last); problem != nil {
+			if problem := outputProblem(j, state.Concluding, last); problem != nil {
 				runErr = problem
 			}
 		} else {

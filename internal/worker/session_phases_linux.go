@@ -66,19 +66,21 @@ func (p *sessionPhases) startConclusion() (context.Context, error) {
 	}
 	p.endCancel = cancel
 	p.phaseCtx = next
-	if state.ConclusionInputVersion != conclusionInputVersion || l.ConclusionPrompt == "" {
+	if state.ConclusionInputVersion != conclusionInputVersion || state.ConclusionPrompt == "" {
 		input, refs, err := conclusionInputWithEvidence(next, j, o.RunDir, !wasConcluding)
 		if err != nil {
 			return nil, err
 		}
-		before, beforePrompt := *state, l.ConclusionPrompt
-		state.ConclusionPrompt, l.ConclusionPrompt = input, input
+		before := *state
+		state.ConclusionPrompt = input
 		state.ConclusionEvidence = refs
 		state.ConclusionInputVersion = conclusionInputVersion
+		p.runtime.applyPhase()
 		// Persist the frozen input before another model request. Recovery
 		// reuses it even if files have changed or disappeared since then.
 		if err = save(l.History); err != nil {
-			*state, l.ConclusionPrompt = before, beforePrompt
+			*state = before
+			p.runtime.applyPhase()
 			return nil, err
 		}
 	}
@@ -102,7 +104,7 @@ func (p *sessionPhases) shouldConclude() bool {
 func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop) (context.Context, error) {
 	state := &p.runtime.state
 
-	if !loop.Concluding && !loop.Repairing && !p.shouldConclude() {
+	if !state.Concluding && !state.Repairing && !p.shouldConclude() {
 		if err := state.ToolProgress.problem(); err != nil {
 			return nil, err
 		}
@@ -119,7 +121,7 @@ func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop)
 			return err
 		}
 		turnCtx = next
-		return loop.AppendInstruction(loop.ConclusionPrompt)
+		return loop.AppendInstruction(state.ConclusionPrompt)
 	}
 	if p.shouldConclude() {
 		if err := concludeAtBoundary(); err != nil {
@@ -143,19 +145,19 @@ func (p *sessionPhases) beforeRequest(turnCtx context.Context, loop *agent.Loop)
 }
 
 func (p *sessionPhases) prepareRepairHistory() error {
-	l := p.runtime.loop
+	l, state := p.runtime.loop, &p.runtime.state
 
 	if err := l.RepairHistory(); err != nil {
 		return err
 	}
-	if l.Concluding && !containsInstruction(l.History, l.ConclusionPrompt) {
-		return l.AppendInstruction(l.ConclusionPrompt)
+	if state.Concluding && !containsInstruction(l.History, state.ConclusionPrompt) {
+		return l.AppendInstruction(state.ConclusionPrompt)
 	}
 	return nil
 }
 
 func (p *sessionPhases) startRepair(turnCtx context.Context, problem *outputFailure) (string, error) {
-	j, state, l := p.runtime.job, &p.runtime.state, p.runtime.loop
+	j, state := p.runtime.job, &p.runtime.state
 	if err := turnCtx.Err(); err != nil {
 		return "", err
 	}
@@ -166,7 +168,7 @@ func (p *sessionPhases) startRepair(turnCtx context.Context, problem *outputFail
 	if err != nil {
 		return "", err
 	}
-	instruction, err := repairInstruction(j, l.Concluding, next.RepairCount, problem)
+	instruction, err := repairInstruction(j, state.Concluding, next.RepairCount, problem)
 	if err != nil {
 		return "", err
 	}
@@ -219,7 +221,7 @@ func (p *sessionPhases) onTurnEnd(turnCtx context.Context, l *agent.Loop, m agen
 		return nil, "", errors.New(p.runtime.roles.graph.Conflict)
 	}
 	hasCalls := hasToolCalls(m)
-	if hasCalls && !l.Concluding && !l.Repairing && !truncated(m) && !p.shouldConclude() {
+	if hasCalls && !state.Concluding && !state.Repairing && !truncated(m) && !p.shouldConclude() {
 		if err := state.ToolProgress.problem(); err != nil {
 			return nil, "", err
 		}
@@ -242,10 +244,10 @@ func (p *sessionPhases) onTurnEnd(turnCtx context.Context, l *agent.Loop, m agen
 			turn.Rejected = err == nil && parsed.Kind == "rejected"
 		}
 	} else {
-		problem = outputProblem(j, l.Concluding, m)
+		problem = outputProblem(j, state.Concluding, m)
 		turn.InvalidResult = problem != nil
 		if problem == nil {
-			parsed, err := parseOutput(j, l.Concluding, m.Text())
+			parsed, err := parseOutput(j, state.Concluding, m.Text())
 			if err != nil {
 				return nil, "", err
 			}
@@ -264,7 +266,7 @@ func (p *sessionPhases) onTurnEnd(turnCtx context.Context, l *agent.Loop, m agen
 			instruction, err := p.startRepair(next, problem)
 			return next, instruction, err
 		}
-		return next, l.ConclusionPrompt, nil
+		return next, state.ConclusionPrompt, nil
 	case phase.Repair:
 		instruction, err := p.startRepair(turnCtx, problem)
 		return turnCtx, instruction, err

@@ -19,12 +19,12 @@ type Loop struct {
 	// Original messages remain in message_end events.
 	SaveState  func([]Message, *ContextCheckpoint) error
 	Checkpoint *ContextCheckpoint
-	Concluding bool
-	Repairing  bool
-	// Task and conclusion instructions remain verbatim across every compaction.
-	TaskPrompt       string
-	ConclusionPrompt string
-	RepairPrompt     string
+	// A nonempty reason both hides tools and rejects calls. The runtime owns
+	// the policy and its explanation; Loop has no application-specific phases.
+	ToolsDisabledReason string
+	// Task and ordered runtime instructions survive every compaction verbatim.
+	TaskPrompt         string
+	PinnedInstructions []string
 	// ContextData retains bounded runtime task data verbatim during compaction.
 	// Callers persist and restore it separately from task and phase instructions.
 	ContextData []string
@@ -124,9 +124,6 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 		} else {
 			l.TaskPrompt = prompt
 		}
-	}
-	if l.Concluding && l.ConclusionPrompt == "" && prompt != "" {
-		l.ConclusionPrompt = prompt
 	}
 	if err := l.RepairHistory(); err != nil {
 		return "", err
@@ -256,11 +253,6 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 				ctx = next
 			}
 			if instruction != "" {
-				if l.Repairing {
-					l.RepairPrompt = instruction
-				} else if l.Concluding {
-					l.ConclusionPrompt = instruction
-				}
 				if err = l.append(Text("user", instruction)); err != nil {
 					return last, err
 				}
@@ -306,10 +298,8 @@ func (l *Loop) execute(ctx context.Context, calls []Block, truncated bool) []Blo
 			err = errors.New("the runtime already committed a terminal result; remaining calls were not executed")
 		case ctx.Err() != nil:
 			err = ctx.Err()
-		case l.Concluding:
-			err = errors.New("all tools are disabled during conclusion; use the supplied snapshot and session evidence")
-		case l.Repairing:
-			err = errors.New("all tools are disabled during result-format repair; use existing session evidence")
+		case l.ToolsDisabledReason != "":
+			err = errors.New(l.ToolsDisabledReason)
 		case t == nil:
 			err = fmt.Errorf("unknown tool %q", c.Name)
 		default:

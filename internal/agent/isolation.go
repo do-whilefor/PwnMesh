@@ -8,6 +8,7 @@ func (l *Loop) ownState() {
 	if !l.stateOwned {
 		l.History = cloneMessages(l.History)
 		l.Checkpoint = cloneCheckpoint(l.Checkpoint)
+		l.PinnedInstructions = slices.Clone(l.PinnedInstructions)
 		l.stateOwned = true
 	}
 }

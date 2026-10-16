@@ -167,7 +167,7 @@ func TestPhaseDeltasRetainTaskThroughCompaction(t *testing.T) {
 	}
 	requests, summaries := 0, 0
 	loop := agent.Loop{
-		TaskPrompt: task, ConclusionPrompt: conclusion, RepairPrompt: repair, Concluding: true, Repairing: true,
+		TaskPrompt:   task,
 		ContextBytes: 16000, SummaryBytes: 2048, RecentBytes: 128,
 		History: []agent.Message{agent.Text("user", task), agent.Text("assistant", strings.Repeat("Old unverified observation. ", 3000)), agent.Text("user", conclusion), agent.Text("assistant", "invalid result"), agent.Text("user", repair)},
 		Provider: scenarioProvider(func(_ context.Context, history []agent.Message, definitions []agent.Definition, _ agent.Emit) (agent.Message, error) {
@@ -187,6 +187,8 @@ func TestPhaseDeltasRetainTaskThroughCompaction(t *testing.T) {
 			return agent.Text("assistant", incompleteOutput), nil
 		}),
 	}
+	runtime := &sessionRuntime{state: session{ConclusionPrompt: conclusion, RepairPrompt: repair, Concluding: true, Repairing: true}, loop: &loop}
+	runtime.applyPhase()
 	if _, err := loop.Run(context.Background(), ""); err != nil || requests != 1 || summaries != 1 || loop.Checkpoint.CompactionCount != 1 {
 		t.Fatalf("compaction failed: err=%v requests=%d summaries=%d", err, requests, summaries)
 	}

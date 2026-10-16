@@ -84,7 +84,7 @@ func TestSessionSaveUsesSuppliedCheckpointAndRollsBackRejectedSave(t *testing.T)
 	if err := json.Unmarshal(before, &saved); err != nil {
 		t.Fatal(err)
 	}
-	if saved.ContextCheckpoint.LastSequence != 3 || saved.GraphVersion != "accepted" {
+	if saved.ContextCheckpoint.LastSequence != 3 || saved.GraphVersion != "accepted" || saved.TaskPrompt != "original task" {
 		t.Fatalf("save ignored its checkpoint or graph snapshot: %+v", saved)
 	}
 	// Live graph progress has no pointer into the last saved session snapshot.

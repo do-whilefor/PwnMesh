@@ -87,7 +87,7 @@ func (l *Loop) initCheckpoint() error {
 
 func (l *Loop) definitions() []Definition {
 	var defs []Definition
-	if !l.Concluding && !l.Repairing {
+	if l.ToolsDisabledReason == "" {
 		for _, t := range l.Tools {
 			defs = append(defs, t.Definition)
 		}
@@ -185,7 +185,11 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 	}
 	// Runtime task data remains verbatim too. Exclude exact copies from the
 	// summary and tail, and charge the retained data to the same hard budget.
-	pinned := map[string]bool{l.TaskPrompt: true, l.ConclusionPrompt: true, l.RepairPrompt: true}
+	instructions := append([]string(nil), l.PinnedInstructions...)
+	pinned := map[string]bool{l.TaskPrompt: true}
+	for _, instruction := range instructions {
+		pinned[instruction] = true
+	}
 	var contextData []string
 	for _, data := range l.ContextData {
 		if data != "" && !pinned[data] {
@@ -211,11 +215,10 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 		for _, data := range contextData {
 			out = append(out, Text("user", data))
 		}
-		if l.ConclusionPrompt != "" {
-			out = append(out, Text("user", l.ConclusionPrompt))
-		}
-		if l.RepairPrompt != "" {
-			out = append(out, Text("user", l.RepairPrompt))
+		for _, instruction := range instructions {
+			if instruction != "" {
+				out = append(out, Text("user", instruction))
+			}
 		}
 		return out
 	}

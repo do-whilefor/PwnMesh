@@ -305,10 +305,10 @@ func contextDataTestLoop(data string) *Loop {
 func TestContextDataSurvivesCompactionWithoutSummarySupport(t *testing.T) {
 	data := `{"version":7,"correction":"` + strings.Repeat("exact source bytes ", 200) + `"}`
 	loop := contextDataTestLoop(data)
-	loop.Concluding, loop.Repairing = true, true
-	loop.ConclusionPrompt, loop.RepairPrompt = "use the frozen evidence", "repair the result format"
-	loop.ContextData = []string{data, data, "pending dependencies remain", loop.TaskPrompt, loop.ConclusionPrompt, loop.RepairPrompt}
-	loop.History = append(loop.History, Text("user", "recent boundary"), Text("user", data), Text("user", loop.ConclusionPrompt), Text("user", loop.RepairPrompt))
+	loop.ToolsDisabledReason = "use retained evidence"
+	loop.PinnedInstructions = []string{"use the frozen evidence", "repair the result format"}
+	loop.ContextData = []string{data, data, "pending dependencies remain", loop.TaskPrompt, loop.PinnedInstructions[0], loop.PinnedInstructions[1]}
+	loop.History = append(loop.History, Text("user", "recent boundary"), Text("user", data), Text("user", loop.PinnedInstructions[0]), Text("user", loop.PinnedInstructions[1]))
 	requests, summaries := 0, 0
 	loop.Provider = beforeRequestProvider{
 		generate: func(_ context.Context, messages []Message) (Message, error) {
@@ -319,12 +319,12 @@ func TestContextDataSurvivesCompactionWithoutSummarySupport(t *testing.T) {
 					counts[message.Text()]++
 				}
 			}
-			for _, text := range []string{data, "pending dependencies remain", loop.TaskPrompt, loop.ConclusionPrompt, loop.RepairPrompt} {
+			for _, text := range []string{data, "pending dependencies remain", loop.TaskPrompt, loop.PinnedInstructions[0], loop.PinnedInstructions[1]} {
 				if counts[text] != 1 {
 					t.Fatalf("retained task data or instructions lost/duplicated: count=%d text=%q", counts[text], text)
 				}
 			}
-			for offset, want := range []string{data, "pending dependencies remain", loop.ConclusionPrompt, loop.RepairPrompt} {
+			for offset, want := range []string{data, "pending dependencies remain", loop.PinnedInstructions[0], loop.PinnedInstructions[1]} {
 				if messages[len(messages)-4+offset].Text() != want {
 					t.Fatal("runtime data was not rebuilt after the tail and before phase instructions")
 				}
