@@ -334,8 +334,9 @@ func (t *Tx) addFactRelation(s State, d *stateData, fence ExecutionFence, raw js
 			return input.Target, relation, false, nil
 		}
 	}
-	// Relations point from old target to its new corrective source. Reject
-	// cycles so an observation can never invalidate itself through a chain.
+	// Relations point from old target to its new corrective source. Include
+	// evidence prerequisites so a correction cannot invalidate its own support.
+	dependencies := s.FactDependencies()
 	seen := map[string]bool{}
 	var reaches func(string) bool
 	reaches = func(id string) bool {
@@ -346,6 +347,11 @@ func (t *Tx) addFactRelation(s State, d *stateData, fence ExecutionFence, raw js
 			return false
 		}
 		seen[id] = true
+		for _, dependency := range dependencies[id] {
+			if reaches(dependency.ID) {
+				return true
+			}
+		}
 		for _, relation := range d.FactRelations {
 			if relation.Target == id && reaches(relation.Source) {
 				return true

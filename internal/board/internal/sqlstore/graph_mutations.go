@@ -48,6 +48,12 @@ func RevokeRun(q Queries, project, worker string) error {
 	return err
 }
 
+func RevokePendingStepRuns(q Queries, project, step string, generation int64) error {
+	_, err := q.Exec(`INSERT OR IGNORE INTO pwnmesh_revoked_runs(project_id,worker)
+SELECT project_id,lease FROM pwnmesh_executions WHERE project_id=? AND intent=? AND generation=? AND kind='explore' AND `+PendingExecutionSQL, project, step, generation)
+	return err
+}
+
 func InsertAssetAnchors(q Queries, project string, generation int64, kind, id string, assets []model.Asset) error {
 	for _, asset := range assets {
 		if _, err := q.Exec("INSERT OR IGNORE INTO pwnmesh_assets(project_id,id,kind,value,method) VALUES(?,?,?,?,?)", project, asset.ID, asset.Kind, asset.Value, asset.Method); err != nil {

@@ -49,12 +49,18 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 		pending("legacy_revision_unknown")
 	}
 	span := current.Revision - cursor.Revision
-	if span > 1000 {
-		pending("event_limit")
-	} else if int64(len(events)) != span {
+	// A long-lived Execute can outgrow the event page. Rebaseline only its
+	// immutable dependency scope from this transaction's current state instead
+	// of pretending that the truncated event history was read. Every causal
+	// record must fit before the Worker may advance its identity-bound cursor.
+	out.Rebased = baselineKnown && span > model.MaxExecuteUpdateEvents
+	if !out.Rebased && int64(len(events)) != span {
 		pending("event_gap")
 	}
 	for i, event := range events {
+		if out.Rebased {
+			break
+		}
 		if event.Revision != cursor.Revision+int64(i)+1 || event.Revision > current.Revision || event.ID == "" {
 			pending("event_gap")
 		}
@@ -64,11 +70,19 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 			pending("unknown_event")
 		}
 	}
-	// Follow explicit derivations and corrective sources, never a common producer
-	// or ordinary newly published facts. Cap traversal even for corrupt cycles.
+	// Follow the same prerequisites as effective support, plus corrective
+	// sources. Never expand unrelated raw observations from a common producer.
 	const maxNodes = 256
 	selected := map[string]bool{}
 	queue := []string{}
+	immutableInputs := map[string]bool{}
+	if out.Rebased {
+		for _, fact := range current.FactRecords {
+			if (fact.ID == "origin" || fact.ID == "goal") && fact.Status == "input" && fact.Legacy && fact.SourceStepID == "" && len(fact.DerivedFrom)+len(fact.Evidence) == 0 {
+				immutableInputs[fact.ID] = true
+			}
+		}
+	}
 	add := func(id string) {
 		if selected[id] {
 			return
@@ -82,27 +96,30 @@ func BuildExecuteUpdates(current State, cursor ExecuteUpdateCursor, sources []st
 		queue = append(queue, id)
 	}
 	for _, id := range sources {
+		if immutableInputs[id] {
+			continue // Already retained in the registered immutable Job input.
+		}
 		add(id)
 	}
 	byTarget := map[string][]int{}
-	derivations := map[string][]string{}
-	for _, fact := range current.FactRecords {
-		derivations[fact.ID] = fact.DerivedFrom
-	}
+	dependencies := current.FactDependencies()
 	for i, relation := range current.FactRelations {
 		if executeCorrection(relation.Kind) {
 			byTarget[relation.Target] = append(byTarget[relation.Target], i)
 		}
 	}
 	for i := 0; i < len(queue); i++ {
-		for _, source := range derivations[queue[i]] {
-			add(source)
+		for _, source := range dependencies[queue[i]] {
+			if source.ID == "origin" || source.ID == "goal" {
+				continue // Immutable user inputs are already bound in the Job.
+			}
+			add(source.ID)
 		}
 		for _, index := range byTarget[queue[i]] {
 			add(current.FactRelations[index].Source)
 		}
 	}
-	relevant := !out.Complete
+	relevant := out.Rebased || !out.Complete
 	curated := slices.ContainsFunc(events, func(event StateChange) bool { return event.Op == "curate" })
 	curationRelevant := curated && current.ValidateFactSources(sources, false) != nil
 	for _, event := range events {

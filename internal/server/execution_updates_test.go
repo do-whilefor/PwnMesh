@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"reflect"
@@ -10,6 +11,46 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/protocol"
 )
+
+func TestExecutionUpdatesRebaselineBeyondEventPage(t *testing.T) {
+	f, job := prepareUpdateFixture(t, "snapshot")
+	before := f.state()
+	// Seed only event-index churn: the correction deliberately lands beyond
+	// the first page, so scanning those 1000 events cannot discover its ID.
+	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
+		for revision := before.Revision + 1; revision <= before.Revision+1001; revision++ {
+			event, _ := json.Marshal(board.StateEvent{Revision: revision, Op: "hint", ID: "unrelated", CreatedAt: tx.Now})
+			if _, err := tx.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", f.project, revision, string(event)); err != nil {
+				return err
+			}
+		}
+		_, err := tx.Exec("UPDATE pwnmesh_state SET revision=revision+1001 WHERE project_id=?", f.project)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.refute()
+	path := f.base() + "/executions/" + f.run + "/updates"
+	var update, repeated board.ExecuteUpdates
+	f.request("POST", path, updateRead(nil), true, http.StatusOK, &update)
+	f.request("POST", path, updateRead(nil), true, http.StatusOK, &repeated)
+	if !update.Complete || !update.Rebased || update.FromRevision != job.InputSnapshot.Revision || len(update.Relations) != 1 || len(update.Facts) != 2 || !reflect.DeepEqual(update, repeated) {
+		t.Fatalf("backlog did not yield a repeatable complete dependency rebaseline: %+v", update)
+	}
+	cursor := update.ExecuteUpdateCursor
+	cursor.Revision = update.ToRevision
+	bad := cursor
+	bad.Generation++
+	f.request("POST", path, updateRead(&bad), true, http.StatusUnprocessableEntity, nil)
+	// A later write must remain beyond the acknowledged snapshot boundary.
+	f.curateRelations(map[string]any{"kind": "narrows", "source": f.correction, "target": f.source, "reason": "Retain the more precise corrected scope"})
+	var after board.ExecuteUpdates
+	f.request("POST", path, updateRead(&cursor), true, http.StatusOK, &after)
+	if !after.Complete || after.Rebased || after.FromRevision != cursor.Revision || after.ToRevision <= cursor.Revision || len(after.Relations) != 2 {
+		t.Fatalf("rebaseline swallowed a later correction: %+v", after)
+	}
+}
 
 func prepareUpdateFixture(t *testing.T, input string) (*stepInvalidationFixture, protocol.Job) {
 	t.Helper()

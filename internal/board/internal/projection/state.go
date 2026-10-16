@@ -119,6 +119,7 @@ func Build(g model.Graph, d Metadata, revision, decision int64, runs []model.Exe
 // success and every original observation. Accepted results carry their Step's
 // prerequisites; other Facts carry only explicitly declared derivations.
 func projectStepSupport(s *model.State, latest map[string]model.ExecutionSummary, currentRuns map[string]bool) {
+	dependencies := s.FactDependencies()
 	steps := map[string]*model.Step{}
 	facts := map[string]*model.FactRecord{}
 	owners := map[string]string{}
@@ -146,8 +147,14 @@ func projectStepSupport(s *model.State, latest map[string]model.ExecutionSummary
 		if fact == nil {
 			return false
 		}
-		for _, source := range fact.DerivedFrom {
-			if !effective(source, true) {
+		for _, source := range dependencies[id] {
+			if source.StepID != "" {
+				if !supports(source.StepID) {
+					return false
+				}
+				continue
+			}
+			if !effective(source.ID, source.Observation) {
 				return false
 			}
 		}
@@ -191,14 +198,16 @@ func projectStepSupport(s *model.State, latest map[string]model.ExecutionSummary
 		if len(step.From) == 0 {
 			return false
 		}
-		for _, source := range step.From {
-			if !effective(source, false) {
-				return false
+		if *step.Result == "goal" {
+			for _, source := range step.From {
+				if !effective(source, false) {
+					return false
+				}
 			}
-		}
-		for _, upstream := range step.DependsOn {
-			if !supports(upstream) {
-				return false
+			for _, upstream := range step.DependsOn {
+				if !supports(upstream) {
+					return false
+				}
 			}
 		}
 		valid[id] = true

@@ -66,8 +66,12 @@ func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, a
 			if dispute.ID != step.DisputeID {
 				continue
 			}
+			reviews, err := currentDisputeReviewSteps(dispute)
+			if err != nil {
+				return "", nil, false, err
+			}
 			for _, other := range s.Steps {
-				if other.ID != id && slices.Contains(dispute.ReviewStepIDs, other.ID) && contextActiveStep(other.Status) {
+				if other.ID != id && slices.Contains(reviews, other.ID) && contextActiveStep(other.Status) {
 					return "", nil, false, Err(409, "dispute already has another active independent review")
 				}
 			}

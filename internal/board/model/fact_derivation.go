@@ -8,6 +8,48 @@ import (
 
 const MaxFactDerivationSources = 32
 
+// FactDependency is a prerequisite of an observation's effective support.
+// Planning inputs may include origin; explicit derivations and accepted
+// upstream results must be evidence-backed observations.
+type FactDependency struct {
+	ID          string
+	Observation bool
+	StepID      string
+}
+
+// FactDependencies is shared by support projection, correction admission and
+// execution updates. Only an accepted result inherits its Step prerequisites;
+// unrelated raw observations never inherit a producer's other work.
+func (s State) FactDependencies() map[string][]FactDependency {
+	dependencies := make(map[string][]FactDependency, len(s.FactRecords))
+	for _, fact := range s.FactRecords {
+		for _, source := range fact.DerivedFrom {
+			dependencies[fact.ID] = append(dependencies[fact.ID], FactDependency{ID: source, Observation: true})
+		}
+	}
+	if s.Graph.Project.OrchestrationVersion != 1 {
+		return dependencies
+	}
+	steps := make(map[string]Step, len(s.Steps))
+	for _, step := range s.Steps {
+		steps[step.ID] = step
+	}
+	for _, step := range s.Steps {
+		if step.Result == nil || *step.Result == "goal" || s.ExternalFeedbackStep(step) {
+			continue
+		}
+		for _, source := range step.From {
+			dependencies[*step.Result] = append(dependencies[*step.Result], FactDependency{ID: source})
+		}
+		for _, upstream := range step.DependsOn {
+			// Keep missing results as unsatisfied dependencies; never silently
+			// turn an incomplete or malformed prerequisite into valid support.
+			dependencies[*step.Result] = append(dependencies[*step.Result], FactDependency{ID: Value(steps[upstream].Result), Observation: true, StepID: upstream})
+		}
+	}
+	return dependencies
+}
+
 // ParseFactDerivation preserves an absent field's historical encoding. Sources
 // are immutable observation identities, never prose or forward references.
 func ParseFactDerivation(raw json.RawMessage) ([]string, error) {

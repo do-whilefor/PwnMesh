@@ -219,6 +219,54 @@ func TestExecuteUpdateCheckpointSavedBeforeRequestSurvivesRecovery(t *testing.T)
 	}
 }
 
+func TestExecuteUpdateRebaselineCommitsOnlyCompleteRetainedReview(t *testing.T) {
+	f := newUpdateSessionFixture(t)
+	pending := f.response(5, 2008, "context_budget")
+	pending.Rebased = true
+	pending.Omitted["facts"] = 1
+	if err := f.refresh(updateResponseReader(t, pending, 5)); err != nil {
+		t.Fatal(err)
+	}
+	f.reopen()
+	if saved := f.diskState(); saved.ExecuteUpdates.Cursor.Revision != 5 || saved.ExecuteUpdates.ObservedThrough != 2008 {
+		t.Fatal("incomplete rebaseline advanced its acknowledged cursor")
+	}
+	complete := f.response(5, 2009, "")
+	complete.Rebased = true
+	if err := f.refresh(updateResponseReader(t, complete, 5)); err != nil {
+		t.Fatal(err)
+	}
+	f.reopen()
+	saved := f.diskState()
+	if saved.ExecuteUpdates.Cursor.Revision != 2009 || saved.ExecuteUpdates.PendingReason != "" || !strings.Contains(saved.ExecuteUpdates.Review, `"rebased":true`) {
+		t.Fatalf("complete rebaseline was not committed with its evidence: %+v", saved.ExecuteUpdates)
+	}
+	quiet := f.response(2009, 2010, "")
+	quiet.Facts, quiet.Relations, quiet.InvalidSources = nil, nil, nil
+	if err := f.refresh(updateResponseReader(t, quiet, 2009)); err != nil {
+		t.Fatal(err)
+	}
+	if f.diskState().ExecuteUpdates.Cursor.Revision != 2010 {
+		t.Fatal("ordinary updates did not resume after rebaseline")
+	}
+}
+
+func TestExecuteUpdateOriginOnlyRebaselineNeedsNoRepeatedInput(t *testing.T) {
+	f := newUpdateSessionFixture(t)
+	f.job.Intent.From = []string{"origin"}
+	response := f.response(5, 2008, "")
+	response.Rebased = true
+	response.Facts, response.Relations, response.InvalidSources = nil, nil, nil
+	state, _, err := readExecutionUpdates(context.Background(), f.job, updateResponseReader(t, response, 5), nil, "")
+	if err != nil || state.Cursor.Revision != 2008 || state.PendingReason != "" {
+		t.Fatalf("registered origin-only input could not rebaseline: %+v, %v", state, err)
+	}
+	f.job.Intent.From = []string{"origin", "F1"}
+	if _, _, err := readExecutionUpdates(context.Background(), f.job, updateResponseReader(t, response, 5), nil, ""); err == nil {
+		t.Fatal("empty rebaseline silently acknowledged an observation dependency")
+	}
+}
+
 func TestExecuteUpdatePendingReadFailureAndBudgetDeduplicateWithoutAcknowledging(t *testing.T) {
 	for _, reason := range []string{"read_failed", "context_budget"} {
 		t.Run(reason, func(t *testing.T) {
@@ -374,6 +422,10 @@ func TestExecuteUpdateResponseRejectsCrossIdentityAndIllegalBoundaries(t *testin
 		"incomplete_without_reason": func(u *board.ExecuteUpdates) { u.Complete = false },
 		"silent_omission":           func(u *board.ExecuteUpdates) { u.Omitted["facts"] = 1 },
 		"negative_omission":         func(u *board.ExecuteUpdates) { u.Omitted["facts"] = -1 },
+		"short_rebaseline":          func(u *board.ExecuteUpdates) { u.Rebased = true },
+		"empty_rebaseline": func(u *board.ExecuteUpdates) {
+			u.Rebased, u.ToRevision, u.Facts = true, 2008, nil
+		},
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {

@@ -43,17 +43,21 @@ type CurationRequestReview struct {
 }
 
 type Dispute struct {
-	ID             string   `json:"id"`
-	FindingID      string   `json:"finding_id"`
-	CandidateIDs   []string `json:"candidate_ids"`
-	Status         string   `json:"status"`
-	Question       string   `json:"question"`
-	Reason         string   `json:"reason"`
-	ReviewStepIDs  []string `json:"review_step_ids"`
-	ReviewFactIDs  []string `json:"review_fact_ids"`
-	ProducerRunIDs []string `json:"producer_run_ids"`
-	CreatedAt      string   `json:"created_at"`
-	UpdatedAt      string   `json:"updated_at"`
+	ID            string   `json:"id"`
+	FindingID     string   `json:"finding_id"`
+	CandidateIDs  []string `json:"candidate_ids"`
+	Status        string   `json:"status"`
+	Question      string   `json:"question"`
+	Reason        string   `json:"reason"`
+	ReviewStepIDs []string `json:"review_step_ids"`
+	ReviewFactIDs []string `json:"review_fact_ids"`
+	// A renewed evidence boundary retains old review identities while binding
+	// new attempts to the reopening revision and its own bounded Step suffix.
+	ReviewRevision   int64    `json:"review_revision,omitempty"`
+	ReviewStepOffset int      `json:"review_step_offset,omitempty"`
+	ProducerRunIDs   []string `json:"producer_run_ids"`
+	CreatedAt        string   `json:"created_at"`
+	UpdatedAt        string   `json:"updated_at"`
 }
 
 // CurationRequest lets the planner ask for evidence reconciliation without

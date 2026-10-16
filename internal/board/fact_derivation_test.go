@@ -125,3 +125,47 @@ func TestFactDerivationRejectsInvalidSourcesAtomically(t *testing.T) {
 		}
 	}
 }
+
+func TestCorrectionRejectsItsOwnSupportAtomically(t *testing.T) {
+	for _, edge := range []string{"derived_from", "from", "depends_on", "later_relation"} {
+		t.Run(edge, func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			producer := f.worker("producer", "")
+			original := f.fact(producer, "original")
+			f.finish(producer, original)
+			var correction string
+			switch edge {
+			case "from":
+				step := f.action(f.planner, "step", "correction-step", map[string]any{"action": "add", "from": []string{original}, "description": "Compute correction"}, "").ID
+				run := f.worker("corrector", step)
+				correction = f.fact(run, "correction")
+				f.finish(run, correction)
+			case "depends_on":
+				run := dependencyRun(f, "corrector", dependentStep(f, "corrector", producer.Intent))
+				f.do(func(tx *Tx) error { return tx.RegisterExecution(run) })
+				correction = f.fact(run, "correction")
+				f.finish(run, correction)
+			default:
+				run := f.worker("corrector", "")
+				correction = f.action(run.Fence(), "fact", "derived", derivedFactPayload(f, run, "derived", []string{original}), "").ID
+			}
+			relations := []CurateRelation{{Kind: "refutes", Source: correction, Target: original, Reason: "Correct the original observation"}}
+			if edge == "later_relation" {
+				run := f.worker("independent", "")
+				other, replacement := f.fact(run, "other"), f.fact(run, "replacement")
+				relations[0].Target = other
+				relations = append(relations, CurateRelation{Kind: "refutes", Source: replacement, Target: original, Reason: "Invalidate the earlier correction's premise"})
+			}
+			curator, before := f.curator("correction")
+			raw, _ := json.Marshal(CuratePayload{ThroughRevision: before.Revision, Groups: []CurateGroup{}, Relations: relations})
+			err := f.store.Do(context.Background(), func(tx *Tx) error {
+				_, err := tx.StateAction("p", curator.Fence(), StateAction{Op: "curate", IdempotencyKey: "unsupported-correction", Payload: raw, ExpectedVersion: DecisionStateVersion(before)})
+				return err
+			})
+			requireAPIStatus(t, err, 409)
+			if !reflect.DeepEqual(before, f.state()) {
+				t.Fatal("rejected correction changed evidence, relations, receipts or curation progress")
+			}
+		})
+	}
+}

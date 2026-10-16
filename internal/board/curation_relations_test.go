@@ -335,6 +335,11 @@ func TestCurationResolutionChecksRelationsBeforeReviewEvidence(t *testing.T) {
 func TestCurationRelationsReopenResolutionWithInvalidatedReviewSupport(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	dispute, candidates, _ := f.conflict()
+	failedStep := f.step("failed independent review", dispute.ID)
+	failedReview := f.worker("failed-review", failedStep)
+	f.do(func(tx *Tx) error {
+		return tx.ExecutionStatus(failedReview, "failed", json.RawMessage(`{"status":"failed"}`))
+	})
 	firstStep := f.step("first review", dispute.ID)
 	firstReview := f.worker("first-review", firstStep)
 	firstFact := f.fact(firstReview, "first-review-evidence")
@@ -353,7 +358,7 @@ func TestCurationRelationsReopenResolutionWithInvalidatedReviewSupport(t *testin
 	}
 	f.finish(curator, "")
 	reopened := f.state()
-	if reopened.Disputes[0].Status != "open" || len(reopened.Disputes[0].ReviewFactIDs) != 0 || !reflect.DeepEqual(reopened.Disputes[0].ReviewStepIDs, []string{firstStep}) || reopened.Findings[0].Status != "candidate" || reopened.Findings[0].SupportValid {
+	if reopened.Disputes[0].Status != "open" || len(reopened.Disputes[0].ReviewFactIDs) != 0 || !reflect.DeepEqual(reopened.Disputes[0].ReviewStepIDs, []string{failedStep, firstStep}) || reopened.Disputes[0].ReviewStepOffset != 2 || reopened.Findings[0].Status != "candidate" || reopened.Findings[0].SupportValid {
 		t.Fatalf("invalidated review did not reopen its disputed conclusion: %+v", reopened.Disputes)
 	}
 	f.do(func(tx *Tx) error {
@@ -383,7 +388,7 @@ func TestCurationRelationsReopenResolutionWithInvalidatedReviewSupport(t *testin
 	f.curate(curator, input, CurateGroup{CandidateIDs: candidates, Status: "refuted", Reason: "Fresh independent evidence supersedes the unsupported resolution", DisputeID: dispute.ID, ReviewFactIDs: []string{secondFact}, Resolution: "resolved"})
 	f.finish(curator, "")
 	final := f.state()
-	if final.Disputes[0].Status != "resolved" || !reflect.DeepEqual(final.Disputes[0].ReviewStepIDs, []string{firstStep, secondStep}) || !reflect.DeepEqual(final.Disputes[0].ReviewFactIDs, []string{secondFact}) || final.Findings[0].Status != "refuted" || !final.Findings[0].SupportValid {
+	if final.Disputes[0].Status != "resolved" || !reflect.DeepEqual(final.Disputes[0].ReviewStepIDs, []string{failedStep, firstStep, secondStep}) || !reflect.DeepEqual(final.Disputes[0].ReviewFactIDs, []string{secondFact}) || final.Findings[0].Status != "refuted" || !final.Findings[0].SupportValid {
 		t.Fatalf("fresh review did not restore a supported resolution and its history: %+v", final.Disputes)
 	}
 }

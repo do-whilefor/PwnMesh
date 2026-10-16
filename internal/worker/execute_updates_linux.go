@@ -161,7 +161,8 @@ func readExecutionUpdates(ctx context.Context, j Job, request func(context.Conte
 		InvalidSources []string             `json:"invalid_sources"`
 		Omitted        map[string]int       `json:"omitted"`
 		PendingReason  string               `json:"pending_reason"`
-	}{update.Facts, update.Relations, update.InvalidSources, update.Omitted, update.PendingReason})
+		Rebased        bool                 `json:"rebased,omitempty"`
+	}{update.Facts, update.Relations, update.InvalidSources, update.Omitted, update.PendingReason, update.Rebased})
 	if err != nil {
 		return nil, "", err
 	}
@@ -199,6 +200,14 @@ func validateExecuteUpdateResponse(j Job, cursor *board.ExecuteUpdateCursor, u b
 	}
 	if u.Complete == (u.PendingReason != "") {
 		return errors.New("execution update completeness is inconsistent")
+	}
+	immutableOnly := len(j.Intent.From) > 0
+	for _, source := range j.Intent.From {
+		immutableOnly = immutableOnly && (source == "origin" || source == "goal")
+	}
+	emptyRebaseline := u.Complete && len(u.Facts) == 0 && (!immutableOnly || len(u.Relations)+len(u.InvalidSources) > 0)
+	if u.Rebased && (originalUpdateCursor(j) == nil || u.ToRevision-u.FromRevision <= board.MaxExecuteUpdateEvents || emptyRebaseline) {
+		return errors.New("execution update rebaseline has no bound dependency review")
 	}
 	for _, omitted := range u.Omitted {
 		if omitted < 0 || (u.Complete && omitted != 0) {

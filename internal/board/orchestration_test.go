@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -731,5 +732,240 @@ func TestReopenedDisputeRequiresReviewCoveringNewCandidate(t *testing.T) {
 				return f.complete(tx, []string{secondFact}, "Reopened conflict independently rechecked")
 			})
 		})
+	}
+}
+
+func TestDisputeReviewBudgetRenewsOnlyForNewRetainedEvidence(t *testing.T) {
+	for _, freshEvidence := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fresh-evidence=%t", freshEvidence), func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			dispute, candidates, originalFact := f.conflict()
+			failedStep := f.step("failed original review", dispute.ID)
+			failed := f.worker("failed-original-review", failedStep)
+			f.do(func(tx *Tx) error {
+				return tx.ExecutionStatus(failed, "failed", json.RawMessage(`{"status":"failed"}`))
+			})
+			resolvedStep := f.step("successful original review", dispute.ID)
+			resolved := f.workerInput("successful-original-review", resolvedStep, true)
+			reviewFact := f.fact(resolved, "original-review-result")
+			f.finish(resolved, reviewFact)
+			curator, input := f.curator("original-resolution")
+			f.curate(curator, input, CurateGroup{CandidateIDs: candidates, Status: "verified", Reason: "Independent review", DisputeID: dispute.ID, ReviewFactIDs: []string{reviewFact}, Resolution: "resolved"})
+			before := f.state()
+
+			producer := f.worker("later-producer", "")
+			source := originalFact
+			if freshEvidence {
+				source = f.fact(producer, "new-observation")
+			}
+			candidates = append(candidates, f.candidate(producer, source, "refuted"))
+			curator, input = f.curator("later-curation")
+			f.curate(curator, input, CurateGroup{CandidateIDs: candidates, Status: "candidate", Reason: "Consider the later producer note", DisputeID: dispute.ID})
+			after := f.state()
+			if !reflect.DeepEqual(after.Disputes[0].ReviewStepIDs, before.Disputes[0].ReviewStepIDs) {
+				t.Fatal("reconsideration erased prior review history")
+			}
+			if !freshEvidence {
+				if after.Disputes[0].Status != "resolved" || !slices.Equal(after.Findings[0].Sources, []string{reviewFact}) {
+					t.Fatal("rewording existing support reopened an independently resolved dispute")
+				}
+				return
+			}
+			if after.Disputes[0].Status != "open" {
+				t.Fatal("new retained support did not reopen the dispute")
+			}
+			f.do(func(tx *Tx) error {
+				requireAPIStatus(t, tx.validateReviewFacts(after, after.Disputes[0], []string{reviewFact}), 409)
+				requireAPIStatus(t, tx.validateReviewExecution(failed), 409)
+				return tx.reviewExecutionTransition(failed, "failed")
+			})
+			if !reflect.DeepEqual(after, f.state()) {
+				t.Fatal("an old review transition changed the renewed dispute")
+			}
+			step := f.step("review new evidence", dispute.ID)
+			stale := dependencyRun(f, "stale-review", step)
+			var staleInput *InputSnapshot
+			f.do(func(tx *Tx) (err error) { staleInput, err = tx.FreezeInput(before); return err })
+			bound := f.state()
+			for _, frozen := range []bool{false, true} {
+				job := map[string]any{"kind": "explore", "run_id": stale.ID, "graph": bound.Graph, "graph_rpc": true, "result_contract_version": 2}
+				if frozen {
+					job["input_snapshot"] = staleInput
+				} else {
+					job["state"] = before
+				}
+				stale.Job, _ = json.Marshal(job)
+				err := f.store.Do(context.Background(), func(tx *Tx) error { return tx.RegisterExecution(stale) })
+				requireAPIStatus(t, err, 409)
+				if !strings.Contains(err.Error(), "predates") || !reflect.DeepEqual(bound, f.state()) {
+					t.Fatalf("stale review input escaped its renewed evidence boundary: %v", err)
+				}
+			}
+			first := f.workerInput("renewed-review-first", step, true)
+			f.do(func(tx *Tx) error { return tx.ExecutionStatus(first, "failed", json.RawMessage(`{"status":"failed"}`)) })
+			grantMainRetry(f, "renewed-review-retry", first)
+			second := retrySuccessor(f, first, "renewed-review-second")
+			f.do(func(tx *Tx) error {
+				return tx.ExecutionStatus(second, "failed", json.RawMessage(`{"status":"failed"}`))
+			})
+			err := f.store.Do(context.Background(), func(tx *Tx) error {
+				_, err := tx.StateAction("p", f.planner, StateAction{Op: "step", IdempotencyKey: "renewed-review-third", Payload: retryStepAction(step, second.ID)})
+				return err
+			})
+			requireAPIStatus(t, err, 409)
+			if !strings.Contains(err.Error(), "review execution limit") || f.state().Disputes[0].Status != "uncertain" {
+				t.Fatalf("new evidence removed the bounded review limit: %v", err)
+			}
+		})
+	}
+}
+
+func TestDisputeReviewRenewalRequiresNewEffectiveEvidenceReferences(t *testing.T) {
+	old := EvidenceRef{RunID: "old", Path: "evidence/response.txt", Excerpt: "observed"}
+	fresh := EvidenceRef{RunID: "fresh", Path: "evidence/response.txt", Excerpt: "changed"}
+	s := State{Graph: Graph{Project: Project{OrchestrationVersion: 1}},
+		FactRecords: []FactRecord{
+			{ID: "old", Status: "valid", Evidence: []EvidenceRef{old}},
+			{ID: "alias", Status: "valid", Evidence: []EvidenceRef{old}},
+			{ID: "fresh", Status: "valid", Evidence: []EvidenceRef{fresh}},
+			{ID: "invalid", Status: "refuted", Evidence: []EvidenceRef{fresh}},
+		}, Candidates: []Candidate{{ID: "prior", Sources: []string{"old"}}}}
+	dispute := Dispute{CandidateIDs: []string{"prior"}}
+	for _, tc := range []struct {
+		name      string
+		candidate Candidate
+		want      bool
+	}{
+		{"same-source", Candidate{Sources: []string{"old"}, Reason: "Reworded interpretation"}, false},
+		{"new-fact-same-evidence", Candidate{Sources: []string{"alias"}}, false},
+		{"invalid-new-evidence", Candidate{Sources: []string{"invalid"}}, false},
+		{"fresh-source", Candidate{Sources: []string{"fresh"}}, true},
+		{"same-direct-evidence", Candidate{Evidence: []EvidenceRef{old}}, false},
+		{"fresh-direct-evidence", Candidate{Evidence: []EvidenceRef{fresh}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := disputeHasNewEvidence(s, dispute, []Candidate{tc.candidate}, nil, nil); got != tc.want {
+				t.Fatalf("new evidence=%t, want %t", got, tc.want)
+			}
+		})
+	}
+	s.FactRecords = append(s.FactRecords, FactRecord{ID: "prior-review", SourceStepID: "review", Status: "refuted", Evidence: []EvidenceRef{old}})
+	dispute.ReviewStepIDs = []string{"review"}
+	prior := []FactRelation{{Kind: "refutes", Source: "fresh", Target: "prior-review"}}
+	if disputeHasNewEvidence(s, dispute, nil, []string{"fresh"}, prior) {
+		t.Fatal("reusing an earlier correction's retained evidence renewed the budget again")
+	}
+}
+
+func TestDisputeReopeningWithoutNewEvidenceAdvancesReviewBoundary(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	dispute, candidates, original := f.conflict()
+	step := f.step("original independent review", dispute.ID)
+	review := f.worker("original-review", step)
+	accepted, alternate := f.fact(review, "accepted"), f.fact(review, "alternate")
+	f.finish(review, accepted)
+	curator, input := f.curator("resolve-original")
+	f.curate(curator, input, CurateGroup{CandidateIDs: candidates, Status: "verified", Reason: "Independent result", DisputeID: dispute.ID, ReviewFactIDs: []string{accepted}, Resolution: "resolved"})
+	before := f.state()
+	curator, input = f.curator("correct-with-known-evidence")
+	f.action(curator.Fence(), "curate", "known-correction", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: original, Target: accepted, Reason: "The original retained observation contradicts the review"}}}, DecisionStateVersion(input))
+	reopened := f.state()
+	if reopened.Disputes[0].Status != "open" || reopened.Disputes[0].ReviewStepOffset != 0 || reopened.Disputes[0].ReviewRevision != input.Revision+1 {
+		t.Fatalf("known evidence reset the allowance or failed to fence prior inputs: %+v", reopened.Disputes[0])
+	}
+	if err := reopened.ValidateFactSources([]string{alternate}, true); err != nil {
+		t.Fatalf("alternate raw observation should remain valid: %v", err)
+	}
+	f.do(func(tx *Tx) error {
+		err := tx.validateReviewFacts(reopened, reopened.Disputes[0], []string{alternate})
+		requireAPIStatus(t, err, 409)
+		if !strings.Contains(err.Error(), "predates") {
+			t.Fatalf("old alternate evidence escaped the new input boundary: %v", err)
+		}
+		return nil
+	})
+	freshStep := f.step("remaining independent attempt", dispute.ID)
+	stale := dependencyRun(f, "stale-remaining-review", freshStep)
+	bound := f.state()
+	stale.Job, _ = json.Marshal(map[string]any{"kind": "explore", "run_id": stale.ID, "graph": bound.Graph, "state": before, "graph_rpc": true, "result_contract_version": 2})
+	err := f.store.Do(context.Background(), func(tx *Tx) error { return tx.RegisterExecution(stale) })
+	requireAPIStatus(t, err, 409)
+	if !strings.Contains(err.Error(), "predates") || !reflect.DeepEqual(bound, f.state()) {
+		t.Fatalf("stale input changed the remaining allowance: %v", err)
+	}
+	fresh := f.worker("fresh-remaining-review", freshStep)
+	f.do(func(tx *Tx) error { return tx.ExecutionStatus(fresh, "failed", json.RawMessage(`{"status":"failed"}`)) })
+	err = f.store.Do(context.Background(), func(tx *Tx) error {
+		_, err := tx.StateAction("p", f.planner, StateAction{Op: "step", IdempotencyKey: "third-known-evidence-review", Payload: retryStepAction(freshStep, fresh.ID)})
+		return err
+	})
+	requireAPIStatus(t, err, 409)
+	if !strings.Contains(err.Error(), "review execution limit") {
+		t.Fatalf("known evidence silently renewed the original allowance: %v", err)
+	}
+}
+
+func TestDisputeReopeningRevokesPreparedReviewsAndPreservesNewAllowance(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	dispute, candidates, _ := f.conflict()
+	firstStep := f.step("completed independent review", dispute.ID)
+	first := f.worker("completed-review", firstStep)
+	firstFact := f.fact(first, "accepted-review")
+	f.finish(first, firstFact)
+	oldStep := f.step("prepared second review", dispute.ID)
+	old := f.worker("prepared-review", oldStep)
+	oldFact := f.fact(old, "prepared-observation")
+	curator, input := f.curator("resolve-with-pending-review")
+	f.curate(curator, input, CurateGroup{CandidateIDs: candidates, Status: "verified", Reason: "Completed independent result", DisputeID: dispute.ID, ReviewFactIDs: []string{firstFact}, Resolution: "resolved"})
+	producer := f.worker("fresh-producer", "")
+	freshFact := f.fact(producer, "fresh-conflict")
+	candidates = append(candidates, f.candidate(producer, freshFact, "refuted"))
+	f.finish(producer, freshFact)
+	curator, input = f.curator("reopen-with-pending-review")
+	payload, _ := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{{CandidateIDs: candidates, Status: "verified", Reason: "Invalid old review reuse", DisputeID: dispute.ID, ReviewFactIDs: []string{firstFact}, Resolution: "resolved"}}})
+	err := f.store.Do(context.Background(), func(tx *Tx) error {
+		_, err := tx.StateAction("p", curator.Fence(), StateAction{Op: "curate", IdempotencyKey: "rejected-reopen", Payload: payload, ExpectedVersion: DecisionStateVersion(input)})
+		return err
+	})
+	requireAPIStatus(t, err, 409)
+	f.do(func(tx *Tx) error {
+		revoked, err := tx.RunRevoked("p", old.Lease)
+		if revoked {
+			t.Fatal("rejected curation leaked a run revocation")
+		}
+		return err
+	})
+	f.curate(curator, input, CurateGroup{CandidateIDs: candidates, Status: "candidate", Reason: "New retained support requires review", DisputeID: dispute.ID})
+	f.do(func(tx *Tx) error {
+		revoked, err := tx.RunRevoked("p", old.Lease)
+		if !revoked {
+			t.Fatal("reopened evidence did not revoke its stale pending review")
+		}
+		return err
+	})
+	lateFact, _ := json.Marshal(map[string]any{"description": "Late stale review", "scope": "fixture", "observed_at": f.store.Now().Format(time.RFC3339), "evidence": []EvidenceRef{{RunID: old.Lease, Path: "/workspace/late.txt", Excerpt: "late"}}})
+	for _, check := range []func(*Tx) error{
+		func(tx *Tx) error { return tx.ExecutionStatus(old, "running", nil) },
+		func(tx *Tx) error { return tx.ResumeExecution(old) },
+		func(tx *Tx) error { _, err := tx.ConcludeEvidenceStep("p", old.Fence(), oldFact, nil); return err },
+		func(tx *Tx) error {
+			_, err := tx.StateAction("p", old.Fence(), StateAction{Op: "fact", IdempotencyKey: "late-stale-fact", Payload: lateFact})
+			return err
+		},
+	} {
+		requireAPIStatus(t, f.store.Do(context.Background(), check), 409)
+	}
+	result := json.RawMessage(`{"status":"success","text":"late result"}`)
+	f.do(func(tx *Tx) error { return tx.ExecutionStatus(old, "result_pending", result) })
+	requireAPIStatus(t, f.store.Do(context.Background(), func(tx *Tx) error { return tx.ExecutionStatus(old, "succeeded", result) }), 409)
+	freshStep := f.step("review renewed evidence", dispute.ID)
+	fresh := f.worker("fresh-review", freshStep)
+	f.do(func(tx *Tx) error { return tx.ExecutionStatus(fresh, "failed", json.RawMessage(`{"status":"failed"}`)) })
+	grantMainRetry(f, "fresh-review-retry", fresh)
+	retrySuccessor(f, fresh, "fresh-review-retry")
+	beforeCleanup := f.state().Disputes[0]
+	f.do(func(tx *Tx) error { return tx.ExecutionStatus(old, "cancelled", nil) })
+	if !reflect.DeepEqual(beforeCleanup, f.state().Disputes[0]) {
+		t.Fatal("stale run cleanup changed the current evidence review")
 	}
 }

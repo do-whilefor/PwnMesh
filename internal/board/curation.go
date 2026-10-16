@@ -146,6 +146,7 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 	}
 	result := CurateResult{Findings: []Finding{}, Disputes: []Dispute{}}
 	touchedFindings, touchedDisputes := map[string]bool{}, map[string]bool{}
+	beforeRelations := s
 	for _, relation := range input.Relations {
 		raw, err := json.Marshal(relation)
 		if err != nil {
@@ -175,16 +176,27 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 			}
 		}
 	}
+	// Later corrections in this atomic batch must not remove an earlier
+	// correction's premises. Validate the final prospective support, not only
+	// each source's validity before its own edge was added.
+	for _, relation := range result.FactRelations {
+		if err := s.ValidateFactSources([]string{relation.Source}, true); err != nil {
+			return "", nil, Err(409, "curation relations invalidate a submitted correction's support")
+		}
+	}
 	if len(input.Relations) > 0 {
 		for n := range d.Disputes {
 			dispute := &d.Disputes[n]
 			if dispute.Status != "resolved" || s.ValidateFactSources(dispute.ReviewFactIDs, true) == nil {
 				continue
 			}
-			// Invalidating accepted review support removes the mechanical
-			// prerequisite for resolution. Keep the review history and limits,
-			// but allow the primary Agent to authorize a fresh independent run.
-			dispute.Status, dispute.ReviewFactIDs = "open", []string{}
+			// A fresh correction can reopen the bounded review allowance, but
+			// unrelated relations and repeated old support cannot reset it.
+			fresh := beforeRelations.ValidateFactSources(dispute.ReviewFactIDs, true) == nil &&
+				disputeHasNewEvidence(s, *dispute, nil, disputeReviewCorrectionSources(beforeRelations, *dispute, result.FactRelations), beforeRelations.FactRelations)
+			if err := t.reopenDispute(s, dispute, fresh); err != nil {
+				return "", nil, err
+			}
 			dispute.Reason, dispute.UpdatedAt = "Independent review evidence was invalidated by this curation batch", t.Now
 			touchedDisputes[dispute.ID] = true
 			for n := range d.Findings {
@@ -330,11 +342,13 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 		if disputeIndex >= 0 {
 			dispute := &d.Disputes[disputeIndex]
 			touchedDisputes[dispute.ID] = true
-			newEvidence := false
+			var incoming []Candidate
 			for _, cid := range finding.CandidateIDs {
 				if !slices.Contains(dispute.CandidateIDs, cid) {
-					newEvidence = true
 					candidate := byID[cid]
+					if active[cid] {
+						incoming = append(incoming, candidate)
+					}
 					// New outside producers join the conflict's independence
 					// boundary. An authorized review's own judgment is evidence
 					// from that review, not a new original producer.
@@ -343,9 +357,10 @@ func (t *Tx) curate(s State, d *stateData, fence ExecutionFence, raw json.RawMes
 					}
 				}
 			}
-			if newEvidence && dispute.Status == "resolved" {
-				dispute.Status = "open"
-				dispute.ReviewFactIDs = []string{}
+			if dispute.Status == "resolved" && disputeHasNewEvidence(s, *dispute, incoming, nil, beforeRelations.FactRelations) {
+				if err := t.reopenDispute(s, dispute, true); err != nil {
+					return "", nil, err
+				}
 			}
 			dispute.CandidateIDs = append([]string{}, finding.CandidateIDs...)
 			dispute.Reason, dispute.UpdatedAt = group.Reason, t.Now
@@ -459,6 +474,10 @@ func (t *Tx) validateReviewFacts(s State, dispute Dispute, ids []string) error {
 	if err := s.ValidateFactSources(ids, true); err != nil {
 		return err
 	}
+	reviews, err := currentDisputeReviewSteps(dispute)
+	if err != nil {
+		return err
+	}
 	for _, id := range ids {
 		var fact *FactRecord
 		for n := range s.FactRecords {
@@ -469,6 +488,9 @@ func (t *Tx) validateReviewFacts(s State, dispute Dispute, ids []string) error {
 		}
 		if fact == nil || fact.Legacy || len(fact.Evidence) == 0 || !slices.Contains(dispute.ReviewStepIDs, fact.SourceStepID) {
 			return Err(409, "resolution evidence must come from this dispute's independent review")
+		}
+		if !slices.Contains(reviews, fact.SourceStepID) {
+			return Err(409, "review input predates the current dispute evidence boundary")
 		}
 		e, err := t.executionForLease(s.Graph.Project.ID, fact.RunID)
 		if err != nil || e.Status != "succeeded" || e.Intent != fact.SourceStepID {
@@ -499,6 +521,9 @@ func (t *Tx) validateReviewFacts(s State, dispute Dispute, ids []string) error {
 			boundary = job.State.Revision
 		default:
 			return Err(409, "review evidence requires a registered input boundary")
+		}
+		if boundary < dispute.ReviewRevision {
+			return Err(409, "review input predates the current dispute evidence boundary")
 		}
 		for _, candidate := range s.Candidates {
 			// A review can publish a judgment after reading its input. Every

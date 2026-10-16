@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -150,8 +151,16 @@ func TestExecuteUpdatesKeepCurationInvalidationAcrossStepSupport(t *testing.T) {
 				if err != nil || !update.Complete || !reflect.DeepEqual(update.InvalidSources, []string{source}) || len(update.Facts) == 0 {
 					t.Fatalf("curation lost the invalidated source: %+v, %v", update, err)
 				}
-				if edge != "direct" && !update.Facts[0].SupportInvalid {
+				if edge != "direct" && !slices.ContainsFunc(update.Facts, func(fact FactRecord) bool { return fact.ID == source && fact.SupportInvalid }) {
 					t.Fatal("indirect correction lost the derived support status")
+				}
+				for _, id := range []string{source, original, correction} {
+					if !slices.ContainsFunc(update.Facts, func(fact FactRecord) bool { return fact.ID == id }) {
+						t.Fatalf("indirect correction omitted causal Fact %s", id)
+					}
+				}
+				if len(update.Relations) != 1 || update.Relations[0].Target != original {
+					t.Fatal("indirect correction omitted its causal relation")
 				}
 			})
 		}
@@ -208,11 +217,59 @@ func TestExecuteUpdatesRetainPendingRanges(t *testing.T) {
 			}
 		})
 	}
-	state, cursor, events := executeUpdateFixture()
+}
+
+func TestExecuteUpdatesRebaselineLargeEventBacklog(t *testing.T) {
+	for _, oversized := range []bool{false, true} {
+		t.Run(fmt.Sprint(oversized), func(t *testing.T) {
+			state, cursor, events := executeUpdateFixture()
+			state.Revision = 2002
+			if oversized {
+				state.FactRecords[1].Evidence[0].Excerpt = strings.Repeat("x", MaxExecuteUpdateBytes)
+			}
+			update, err := BuildExecuteUpdates(state, cursor, []string{"F1"}, events, true, 0)
+			if err != nil || !update.Rebased || update.FromRevision != 1 || update.ToRevision != 2002 || update.Revision != cursor.Revision {
+				t.Fatalf("large backlog did not produce a bound rebaseline: %+v, %v", update, err)
+			}
+			if oversized {
+				if update.Complete || update.PendingReason != "context_budget" || update.Omitted["facts"] != 1 {
+					t.Fatalf("oversized rebaseline acknowledged unread correction evidence: %+v", update)
+				}
+			} else if !update.Complete || len(update.Facts) != 2 || len(update.Relations) != 1 || !slices.Equal(update.InvalidSources, []string{"F1"}) {
+				t.Fatalf("rebaseline omitted current causal evidence: %+v", update)
+			}
+			repeated, err := BuildExecuteUpdates(state, cursor, []string{"F1"}, events, true, 0)
+			if err != nil || !reflect.DeepEqual(update, repeated) {
+				t.Fatal("same bound rebaseline request changed its result")
+			}
+		})
+	}
+}
+
+func TestExecuteUpdatesRebaselineKeepsLargeImmutableOriginBound(t *testing.T) {
+	state, cursor, _ := executeUpdateFixture()
 	state.Revision = 2002
-	update, err := BuildExecuteUpdates(state, cursor, []string{"F1"}, events, true, 0)
-	if err != nil || update.Complete || update.PendingReason != "event_limit" || update.FromRevision != 1 || update.ToRevision != 2002 {
-		t.Fatalf("event limit acknowledged unscanned changes: %+v, %v", update, err)
+	state.Graph.Project.OrchestrationVersion = 1
+	origin := FactRecord{ID: "origin", Description: strings.Repeat("x", 20<<10), Status: "input", Legacy: true}
+	state.FactRecords = []FactRecord{origin}
+	state.Graph.Facts = []Fact{{ID: "origin", Description: origin.Description}, {ID: "goal", Description: "Inspect the input"}}
+	if err := ValidateContextCapacity(state); err != nil {
+		t.Fatalf("origin is not an admissible immutable input: %v", err)
+	}
+	update, err := BuildExecuteUpdates(state, cursor, []string{"origin"}, nil, true, 0)
+	if err != nil || !update.Rebased || !update.Complete || len(update.Facts)+len(update.Relations)+len(update.InvalidSources)+len(update.Omitted) != 0 {
+		t.Fatalf("immutable origin unnecessarily blocked cursor recovery: %+v, %v", update, err)
+	}
+	for _, source := range []string{"missing", "observation", "origin"} {
+		id := source
+		if source == "missing" {
+			id = "observation"
+		}
+		state.FactRecords = []FactRecord{{ID: id, Description: origin.Description, Status: "valid"}}
+		update, err := BuildExecuteUpdates(state, cursor, []string{source}, nil, true, 0)
+		if err != nil || update.Complete || len(update.Omitted) == 0 {
+			t.Fatalf("missing or oversized observation was treated as immutable input: %+v, %v", update, err)
+		}
 	}
 }
 

@@ -114,6 +114,9 @@ func (t *Tx) CheckExecutionDependencies(e Execution) error {
 	if err != nil {
 		return err
 	}
+	if _, err := checkReviewExecutionScope(s, e); err != nil {
+		return Err(409, "dependency_invalidated: "+err.Error())
+	}
 	if err = t.stepReadyState(s, e.Intent, ""); err != nil {
 		return Err(409, "dependency_invalidated: "+err.Error())
 	}
