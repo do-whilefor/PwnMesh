@@ -46,33 +46,22 @@ func bindTestContainerOwner(t *testing.T, runner *docker.Client, store *board.St
 // that exports every immutable job and result in the namespace.
 func testExecutions(ctx context.Context, store *board.Store, namespace string) ([]board.Execution, error) {
 	out := []board.Execution{}
-	err := store.Do(ctx, func(tx *board.Tx) error {
-		rows, err := tx.Query("SELECT project_id,id FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", namespace)
+	err := fixtureSQL(store).View(ctx, func(tx *fixtureSQLTx) error {
+		rows, err := tx.Query("SELECT project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,result,resumes,created_at,updated_at FROM pwnmesh_executions WHERE namespace=? ORDER BY created_at,rowid", namespace)
 		if err != nil {
 			return err
 		}
-		var ids [][2]string
+		defer rows.Close()
 		for rows.Next() {
-			var id [2]string
-			if err := rows.Scan(&id[0], &id[1]); err != nil {
-				rows.Close()
+			var run board.Execution
+			var job, result []byte
+			if err := rows.Scan(&run.ProjectID, &run.ID, &run.Namespace, &run.Backend, &run.Kind, &run.Intent, &run.Lease, &job, &run.RetryKey, &run.Status, &result, &run.Resumes, &run.CreatedAt, &run.UpdatedAt); err != nil {
 				return err
 			}
-			ids = append(ids, id)
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return err
-		}
-		for _, id := range ids {
-			run, err := tx.Execution(id[0], id[1])
-			if err != nil {
-				return err
-			}
+			run.Job, run.Result = job, result
 			out = append(out, run)
 		}
-		return nil
+		return rows.Err()
 	})
 	return out, err
 }

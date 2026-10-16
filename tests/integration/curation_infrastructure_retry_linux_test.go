@@ -41,7 +41,7 @@ func runDockerCurationInfrastructureFixture(t *testing.T, hook curationDockerHoo
 	if image == "" {
 		t.Skip("set PWNMESH_DOCKER_TEST_IMAGE for real Worker curation recovery")
 	}
-	store, err := board.Open(filepath.Join(t.TempDir(), "curation-retry.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "curation-retry.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

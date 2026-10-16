@@ -307,7 +307,7 @@ func TestLiveWebWaitBoundsAndListener(t *testing.T) {
 }
 
 func TestLiveWebCreationObservesUnchangedProductionHandler(t *testing.T) {
-	store, err := board.Open(filepath.Join(t.TempDir(), "project.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "project.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

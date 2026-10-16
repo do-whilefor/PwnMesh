@@ -202,7 +202,7 @@ func TestDockerGraphBridgeDecideAndExecute(t *testing.T) {
 	if image == "" {
 		t.Skip("set PWNMESH_DOCKER_TEST_IMAGE for real graph bridge acceptance")
 	}
-	store, err := board.Open(filepath.Join(t.TempDir(), "graph.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "graph.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -954,7 +954,7 @@ func TestDockerOrchestrationBusinessRetry(t *testing.T) {
 		t.Skip("set PWNMESH_DOCKER_TEST_IMAGE for real Worker business-retry acceptance")
 	}
 	started := time.Now()
-	store, err := board.Open(filepath.Join(t.TempDir(), "retry.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "retry.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1348,7 +1348,7 @@ func TestDockerDecisionSurvivesNewFactsUntilDeadlineWithoutStoppingExecute(t *te
 	if image == "" {
 		t.Skip("set PWNMESH_DOCKER_TEST_IMAGE for Decide refresh/deadline acceptance")
 	}
-	store, err := board.Open(filepath.Join(t.TempDir(), "stale.db"))
+	store, err := openFixtureStore(t, filepath.Join(t.TempDir(), "stale.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

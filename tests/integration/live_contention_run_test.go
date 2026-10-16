@@ -236,7 +236,7 @@ func runObservedScenarioProject(t *testing.T, title, origin, goal, scenario, val
 	} else {
 		t.Logf("model observation mode=direct reason=%s; provider URL preserved, proxy HTTP observations unavailable", observationReason)
 	}
-	store, err := board.Open(filepath.Join(output, "project.db"))
+	store, err := openFixtureStore(t, filepath.Join(output, "project.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
