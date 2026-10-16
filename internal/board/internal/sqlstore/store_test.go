@@ -58,14 +58,83 @@ func TestCallbacksRetainTransactionOwnership(t *testing.T) {
 				if timeout != 15 {
 					t.Fatalf("failed callback persisted its write: %d", timeout)
 				}
-				if !memory {
-					if _, err := q.Exec("UPDATE settings SET intent_timeout=77 WHERE rowid=1"); err == nil {
-						t.Error("disk View accepted a write")
-					}
+				if _, err := q.Exec("UPDATE settings SET intent_timeout=77 WHERE rowid=1"); err == nil {
+					t.Error("View accepted a write")
 				}
 				return nil
 			}); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestMemoryViewRestoresConnectionAfterEveryExit(t *testing.T) {
+	for _, exit := range []string{"success", "error", "cancel", "panic", "already_cancelled"} {
+		t.Run(exit, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if exit == "already_cancelled" {
+				cancel()
+			}
+			cancelQuery := ""
+			if exit == "cancel" {
+				name := fmt.Sprintf("pwnmesh_cancel_view_%d", activeCancellationID.Add(1))
+				if err := sqlite.RegisterScalarFunction(name, 0, func(_ *sqlite.FunctionContext, _ []driver.Value) (driver.Value, error) {
+					cancel()
+					return int64(1), nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				cancelQuery = "WITH RECURSIVE work(n) AS (SELECT " + name + "() UNION ALL SELECT n+1 FROM work WHERE n<1000000) SELECT sum(n) FROM work"
+			}
+			store, err := Open(":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer store.Close()
+			wantErr := errors.New("view callback failed")
+			var caught any
+			func() {
+				defer func() { caught = recover() }()
+				err = store.View(ctx, func(q Queries) error {
+					if _, err := q.Exec("UPDATE settings SET intent_timeout=77 WHERE rowid=1"); err == nil {
+						t.Error("memory View accepted a write")
+					}
+					switch exit {
+					case "error":
+						return wantErr
+					case "cancel":
+						var value int
+						return q.QueryRow(cancelQuery).Scan(&value)
+					case "panic":
+						panic(wantErr)
+					case "already_cancelled":
+						t.Error("cancelled View entered its callback")
+					}
+					return nil
+				})
+			}()
+			if exit == "error" && !errors.Is(err, wantErr) || (exit == "cancel" || exit == "already_cancelled") && !errors.Is(err, context.Canceled) || exit == "success" && err != nil {
+				t.Fatalf("View changed its completion error: %v", err)
+			}
+			if exit == "panic" && caught != wantErr || exit != "panic" && caught != nil {
+				t.Fatalf("View changed its panic: %v", caught)
+			}
+			followup, stop := context.WithTimeout(context.Background(), time.Second)
+			defer stop()
+			if err := store.Do(followup, func(q Queries) error {
+				var timeout int
+				if err := q.QueryRow("SELECT intent_timeout FROM settings WHERE rowid=1").Scan(&timeout); err != nil {
+					return err
+				}
+				if timeout != 15 {
+					t.Fatalf("View retained its mutation: %d", timeout)
+				}
+				_, err := q.Exec("UPDATE settings SET intent_timeout=16 WHERE rowid=1")
+				return err
+			}); err != nil {
+				t.Fatalf("View lost its database or retained a read-only connection: %v", err)
 			}
 		})
 	}

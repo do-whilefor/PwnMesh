@@ -99,13 +99,39 @@ func (s *Store) Close() error {
 	return errors.Join(readErr, s.db.Close())
 }
 
-// View is observational. A private :memory: database retains the serialized
-// transaction semantics of Do instead of opening a separate, empty database.
+// View is observational. A private :memory: database reuses its only connection
+// instead of opening a separate, empty database.
 func (s *Store) View(ctx context.Context, fn func(Queries) error) error {
 	if s.readers == nil {
-		return s.Do(ctx, fn)
+		return s.memoryView(ctx, fn)
 	}
 	t, err := s.readers.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return err
+	}
+	defer t.Rollback()
+	if err := fn(queries{transaction: t, ctx: ctx}); err != nil {
+		return err
+	}
+	return t.Commit()
+}
+
+func (s *Store) memoryView(ctx context.Context, fn func(Queries) error) (err error) {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	// Retain the connection until rollback and reset finish, including after
+	// cancellation or panic. The writer must never inherit query_only.
+	defer func() {
+		_, resetErr := conn.ExecContext(context.Background(), "PRAGMA query_only=OFF")
+		err = errors.Join(err, resetErr)
+	}()
+	if _, err = conn.ExecContext(ctx, "PRAGMA query_only=ON"); err != nil {
+		return err
+	}
+	t, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err
 	}
