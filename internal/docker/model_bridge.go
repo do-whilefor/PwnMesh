@@ -20,18 +20,21 @@ import (
 
 // Each bridge is bound to one launch. Only the dispatcher sees the upstream
 // endpoint and credentials; worker messages cannot choose either of them.
+const maxModelConcurrency = 16
+
 type modelBridge struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	job     protocol.Job
-	model   *provider.Anthropic
-	deliver func(context.Context, modelrpc.Response) error
-	fail    func(error)
-	mu      sync.Mutex
-	active  map[string]context.CancelFunc
-	seen    map[string]bool
-	wg      sync.WaitGroup
-	slots   chan struct{}
+	ctx       context.Context
+	cancel    context.CancelFunc
+	job       protocol.Job
+	model     *provider.Anthropic
+	deliver   func(context.Context, modelrpc.Response) error
+	fail      func(error)
+	mu        sync.Mutex
+	active    map[string]context.CancelFunc
+	seen      map[string]bool
+	wg        sync.WaitGroup
+	slots     chan struct{}
+	admission chan struct{}
 }
 
 func configuredModel(w config.Worker, j protocol.Job) (*provider.Anthropic, error) {
@@ -183,7 +186,7 @@ func (b *modelBridge) start(r modelrpc.Request) error {
 		<-b.slots
 		return b.ctx.Err()
 	}
-	if b.seen[r.RequestID] || len(b.seen) >= 4096 || len(b.active) >= 16 {
+	if b.seen[r.RequestID] || len(b.seen) >= 4096 || len(b.active) >= maxModelConcurrency {
 		<-b.slots
 		return errors.New("model bridge request limit or duplicate ID")
 	}
@@ -200,7 +203,7 @@ func (b *modelBridge) start(r modelrpc.Request) error {
 		defer b.wg.Done()
 		defer cancel()
 		defer func() { <-b.slots }()
-		response := b.generate(ctx, r)
+		response := b.generateAdmitted(ctx, r)
 		// Free the model slot before publishing its response. The worker can
 		// issue its next turn as soon as mv publishes, before Docker exec exits.
 		b.mu.Lock()
@@ -215,6 +218,23 @@ func (b *modelBridge) start(r modelrpc.Request) error {
 		}
 	}()
 	return nil
+}
+
+// Wait inside the request goroutine so model cancellation and graph frames can
+// still be consumed. Delivery has its own bound and never holds provider capacity.
+func (b *modelBridge) generateAdmitted(ctx context.Context, r modelrpc.Request) modelrpc.Response {
+	if b.admission != nil {
+		select {
+		case b.admission <- struct{}{}:
+			defer func() { <-b.admission }()
+		case <-ctx.Done():
+			return modelrpc.Response{RequestID: r.RequestID, Error: safeModelError(ctx.Err())}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return modelrpc.Response{RequestID: r.RequestID, Error: safeModelError(err)}
+	}
+	return b.generate(ctx, r)
 }
 
 func modelSessionPart(s string) bool {

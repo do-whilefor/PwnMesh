@@ -199,3 +199,95 @@ func TestResultSinkRoutesModelFramesWithoutBlockingGraph(t *testing.T) {
 		t.Fatal(order)
 	}
 }
+
+func TestModelBridgeSharesAdmissionWithoutBlockingCancellationOrDelivery(t *testing.T) {
+	arrived := make(chan string, 4)
+	release := make(chan struct{}, 4)
+	client := &http.Client{Transport: inputTestTransport(func(r *http.Request) (*http.Response, error) {
+		arrived <- r.Header.Get("x-opencode-session")
+		select {
+		case <-release:
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"role":"assistant","content":[{"type":"text","text":"fixture"}],"stop_reason":"end_turn"}`))}, nil
+	})}
+	pool := make(chan struct{}, 1)
+	responses := make(chan modelrpc.Response, 4)
+	deliveryRelease := make(chan struct{})
+	makeBridge := func(run string) *modelBridge {
+		b := newModelBridge(context.Background(), &provider.Anthropic{Token: "fixture", Model: "fixture", MaxTokens: 32, Timeout: 5 * time.Second, Client: client}, protocol.Job{RunID: run}, func(ctx context.Context, r modelrpc.Response) error {
+			responses <- r
+			select {
+			case <-deliveryRelease:
+			case <-ctx.Done():
+			}
+			return nil
+		}, func(err error) { t.Errorf("delivery: %v", err) })
+		b.admission = pool
+		t.Cleanup(b.close)
+		return b
+	}
+	first, second := makeBridge("first"), makeBridge("second")
+	request := func(id int, run string) modelrpc.Request {
+		return modelrpc.Request{RequestID: fmt.Sprintf("%032x", id), SessionID: run}
+	}
+	start := func(b *modelBridge, r modelrpc.Request) {
+		t.Helper()
+		if err := b.start(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitArrival := func(want string) {
+		t.Helper()
+		select {
+		case got := <-arrived:
+			if got != want {
+				t.Fatalf("provider saw %q, want %q", got, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("provider admission did not advance")
+		}
+	}
+	start(first, request(1, "first"))
+	waitArrival("first")
+	start(second, request(2, "second"))
+	select {
+	case got := <-arrived:
+		t.Fatalf("shared limit admitted %q while occupied", got)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if err := second.stop(request(2, "second").RequestID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-responses:
+		if r.RequestID != request(2, "second").RequestID || r.Error == nil || !errors.Is(r.Error.Err(), context.Canceled) {
+			t.Fatalf("queued cancellation lost its typed response: %+v", r)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queued cancellation waited for provider capacity")
+	}
+	start(second, request(3, "second"))
+	release <- struct{}{}
+	waitArrival("second") // First delivery is still blocked, but capacity was freed.
+	release <- struct{}{}
+	close(deliveryRelease)
+	first.close()
+	second.close()
+	if len(pool) != 0 {
+		t.Fatal("closed bridges leaked shared admission")
+	}
+	select {
+	case got := <-arrived:
+		t.Fatalf("cancelled queued request reached provider: %s", got)
+	default:
+	}
+}
+
+func TestClientModelAdmissionIsSharedAndBounded(t *testing.T) {
+	c := &Client{}
+	if first, second := c.modelAdmission(), c.modelAdmission(); first != second || cap(first) != maxModelConcurrency {
+		t.Fatal("Worker launches do not share the dispatcher model limit")
+	}
+}

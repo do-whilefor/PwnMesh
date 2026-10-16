@@ -40,6 +40,8 @@ type Client struct {
 	owner           string
 	requiresOwner   bool
 	pendingStops    sync.Map // run directory -> pendingStop; removed only after confirmed exit.
+	modelOnce       sync.Once
+	modelSlots      chan struct{}
 }
 type APIError struct{ Status int }
 
@@ -50,7 +52,13 @@ func New(c config.Container) *Client {
 	}, ResponseHeaderTimeout: 30 * time.Second}
 	return &Client{Config: c, http: &http.Client{Transport: transport}, requiresOwner: true}
 }
-func (c *Client) Close()                { c.http.CloseIdleConnections() }
+func (c *Client) Close() { c.http.CloseIdleConnections() }
+
+// One dispatcher client shares upstream capacity across every Worker launch.
+func (c *Client) modelAdmission() chan struct{} {
+	c.modelOnce.Do(func() { c.modelSlots = make(chan struct{}, maxModelConcurrency) })
+	return c.modelSlots
+}
 func (c *Client) name(id string) string { return c.ContainerName(id) }
 func (c *Client) lock(id string) func() {
 	value, _ := c.locks.LoadOrStore(id, &sync.Mutex{})
@@ -555,6 +563,7 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (prot
 	bridgeCtx, abortBridge := context.WithCancelCause(ctx)
 	defer abortBridge(nil)
 	bridge := newModelBridge(bridgeCtx, p, j, c.modelDelivery(name, path.Dir(target)), abortBridge)
+	bridge.admission = c.modelAdmission()
 	defer bridge.close()
 	sink := &resultSink{graph: c.graphBridge(bridgeCtx, name, path.Dir(target), j), model: bridge.start, cancelModel: bridge.stop}
 	err = c.exec(bridgeCtx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--job", target}, env, sink)
