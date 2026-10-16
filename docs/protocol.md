@@ -50,6 +50,14 @@ Derivation participates in support invalidation, context/evidence traversal and
 completion checks. Fact `sources` read pages return these explicit derivation IDs;
 stored observations and frozen inputs are never rewritten by a later correction.
 
+Execute `read_updates` follows registered inputs through derivations, accepted
+Step prerequisites and correction sources. Beyond 1000 intervening events,
+`rebased: true` returns their current dependency closure from one snapshot. The
+Worker advances its bound cursor only after a complete response is saved with
+its transcript. Immutable user inputs already bound in the Job are not resent.
+Missing observations or byte/node limits retain a pending cursor; the original
+Job and permissions remain unchanged.
+
 Decide's Step-add payload accepts optional `assessment: {claim, scope}`. The claim
 normalizes whitespace and scope trims outer whitespace. This contract is immutable
 and is checked against every Candidate from that Step using the same identity
@@ -80,6 +88,12 @@ them ineffective, so the disagreement can still be reviewed. An unrelated reques
 cannot replace the unresolved question; a different unreviewed pending request
 also cannot be replaced. Reviews, effects and receipts commit atomically.
 
+Disputes expose optional server-owned `review_revision` and `review_step_offset`.
+Reopened reviews require input at or after that revision. The offset preserves
+historical `review_step_ids` while limiting the current evidence period to two
+review Steps and two execution attempts, including retries. Only new effective
+retained evidence renews that allowance; old runs cannot resolve the new period.
+
 ## Asset reads
 
 Asset identity remains the exact normalized host, service or endpoint identity.
@@ -90,6 +104,9 @@ behavior. Selecting an endpoint includes its known service and host, not sibling
 endpoints; selecting a service includes its endpoints and host, not other services.
 The option requires `asset_ids` and is supported on the same asset-filterable
 sections. It creates no catalog entries. Preserve both filters while paging.
+Asset records expose read-only `ancestor_ids` keyed by `host` or `service`.
+Neighborhood queries accept an absent parent ID only when it is derivable from
+catalog children in the same snapshot; exact lookup still requires an entry.
 
 Read `anchors` to distinguish provenance. An anchor with `discovery_step_id`
 means an untagged result was discovered through that producing Step's declared
@@ -114,8 +131,11 @@ not a filesystem sandbox or a guarantee against undeclared shell side effects.
 `reused_from` provenance. Verification/reuse does not establish target freshness.
 Reuse from an interrupted graph requires a successful, verified dependency
 subgraph independent of all pending/running nodes and their declared resources.
-Source locks, definition/input identity and artifact checks still apply; uncertain
-effects, unfinished outputs and recursive reuse are not accepted.
+Source locks and whole-source structure/identity checks still apply; artifact
+verification covers the selected dependency closure. An unrelated damaged output
+does not block reuse. Original nodes in repair graphs remain eligible, but any
+imported node in the selected closure prevents recursive reuse. Uncertain effects
+and unfinished outputs are not accepted.
 
 ## RPC and serialization
 

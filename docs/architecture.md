@@ -17,9 +17,11 @@ Dispatcher ---+  prepare, register, heartbeat, settle
 ```
 
 The model bridge keeps upstream credentials in Dispatcher. Worker requests
-cannot choose the provider endpoint or credentials. Jobs use immutable snapshots
-or bound state views. A model response alone cannot establish success: Execute
-evidence must pass acceptance; Decide and Curate require server receipts.
+cannot choose the provider endpoint or credentials. One Docker client shares a
+16-request model limit across launches; waiting is cancellable and consumes the
+request timeout. Model capacity is released before response delivery. Jobs use
+immutable snapshots or bound state views. A model response alone cannot establish
+success: Execute evidence must pass acceptance; Decide and Curate require server receipts.
 
 ## Components
 
@@ -49,10 +51,11 @@ receipts in one immediate write transaction. Multiwrite operations use local
 savepoints so handled failures cannot retain partial changes. Server calls Board
 operations and never runs SQL. Store owns commit and rollback.
 
-Fact and Candidate writes reuse the graph and metadata already updated within
-the operation, refreshing execution and asset data before projection. Other
-mutations retain their normal state readback. Short mutation benchmarks show
-lower allocation costs; they do not establish a latency or throughput guarantee.
+Fact and Candidate publication appends one immutable metadata row and updates
+the header atomically, without rewriting historical records. It reuses the
+updated graph and metadata, refreshing execution and assets before projection.
+State reads and control version checks still process the full state. Short
+benchmarks do not establish a latency or throughput guarantee.
 
 `Store.View` uses query-only WAL readers for consistent snapshots. Observational
 reads account for lease expiry without clearing authority or reserving the
@@ -82,6 +85,9 @@ a DAG does not publish a shared Fact or complete a Step. Explicit `derived_from`
 edges connect computed observations to their source Facts. Corrections invalidate
 their derived descendants and supported Step results, without invalidating
 independent raw observations merely because they share a producer or asset.
+Support projection, correction validation and Execute updates share prerequisite
+traversal. Corrections cannot invalidate their own premises, including through
+accepted Step inputs or another correction in the same curation batch.
 
 Decide may give coordinated Steps an immutable `assessment` with a canonical
 claim and scope. Their Candidates use that proposition and express agreement or
@@ -98,6 +104,11 @@ all original source identities, including ones later invalidated, and optionally
 adding effective observations. An unrelated request cannot erase the unresolved
 question.
 
+Reopening a resolved dispute fences reviews to the new input revision. New
+effective retained evidence renews its bounded review allowance; rewording or
+reusing known evidence does not. Prior review and producer identities remain in
+history, and stale pending review runs lose authority.
+
 Assets are discovery identities, not evidence, dependencies, permissions or
 coverage. A completed Step's untagged result can be found through its declared
 assets using projected anchors marked with `discovery_step_id`. Explicit Fact
@@ -106,6 +117,9 @@ or propagated into a Finding's support. Exact asset lookup remains the default.
 Optional neighborhood reads include existing syntax-defined ancestors and
 descendants, without DNS resolution, identity merging or sibling expansion.
 These projections and their provenance are bound to the read snapshot and round.
+Asset reads expose syntax-derived parent IDs even in endpoint-only catalogs.
+Finding membership follows its curated Candidate boundary and current effective
+support; an uncurated replacement Candidate cannot silently erase it.
 
 ## Execution and recovery
 
@@ -132,11 +146,15 @@ nodes require dependency ordering. Shared workspace declarations must fit the
 Step's registered `write_paths`. These declarations coordinate cooperating work;
 they do not constrain arbitrary shell access or resolve filesystem aliases.
 
-Reuse checks retained bytes and original execution identity. An interrupted graph
+Reuse checks source structure and identity, then verifies retained bytes for the
+selected dependency closure. Original nodes in repair graphs remain eligible;
+closures containing imported nodes cannot be imported again. An interrupted graph
 can supply a verified successful subgraph only when it is independent of every
 unresolved node through dependencies and declared resources. Uncertain effects
 are never replayed. Evidence reports verification time separately from the
 original execution window; reuse does not observe a mutable target again.
+An Agent node's bound terminal session can close a graph-checkpoint gap without
+model or tool calls; unfinished Agents and commands remain ineligible for replay.
 See [recovery](recovery.md) for interruption and retry semantics.
 
 Control writes retain the full state-version comparison and completion checks.

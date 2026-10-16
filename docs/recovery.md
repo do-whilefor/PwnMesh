@@ -38,6 +38,10 @@ original deadlines and consumed repair, continuation and recovery allowances.
 - Require current acceptance receipts and graph-node definition digests. An old
   `graph.json` alone cannot authorize recovery; do not reconstruct missing identity
   bindings. See [supported formats](formats.md).
+- A child Agent's retained terminal receipt can reconcile a running graph node
+  after verifying its run/node/input identity, committed final journal message,
+  output and artifact hashes. This performs no model or tool calls. Commands,
+  unfinished Agents and sessions without a terminal receipt remain fail-closed.
 
 ## Restore and cleanup
 
