@@ -62,6 +62,9 @@ func (l *Loop) initCheckpoint() error {
 		if l.Checkpoint.Version != ContextCheckpointVersion {
 			return errors.New("unsupported context checkpoint version")
 		}
+		if l.Checkpoint.OverflowRetries < 0 || l.Checkpoint.OverflowRetries > 1 {
+			return errors.New("invalid context overflow recovery allowance")
+		}
 		if l.Checkpoint.ToolArgumentRetries < 0 || l.Checkpoint.ToolArgumentRetries > 1 {
 			return errors.New("invalid tool argument recovery allowance")
 		}

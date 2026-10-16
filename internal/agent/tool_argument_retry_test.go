@@ -89,18 +89,52 @@ func TestToolArgumentRetryStopsAtPersistenceAndRuntimeBoundaries(t *testing.T) {
 	}
 }
 
-func TestToolArgumentRetryRejectsInvalidCheckpointAllowance(t *testing.T) {
-	for _, count := range []int{-1, 2} {
-		loop := &Loop{
-			Checkpoint: &ContextCheckpoint{Version: ContextCheckpointVersion, ToolArgumentRetries: count},
-			Provider: beforeRequestProvider{generate: func(context.Context, []Message) (Message, error) {
-				t.Fatal("invalid checkpoint reached provider")
-				return Message{}, nil
-			}},
+func TestRetryAllowancesRejectInvalidCheckpoint(t *testing.T) {
+	for _, allowance := range []string{"tool_arguments", "context_overflow"} {
+		for _, count := range []int{-1, 2} {
+			checkpoint := &ContextCheckpoint{Version: ContextCheckpointVersion, LastSequence: 1}
+			if allowance == "tool_arguments" {
+				checkpoint.ToolArgumentRetries = count
+			} else {
+				checkpoint.OverflowRetries = count
+			}
+			requests, saves := 0, 0
+			message := Text("user", "retained task")
+			message.Sequence = 1
+			loop := &Loop{
+				History: []Message{message}, Checkpoint: checkpoint,
+				Provider: beforeRequestProvider{generate: func(context.Context, []Message) (Message, error) {
+					requests++
+					return Text("assistant", "done"), nil
+				}},
+				SaveState: func([]Message, *ContextCheckpoint) error { saves++; return nil },
+			}
+			if _, err := loop.Run(context.Background(), ""); err == nil || requests != 0 || saves != 0 {
+				t.Errorf("invalid %s count %d reached runtime: err=%v requests=%d saves=%d", allowance, count, err, requests, saves)
+			}
 		}
-		if _, err := loop.Run(context.Background(), "task"); err == nil {
-			t.Fatalf("accepted invalid retry count %d", count)
-		}
+	}
+}
+
+func TestConsumedContextOverflowAllowanceSurvivesRestart(t *testing.T) {
+	var checkpoint ContextCheckpoint
+	if err := json.Unmarshal([]byte(`{"version":1,"last_sequence":1,"overflow_retries":1}`), &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	message := Text("user", "retained task")
+	message.Sequence = 1
+	overflow := &ModelError{Kind: ErrorContextOverflow, Err: errors.New("context full")}
+	requests, saves := 0, 0
+	loop := &Loop{
+		History: []Message{message}, Checkpoint: &checkpoint,
+		Provider: beforeRequestProvider{generate: func(context.Context, []Message) (Message, error) {
+			requests++
+			return Message{}, overflow
+		}},
+		SaveState: func([]Message, *ContextCheckpoint) error { saves++; return nil },
+	}
+	if _, err := loop.Run(context.Background(), ""); !errors.Is(err, overflow) || requests != 1 || saves != 0 || loop.Checkpoint.OverflowRetries != 1 {
+		t.Fatalf("valid retained allowance was rejected or replenished: err=%v requests=%d saves=%d checkpoint=%+v", err, requests, saves, loop.Checkpoint)
 	}
 }
 
