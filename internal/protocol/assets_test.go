@@ -4,11 +4,65 @@ import (
 	"encoding/json"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"pwnmesh/internal/board/model"
 	"pwnmesh/internal/protocol"
 )
+
+func TestAssetNeighborhoodByteContinuationRetainsSelectors(t *testing.T) {
+	catalog := assetNeighborhoodState(t)
+	s := model.State{
+		Assets: []model.Asset{catalog.Assets[3]},
+		FactRecords: []model.FactRecord{
+			{ID: "unrelated", Description: "Earlier unrelated record"},
+			{ID: "selected", Description: strings.Repeat("Observation ", protocol.MaxGraphPageBytes/8)},
+		},
+		AssetAnchors: []model.AssetAnchor{{AssetID: catalog.Assets[3].ID, NodeKind: "fact", NodeID: "selected", DiscoveryStepID: "producer"}},
+	}
+	r := protocol.GraphRequest{Section: "facts", AssetIDs: []string{catalog.Assets[0].ID}, AssetNeighborhood: true, Limit: 1}
+	page := neighborhoodPage(t, s, r)
+	var ref protocol.GraphRecordReference
+	if len(page.Items) != 1 || json.Unmarshal(page.Items[0], &ref) != nil || !ref.RecordOmitted || ref.RecordOffset != 0 {
+		t.Fatal("filtered record did not expose a continuation")
+	}
+	r.Offset, r.ExpectedVersion, r.RecordVersion = ref.RecordOffset, ref.StateVersion, ref.RecordVersion
+	zero := 0
+	r.ByteOffset = &zero
+	dropped := r
+	dropped.AssetIDs, dropped.AssetNeighborhood = nil, false
+	if _, err := protocol.GraphPage(s, dropped); err == nil {
+		t.Fatal("continuation silently changed from the selected record to an unrelated one")
+	}
+	// The public guidance must retain the selectors that give the offset its
+	// meaning; a valid record digest alone cannot recover the selected offset.
+	for _, field := range []string{"asset_ids", "asset_neighborhood"} {
+		if !strings.Contains(ref.ReadMore, field) {
+			t.Errorf("continuation guidance omits %s", field)
+		}
+	}
+	var got []byte
+	for {
+		value, err := protocol.GraphPage(s, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		part, ok := value.(protocol.GraphContentPage)
+		if !ok || part.StateVersion != ref.StateVersion || part.RecordVersion != ref.RecordVersion || part.ByteOffset != len(got) {
+			t.Fatalf("continuation lost its record binding: %+v", value)
+		}
+		got = append(got, part.Content...)
+		if part.NextByteOffset == nil {
+			break
+		}
+		r.ByteOffset = part.NextByteOffset
+	}
+	want, _ := json.Marshal(s.FactRecords[1])
+	if string(got) != string(want) || protocol.GraphRecordVersion(got) != ref.RecordVersion {
+		t.Fatal("filtered byte continuation changed the original record")
+	}
+}
 
 func assetNeighborhoodState(t *testing.T) model.State {
 	t.Helper()

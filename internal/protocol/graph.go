@@ -304,7 +304,7 @@ func graphItemsPage[T any](s model.State, r GraphRequest, version string, record
 	return boundedGraphPage(s, r, version, len(records), items, missing)
 }
 
-const GraphRecordReadMore = "Read the same section and ids with offset:record_offset, byte_offset:0, expected_version:state_version and record_version. Concatenate content fragments, following next_byte_offset until absent, then parse the complete JSON record."
+const GraphRecordReadMore = "Read the same section, ids, asset_ids and asset_neighborhood with offset:record_offset, byte_offset:0, expected_version:state_version and record_version. Concatenate content fragments, following next_byte_offset until absent, then parse the complete JSON record."
 
 type GraphRecordReference struct {
 	RecordOmitted bool   `json:"record_omitted"`

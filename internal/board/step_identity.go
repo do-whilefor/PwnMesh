@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/board/model"
 )
 
 // matchingRepairStep finds an already planned direction in the current board round.
@@ -30,8 +31,9 @@ func matchingRepairStep(s State, goal string, from []string, description string,
 		return Step{}, false
 	}
 	wanted, _ := json.Marshal(repair)
+	assetIndex := s.AssetIndex("step")
 	for _, step := range s.Steps {
-		if !sameSupportSet(s.AssetIDs("step", step.ID), assets) {
+		if !sameSupportSet(assetIndex[model.NodeKey{Kind: "step", ID: step.ID}], assets) {
 			continue
 		}
 		existingWrites, err := normalizeStepWritePaths(step.WritePaths, step.Repair)

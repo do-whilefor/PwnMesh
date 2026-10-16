@@ -1,9 +1,51 @@
 package model
 
 import (
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestAssetIndexFiltersKindsAndOwnsSortedSets(t *testing.T) {
+	s := State{AssetAnchors: []AssetAnchor{
+		{NodeKind: "step", NodeID: "same", AssetID: "b"},
+		{NodeKind: "fact", NodeID: "same", AssetID: "c", DiscoveryStepID: "same"},
+		{NodeKind: "step", NodeID: "same", AssetID: "a"},
+		{NodeKind: "step", NodeID: "same", AssetID: "b"},
+		{NodeKind: "candidate", NodeID: "same", AssetID: "d"},
+	}}
+	before, _ := json.Marshal(s)
+	all := map[NodeKey][]string{
+		{Kind: "step", ID: "same"}:      {"a", "b"},
+		{Kind: "fact", ID: "same"}:      {"c"},
+		{Kind: "candidate", ID: "same"}: {"d"},
+	}
+	for _, kinds := range [][]string{nil, {"step"}, {"fact", "candidate"}, {"step", "step"}, {"absent"}} {
+		want := map[NodeKey][]string{}
+		for key, ids := range all {
+			include := len(kinds) == 0
+			for _, kind := range kinds {
+				include = include || kind == key.Kind
+			}
+			if include {
+				want[key] = ids
+			}
+		}
+		index := s.AssetIndex(kinds...)
+		if !reflect.DeepEqual(index, want) {
+			t.Fatalf("kinds %v: got %v, want %v", kinds, index, want)
+		}
+		for key, ids := range index {
+			ids[0] = "changed"
+			delete(index, key)
+		}
+	}
+	after, _ := json.Marshal(s)
+	if string(before) != string(after) || !reflect.DeepEqual(s.AssetIndex(), all) {
+		t.Fatal("editing an index changed the source anchors or a later view")
+	}
+}
 
 func TestNormalizeAssetEquivalentAddresses(t *testing.T) {
 	for _, pair := range [][2]AssetSpec{

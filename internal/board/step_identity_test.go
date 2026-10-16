@@ -4,10 +4,75 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
+
+func TestStepIdentityKeepsExactAssetSetsAcrossNodeKinds(t *testing.T) {
+	s := State{Steps: []Step{
+		{ID: "shared", GoalID: "goal", Description: "Inspect target", From: []string{"origin"}},
+		{ID: "single", GoalID: "goal", Description: "Inspect target", From: []string{"origin"}},
+		{ID: "empty", GoalID: "goal", Description: "Inspect target", From: []string{"origin"}},
+	}, AssetAnchors: []AssetAnchor{
+		{NodeKind: "fact", NodeID: "shared", AssetID: "unrelated"},
+		{NodeKind: "step", NodeID: "shared", AssetID: "b"},
+		{NodeKind: "step", NodeID: "shared", AssetID: "a"},
+		{NodeKind: "step", NodeID: "shared", AssetID: "b"},
+		{NodeKind: "candidate", NodeID: "single", AssetID: "b"},
+		{NodeKind: "step", NodeID: "single", AssetID: "a"},
+		{NodeKind: "fact", NodeID: "empty", AssetID: "a", DiscoveryStepID: "shared"},
+	}}
+	before, _ := json.Marshal(s)
+	for _, tc := range []struct {
+		assets []string
+		want   string
+	}{
+		{[]string{"a", "b"}, "shared"},
+		{[]string{"b", "a"}, "shared"},
+		{[]string{"a"}, "single"},
+		{nil, "empty"},
+		{[]string{}, "empty"},
+		{[]string{"unrelated"}, ""},
+	} {
+		assetsBefore := append([]string(nil), tc.assets...)
+		got, ok := matchingRepairStep(s, "goal", []string{"origin"}, "Inspect target", nil, nil, nil, tc.assets)
+		if ok != (tc.want != "") || got.ID != tc.want {
+			t.Fatalf("assets %v matched %q (%t), want %q", tc.assets, got.ID, ok, tc.want)
+		}
+		if len(tc.assets) > 0 && !reflect.DeepEqual(tc.assets, assetsBefore) {
+			t.Fatal("lookup changed the requested asset set")
+		}
+	}
+	after, _ := json.Marshal(s)
+	if string(before) != string(after) {
+		t.Fatal("lookup changed the state or its anchors")
+	}
+}
+
+func BenchmarkStepIdentityAssetLookup(b *testing.B) {
+	for _, count := range []int{100, 1000} {
+		b.Run(fmt.Sprint(count), func(b *testing.B) {
+			s := State{}
+			for n := range count {
+				id := fmt.Sprintf("step-%d", n)
+				s.Steps = append(s.Steps, Step{ID: id, GoalID: "goal", Description: "Inspect target", From: []string{"origin"}})
+				s.AssetAnchors = append(s.AssetAnchors,
+					AssetAnchor{NodeKind: "step", NodeID: id, AssetID: "target-" + id},
+					AssetAnchor{NodeKind: "fact", NodeID: id, AssetID: "observed-" + id})
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				if _, ok := matchingRepairStep(s, "goal", []string{"origin"}, "Inspect target", nil, nil, nil, []string{"new-target"}); ok {
+					b.Fatal("a different asset reused an existing Step")
+				}
+			}
+		})
+	}
+}
 
 type planFixture struct {
 	t     *testing.T

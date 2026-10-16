@@ -168,10 +168,14 @@ func (s State) History() []HistoryEntry {
 }
 
 // AssetIndex builds once per reading view; scanning all anchors per node would make large
-// histories quadratic. The index owns its slices and cannot mutate State.
-func (s State) AssetIndex() map[NodeKey][]string {
+// histories quadratic. Optional kinds avoid indexing unrelated records. The
+// index owns its slices and cannot mutate State.
+func (s State) AssetIndex(kinds ...string) map[NodeKey][]string {
 	index := map[NodeKey][]string{}
 	for _, anchor := range s.AssetAnchors {
+		if len(kinds) > 0 && !slices.Contains(kinds, anchor.NodeKind) {
+			continue
+		}
 		member := NodeKey{Kind: anchor.NodeKind, ID: anchor.NodeID}
 		index[member] = append(index[member], anchor.AssetID)
 	}
