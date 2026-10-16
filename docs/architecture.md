@@ -6,7 +6,7 @@ through Server and launches Docker Workers. Workers retain session journals,
 artifacts and acceptance receipts in their workspace.
 
 ```text
-Browser -> Server -> Board transactions -> private sqlstore -> SQLite
+Browser -> Server -> execution use cases / Board -> private sqlstore -> SQLite
               ^
 Dispatcher ---+  prepare, register, heartbeat, settle
     |
@@ -29,6 +29,7 @@ success: Execute evidence must pass acceptance; Decide and Curate require server
 | --- | --- |
 | `cmd/`, `internal/config/`, `internal/modelconfig/` | Process wiring and configuration |
 | `internal/server/` | HTTP handling and transaction selection |
+| `internal/execution/` | Preparation, registration, settlement and recovery use cases |
 | `internal/board/` | Business validation and transactional operations |
 | `internal/board/model/` | Storage-free canonical state and shared execution values |
 | `internal/board/internal/sqlstore/` | SQLite connections, schema, queries and persistence |
@@ -49,13 +50,20 @@ Runtime status comes from authoritative execution records.
 `Store.Do` keeps lease/generation checks, idempotency, mutations, revisions and
 receipts in one immediate write transaction. Multiwrite operations use local
 savepoints so handled failures cannot retain partial changes. Server calls Board
-operations and never runs SQL. Store owns commit and rollback.
+operations and execution use cases without running SQL. Use cases accept the
+caller's `board.Tx`; its public API exposes domain operations only. Store owns
+commit and rollback.
 
 Fact and Candidate publication appends one immutable metadata row and updates
 the header atomically, without rewriting historical records. It reuses the
 updated graph and metadata, refreshing execution and assets before projection.
 State reads and control version checks still process the full state. Short
 benchmarks do not establish a latency or throughput guarantee.
+
+Curation reuses execution and Asset inputs within one transaction while checking
+successive corrections. Pure projections recompute support for each correction;
+no cache crosses transaction or generation boundaries. Frozen State bytes and
+decision digests share an explicit canonical encoding with compatibility tests.
 
 `Store.View` uses query-only WAL readers for consistent snapshots. Observational
 reads account for lease expiry without clearing authority or reserving the
@@ -133,6 +141,10 @@ or provider access. Its private `journal` package owns append-only bytes,
 committed-prefix verification and crash-tail archival. Failed saves restore the
 prior phase and cursor values.
 
+Worker translates durable phases into generic Agent request policy: pinned
+instructions and a tool-disable reason. The Agent loop does not know Worker
+phases, and request policy does not change the session checkpoint schema.
+
 Journals and checkpoints precede side effects. Recovery checks durable receipts
 before additional model or tool calls. Acceptance reads an identity-bound
 committed transcript. Per-run tools and drafts stay separate from durable state.
@@ -173,6 +185,11 @@ The API layer owns transport and wire types; pure workspace models derive displa
 values. `project-resource.ts` owns accepted reads and caches, with one
 `useWorkspaceSync.ts` polling lifecycle. Failed or superseded reads cannot
 overwrite accepted state.
+
+The Blackboard view exposes exact Asset associations and their provenance,
+retained Candidate judgments, disputes and curation requests. Derived Fact edges
+and support warnings use the same evidence semantics as canvas details; discovery
+associations never establish evidence validity.
 
 Project commands own writes and upload continuation. Client round checks do not
 replace server generation fences. Results, details and exports share evidence

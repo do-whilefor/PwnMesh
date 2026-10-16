@@ -40,6 +40,14 @@ checks and mutation/receipt writes share a transaction.
 Steps and project completion use decision batches; Step completion uses the
 registered result contract. Retired direct intent/completion routes return `404`.
 
+HTTP failures retain `detail` and add an authoritative `code`. Graph bridge
+responses retain legacy `error` text and add `failure: {code, status, detail}`.
+Recovery uses codes such as `state_changed`, `dependency_invalidated` and
+`recovery_exhausted`, with HTTP status checks. Unclassified failures use
+`request_failed`; only the transport compatibility adapter parses old uncoded
+responses. Worker role policy accepts a narrow Graph round-trip function, with
+the existing container bridge as the default transport.
+
 ## Observations and coordinated checks
 
 Fact publication and final Fact handoff accept optional immutable `derived_from`:
