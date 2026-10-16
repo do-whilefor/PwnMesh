@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,12 +12,96 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/dispatcher"
 	"pwnmesh/internal/modelrpc"
 	"pwnmesh/internal/protocol"
 )
+
+func TestGraphBridgeSeparatesOperationAndDeliveryLifetimes(t *testing.T) {
+	for _, scenario := range []string{"receipt", "typed failure", "cancel before request", "cancel during operation"} {
+		t.Run(scenario, func(t *testing.T) {
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var operation context.Context
+			var response protocol.GraphResponse
+			publications := 0
+			client := &Client{http: &http.Client{Transport: inputTestTransport(func(request *http.Request) (*http.Response, error) {
+				publications++
+				if operation == nil || !errors.Is(operation.Err(), context.Canceled) {
+					t.Fatal("response publication still owns the live graph operation context")
+				}
+				if err := request.Context().Err(); err != nil {
+					t.Fatalf("response publication inherited the finished operation: %v", err)
+				}
+				deadline, bounded := request.Context().Deadline()
+				if remaining := time.Until(deadline); !bounded || remaining <= 0 || remaining > 5*time.Second {
+					t.Fatalf("response publication has no independent five-second budget: %v", remaining)
+				}
+				body := ""
+				switch {
+				case request.Method == "PUT" && strings.HasSuffix(request.URL.Path, "/archive"):
+					archive := tar.NewReader(request.Body)
+					for {
+						header, err := archive.Next()
+						if err != nil {
+							return nil, err
+						}
+						if header.Typeflag != tar.TypeReg {
+							continue
+						}
+						if err := json.NewDecoder(archive).Decode(&response); err != nil {
+							return nil, err
+						}
+						break
+					}
+				case request.Method == "POST" && strings.HasSuffix(request.URL.Path, "/exec"):
+					body = `{"Id":"publish"}`
+				case request.URL.Path == "/exec/publish/start":
+				case request.URL.Path == "/exec/publish/json":
+					body = `{"Running":false,"ExitCode":0}`
+				default:
+					t.Fatalf("unexpected publication: %s %s", request.Method, request.URL.Path)
+				}
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}}
+			failure := &protocol.RPCError{Code: board.CodeStateChanged, Status: http.StatusConflict, Detail: "operation rejected"}
+			client.SetGraphHandler(func(ctx context.Context, _ protocol.Job, _ protocol.GraphRequest) (any, error) {
+				operation = ctx
+				if scenario == "cancel during operation" {
+					cancel()
+				}
+				if scenario == "typed failure" {
+					return nil, failure
+				}
+				return map[string]bool{"committed": true}, nil
+			})
+			if scenario == "cancel before request" {
+				cancel()
+			}
+			request := protocol.GraphRequest{RequestID: strings.Repeat("a", 32), Op: "read_graph"}
+			err := client.graphBridge(parent, "fixture", "/workspace/.pwnmesh/runs/run", protocol.Job{Kind: "explore", GraphRPC: true})(request)
+			if parent.Err() != nil {
+				if !errors.Is(err, context.Canceled) || publications != 0 || scenario == "cancel before request" && operation != nil {
+					t.Fatalf("canceled launch published a late response: err=%v requests=%d operation=%v", err, publications, operation)
+				}
+				return
+			}
+			if err != nil || publications != 4 || response.RequestID != request.RequestID {
+				t.Fatalf("response was not published completely: err=%v requests=%d response=%+v", err, publications, response)
+			}
+			if scenario == "typed failure" {
+				if response.Failure == nil || *response.Failure != *failure || len(response.Result) != 0 {
+					t.Fatalf("operation failure lost its identity: %+v", response)
+				}
+			} else if response.Failure != nil || string(response.Result) != `{"committed":true}` {
+				t.Fatalf("successful operation lost its receipt: %+v", response)
+			}
+		})
+	}
+}
 
 func TestGraphBridgePreservesDispatcherErrorCode(t *testing.T) {
 	for _, code := range []string{board.CodeStateChanged, protocol.CodeRequestFailed} {

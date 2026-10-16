@@ -66,6 +66,7 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j prot
 			response.Failure = protocol.GraphFailure(err)
 			response.Result = nil
 		}
+		cancel()
 		raw, err = json.Marshal(response)
 		if err != nil {
 			return err
@@ -79,6 +80,13 @@ func (c *Client) graphBridge(parent context.Context, name, runDir string, j prot
 		// A complete temporary file is uploaded before publishing the response.
 		// Every path component comes from the verified run or a 32-hex request ID.
 		target := path.Join(runDir, "graph-response-"+request.RequestID+".json")
-		return c.publish(ctx, name, target, raw)
+		// An operation timeout still needs a reply. Delivery has its own budget
+		// within the Worker's 30-second wait, but never outlives the launch.
+		delivery, stopDelivery := context.WithTimeout(parent, 5*time.Second)
+		defer stopDelivery()
+		if err := delivery.Err(); err != nil {
+			return err
+		}
+		return c.publish(delivery, name, target, raw)
 	}
 }

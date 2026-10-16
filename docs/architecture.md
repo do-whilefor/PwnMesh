@@ -23,6 +23,10 @@ request timeout. Model capacity is released before response delivery. Jobs use
 immutable snapshots or bound state views. A model response alone cannot establish
 success: Execute evidence must pass acceptance; Decide and Curate require server receipts.
 
+Graph RPC separates its 20-second operation deadline from a 5-second response
+delivery budget. Both remain bound to the launch, so operation failure can be
+reported while launch cancellation still stops delivery.
+
 ## Components
 
 | Location | Responsibility |
