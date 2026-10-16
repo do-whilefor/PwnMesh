@@ -63,6 +63,8 @@ savepoints so handled failures cannot retain partial changes. Server calls Board
 operations and execution use cases without running SQL. Use cases accept the
 caller's `board.Tx`; its public API exposes domain operations only. Store owns
 commit and rollback.
+Registration rolls back retry-grant consumption, successor insertion and review
+transition together even when its caller handles a failure.
 
 The private query adapter forwards the caller's context to every SQL statement,
 so cancellation can interrupt active database work as well as pool waiting.
@@ -88,6 +90,8 @@ decision digests share an explicit canonical encoding with compatibility tests.
 `Store.View` uses query-only WAL readers for consistent snapshots. Observational
 reads account for lease expiry without clearing authority or reserving the
 writer. Planner reads that pin a view and decision previews still need a writer.
+Private in-memory stores enforce the same read-only contract on their single
+connection, restoring writable mode after callback failure or cancellation.
 
 Board owns authorization, retry eligibility, conflicts, quotas and public cursor
 validation. Storage retains snapshots, executions, receipts, events and archives.
