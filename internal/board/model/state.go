@@ -123,15 +123,10 @@ type StateActionResult struct {
 	AssetIDs     []string        `json:"asset_ids,omitempty"`
 }
 
-// Curation is the final field in the current canonical encoding. Keep that
-// order: frozen inputs and decision state versions hash these exact JSON bytes.
+// MarshalJSON uses the explicit frozen-state encoding shared by snapshots and
+// decision versions. Presentation fields belong in separate response values.
 func (s State) MarshalJSON() ([]byte, error) {
-	type stateAlias State
-	view := struct {
-		*stateAlias
-		Curation *CurationProgress `json:"curation"`
-	}{stateAlias: (*stateAlias)(&s), Curation: &s.Curation}
-	return json.Marshal(view)
+	return marshalCanonicalState(s)
 }
 
 func (s State) ValidateFactSources(ids []string, requireObservation bool) error {

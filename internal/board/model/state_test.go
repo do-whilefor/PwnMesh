@@ -43,6 +43,26 @@ func TestStatePreservesOriginalCanonicalBytesAndVersion(t *testing.T) {
 	}
 }
 
+func TestExplicitCanonicalStatePreservesSparseAndEmptyEncoding(t *testing.T) {
+	// This is the previous encoder, retained only as a compatibility oracle.
+	type previousState State
+	for _, state := range []State{{}, {Goals: []Goal{}, Steps: []Step{}, FactRecords: []FactRecord{}, Findings: []Finding{}, FactRelations: []FactRelation{}, Candidates: []Candidate{}, Disputes: []Dispute{}, Assets: []Asset{}, AssetAnchors: []AssetAnchor{}}, readStateFixture(t, "state.json")} {
+		for _, value := range []State{state, canonicalDecisionState(state)} {
+			want, err := json.Marshal(struct {
+				*previousState
+				Curation *CurationProgress `json:"curation"`
+			}{(*previousState)(&value), &value.Curation})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := marshalCanonicalState(value)
+			if err != nil || !bytes.Equal(got, want) {
+				t.Fatalf("explicit encoding changed retained bytes: got %s, want %s, error %v", got, want, err)
+			}
+		}
+	}
+}
+
 func TestDecisionStateVersionIgnoresRuntimeMetadataButRetainsSharedInputs(t *testing.T) {
 	state := readStateFixture(t, "state.json")
 	version := DecisionStateVersion(state)
