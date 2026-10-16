@@ -15,6 +15,7 @@ export interface GraphRecord {
   goal_id?: string;
   result?: string;
   sources?: string[];
+  derived_from?: string[];
   from?: string[];
   depends_on?: string[];
   blocked_by?: string[];

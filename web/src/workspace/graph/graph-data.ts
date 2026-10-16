@@ -69,6 +69,8 @@ export function mapState(input: unknown): GraphProject {
       if (text(raw.result)) addEdge('step_result', node.key, keyOf('fact', raw.result), '产生', null);
     } else if (node.type === 'finding') {
       node.sources.forEach(id => addEdge('finding_support', keyOf('fact', id), node.key, '支持发现', null, node.supportValid));
+    } else if (node.type === 'fact') {
+      strings(raw.derived_from).forEach(id => addEdge('fact_derivation', keyOf('fact', id), node.key, 'Derived from', null, raw.support_invalid === true ? false : null));
     }
   });
   array(state.fact_relations).forEach(value => {

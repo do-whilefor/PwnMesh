@@ -7,6 +7,20 @@ import { visualStatus, nodePresentation, collectSelection, describeEdge, project
 import { worldBounds } from './canvas';
 import type { GraphRecord } from './types';
 interface Fixture { graph: {project: GraphRecord}; goals: GraphRecord[]; steps: GraphRecord[]; fact_records: GraphRecord[]; findings: GraphRecord[]; fact_relations: GraphRecord[] }
+
+test('explicit Fact derivations remain visible after support invalidation without inventing missing sources', () => {
+  const input = {graph: {project: {id: 'derived'}}, fact_records: [
+    {id: 'source', status: 'refuted'}, {id: 'result', status: 'valid', support_invalid: true, derived_from: ['source', 'missing']},
+    {id: 'independent', status: 'valid', source_step_id: 'same-producer'},
+  ]};
+  const mapped = mapState(input), edges = mapped.edges.filter(edge => edge.kind === 'fact_derivation');
+  assert.equal(edges.length, 1);
+  assert.equal(edges[0].source, 'fact:source'); assert.equal(edges[0].target, 'fact:result');
+  assert.equal(describeEdge(mapped, edges[0])?.status, 'invalid');
+  assert.ok(mapped.diagnostics.some(item => item.kind === 'missing_reference'));
+  assert.deepEqual([...collectSelection(mapped, 'fact:result', null).nodeIds].sort(), ['fact:result', 'fact:source']);
+  assert.equal(mapped.edges.some(edge => edge.target === 'fact:independent'), false);
+});
 test('card geometry, viewport bounds and connector endpoints share compact V5 dimensions', () => {
   const positions = new Map([['a', {x:0,y:0}], ['b', {x:400,y:0}]]);
   const geometry = projectGeometry([{key:'a'}, {key:'b'}], positions);

@@ -55,7 +55,7 @@ export function describeEdge(project: GraphProject | null, edge: EdgeSelection):
     return {...record, sourceNode, targetNode, status, statusLabel, description: `${targetNode.label || targetNode.id} 依赖 ${sourceNode.label || sourceNode.id} 的有效完成结果。${statusLabel}。`};
   }
   const correction = ['refutes', 'supersedes', 'narrows'].includes(record.kind);
-  const invalid = record.supportValid === false || (['goal_support', 'finding_support', 'step_input'].includes(record.kind) && (sourceNode.raw?.support_invalid === true || ['refuted', 'superseded', 'narrowed'].includes(sourceNode.status))) || (record.kind === 'step_result' && visualStatus(targetNode) === 'invalid');
+  const invalid = record.supportValid === false || (['goal_support', 'finding_support', 'step_input', 'fact_derivation'].includes(record.kind) && (sourceNode.raw?.support_invalid === true || ['refuted', 'superseded', 'narrowed'].includes(sourceNode.status))) || (record.kind === 'step_result' && visualStatus(targetNode) === 'invalid');
   const step = record.kind === 'step_input' ? targetNode : record.kind === 'step_result' ? sourceNode : null;
   const supported = ['goal_support', 'finding_support'].includes(record.kind) ? targetNode : null;
   const status = invalid || correction ? 'invalid' : step ? visualStatus(step) : supported ? visualStatus(supported) : 'recorded';
