@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -16,6 +17,78 @@ import (
 	"testing"
 	"time"
 )
+
+func TestWorkerIdentityPublicationHelper(t *testing.T) {
+	dir := os.Getenv("PWNMESH_TEST_PID_PUBLICATION")
+	if dir == "" {
+		t.Skip("subprocess helper")
+	}
+	// Limit only this helper so a real failed write cannot damage the parent
+	// test runner or rely on a production filesystem fault-injection hook.
+	signal.Ignore(syscall.SIGXFSZ)
+	if err := syscall.Setrlimit(syscall.RLIMIT_FSIZE, &syscall.Rlimit{Cur: 1, Max: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := RegisterWorker(dir); !errors.Is(err, syscall.EFBIG) {
+		t.Fatalf("worker publication = %v, want file size limit failure", err)
+	}
+}
+
+func TestWorkerIdentityPublicationFailureLeavesNoPartialMarker(t *testing.T) {
+	for _, existing := range []bool{false, true} {
+		t.Run(strconv.FormatBool(existing), func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "worker.pid")
+			const previous = `{"pid":2147483647,"start":"1"}`
+			if existing {
+				if err := os.WriteFile(path, []byte(previous), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			helper := exec.Command(os.Args[0], "-test.run=^TestWorkerIdentityPublicationHelper$")
+			helper.Env = append(os.Environ(), "PWNMESH_TEST_PID_PUBLICATION="+dir)
+			if output, err := helper.CombinedOutput(); err != nil {
+				t.Fatalf("publication helper: %v\n%s", err, output)
+			}
+			raw, err := os.ReadFile(path)
+			if existing && (err != nil || string(raw) != previous) {
+				t.Fatalf("failed publication changed the complete marker: %q, %v", raw, err)
+			}
+			if !existing && !os.IsNotExist(err) {
+				t.Fatalf("failed publication exposed a partial marker: %q, %v", raw, err)
+			}
+			leftovers, err := filepath.Glob(filepath.Join(dir, ".process-*"))
+			if err != nil || len(leftovers) != 0 {
+				t.Fatalf("failed publication left temporary files: %v, %v", leftovers, err)
+			}
+		})
+	}
+}
+
+func TestWorkerIdentityPublicationRetainsOpenSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.pid")
+	const previous = `{"pid":2147483647,"start":"1"}`
+	if err := os.WriteFile(path, []byte(previous), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if err := RegisterWorker(dir); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil || string(raw) != previous {
+		t.Fatalf("replacement changed an already opened identity snapshot: %q, %v", raw, err)
+	}
+	id, alive, err := readIdentity(path)
+	if err != nil || !alive || id.PID != os.Getpid() {
+		t.Fatalf("published identity does not identify this worker: %+v, alive=%v, %v", id, alive, err)
+	}
+}
 
 func TestCommandLaunchHelper(t *testing.T) {
 	dir := os.Getenv("PWNMESH_TEST_PROCESS_HELPER")

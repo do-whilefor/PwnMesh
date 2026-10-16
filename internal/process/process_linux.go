@@ -46,11 +46,7 @@ func saveIdentity(path string, pid int) error {
 	if err != nil {
 		return err
 	}
-	raw, err := json.Marshal(id)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, raw, 0600)
+	return publishIdentity(path, id)
 }
 func readIdentity(path string) (identity, bool, error) {
 	raw, err := os.ReadFile(path)

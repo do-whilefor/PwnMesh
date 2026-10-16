@@ -54,3 +54,18 @@ func TestForceCancelConfirmsLockReleaseAndInvalidatesDelayedLaunch(t *testing.T)
 		t.Fatal("delayed old launch remained valid")
 	}
 }
+
+func TestInterruptRejectsMalformedWorkerIdentity(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "worker.pid")
+	if err := os.WriteFile(path, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := Interrupt(dir); err == nil || !strings.Contains(err.Error(), "invalid process identity marker") {
+		t.Fatalf("malformed identity was accepted: %v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || string(raw) != "{" {
+		t.Fatalf("unconfirmed historical identity was discarded: %q, %v", raw, err)
+	}
+}
