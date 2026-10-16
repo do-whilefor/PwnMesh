@@ -41,28 +41,44 @@ func TestExecutionWritesRollbackWithReviewEvents(t *testing.T) {
 		})
 	}
 	before := f.state()
-	setEventFailure(true)
-	err := f.store.Do(context.Background(), func(tx *Tx) error { return tx.RegisterExecution(next) })
-	if err == nil || !strings.Contains(err.Error(), "event refused") {
-		t.Fatalf("registration did not reach review event: %v", err)
-	}
-	if after := f.state(); !reflect.DeepEqual(after, before) {
-		t.Fatal("failed review event retained registration state or revisions")
-	}
-	f.do(func(tx *Tx) error {
-		grant, err := tx.Execution("p", previous.ID)
-		if err != nil || grant.Status != "retry_requested" {
-			t.Fatalf("failed registration consumed its grant: %+v, %v", grant, err)
+	for _, failure := range []struct{ table, message string }{
+		{"pwnmesh_executions", "registration refused"},
+		{"pwnmesh_state_events", "event refused"},
+	} {
+		f.do(func(tx *Tx) error {
+			_, err := tx.transactionQueries.Exec("CREATE TRIGGER reject_registration BEFORE INSERT ON " + failure.table + " BEGIN SELECT RAISE(ABORT,'" + failure.message + "'); END")
+			return err
+		})
+		f.do(func(tx *Tx) error {
+			if err := tx.RegisterExecution(next); err == nil || !strings.Contains(err.Error(), failure.message) {
+				t.Fatalf("registration did not reach injected failure: %v", err)
+			}
+			// Handling this operation's error must not consume its grant or
+			// publish its review while unrelated work commits successfully.
+			return tx.UpdateSettings(Settings{IntentTimeout: 30, ReasonTimeout: 30})
+		})
+		if after := f.state(); !reflect.DeepEqual(after, before) {
+			t.Fatal("handled registration error retained state or revisions")
 		}
-		_, err = tx.Execution("p", next.ID)
-		requireAPIStatus(t, err, 404)
-		return nil
-	})
-	setEventFailure(false)
+		f.do(func(tx *Tx) error {
+			grant, err := tx.Execution("p", previous.ID)
+			if err != nil || grant.Status != "retry_requested" {
+				t.Fatalf("failed registration consumed its grant: %+v, %v", grant, err)
+			}
+			_, err = tx.Execution("p", next.ID)
+			requireAPIStatus(t, err, 404)
+			settings, err := tx.Settings()
+			if err != nil || settings.IntentTimeout != 30 || settings.ReasonTimeout != 30 {
+				t.Fatalf("registration rolled back unrelated settings: %+v, %v", settings, err)
+			}
+			_, err = tx.transactionQueries.Exec("DROP TRIGGER reject_registration")
+			return err
+		})
+	}
 	f.do(func(tx *Tx) error { return tx.RegisterExecution(next) })
 	before = f.state()
 	setEventFailure(true)
-	err = f.store.Do(context.Background(), func(tx *Tx) error {
+	err := f.store.Do(context.Background(), func(tx *Tx) error {
 		return tx.ExecutionStatus(next, "failed", json.RawMessage(`{"status":"failed","error":"review interrupted"}`))
 	})
 	if err == nil || !strings.Contains(err.Error(), "event refused") {

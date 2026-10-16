@@ -22,7 +22,7 @@ func (t *Tx) Execution(project, id string) (Execution, error) {
 	}
 	return e, err
 }
-func (t *Tx) RegisterExecution(e Execution) error {
+func (t *Tx) RegisterExecution(e Execution) (err error) {
 	var snapshotJob struct {
 		InputSnapshot *InputSnapshot `json:"input_snapshot"`
 		Graph         Graph          `json:"graph"`
@@ -146,7 +146,19 @@ func (t *Tx) RegisterExecution(e Execution) error {
 		return Err(409, "Execution requires new task evidence or an explicit retry")
 	}
 	// Consume the one-use authorization in the same transaction as the new
-	// registration and its review transition.
+	// registration and its review transition. Keep this operation atomic even
+	// when the caller handles its error and commits unrelated work.
+	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_execution_registration"); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_execution_registration")
+			err = errors.Join(err, rollbackErr)
+		}
+		_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_execution_registration")
+		err = errors.Join(err, releaseErr)
+	}()
 	e.Status, e.Result, e.Resumes = "prepared", nil, 0
 	e.CreatedAt, e.UpdatedAt = t.Now, t.Now
 	err = sqlstore.InsertExecution(t.transactionQueries, e, metadata, job.PreviousRunID)
