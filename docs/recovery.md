@@ -42,6 +42,10 @@ original deadlines and consumed repair, continuation and recovery allowances.
   after verifying its run/node/input identity, committed final journal message,
   output and artifact hashes. This performs no model or tool calls. Commands,
   unfinished Agents and sessions without a terminal receipt remain fail-closed.
+- An interrupted receipt import re-verifies its source without replaying it.
+  Graph resume and inspection share a regular-file reader that rejects symlinks,
+  special files, trailing JSON and detected changes during reading. Retained error
+  strings have no size cap, so checkpoint loading has no fixed total byte limit.
 
 ## Restore and cleanup
 

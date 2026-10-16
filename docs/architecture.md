@@ -58,13 +58,16 @@ same limit; zero execution timeout still disables that deadline.
 ## State and transactions
 
 `Store.Do` keeps lease/generation checks, idempotency, mutations, revisions and
-receipts in one immediate write transaction. Multiwrite operations use local
-savepoints so handled failures cannot retain partial changes. Server calls Board
+receipts in one immediate write transaction. Selected Board mutations use local
+savepoints to roll back handled operation failures. Server calls Board
 operations and execution use cases without running SQL. Use cases accept the
 caller's `board.Tx`; its public API exposes domain operations only. Store owns
-commit and rollback.
+commit and rollback. Composed use-case failures and savepoint cleanup errors must
+propagate to Store for transaction rollback.
 Registration rolls back retry-grant consumption, successor insertion and review
 transition together even when its caller handles a failure.
+Execution outcomes keep status, revocation, failure events and review transitions
+atomic. Resume updates only its role's lease and recovery allowance, together.
 
 The private query adapter forwards the caller's context to every SQL statement,
 so cancellation can interrupt active database work as well as pool waiting.
@@ -155,6 +158,8 @@ These projections and their provenance are bound to the read snapshot and round.
 Asset reads expose syntax-derived parent IDs even in endpoint-only catalogs.
 Finding membership follows its curated Candidate boundary and current effective
 support; an uncurated replacement Candidate cannot silently erase it.
+Step deduplication indexes Asset anchors once per lookup. Filtered record byte
+continuations must retain asset selectors, neighborhood mode and both versions.
 
 ## Execution and recovery
 
@@ -189,9 +194,10 @@ dependency files and verified artifact receipts. Worker supplies execution
 identity and the Agent callback; DAG does not import Worker or a provider.
 Ordinary outputs stay in run/node directories. Declared path resources are
 compared after lexical normalization, including parent/child overlaps; conflicting
-nodes require dependency ordering. Shared workspace declarations must fit the
-Step's registered `write_paths`. These declarations coordinate cooperating work;
-they do not constrain arbitrary shell access or resolve filesystem aliases.
+nodes require dependency ordering. Declarations overlapping the shared workspace,
+including its ancestors, must fit the Step's registered `write_paths`. These
+declarations coordinate cooperating work; they do not constrain arbitrary shell
+access or resolve filesystem aliases.
 
 Reuse checks source structure and identity, then verifies retained bytes for the
 selected dependency closure. Original nodes in repair graphs remain eligible;
@@ -201,7 +207,8 @@ unresolved node through dependencies and declared resources. Uncertain effects
 are never replayed. Evidence reports verification time separately from the
 original execution window; reuse does not observe a mutable target again.
 An Agent node's bound terminal session can close a graph-checkpoint gap without
-model or tool calls; unfinished Agents and commands remain ineligible for replay.
+model or tool calls. Receipt imports reconcile by rechecking their retained
+source; unfinished Agents and commands remain ineligible for replay.
 Snapshot inspection and resume share retained-node validation. All saved input
 bindings and dependencies are checked before recovery callbacks or checkpoint
 writes, including when a graph adds new nodes.
