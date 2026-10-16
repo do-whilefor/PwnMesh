@@ -5,11 +5,53 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
 	"pwnmesh/internal/board/model"
 )
+
+func TestFailureDiagnosticsKeepLatestLeaseReasons(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if err := store.Do(context.Background(), func(q Queries) error {
+		if _, err := q.Exec("INSERT INTO projects(id,title,status,created_at) VALUES('p','Fixture','active','now'),('other','Other','active','now')"); err != nil {
+			return err
+		}
+		for n, event := range []struct{ project, raw string }{
+			{"p", `{"op":"execution_failed","run_id":"empty","payload":{"reason":"older reason"}}`},
+			{"p", `{"op":"execution_failed","run_id":"empty","payload":{"reason":""}}`},
+			{"p", `{"op":"execution_failed","run_id":"latest","payload":{"reason":null}}`},
+			{"p", `{"op":"execution_failed","run_id":"latest","payload":{"reason":"latest reason"}}`},
+			{"p", `{"op":"execution_failed","run_id":"unrequested","payload":{"reason":"unrelated lease"}}`},
+			{"p", `{"op":"fact","run_id":"latest","payload":{"reason":"unrelated operation"}}`},
+			{"other", `{"op":"execution_failed","run_id":"latest","payload":{"reason":"foreign project"}}`},
+		} {
+			if _, err := q.Exec("INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES(?,?,?)", event.project, n+1, event.raw); err != nil {
+				return err
+			}
+		}
+		// A missing lease keeps the scan open past both old events. Duplicate
+		// requests do not change cardinality, and old null reasons stay hidden.
+		reasons, err := ExecutionFailureReasons(q, "p", []string{"empty", "latest", "missing", "empty"})
+		if err != nil || !reflect.DeepEqual(reasons, map[string]string{"empty": "", "latest": "latest reason"}) {
+			t.Fatalf("diagnostics lost latest-event precedence or project/lease scope: %v, %v", reasons, err)
+		}
+		if _, err := q.Exec(`INSERT INTO pwnmesh_state_events(project_id,revision,event) VALUES('p',8,'{"op":"execution_failed","run_id":"latest","payload":{"reason":null}}')`); err != nil {
+			return err
+		}
+		if _, err := ExecutionFailureReasons(q, "p", []string{"latest"}); err == nil {
+			t.Fatal("invalid latest diagnostic was silently replaced by older history")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestProjectionReadsKeepSnapshotScopeAndRawMetadata(t *testing.T) {
 	store, err := Open(filepath.Join(t.TempDir(), "projection.db"))
@@ -72,9 +114,9 @@ func TestProjectionReadsKeepSnapshotScopeAndRawMetadata(t *testing.T) {
 		if err != nil || len(runs) != 1 || runs[0].ID != "latest" || runs[0].Generation != 1 || runs[0].Lease != "backend@latest" {
 			t.Fatalf("latest attempt escaped snapshot or changed scope: %+v %v", runs, err)
 		}
-		detail, err := ExecutionFailureReason(q, "p", "backend@latest")
-		if err != nil || detail != "original diagnostic" {
-			t.Fatalf("failure diagnostic escaped snapshot: %q %v", detail, err)
+		reasons, err := ExecutionFailureReasons(q, "p", []string{"backend@latest"})
+		if err != nil || reasons["backend@latest"] != "original diagnostic" {
+			t.Fatalf("failure diagnostic escaped snapshot: %v %v", reasons, err)
 		}
 		assets, anchors, err := ProjectAssets(q, "p", 2)
 		if err != nil || len(assets) != 1 || assets[0].ID != "a" || len(anchors) != 1 || anchors[0].NodeID != "f" {

@@ -67,6 +67,9 @@ updated graph and metadata, refreshing execution and assets before projection.
 State reads and control version checks still process the full state. Short
 benchmarks do not establish a latency or throughput guarantee.
 
+Failed Step diagnostics load in one project-scoped event query per state read,
+preserving the latest reason for each lease. Reads without failed Steps skip it.
+
 Curation reuses execution and Asset inputs within one transaction while checking
 successive corrections. Pure projections recompute support for each correction;
 no cache crosses transaction or generation boundaries. Frozen State bytes and

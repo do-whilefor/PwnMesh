@@ -1,6 +1,12 @@
 package sqlstore
 
-import "pwnmesh/internal/board/model"
+import (
+	"database/sql"
+	"encoding/json"
+	"errors"
+
+	"pwnmesh/internal/board/model"
+)
 
 // Only runtime identity is needed for the current graph. Keep archived Job and
 // Result bodies out of this read, including when a retained body is malformed.
@@ -26,11 +32,48 @@ func LatestStepExecutions(q Queries, project string) ([]model.ExecutionSummary, 
 }
 
 // Delivery failures retain their diagnostic in an event, without overwriting an
-// immutable pending result. Board requests this only for projected failed Steps.
-func ExecutionFailureReason(q Queries, project, lease string) (string, error) {
-	var detail string
-	err := q.QueryRow("SELECT json_extract(event,'$.payload.reason') FROM pwnmesh_state_events WHERE project_id=? AND json_extract(event,'$.op')='execution_failed' AND json_extract(event,'$.run_id')=? ORDER BY revision DESC LIMIT 1", project, lease).Scan(&detail)
-	return detail, err
+// immutable pending result. Read the requested leases together, newest first,
+// and stop when all are found. An empty latest reason still hides older reasons.
+func ExecutionFailureReasons(q Queries, project string, leases []string) (map[string]string, error) {
+	reasons := make(map[string]string, len(leases))
+	if len(leases) == 0 {
+		return reasons, nil
+	}
+	remaining := make(map[string]bool, len(leases))
+	for _, lease := range leases {
+		remaining[lease] = true
+	}
+	// One JSON parameter avoids SQLite's variable limit on large projects.
+	raw, err := json.Marshal(leases)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.Query(`SELECT json_extract(event,'$.run_id'),json_extract(event,'$.payload.reason')
+		FROM pwnmesh_state_events WHERE project_id=? AND json_extract(event,'$.op')='execution_failed'
+		AND json_extract(event,'$.run_id') IN (SELECT value FROM json_each(?)) ORDER BY revision DESC`, project, string(raw))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var lease string
+		var reason sql.NullString
+		if err := rows.Scan(&lease, &reason); err != nil {
+			return nil, err
+		}
+		if !remaining[lease] {
+			continue
+		}
+		if !reason.Valid {
+			return nil, errors.New("execution failure event has no reason")
+		}
+		reasons[lease] = reason.String
+		delete(remaining, lease)
+		if len(remaining) == 0 {
+			break
+		}
+	}
+	return reasons, rows.Err()
 }
 
 func ProjectAssets(q Queries, project string, generation int64) ([]model.Asset, []model.AssetAnchor, error) {

@@ -67,16 +67,20 @@ func (t *Tx) projectState(g Graph, d stateData, revision, decision int64) (State
 	for _, run := range inputs.runs {
 		leases[run.Intent] = run.Lease
 	}
+	failedLeases := []string{}
+	for _, step := range s.Steps {
+		if step.Status == "failed" {
+			failedLeases = append(failedLeases, leases[step.ID])
+		}
+	}
+	reasons, err := sqlstore.ExecutionFailureReasons(t.transactionQueries, g.Project.ID, failedLeases)
+	if err != nil {
+		return State{}, err
+	}
 	for n := range s.Steps {
 		step := &s.Steps[n]
-		if step.Status != "failed" {
-			continue
-		}
-		detail, err := sqlstore.ExecutionFailureReason(t.transactionQueries, g.Project.ID, leases[step.ID])
-		if err == nil && detail != "" {
+		if detail := reasons[leases[step.ID]]; step.Status == "failed" && detail != "" {
 			step.Reason = detail
-		} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return State{}, err
 		}
 	}
 	return s, nil
