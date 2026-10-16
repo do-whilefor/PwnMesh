@@ -66,6 +66,9 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
     browser=await launch();
     const page=await browser.newPage({viewport:{width:1440,height:960},reducedMotion:'reduce'});page.setDefaultTimeout(12000);
     const data=fixture(),state=data.state,errors: string[]=[],assetErrors: string[]=[];let unavailable=false;
+    state.fact_records[1].derived_from=['origin'];
+    state.assets=[{id:'endpoint',kind:'endpoint',value:'https://example.test/account',method:'GET'}];
+    state.asset_anchors=[{asset_id:'endpoint',node_kind:'fact',node_id:'long',discovery_step_id:'done'}];
     page.on('pageerror',error=>errors.push(error.message));page.on('response',response=>{if(new URL(response.url()).pathname.startsWith('/static/')&&response.status()>=400)assetErrors.push(response.url());});
     const requests=await interceptProject(page,data,{unavailable:()=>unavailable});
     const base=process.env.PWNMESH_WEB_URL||server!.url;
@@ -159,6 +162,16 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       await edge.dispatchEvent('click');assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/依赖已满足/);assert.match(await page.locator('.activity-pane .node-inspector').innerText(),/已经完成的任务/);await page.locator('#clear-selection').click();
       await page.locator('[data-node-key="fact:long"]').dispatchEvent('click');await page.locator('.activity-pane [data-inspector-action="read"]').click();
       assert.ok((await page.locator('.inspector-reader[open] .inspector-reader-content').textContent())!.includes(boardTail));await closeReader();await page.locator('#clear-selection').click();
+    });
+
+    await t.test('workspace keeps three views and canvas details retain derivations and discovery provenance',async()=>{
+      assert.deepEqual(await page.locator('.view-tabs [role="tab"]').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('data-view'))),['graph','materials','result']);
+      await page.locator('[data-node-key="fact:long"]').dispatchEvent('click');
+      const detail=await page.locator('.activity-pane .node-inspector').innerText();
+      assert.match(detail,/Derived from/);assert.match(detail,/Discovery via Step done/);assert.match(detail,/https:\/\/example\.test\/account/);
+      const edges=await page.locator('.graph-edge-hit').evaluateAll(nodes=>nodes.map(node=>node.getAttribute('data-edge-key')));
+      assert.ok(edges.includes('edge:'+JSON.stringify(['fact_derivation','fact:origin','fact:long'])));
+      await page.locator('#clear-selection').click();
     });
 
     await t.test('polling errors disable mutations and recovery preserves the displayed graph',async()=>{

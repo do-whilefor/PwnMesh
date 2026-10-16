@@ -13,12 +13,11 @@ import GraphCanvas from './graph/GraphCanvas.vue';
 import ActivityPanel from './activity/ActivityPanel.vue';
 import MaterialsView from './materials/MaterialsView.vue';
 import ResultsView from './results/ResultsView.vue';
-import BlackboardView from './blackboard/BlackboardView.vue';
 import RecordReader from './details/RecordReader.vue';
 defineOptions({ name: 'WorkspacePage' });
 const props = defineProps<{ project?: ProjectView; projectIds?: readonly string[]; disabled: boolean; modelSummary: string; loadRound: (project: ProjectView, generation: number) => Promise<unknown> }>();
 const emit = defineEmits<{ create: []; hint: [id: string]; manage: [project: ProjectView]; toast: [message: string] }>();
-type Tab = 'graph' | 'materials' | 'result' | 'blackboard';
+type Tab = 'graph' | 'materials' | 'result';
 const tab = ref<Tab>('graph'), run = ref('current'), graph = ref<InstanceType<typeof GraphCanvas>>(), reader = ref<InstanceType<typeof RecordReader>>(), filter = ref('all'), zoom = ref(1), active = ref(true);
 const materials = ref<InstanceType<typeof MaterialsView>>();
 const selectedNode = ref<GraphNode | null>(null), selectedEdge = ref<GraphEdgeDetails | null>(null);
@@ -32,7 +31,7 @@ const types: Record<string, string> = Object.fromEntries([['', '通用'], ...PRO
 const statusLabels: Record<string, string> = { running: '探索中', done: '已完成', paused: '已暂停', pending: '待开始', terminated: '已终止' };
 const selection = computed(() => selectedNode.value ? selectionDetail(selectedNode.value, 'node', nodePresentation(selectedNode.value, 'goal:goal'), state.value) : selectedEdge.value ? selectionDetail(selectedEdge.value, 'edge') : null);
 const completed = computed(() => state.value?.steps.filter(step => step.status === 'completed').length || 0);
-const tabs: { id: Tab; icon: string; label: string }[] = [{ id: 'graph', icon: 'workflow', label: '画布' }, { id: 'blackboard', icon: 'workflow', label: 'Blackboard' }, { id: 'materials', icon: 'paperclip', label: '材料' }, { id: 'result', icon: 'file-check-2', label: '结果' }];
+const tabs: { id: Tab; icon: string; label: string }[] = [{ id: 'graph', icon: 'workflow', label: '画布' }, { id: 'materials', icon: 'paperclip', label: '材料' }, { id: 'result', icon: 'file-check-2', label: '结果' }];
 function clearSelection() { selectedNode.value = null; selectedEdge.value = null; graph.value?.clearSelection(); }
 function node(value: GraphNode | null) { selectedNode.value = value; selectedEdge.value = null; }
 function edge(value: GraphEdgeDetails | null) { selectedEdge.value = value; selectedNode.value = null; }
@@ -72,7 +71,6 @@ defineExpose({ reset: () => { run.value = 'current'; tab.value = 'graph'; clearS
         <div v-if="summaryOnly" class="empty-state"><Icon name="info"/>此历史项目仅提供基本信息，详情暂不可查看。请新建项目继续。</div>
         <template v-else-if="tab === 'graph'"><GraphCanvas v-if="viewed" ref="graph" :state="state" :project-layouts="layouts" @select-node="node" @select-edge="edge" @zoom="zoom = $event"/><template v-else><div id="graph-host" class="graph-host"/><div class="canvas-empty-state"><h2>每一次探索，从一个目标开始。</h2><p>创建一个项目，把复杂的问题一步步展开。</p><button class="button primary" data-create @click="emit('create')"><Icon name="plus"/>新建项目</button></div></template><div class="canvas-bottom"><div class="zoom-controls"><button id="zoom-out" class="icon-button" aria-label="缩小画布" :disabled="!viewed" @click="graph?.zoomBy(1 / 1.18)"><Icon name="minus"/></button><span id="zoom-label">{{ Math.round(zoom * 100) }}%</span><button id="zoom-in" class="icon-button" aria-label="放大画布" :disabled="!viewed" @click="graph?.zoomBy(1.18)"><Icon name="plus"/></button><i/><button id="fit-graph" class="icon-button" aria-label="适应画布" title="适应画布 · 0" :disabled="!viewed" @click="graph?.fit()"><Icon name="maximize"/></button></div></div></template>
         <MaterialsView v-else-if="viewed && tab === 'materials'" ref="materials" :key="viewed.id + ':' + viewed.generation" :project="viewed" :active="active" @hint="project && emit('hint', project.id)" @read="read"/>
-        <BlackboardView v-else-if="state && tab === 'blackboard'" :key="state.graph.project.id + ':' + state.graph.project.generation" :state="state" @read="read" @locate="focus"/>
         <ResultsView v-else-if="viewed" :key="viewed.id + ':' + viewed.generation" :project="viewed" @read="read" @locate="focus" @toast="emit('toast', $event)"/>
       </div><footer v-if="!summaryOnly" class="canvas-footer"><div class="legend" role="group" aria-label="按节点状态筛选"><template v-if="tab === 'graph'"><button v-for="(label, value) in { done: '已完成', running: '运行中', pending: '待执行' }" :key="value" :data-filter="value" :disabled="!viewed" :class="{ active: filter === value }" :aria-pressed="filter === value" @click="setFilter(value)"><i class="legend-dot" :class="value"/>{{ label }}</button></template></div><div class="task-progress"><span>{{ completed }} / {{ state?.steps.length || 0 }} 个任务</span><span class="progress-track"><i :style="{ width: (state?.steps.length ? completed / state.steps.length * 100 : 0) + '%' }"/></span></div></footer></section>
       <ActivityPanel :project="viewed" :project-ids="projectIds" :selection="selection" @back="clearSelection" @read="read"/>

@@ -19,6 +19,42 @@ function project(id = 'project', generation = 1): ProjectView {
   return view;
 }
 
+test('workspace exposes three views and keyboard navigation cycles through them', async () => {
+  const wrapper = mount(WorkspacePage, {attachTo: document.body, props: {project: project(), disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.attributes('data-view'))).toEqual(['graph', 'materials', 'result']);
+    for (const [id, component] of [['materials', MaterialsView], ['result', ResultsView], ['graph', GraphCanvas]] as const) {
+      await wrapper.get('#view-tab-' + id).trigger('click');
+      expect(wrapper.findComponent(component).exists()).toBe(true);
+      expect(wrapper.get('#project-view').attributes('aria-labelledby')).toBe('view-tab-' + id);
+    }
+    for (const [key, id] of [['ArrowRight', 'materials'], ['ArrowRight', 'result'], ['ArrowRight', 'graph'], ['ArrowLeft', 'result'], ['Home', 'graph'], ['End', 'result']]) {
+      await wrapper.get('[role="tab"][aria-selected="true"]').trigger('keydown', {key});
+      await flushPromises();
+      const tab = wrapper.get('#view-tab-' + id);
+      expect(tab.attributes('aria-selected')).toBe('true');
+      expect(document.activeElement).toBe(tab.element);
+    }
+  } finally { wrapper.unmount(); }
+});
+
+test('canvas Fact details retain derivation and discovery provenance without manufacturing evidence', async () => {
+  const current = project(), state = current.state!;
+  const fact = {id: 'derived', description: 'Computed observation', status: 'valid', derived_from: ['raw'], support_invalid: true};
+  state.fact_records = [fact];
+  state.assets = [{id: 'asset', kind: 'endpoint', value: 'https://example.test/a', method: 'GET'}];
+  state.asset_anchors = [{asset_id: 'asset', node_kind: 'fact', node_id: 'derived', discovery_step_id: 'work'}];
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  try {
+    wrapper.findComponent(GraphCanvas).vm.$emit('select-node', {id: fact.id, key: 'fact:derived', type: 'fact', label: fact.description, status: fact.status, raw: fact});
+    await flushPromises();
+    const detail = wrapper.findComponent(ActivityPanel).props('selection')!;
+    expect(detail.meta).toContainEqual({label: 'Derived from', value: 'raw'});
+    expect(detail.meta).toContainEqual({label: 'Asset associations', value: 'GET https://example.test/a (Discovery via Step work)'});
+    expect(detail.evidence).toEqual([]);
+  } finally { wrapper.unmount(); }
+});
+
 test('same project and generation refresh preserves the selected tab and historical round', async () => {
   const current = project(), loadRound = vi.fn(async () => current.history[0]);
   const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});

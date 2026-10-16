@@ -214,10 +214,9 @@ values. `project-resource.ts` owns accepted reads and caches, with one
 `useWorkspaceSync.ts` polling lifecycle. Failed or superseded reads cannot
 overwrite accepted state.
 
-The Blackboard view exposes exact Asset associations and their provenance,
-retained Candidate judgments, disputes and curation requests. Derived Fact edges
-and support warnings use the same evidence semantics as canvas details; discovery
-associations never establish evidence validity.
+Canvas details expose exact Asset associations and their provenance alongside
+Fact derivations and support warnings. Discovery associations never establish
+evidence validity.
 
 Project commands own writes and upload continuation. Client round checks do not
 replace server generation fences. Results, details and exports share evidence

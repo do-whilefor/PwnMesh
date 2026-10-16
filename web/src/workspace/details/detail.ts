@@ -1,6 +1,6 @@
 import { object, plain } from '@/ui/format';
 import type { WorkspaceSnapshot } from '@/api/types';
-import { assetAssociations } from '../model/blackboard';
+import { assetAssociations } from '../model/asset-associations';
 
 export interface DetailRecord {
   title: string; kind: string; body: string; output?: string;
