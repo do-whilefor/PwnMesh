@@ -3,6 +3,7 @@
 package workergraph
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -14,13 +15,66 @@ func NodeDefinitionSHA256(node Node) string {
 	return hash(describe(canonicalNode(node)))
 }
 
-// Both snapshots and resumable checkpoints accept the same node fields and
-// attempt timing. Identity, definition coverage and dependency checks remain
-// with each caller because only Run can incrementally extend a saved graph.
 func validSavedNode(state NodeState, node Node) bool {
 	return state.Kind == node.Kind && state.Attempt >= 0 && state.Attempt <= 1 &&
 		slices.Contains([]string{"pending", "running", "succeeded", "skipped", "failed", "blocked", "cancelled"}, state.Status) &&
 		validateOutput(state.Output) == nil
+}
+
+// Validate the entire retained graph before any recovery callback or write.
+// Nodes absent from the saved checkpoint are extension candidates; every saved
+// node must retain its original definition and a closed dependency set.
+func validateSavedNodes(nodes []Node, initial json.RawMessage, saved []NodeState, signature string) error {
+	byID := make(map[string]Node, len(nodes))
+	states := make(map[string]*NodeState, len(saved))
+	for _, node := range nodes {
+		byID[node.ID] = node
+	}
+	var definitions []nodeDefinition
+	for i := range saved {
+		state := &saved[i]
+		node, ok := byID[state.ID]
+		if !ok || i > 0 && saved[i-1].ID >= state.ID || !validSavedNode(*state, node) {
+			return errors.New("invalid graph node checkpoint")
+		}
+		if state.DefinitionSHA256 != NodeDefinitionSHA256(node) {
+			return fmt.Errorf("node %s definition changed", node.ID)
+		}
+		if !validSavedAttempt(*state) || state.Status == "skipped" && state.Reason == "" {
+			return errors.New("invalid graph node attempt, timing or skip reason")
+		}
+		definitions = append(definitions, describe(node))
+		states[state.ID] = state
+	}
+	if hash(definitions) != signature {
+		return errors.New("graph checkpoint definition mismatch")
+	}
+	for _, node := range nodes {
+		state := states[node.ID]
+		if state == nil {
+			continue
+		}
+		for _, dep := range node.DependsOn {
+			if states[dep.ID] == nil {
+				return fmt.Errorf("node %s saved dependency is missing", node.ID)
+			}
+		}
+		if state.InputSHA256 != "" || state.Attempt > 0 || state.Status == "skipped" {
+			if state.InputSHA256 != nodeInput(node, *state, initial, states).SHA256 {
+				return fmt.Errorf("node %s input binding changed", node.ID)
+			}
+		}
+		if state.Status != "succeeded" {
+			continue
+		}
+		for _, dep := range node.DependsOn {
+			status := states[dep.ID].Status
+			if status == "pending" || status == "running" || !dep.Optional && status != "succeeded" {
+				return fmt.Errorf("node %s saved dependency is not satisfied", node.ID)
+			}
+		}
+	}
+	return nil
 }
 
 func validSavedAttempt(state NodeState) bool {
@@ -45,38 +99,5 @@ func ValidateSnapshot(definition Definition, options Options, saved Checkpoint) 
 	if saved.SchemaVersion != 1 || saved.RunID != options.RunID || saved.Version != definition.Version || saved.DefinitionSHA256 != signature || saved.InputSHA256 != hash(options.Input) || len(saved.Nodes) != len(nodes) || !slices.Contains([]string{"running", "succeeded", "failed", "interrupted"}, saved.Status) {
 		return errors.New("graph snapshot identity, definition or input mismatch")
 	}
-	byID := make(map[string]Node, len(nodes))
-	states := make(map[string]*NodeState, len(nodes))
-	for _, node := range nodes {
-		byID[node.ID] = node
-	}
-	for i := range saved.Nodes {
-		state := &saved.Nodes[i]
-		node, ok := byID[state.ID]
-		if !ok || i > 0 && saved.Nodes[i-1].ID >= state.ID || !validSavedNode(*state, node) || state.DefinitionSHA256 != NodeDefinitionSHA256(node) {
-			return errors.New("invalid graph snapshot node")
-		}
-		if !validSavedAttempt(*state) || state.Status == "skipped" && state.Reason == "" {
-			return errors.New("invalid graph snapshot attempt or timing")
-		}
-		states[state.ID] = state
-	}
-	for _, node := range nodes {
-		state := states[node.ID]
-		if state.InputSHA256 != "" || state.Attempt > 0 || state.Status == "skipped" {
-			if state.InputSHA256 != inputHash(nodeInput(node, *state, options.Input, states)) {
-				return fmt.Errorf("node %s snapshot input binding changed", node.ID)
-			}
-		}
-		if state.Status != "succeeded" {
-			continue
-		}
-		for _, dep := range node.DependsOn {
-			status := states[dep.ID].Status
-			if status == "pending" || status == "running" || !dep.Optional && status != "succeeded" {
-				return fmt.Errorf("node %s snapshot dependency is not satisfied", node.ID)
-			}
-		}
-	}
-	return nil
+	return validateSavedNodes(nodes, options.Input, saved.Nodes, saved.DefinitionSHA256)
 }

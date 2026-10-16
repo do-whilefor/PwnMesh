@@ -177,6 +177,9 @@ are never replayed. Evidence reports verification time separately from the
 original execution window; reuse does not observe a mutable target again.
 An Agent node's bound terminal session can close a graph-checkpoint gap without
 model or tool calls; unfinished Agents and commands remain ineligible for replay.
+Snapshot inspection and resume share retained-node validation. All saved input
+bindings and dependencies are checked before recovery callbacks or checkpoint
+writes, including when a graph adds new nodes.
 See [recovery](recovery.md) for interruption and retry semantics.
 
 Control writes retain the full state-version comparison and completion checks.

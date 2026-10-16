@@ -160,6 +160,55 @@ func TestSavedNodeValidationRejectsBeforeCallbacks(t *testing.T) {
 	}
 }
 
+func TestResumeValidatesAllRetainedBindingsBeforeCallbacks(t *testing.T) {
+	for _, status := range []string{"failed", "succeeded"} {
+		for _, binding := range []string{"", strings.Repeat("0", 64)} {
+			t.Run(status+"/"+binding, func(t *testing.T) {
+				options := fixtureOptions(t, 1)
+				options.Extend = true
+				callbacks := 0
+				verify := func(context.Context, Input, Output) error { callbacks++; return nil }
+				definition := Definition{Version: "binding-preflight-v1", Nodes: []Node{
+					{ID: "first", Kind: "function", Run: successful, Verify: verify},
+					{ID: "target", Kind: "function", Optional: true, DependsOn: []Dependency{{ID: "first"}}, Verify: verify,
+						Run: func(context.Context, Input) (Output, error) {
+							if status == "failed" {
+								return Output{Value: json.RawMessage(`"retained failure diagnostics"`)}, errors.New("optional failure")
+							}
+							return Output{}, nil
+						}},
+				}}
+				saved, err := Run(context.Background(), definition, options)
+				if err != nil || stateByID(saved, "target").Status != status {
+					t.Fatalf("unexpected initial graph: %+v %v", saved, err)
+				}
+				for i := range saved.Nodes {
+					if saved.Nodes[i].ID == "target" {
+						saved.Nodes[i].InputSHA256 = binding
+					}
+				}
+				raw, err := json.Marshal(saved)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(options.Dir, "graph.json"), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := ValidateSnapshot(definition, options, saved); err == nil {
+					t.Fatal("snapshot accepted an invalid retained binding")
+				}
+				definition.Nodes = append(definition.Nodes, Node{ID: "consumer", Kind: "function", DependsOn: []Dependency{{ID: "target", Optional: true}},
+					Run: func(context.Context, Input) (Output, error) { callbacks++; return Output{}, nil }})
+				callbacks = 0
+				_, err = Run(context.Background(), definition, options)
+				if err == nil || !strings.Contains(err.Error(), "input binding changed") || callbacks != 0 || !bytes.Equal(raw, checkpointBytes(t, options)) {
+					t.Fatalf("invalid binding reached recovery or extension: err=%v callbacks=%d checkpoint_changed=%t", err, callbacks, !bytes.Equal(raw, checkpointBytes(t, options)))
+				}
+			})
+		}
+	}
+}
+
 func TestNodeDefinitionSHA256MatchesRunWithoutMutatingDependencies(t *testing.T) {
 	node := Node{ID: "join", Kind: "function", DependsOn: []Dependency{{ID: "a_1"}, {ID: "a.1"}, {ID: "a-1"}, {ID: "a"}, {ID: "A"}, {ID: "1"}}, Run: func(context.Context, Input) (Output, error) { return Output{}, nil }}
 	original := slices.Clone(node.DependsOn)

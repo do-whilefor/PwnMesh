@@ -393,9 +393,7 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		return Checkpoint{}, err
 	}
 	checkpoint := Checkpoint{SchemaVersion: 1, RunID: options.RunID, Version: definition.Version, DefinitionSHA256: signature, InputSHA256: hash(options.Input), Status: "running"}
-	byID := make(map[string]Node, len(nodes))
 	for _, node := range nodes {
-		byID[node.ID] = node
 		checkpoint.Nodes = append(checkpoint.Nodes, NodeState{ID: node.ID, Kind: node.Kind, DefinitionSHA256: hash(describe(node)), Status: "pending"})
 	}
 	slices.SortFunc(checkpoint.Nodes, func(a, b NodeState) int { return cmp.Compare(a.ID, b.ID) })
@@ -409,22 +407,8 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 		if !options.Extend && (extending || saved.DefinitionSHA256 != signature) {
 			return checkpoint, errors.New("graph checkpoint definition mismatch")
 		}
-		var savedDefinitions []nodeDefinition
-		for i, state := range saved.Nodes {
-			node, exists := byID[state.ID]
-			if !exists || i > 0 && saved.Nodes[i-1].ID >= state.ID || !validSavedNode(state, node) {
-				return checkpoint, errors.New("invalid graph node checkpoint")
-			}
-			if state.DefinitionSHA256 != hash(describe(node)) {
-				return checkpoint, fmt.Errorf("node %s definition changed", node.ID)
-			}
-			savedDefinitions = append(savedDefinitions, describe(node))
-			if !validSavedAttempt(state) {
-				return checkpoint, errors.New("invalid graph node attempt or timing")
-			}
-		}
-		if hash(savedDefinitions) != saved.DefinitionSHA256 {
-			return checkpoint, errors.New("graph checkpoint definition mismatch")
+		if err := validateSavedNodes(nodes, options.Input, saved.Nodes, saved.DefinitionSHA256); err != nil {
+			return checkpoint, err
 		}
 		checkpoint, resumed = saved, true
 	} else if !os.IsNotExist(readErr) {
@@ -457,9 +441,6 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				continue
 			}
 			input := nodeInput(node, *state, options.Input, states)
-			if state.InputSHA256 != input.SHA256 {
-				return checkpoint, fmt.Errorf("node %s input binding changed", node.ID)
-			}
 			switch state.Status {
 			case "succeeded":
 				if node.Verify == nil {
@@ -470,10 +451,6 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				state.RecoveryVerifyDurationMS += float64(time.Since(started)) / float64(time.Millisecond)
 				if verifyErr != nil {
 					return checkpoint, errors.Join(fmt.Errorf("node %s result verification: %w", node.ID, verifyErr), persist())
-				}
-			case "skipped":
-				if state.Reason == "" {
-					return checkpoint, errors.New("skipped node requires a reason")
 				}
 			case "running":
 				if node.Reconcile == nil {
