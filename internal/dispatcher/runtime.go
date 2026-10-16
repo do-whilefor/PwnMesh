@@ -38,9 +38,9 @@ func (s *Scheduler) prepareRun(ctx context.Context) error {
 	if s.leaseTimeout < 2*time.Duration(s.Config.Runtime.Interval)*time.Second {
 		slog.Warn("server lease timeout leaves little heartbeat slack", "interval", s.Config.Runtime.Interval, "lease_timeout", int(s.leaseTimeout/time.Second))
 	}
-	_ = s.Health(ctx, false)
 	// With one dispatcher, old managed executions cannot survive a restart and
-	// keep exploring after their leases are reassigned. Keep workspace contents.
+	// keep exploring while model readiness is checked or leases are reassigned.
+	// Keep workspace contents.
 	old, err := s.Runner.Projects(ctx)
 	if err != nil {
 		return err
@@ -50,6 +50,7 @@ func (s *Scheduler) prepareRun(ctx context.Context) error {
 			return err
 		}
 	}
+	_ = s.Health(ctx, false)
 	return nil
 }
 

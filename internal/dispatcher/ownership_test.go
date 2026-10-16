@@ -173,7 +173,12 @@ func TestDispatcherStartupFailuresReleaseOwnershipBeforeScheduling(t *testing.T)
 			}))
 			defer api.Close()
 			runner := &ownershipRunner{cleanupError: tc.cleanupError}
-			scheduler := New(config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, HealthMode: "disabled"}}, runner)
+			scheduler := New(config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, HealthMode: "startup_only"}, Workers: []config.Worker{{Name: "fixture"}}}, runner)
+			var healthCalls int
+			scheduler.CheckHealth = func(context.Context, config.Worker) error {
+				healthCalls++
+				return nil
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			defer cancel()
 			err := scheduler.Run(ctx)
@@ -193,6 +198,48 @@ func TestDispatcherStartupFailuresReleaseOwnershipBeforeScheduling(t *testing.T)
 			if runner.owner != installation || runner.projects != tc.wantProjects || runner.cleanups != tc.wantCleanups || runner.runs != 0 {
 				t.Fatalf("startup runner state: owner=%q projects=%d cleanups=%d runs=%d", runner.owner, runner.projects, runner.cleanups, runner.runs)
 			}
+			if healthCalls != 0 {
+				t.Fatalf("startup failure reached %d model probes", healthCalls)
+			}
 		})
+	}
+}
+
+func TestDispatcherStopsRetainedWorkersBeforeBlockingHealthProbe(t *testing.T) {
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/settings" {
+			t.Errorf("unexpected startup request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(`{"intent_timeout":30,"reason_timeout":30}`))
+	}))
+	defer api.Close()
+	runner := &ownershipRunner{}
+	scheduler := New(config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 1, HealthMode: "startup_only"}, Workers: []config.Worker{{Name: "fixture"}}}, runner)
+	probed := make(chan int, 1)
+	scheduler.CheckHealth = func(ctx context.Context, _ config.Worker) error {
+		probed <- runner.cleanups
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- scheduler.prepareRun(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("startup did not stop after health probe cancellation")
+		}
+	}()
+	select {
+	case cleanups := <-probed:
+		if cleanups != 1 {
+			t.Fatalf("model probe started after %d retained-worker cleanups, want 1", cleanups)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("startup did not reach the model probe")
 	}
 }
