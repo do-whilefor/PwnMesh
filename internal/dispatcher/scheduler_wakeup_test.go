@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -219,6 +221,179 @@ func TestCleanupFailureDoesNotCreateImmediateRetryLoop(t *testing.T) {
 	case <-time.After(100 * time.Millisecond):
 	}
 	stop()
+}
+
+type cleanupAdmissionRunner struct {
+	projects  []string
+	started   chan string
+	completed chan string
+	release   chan struct{}
+	err       error
+	active    atomic.Int32
+	peak      atomic.Int32
+}
+
+func (r *cleanupAdmissionRunner) Projects(context.Context) ([]string, error) {
+	return r.projects, nil
+}
+
+func (r *cleanupAdmissionRunner) Run(context.Context, config.Worker, protocol.Job) (protocol.Result, error) {
+	return protocol.Result{}, errors.New("unexpected worker launch")
+}
+
+func (r *cleanupAdmissionRunner) Cleanup(ctx context.Context, id, _ string) error {
+	active := r.active.Add(1)
+	for peak := r.peak.Load(); active > peak; peak = r.peak.Load() {
+		if r.peak.CompareAndSwap(peak, active) {
+			break
+		}
+	}
+	defer func() {
+		r.active.Add(-1)
+		r.completed <- id
+	}()
+	r.started <- id
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-r.release:
+		return r.err
+	}
+}
+
+func cleanupAdmissionFixture(t *testing.T, count int) (*Scheduler, *cleanupAdmissionRunner) {
+	t.Helper()
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /settings":
+			_, _ = w.Write([]byte(`{"intent_timeout":180,"reason_timeout":180}`))
+		case "GET /projects":
+			_, _ = w.Write([]byte(`[]`))
+		case "GET /executions/pending":
+			_, _ = w.Write([]byte(`{"items":[]}`))
+		default:
+			t.Errorf("unexpected cleanup request: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(api.Close)
+	runner := &cleanupAdmissionRunner{started: make(chan string, count*2), completed: make(chan string, count*2), release: make(chan struct{}, count*2)}
+	for index := range count {
+		runner.projects = append(runner.projects, fmt.Sprintf("project-%02d", index))
+	}
+	scheduler := New(config.Config{Server: api.URL, Runtime: config.Runtime{Interval: 60, MaxWorkers: 1, MaxProjects: 1, HealthMode: "disabled"}}, runner)
+	return scheduler, runner
+}
+
+func nextCleanup(t *testing.T, events <-chan string) string {
+	t.Helper()
+	select {
+	case id := <-events:
+		return id
+	case <-time.After(2 * time.Second):
+		t.Fatal("cleanup did not advance without the scheduler tick")
+		return ""
+	}
+}
+
+func TestInactiveCleanupAdmissionBoundsCallsAndDrainsOnWakeup(t *testing.T) {
+	for _, cancelBlocked := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel_%t", cancelBlocked), func(t *testing.T) {
+			const limit, total = 8, 21
+			scheduler, runner := cleanupAdmissionFixture(t, total)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			go func() { done <- scheduler.runLoop(ctx, ctx) }()
+			var once sync.Once
+			stop := func() {
+				once.Do(func() {
+					cancel()
+					select {
+					case err := <-done:
+						if err != nil {
+							t.Errorf("cleanup loop stopped with %v", err)
+						}
+					case <-time.After(2 * time.Second):
+						t.Error("cleanup scheduler did not stop")
+					}
+					joined := make(chan struct{})
+					go func() { scheduler.stopWorkers(); close(joined) }()
+					select {
+					case <-joined:
+					case <-time.After(2 * time.Second):
+						t.Error("cleanup producers did not stop")
+					}
+				})
+			}
+			t.Cleanup(stop)
+			seen := map[string]bool{}
+			for range limit {
+				seen[nextCleanup(t, runner.started)] = true
+			}
+			select {
+			case id := <-runner.started:
+				t.Fatalf("cleanup %s started while all %d slots were occupied", id, limit)
+			case <-time.After(25 * time.Millisecond):
+			}
+			if !cancelBlocked {
+				for range total {
+					runner.release <- struct{}{}
+				}
+				for len(seen) < total {
+					id := nextCleanup(t, runner.started)
+					if seen[id] {
+						t.Fatalf("cleanup repeated before draining overflow: %s", id)
+					}
+					seen[id] = true
+				}
+				for range total {
+					nextCleanup(t, runner.completed)
+				}
+			}
+			stop()
+			if runner.active.Load() != 0 || runner.peak.Load() > limit {
+				t.Fatalf("cleanup activity: active=%d peak=%d", runner.active.Load(), runner.peak.Load())
+			}
+			if len(runner.started) != 0 {
+				t.Fatal("cleanup overflow started unexpectedly or repeated a project")
+			}
+		})
+	}
+}
+
+func TestInactiveCleanupFailuresYieldCapacityToLaterProjects(t *testing.T) {
+	const limit, total = 8, 17
+	scheduler, runner := cleanupAdmissionFixture(t, total)
+	runner.err = errors.New("synthetic cleanup rejection")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer func() { cancel(); scheduler.stopWorkers() }()
+	seen := map[string]bool{}
+	for len(seen) < total {
+		remaining := total - len(seen)
+		if err := scheduler.cleanupInactiveProjects(ctx, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(scheduler.cleanup); got != limit {
+			t.Fatalf("cleanup wave admitted %d projects, want %d", got, limit)
+		}
+		fresh := 0
+		for range limit {
+			id := nextCleanup(t, runner.started)
+			if !seen[id] {
+				fresh++
+			}
+			seen[id] = true
+			runner.release <- struct{}{}
+		}
+		if fresh != min(limit, remaining) {
+			t.Fatalf("cleanup admitted %d fresh projects with %d still waiting", fresh, remaining)
+		}
+		scheduler.wg.Wait()
+		scheduler.reap()
+		if len(scheduler.wakeup) != 0 {
+			t.Fatal("failed cleanup created its own immediate retry wakeup")
+		}
+	}
 }
 
 type committedPlanRunner struct {

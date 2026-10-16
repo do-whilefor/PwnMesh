@@ -73,6 +73,7 @@ type Scheduler struct {
 	nextWake          time.Time
 	wg                sync.WaitGroup
 	cursor            int
+	cleanupCursor     int
 	pendingExecutions []board.ExecutionSummary
 	decisionRevisions map[string]int64
 	schedules         map[string]board.SchedulePage

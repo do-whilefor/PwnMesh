@@ -70,7 +70,10 @@ func (s *Scheduler) cleanupInactiveProjects(ctx context.Context, states map[stri
 	if err != nil {
 		return err
 	}
-	for _, id := range managed {
+	start := s.cleanupCursor
+	for offset := range managed {
+		index := (start + offset) % len(managed)
+		id := managed[index]
 		state := states[id]
 		if state == "active" {
 			continue
@@ -90,7 +93,11 @@ func (s *Scheduler) cleanupInactiveProjects(ctx context.Context, states map[stri
 		if s.cleaned[id] == state || s.cleanup[id] != "" {
 			continue
 		}
-		s.queueCleanup(ctx, id, state)
+		if !s.queueCleanup(ctx, id, state) {
+			break
+		}
+		// Failed projects must not monopolize each later admission wave.
+		s.cleanupCursor = (index + 1) % len(managed)
 	}
 	return nil
 }
@@ -184,7 +191,14 @@ func (s *Scheduler) observeGeneration(project board.Project) {
 	}
 }
 
-func (s *Scheduler) queueCleanup(ctx context.Context, id, state string) {
+const maxConcurrentCleanups = 8
+
+func (s *Scheduler) queueCleanup(ctx context.Context, id, state string) bool {
+	// Track capacity until completion is reaped. Excess projects remain eligible
+	// for the next pass, without goroutines waiting for a semaphore slot.
+	if ctx.Err() != nil || s.cleanup[id] != "" || len(s.cleanup) >= maxConcurrentCleanups {
+		return false
+	}
 	s.cleanup[id] = state
 	s.wg.Add(1)
 	go func() {
@@ -201,6 +215,7 @@ func (s *Scheduler) queueCleanup(ctx context.Context, id, state string) {
 		case <-ctx.Done():
 		}
 	}()
+	return true
 }
 
 // Individual process cancellation is best effort during Docker outages. A
