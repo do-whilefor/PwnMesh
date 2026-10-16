@@ -49,12 +49,25 @@ func LegacyGraphFailure(message string) *RPCError {
 	detail := message
 	if strings.HasPrefix(message, "board HTTP 409: ") {
 		var body struct {
-			Detail string `json:"detail"`
+			Code   json.RawMessage `json:"code"`
+			Detail json.RawMessage `json:"detail"`
 		}
 		if json.Unmarshal([]byte(strings.TrimPrefix(message, "board HTTP 409: ")), &body) != nil {
 			return failure
 		}
-		detail = body.Detail
+		// An old bridge may carry a newer HTTP envelope as display text.
+		// Its explicit code still wins; only code-free retained data may use
+		// the legacy detail prefix, including when the explicit code is invalid.
+		if len(body.Code) != 0 {
+			var code string
+			if json.Unmarshal(body.Code, &code) == nil && code != "" {
+				failure.Code, failure.Status = code, 409
+			}
+			return failure
+		}
+		if json.Unmarshal(body.Detail, &detail) != nil {
+			return failure
+		}
 	} else if strings.HasPrefix(message, "board HTTP ") {
 		return failure
 	}

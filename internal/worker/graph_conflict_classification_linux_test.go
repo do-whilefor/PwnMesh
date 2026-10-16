@@ -57,6 +57,9 @@ func TestGraphResponseCodesOverrideDisplayText(t *testing.T) {
 		{"display_is_not_code", GraphResponse{Error: "state_changed: stale", Failure: &protocol.RPCError{Code: protocol.CodeRequestFailed, Status: 409, Detail: "state_changed: user text"}}, false},
 		{"wrong_status", GraphResponse{Failure: &protocol.RPCError{Code: board.CodeStateChanged, Status: 422, Detail: "stale"}}, false},
 		{"retained_response", GraphResponse{Error: `board HTTP 409: {"detail":"state_changed: old response"}`}, true},
+		{"retained_explicit_code", GraphResponse{Error: `board HTTP 409: {"code":"request_failed","detail":"state_changed: user text"}`}, false},
+		{"retained_invalid_code", GraphResponse{Error: `board HTTP 409: {"code":3,"detail":"state_changed: user text"}`}, false},
+		{"retained_coded_action", GraphResponse{Error: `board HTTP 409: {"code":"state_changed","detail":{"action":1,"error":"view expired"}}`}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			test.response.RequestID = strings.Repeat("a", 32)
