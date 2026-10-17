@@ -18,6 +18,18 @@ duplicate side effects or restore a revoked lease.
 Same-run recovery allows two resumptions after the initial attempt. It preserves
 original deadlines and consumed repair, continuation and recovery allowances.
 
+Malformed new tool arguments receive the existing bounded correction attempt;
+historical non-object inputs use explicit placeholders in requests while their
+original journal bytes remain unchanged. A truncated summary has one concise
+retry, persisted before the request and reset only after compaction commits.
+
+Execute retains a small script/artifact and command index across compaction and
+recovery. Its sequence IDs point to historical receipts, not current file checks
+or fresh test results. The run can search its own `read_worker_trace`; verified
+committed prefixes exclude crash tails. Trace reads stream large journals with
+record/page limits, but still hash the complete selected prefix on each read.
+Failed-output quotes retain their original coordinates, hash and error status.
+
 ## Durable evidence and authority
 
 - Persist session identity and proposed transitions before their effects. Failed

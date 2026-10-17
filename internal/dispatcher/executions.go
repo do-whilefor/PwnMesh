@@ -172,6 +172,15 @@ func (s *Scheduler) status(ctx context.Context, t *task, status string, result p
 	return err
 }
 func (s *Scheduler) terminal(t *task, status string, result protocol.Result) {
+	if result.Metrics == nil {
+		result.Metrics = t.observedMetrics
+		if result.Metrics == nil && len(t.Execution.Result) != 0 {
+			var saved protocol.Result
+			if json.Unmarshal(t.Execution.Result, &saved) == nil {
+				result.Metrics = saved.Metrics
+			}
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := s.status(ctx, t, status, result); err == nil && status == "failed" && result.FailureKind == "state_changed" && immutableInputVersion(t) != "" {
@@ -311,9 +320,17 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 		return "interrupted", err
 	}
 	var result protocol.Result
-	if t.Execution.Status == "result_pending" {
-		if err := json.Unmarshal(t.Execution.Result, &result); err != nil {
+	if len(t.Execution.Result) != 0 || t.Execution.Status == "result_pending" {
+		var saved protocol.Result
+		err := json.Unmarshal(t.Execution.Result, &saved)
+		if err != nil && t.Execution.Status == "result_pending" {
 			return "failed", err
+		}
+		if err == nil {
+			t.observedMetrics = saved.Metrics
+			if t.Execution.Status == "result_pending" {
+				result = saved
+			}
 		}
 	}
 	if t.Execution.Status != "result_pending" {
@@ -326,7 +343,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			}
 		}
 		for attempt := 0; attempt <= 2; attempt++ {
-			if err := s.status(ctx, t, "running", protocol.Result{}); err != nil {
+			if err := s.status(ctx, t, "running", protocol.Result{Metrics: t.observedMetrics}); err != nil {
 				var pe *ProtocolError
 				if errors.As(err, &pe) && (pe.Status == 403 || pe.Status == 404 || pe.Status == 409) {
 					s.terminal(t, "cancelled", protocol.Result{Status: "failed", FailureKind: "invalidated_before_start", Error: err.Error()})
@@ -344,6 +361,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 				result, err = s.Runner.Run(ctx, t.Worker, t.Job)
 			}
 			if result.Metrics != nil {
+				t.observedMetrics = result.Metrics
 				slog.Info("decision observation", "project", t.Job.Graph.Project.ID, "run", t.Job.RunID, "metrics", result.Metrics)
 			}
 			if committed, receiptErr := s.controlCommitted(ctx, t); committed || receiptErr != nil {
@@ -370,7 +388,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 				return "cancelled", ctx.Err()
 			}
 			if err != nil {
-				result = protocol.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: err.Error()}
+				result = protocol.Result{Status: "failed", Retryable: true, FailureKind: "transient_infrastructure", Error: err.Error(), Metrics: t.observedMetrics}
 				if decisionStateChanged(err) {
 					result.FailureKind, result.Retryable = "state_changed", false
 				}

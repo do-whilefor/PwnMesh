@@ -147,6 +147,17 @@ and unfinished outputs are not accepted.
 
 ## RPC and serialization
 
+`Result.metrics` reports observed model work for all roles, including Execute.
+Metrics v1 adds optional `usage_scope`: `run` covers the parent session;
+`run_and_children` includes original bound child Agent sessions once. Missing
+scope in retained v1 data means parent-only. `child_usage` is an included subtotal,
+not an amount to add again; imported/reused work is excluded. Missing or damaged
+child observations set `child_usage.incomplete` and `usage_status: partial`.
+Input, output, cache-read and cache-write tokens remain provider-reported values.
+Late responses and failure settlement retain known usage without accepting late
+content or business results. Same-run cumulative metrics replace previous values;
+they are not added on redelivery and do not constitute a billing ledger.
+
 Graph RPC is limited to 128 KiB; pages reserve 1 KiB for the envelope. Requests
 validate IDs, digests, offsets and operations against the Job. Read observations
 are runtime metadata, not write authority or proof of success.

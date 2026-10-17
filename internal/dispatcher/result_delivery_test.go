@@ -3,15 +3,99 @@ package dispatcher
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
 	"sync/atomic"
 	"testing"
 
+	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/protocol"
 )
+
+func TestWorkerFailureRetainsReportedUsage(t *testing.T) {
+	for _, mode := range []string{"infrastructure", "resumed_infrastructure", "cancelled", "dependency_invalidated"} {
+		t.Run(mode, func(t *testing.T) {
+			s, runner, store, run := resultDeliveryFixture(t)
+			ctx, cancel := context.WithCancelCause(context.Background())
+			defer cancel(nil)
+			usage := agent.Usage{InputTokens: 11, OutputTokens: 7, CacheReadTokens: 19, CacheWriteTokens: 37}
+			metrics := &protocol.DecisionMetrics{
+				Version: 1, UsageScope: "run_and_children", ModelCalls: 1, UsageCalls: 1,
+				Usage: usage, UsageStatus: "reported_only", CostStatus: "unknown",
+			}
+			if mode == "resumed_infrastructure" {
+				var err error
+				run.Execution.Result, err = json.Marshal(protocol.Result{Status: "failed", Metrics: metrics})
+				if err != nil {
+					t.Fatal(err)
+				}
+				metrics = nil // The resumed transport fails before another observation.
+			}
+			runner.run = func(context.Context, protocol.Job) (protocol.Result, error) {
+				if mode == "resumed_infrastructure" {
+					var stored protocol.Result
+					if err := json.Unmarshal(curationExecution(t, store, run).Result, &stored); err != nil {
+						t.Fatal(err)
+					}
+					if stored.Metrics == nil || stored.Metrics.Usage != usage || stored.Text != "" {
+						t.Fatalf("running update discarded saved usage or retained acceptance: %+v", stored)
+					}
+				}
+				if mode == "cancelled" {
+					cancel(context.Canceled)
+				} else if mode == "dependency_invalidated" {
+					cancel(&protocol.RPCError{Status: 409, Code: board.CodeDependencyInvalidated, Detail: "source invalidated"})
+				}
+				// Same-run responses carry cumulative metrics; retries must not add them.
+				return protocol.Result{Status: "success", Text: "unaccepted result", Metrics: metrics}, errors.New("worker response failed")
+			}
+			outcome, err := s.runTask(ctx, run)
+			wantStatus, wantFailure, wantCalls := "failed", "transient_infrastructure", int32(3)
+			if mode == "cancelled" || mode == "dependency_invalidated" {
+				wantStatus, wantFailure, wantCalls = "cancelled", "hard_cancelled", 1
+				if mode == "dependency_invalidated" {
+					wantFailure = mode
+				}
+			}
+			if outcome != wantStatus || err == nil || runner.calls.Load() != wantCalls {
+				t.Fatalf("unexpected failure behavior: outcome=%s err=%v calls=%d", outcome, err, runner.calls.Load())
+			}
+			execution := curationExecution(t, store, run)
+			var result protocol.Result
+			if err := json.Unmarshal(execution.Result, &result); err != nil {
+				t.Fatal(err)
+			}
+			if execution.Status != wantStatus || result.FailureKind != wantFailure || result.Retryable || result.Text != "" {
+				t.Fatalf("failure retained acceptance or changed classification: execution=%s result=%+v", execution.Status, result)
+			}
+			if result.Metrics == nil || result.Metrics.Usage != usage || result.Metrics.ModelCalls != 1 || result.Metrics.UsageScope != "run_and_children" {
+				t.Fatalf("failure lost or duplicated observed usage: %+v", result.Metrics)
+			}
+		})
+	}
+}
+
+func TestRecoveryTerminalRetainsSavedUsage(t *testing.T) {
+	s, _, store, run := resultDeliveryFixture(t)
+	metrics := &protocol.DecisionMetrics{Version: 1, Usage: agent.Usage{CacheWriteTokens: 37}, UsageStatus: "reported_only", CostStatus: "unknown"}
+	var err error
+	run.Execution.Result, err = json.Marshal(protocol.Result{Status: "success", Text: "unaccepted", Metrics: metrics})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Recovery can reject the environment or resume grant before starting a run.
+	s.terminal(run, "failed", protocol.Result{Status: "failed", FailureKind: "configuration", Error: "registered execution environment changed"})
+	var stored protocol.Result
+	if err := json.Unmarshal(curationExecution(t, store, run).Result, &stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored.Metrics == nil || stored.Metrics.Usage != metrics.Usage || stored.FailureKind != "configuration" || stored.Text != "" {
+		t.Fatalf("recovery failure discarded saved usage or retained acceptance: %+v", stored)
+	}
+}
 
 func resultDeliveryFixture(t *testing.T) (*Scheduler, *staleCuratorRunner, *board.Store, *task) {
 	t.Helper()

@@ -38,6 +38,8 @@ type task struct {
 	committedAt  atomic.Int64
 	staleInputAt time.Time // Written before publishing this task to done.
 	urgentInput  bool      // An invalid dependency is consumed only by success.
+	// Owned by the run goroutine; same-run responses replace cumulative metrics.
+	observedMetrics *protocol.DecisionMetrics
 }
 type finished struct {
 	Task    *task
