@@ -25,7 +25,12 @@ func TestEnsureRequiresCleanModelBoundaryBeforeReusingContainer(t *testing.T) {
 		{name: "URL credentials", boundary: "dispatcher-v1", env: []string{"ANTHROPIC_BASE_URL=https://" + secret + "@model.invalid"}},
 		{name: "provider setting", boundary: "dispatcher-v1", env: []string{"ANTHROPIC_MODEL=fixture"}},
 		{name: "lowercase key", boundary: "dispatcher-v1", env: []string{"anthropic_auth_token=" + secret}},
-		{name: "empty credentials", boundary: "dispatcher-v1", env: []string{"ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_API_KEY=", "PATH=/usr/bin"}, allowed: true},
+		{name: "OpenAI API key", boundary: "dispatcher-v1", env: []string{"OPENAI_API_KEY=" + secret}},
+		{name: "OpenAI URL credentials", boundary: "dispatcher-v1", env: []string{"OPENAI_BASE_URL=https://" + secret + "@model.invalid"}},
+		{name: "OpenAI provider setting", boundary: "dispatcher-v1", env: []string{"OPENAI_MODEL=fixture"}},
+		{name: "OpenAI lowercase key", boundary: "dispatcher-v1", env: []string{"openai_api_key=" + secret}},
+		{name: "protocol", boundary: "dispatcher-v1", env: []string{"PWNMESH_MODEL_PROTOCOL=openai"}},
+		{name: "empty credentials", boundary: "dispatcher-v1", env: []string{"ANTHROPIC_AUTH_TOKEN=", "ANTHROPIC_API_KEY=", "OPENAI_API_KEY=", "PWNMESH_MODEL_PROTOCOL=", "PATH=/usr/bin"}, allowed: true},
 		{name: "clean environment", boundary: "dispatcher-v1", env: []string{"LANG=C", "PWNMESH_CONTEXT_BYTES=8388608"}, allowed: true},
 	} {
 		for _, running := range []bool{true, false} {
@@ -71,7 +76,7 @@ func TestEnsureRequiresCleanModelBoundaryBeforeReusingContainer(t *testing.T) {
 
 func TestEnsureRejectsModelEnvironmentInImageBeforeAnyMutation(t *testing.T) {
 	const secret = "image-secret-sentinel"
-	for _, key := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL"} {
+	for _, key := range []string{"ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "openai_api_key", "PWNMESH_MODEL_PROTOCOL"} {
 		for _, existing := range []bool{true, false} {
 			t.Run(key+"/"+map[bool]string{true: "existing", false: "new"}[existing], func(t *testing.T) {
 				engine := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,6 +119,7 @@ func TestEnsureCreatesBoundaryAndRechecksCreateRaces(t *testing.T) {
 		{name: "clean raced container", race: true, boundary: "dispatcher-v1", allowed: true},
 		{name: "legacy raced container", race: true},
 		{name: "credentialed raced container", race: true, boundary: "dispatcher-v1", env: []string{"ANTHROPIC_AUTH_TOKEN=raced-secret"}},
+		{name: "OpenAI credentialed raced container", race: true, boundary: "dispatcher-v1", env: []string{"OPENAI_API_KEY=raced-secret"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			inspects, creates, starts := 0, 0, 0

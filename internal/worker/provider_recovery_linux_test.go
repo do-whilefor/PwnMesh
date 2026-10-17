@@ -43,7 +43,7 @@ func TestProviderTransientFailureResumesSameRunWithoutRepeatingTools(t *testing.
 			j.Budget.Timeout = 60
 			calls, toolCalls := 0, 0
 			recovering := false
-			p := &provider.Anthropic{Token: "fixture", BaseURL: "https://example.invalid", Timeout: 10 * time.Second, Client: &http.Client{Transport: recoveryRoundTrip(func(req *http.Request) (*http.Response, error) {
+			p := &provider.Client{Token: "fixture", BaseURL: "https://example.invalid", Timeout: 10 * time.Second, Client: &http.Client{Transport: recoveryRoundTrip(func(req *http.Request) (*http.Response, error) {
 				calls++
 				response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Request: req}
 				if calls != 1 && !recovering {
@@ -96,7 +96,7 @@ func TestProviderPermanentFailuresDoNotOfferRunRecovery(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			p := &provider.Anthropic{Token: "fixture", BaseURL: "https://example.invalid", Client: &http.Client{Transport: recoveryRoundTrip(func(req *http.Request) (*http.Response, error) {
+			p := &provider.Client{Token: "fixture", BaseURL: "https://example.invalid", Client: &http.Client{Transport: recoveryRoundTrip(func(req *http.Request) (*http.Response, error) {
 				calls++
 				if tc.err != nil {
 					return nil, tc.err
@@ -116,7 +116,7 @@ func TestMalformedToolResponseRecoversInsideOriginalWorkerRun(t *testing.T) {
 	j = bindingSnapshotJob(t, j)
 	j.Budget.Timeout = 60
 	requests, effects := 0, 0
-	p := &provider.Anthropic{Token: "fixture", BaseURL: "https://example.invalid", Client: &http.Client{Transport: recoveryRoundTrip(func(req *http.Request) (*http.Response, error) {
+	p := &provider.Client{Token: "fixture", BaseURL: "https://example.invalid", Client: &http.Client{Transport: recoveryRoundTrip(func(req *http.Request) (*http.Response, error) {
 		requests++
 		response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Request: req}
 		if requests == 2 || requests == 4 {

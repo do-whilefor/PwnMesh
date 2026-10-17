@@ -144,6 +144,44 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
   }
 });
 
+test('model protocol selection persists and requires a new probe after switching', {
+  timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE to check model protocol selection',
+}, async () => {
+  const server = await staticServer(), browser = await launch(), calls: SettingsCall[] = [];
+  let state: PublicSettings = {has_token:true,base_url:'https://models.example.test/v1',model:'chat-model',connection_mode:'direct',proxy_url:'',reasoning_effort:'max'};
+  try {
+    const page = await browser.newPage();
+    await page.route('**/projects',route=>route.fulfill({contentType:'application/json',body:'[]'}));
+    await page.route('**/model-settings**',route=>{
+      const request = route.request(), path = new URL(request.url()).pathname, body = request.postDataJSON() as SettingsPayload | null;
+      calls.push({path,body});
+      if (request.method() === 'PUT') {assert.ok(body);const {token,...saved}=body;state={...saved,has_token:true};}
+      return route.fulfill({contentType:'application/json',body:JSON.stringify(path.endsWith('/test') ? {ok:true} : state)});
+    });
+    await page.goto(server.url+'/#llm',{waitUntil:'networkidle'});
+    assert.equal(await page.locator('#llm-protocol').inputValue(),'anthropic');
+    assert.deepEqual(await page.locator('#llm-protocol option').allTextContents(),['Anthropic Messages API','OpenAI Chat Completions']);
+    await page.locator('#llm-protocol').selectOption('openai');
+    assert.equal(await page.locator('#llm-url').inputValue(),state.base_url);
+    assert.equal(await page.locator('#llm-model').inputValue(),state.model);
+    assert.equal(await page.locator('#llm-effort').count(),0);
+    assert.equal(await page.locator('.llm-summary-protocol').textContent(),'OpenAI');
+    await page.locator('.llm-test').click();
+    await page.waitForFunction(()=>document.querySelector<HTMLButtonElement>('.llm-save')?.disabled === false);
+    assert.equal(lastSettingsBody(calls).protocol,'openai');
+    await page.locator('#llm-protocol').selectOption('anthropic');
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.locator('#llm-protocol').selectOption('openai');
+    await page.locator('.llm-test').click();await page.locator('.llm-save').click();
+    await page.waitForFunction(()=>document.querySelector('.llm-summary-status')?.textContent==='已保存');
+    assert.equal(lastSettingsBody(calls).protocol,'openai');
+    await page.reload({waitUntil:'networkidle'});
+    assert.equal(await page.locator('#llm-protocol').inputValue(),'openai');
+    assert.equal(await page.locator('#llm-url').inputValue(),state.base_url);
+    assert.equal(await page.locator('#llm-key').inputValue(),'');
+  } finally {await browser.close();await server.close();}
+});
+
 test('model browser blocks cross-origin saved credentials and clears provider drafts', {
   timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE to check model credential binding in a browser',
 }, async () => {

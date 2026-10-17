@@ -20,8 +20,8 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-func testProvider(roundTrip roundTripFunc) *Anthropic {
-	return &Anthropic{
+func testProvider(roundTrip roundTripFunc) *Client {
+	return &Client{
 		BaseURL: "https://example.invalid/step_plan",
 		Token:   "test-token",
 		Timeout: 5 * time.Second,

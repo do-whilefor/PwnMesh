@@ -59,3 +59,28 @@ func TestOverlayPreservesExistingTaskEnvironment(t *testing.T) {
 		t.Fatal("environment overlay was not isolated")
 	}
 }
+
+func TestOpenAISettingsPersistAndSelectOnlyActiveCredentials(t *testing.T) {
+	env := map[string]string{"PWNMESH_MODEL_PROTOCOL": "openai", "OPENAI_MODEL": "fixture-model", "OPENAI_API_KEY": "openai-fixture", "ANTHROPIC_AUTH_TOKEN": "old-fixture", "TOOL_SETTING": "kept"}
+	settings := Defaults(func(key string) string { return env[key] })
+	if settings.Protocol != "openai" || settings.BaseURL != provider.DefaultOpenAIBaseURL || settings.Model != "fixture-model" || settings.Token != "openai-fixture" {
+		t.Fatal("OpenAI defaults inherited inactive provider settings")
+	}
+	store := Store{Path: filepath.Join(t.TempDir(), "models.json"), Defaults: settings}
+	if _, err := store.Update(func(s *Settings) error { s.Token = "openai-fixture"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	saved, found, err := Read(store.Path)
+	if err != nil || !found || saved != settings {
+		t.Fatal("OpenAI settings did not round trip", err)
+	}
+	next := saved.Overlay(env)
+	if next["PWNMESH_MODEL_PROTOCOL"] != "openai" || next["OPENAI_API_KEY"] != "openai-fixture" || next["ANTHROPIC_AUTH_TOKEN"] != "" || next["TOOL_SETTING"] != "kept" || env["ANTHROPIC_AUTH_TOKEN"] != "old-fixture" {
+		t.Fatal("OpenAI overlay retained stale credentials or mutated a running task")
+	}
+	saved.Protocol = "anthropic"
+	next = saved.Overlay(next)
+	if next["PWNMESH_MODEL_PROTOCOL"] != "anthropic" || next["OPENAI_API_KEY"] != "" || next["ANTHROPIC_AUTH_TOKEN"] != saved.Token {
+		t.Fatal("switching back to Anthropic retained OpenAI credentials")
+	}
+}

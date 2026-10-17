@@ -2,26 +2,28 @@
 import {computed, onBeforeUnmount, onMounted, reactive, ref} from 'vue';
 import {Client} from '@/api/client';
 import Icon from '@/ui/Icon.vue';
-import {canReuseToken, defaultReasoningEffort, efforts, originOf, parseProxy, providerFor, providers, proxyProtocols, validate} from './rules';
-import type {Provider, PublicSettings, ReasoningEffort} from './rules';
+import {apiProtocols, canReuseToken, defaultReasoningEffort, efforts, originOf, parseProxy, providerFor, providers, proxyProtocols, validate} from './rules';
+import type {APIProtocol, Provider, PublicSettings, ReasoningEffort} from './rules';
 
 const props = withDefaults(defineProps<{returnLabel?: string; projectName?: string; client?: Pick<Client, 'request'>}>(), {returnLabel: '返回项目', projectName: ''});
 const emit = defineEmits<{return: []; saved: [summary: string]}>();
 const client = props.client || new Client();
 const provider = ref<Provider>('deepseek');
-const values = reactive({url: providers.deepseek.base_url as string, model: providers.deepseek.model as string, reasoningEffort: defaultReasoningEffort as ReasoningEffort, connectionMode: 'direct' as 'direct' | 'proxy', ...parseProxy()});
+const values = reactive({apiProtocol: 'anthropic' as APIProtocol, url: providers.deepseek.base_url as string, model: providers.deepseek.model as string, reasoningEffort: defaultReasoningEffort as ReasoningEffort, connectionMode: 'direct' as 'direct' | 'proxy', ...parseProxy()});
 const token = ref(''), revealKey = ref(false), verified = ref(false), busy = ref(true), loaded = ref(false);
 const connected = ref(false);
 const keyInput = ref<HTMLInputElement>();
 const serverSettings = ref<PublicSettings | null>(null);
 const summaryStatus = ref('待配置'), statusKind = ref(''), statusMessage = ref('');
-const providerDrafts: Record<Provider, {url: string; model: string}> = Object.fromEntries(Object.entries(providers).map(([id, preset]) => [id, {url: preset.base_url, model: preset.model}])) as Record<Provider, {url: string; model: string}>;
+type ProviderDraft = {apiProtocol: APIProtocol; url: string; model: string};
+const providerDrafts = Object.fromEntries(Object.entries(providers).map(([id, preset]) => [id, {apiProtocol: 'anthropic', url: preset.base_url, model: preset.model}])) as Record<Provider, ProviderDraft>;
 let version = 0, disposed = false, request: AbortController | null = null, keyOrigin = '';
 const disabled = computed(() => busy.value || !loaded.value);
 const retained = computed(() => canReuseToken(serverSettings.value, values.url.trim()));
 const keyPlaceholder = computed(() => retained.value ? '已保存，留空保留现有密钥' : serverSettings.value?.has_token ? '服务地址已变更，请输入新的 API Key' : '输入 API Key');
 const statusIcon = computed(() => ({success: 'circle-check', error: 'circle-alert', pending: 'loader-circle'}[statusKind.value] || 'info'));
 const providerIDs = Object.keys(providers) as Provider[];
+const apiProtocolIDs = Object.keys(apiProtocols) as APIProtocol[];
 const effortIDs = Object.keys(efforts) as ReasoningEffort[];
 const proxyIDs = Object.keys(proxyProtocols) as (keyof typeof proxyProtocols)[];
 const message = (error: unknown) => error instanceof Error ? error.message : '请求失败';
@@ -32,24 +34,24 @@ function edit(event: Event) {
   const field = event.target;
   if (field instanceof HTMLInputElement && field.name === 'key') keyOrigin = originOf(values.url);
   if (field instanceof HTMLInputElement && field.name === 'url' && token.value && originOf(values.url) !== keyOrigin) resetKey();
-  providerDrafts[provider.value] = {url: values.url, model: values.model};
+  providerDrafts[provider.value] = {apiProtocol: values.apiProtocol, url: values.url, model: values.model};
   invalidate();
 }
 function selectProvider(selected: Provider) {
   if (disabled.value || selected === provider.value) return;
-  providerDrafts[provider.value] = {url: values.url, model: values.model};
+  providerDrafts[provider.value] = {apiProtocol: values.apiProtocol, url: values.url, model: values.model};
   provider.value = selected;
   Object.assign(values, providerDrafts[selected]);
   resetKey(); invalidate();
 }
 function payload() {
   if (!token.value.trim() && serverSettings.value?.has_token && !retained.value) throw new Error('服务地址已变更，请输入该服务新的 API Key。');
-  return validate({base_url: values.url, model: values.model, token: token.value, reasoning_effort: values.reasoningEffort, connection_mode: values.connectionMode, proxy_protocol: values.protocol, proxy_host: values.host, proxy_port: values.port}, retained.value);
+  return validate({protocol: values.apiProtocol, base_url: values.url, model: values.model, token: token.value, reasoning_effort: values.reasoningEffort, connection_mode: values.connectionMode, proxy_protocol: values.protocol, proxy_host: values.host, proxy_port: values.port}, retained.value);
 }
 function fill(settings: PublicSettings, entering = false) {
   serverSettings.value = settings; provider.value = providerFor(settings.base_url);
-  Object.assign(values, {url: settings.base_url, model: settings.model, reasoningEffort: entering ? defaultReasoningEffort : settings.reasoning_effort || defaultReasoningEffort, connectionMode: entering ? 'direct' : settings.connection_mode}, parseProxy(settings.proxy_url));
-  providerDrafts[provider.value] = {url: values.url, model: values.model};
+  Object.assign(values, {apiProtocol: settings.protocol || 'anthropic', url: settings.base_url, model: settings.model, reasoningEffort: entering ? defaultReasoningEffort : settings.reasoning_effort || defaultReasoningEffort, connectionMode: entering ? 'direct' : settings.connection_mode}, parseProxy(settings.proxy_url));
+  providerDrafts[provider.value] = {apiProtocol: values.apiProtocol, url: values.url, model: values.model};
   resetKey();
   emit('saved', settings.has_token ? `${providers[provider.value].name} · ${settings.model}` : '尚未配置模型');
 }
@@ -59,7 +61,7 @@ async function testConnection() {
   let body;
   try {body = payload();} catch (error) {status('error', message(error)); return;}
   const currentVersion = version; request = new AbortController(); busy.value = true;
-  summaryStatus.value = '连接测试中'; status('pending', '正在验证 Anthropic Messages 与工具调用…');
+  summaryStatus.value = '连接测试中'; status('pending', `正在验证 ${apiProtocols[values.apiProtocol]} 与工具调用…`);
   try {
     const result = await client.request<{ok: boolean; latency_ms?: number; message?: string}>('/model-settings/test', {method: 'POST', body, signal: request.signal, timeout: 60000});
     if (disposed || currentVersion !== version) return;
@@ -106,11 +108,11 @@ onBeforeUnmount(dispose);
         </button>
       </div></section>
       <section class="llm-section llm-connection"><div class="llm-section-title"><h2>连接配置</h2></div>
-        <div class="llm-field"><label for="llm-protocol">API 协议</label><input id="llm-protocol" name="protocol" type="text" value="Anthropic Messages" readonly aria-readonly="true" :disabled="disabled"></div>
+        <div class="llm-field"><label for="llm-protocol">API 协议</label><div class="llm-select-wrap"><select id="llm-protocol" v-model="values.apiProtocol" name="protocol" :disabled="disabled"><option v-for="protocol in apiProtocolIDs" :key="protocol" :value="protocol">{{ apiProtocols[protocol] }}</option></select><Icon name="chevron-down" /></div></div>
         <div class="llm-field"><label for="llm-url">Base URL</label><input id="llm-url" v-model="values.url" name="url" type="url" placeholder="https://api.example.com/v1" spellcheck="false" :disabled="disabled"></div>
         <div class="llm-field"><label for="llm-model">模型名称</label><input id="llm-model" v-model="values.model" name="model" type="text" placeholder="输入模型 ID" spellcheck="false" :disabled="disabled"></div>
         <div class="llm-field"><label for="llm-key">API Key</label><div class="llm-key-wrap"><input ref="keyInput" id="llm-key" v-model="token" name="key" :type="revealKey ? 'text' : 'password'" :placeholder="keyPlaceholder" autocomplete="off" spellcheck="false" :disabled="disabled"><button type="button" class="llm-key-toggle" :aria-label="revealKey ? '隐藏 API Key' : '显示 API Key'" :aria-pressed="revealKey" :disabled="disabled" @click="revealKey = !revealKey"><Icon :name="revealKey ? 'eye-off' : 'eye'" /></button></div><p class="llm-field-hint">密钥保存在服务端，页面不会回显；留空保留同一服务的已存密钥。</p></div>
-        <div class="llm-field llm-effort"><div class="llm-effort-description"><label for="llm-effort">思考强度</label><p class="llm-field-hint" id="llm-effort-hint">可用强度取决于模型与服务商。</p></div><div class="llm-select-wrap"><select id="llm-effort" v-model="values.reasoningEffort" name="reasoningEffort" aria-describedby="llm-effort-hint" :disabled="disabled"><option v-for="effort in effortIDs" :key="effort" :value="effort">{{ efforts[effort] }}</option></select><Icon name="chevron-down" /></div></div>
+        <div v-if="values.apiProtocol === 'anthropic'" class="llm-field llm-effort"><div class="llm-effort-description"><label for="llm-effort">思考强度</label><p class="llm-field-hint" id="llm-effort-hint">可用强度取决于模型与服务商。</p></div><div class="llm-select-wrap"><select id="llm-effort" v-model="values.reasoningEffort" name="reasoningEffort" aria-describedby="llm-effort-hint" :disabled="disabled"><option v-for="effort in effortIDs" :key="effort" :value="effort">{{ efforts[effort] }}</option></select><Icon name="chevron-down" /></div></div>
         <div class="llm-field llm-network"><div class="llm-network-row"><label for="llm-connection-mode">连接方式</label><div class="llm-select-wrap"><select id="llm-connection-mode" v-model="values.connectionMode" name="connectionMode" :disabled="disabled"><option value="direct">直连</option><option value="proxy">使用代理</option></select><Icon name="chevron-down" /></div></div>
           <div class="llm-proxy-fields" :hidden="values.connectionMode === 'direct'">
             <div class="llm-field"><label for="llm-proxy-protocol">代理协议</label><div class="llm-select-wrap"><select id="llm-proxy-protocol" v-model="values.protocol" name="proxyProtocol" :disabled="disabled || values.connectionMode === 'direct'" :required="values.connectionMode === 'proxy'"><option v-for="protocol in proxyIDs" :key="protocol" :value="protocol">{{ proxyProtocols[protocol] }}</option></select><Icon name="chevron-down" /></div></div>
@@ -124,7 +126,7 @@ onBeforeUnmount(dispose);
       <footer class="llm-actions"><div><button class="llm-test" type="button" :disabled="disabled" @click="testConnection"><Icon name="plug" />连接测试</button><button class="llm-save" type="submit" :disabled="disabled || !verified">保存配置</button></div></footer>
     </form>
     <aside class="llm-aside"><div class="llm-overview"><div class="llm-diagram"><div class="llm-diagram-node"><span class="llm-mini-brand" aria-hidden="true"><img src="/static/brand.png" alt=""></span><strong>PwnMesh</strong></div><div class="llm-diagram-node llm-model-node"><span class="llm-model-symbol" aria-hidden="true"><img v-if="providers[provider].icon" :src="providers[provider].icon" alt="" aria-hidden="true"><Icon v-else name="settings-2" /></span><div><strong class="llm-summary-provider">{{ providers[provider].name }}</strong><small class="llm-summary-model">{{ values.model.trim() || '待选择模型' }}</small></div><span class="llm-connection-dot" :class="{'is-connected': connected}"></span></div></div>
-      <dl class="llm-summary"><div><dt>状态</dt><dd class="llm-summary-status">{{ summaryStatus }}</dd></div><div><dt>协议</dt><dd class="llm-summary-protocol">Anthropic</dd></div><div><dt>思考强度</dt><dd class="llm-summary-effort">{{ efforts[values.reasoningEffort] }}</dd></div><div><dt>连接方式</dt><dd class="llm-summary-connection">{{ values.connectionMode === 'proxy' ? `${proxyProtocols[values.protocol]} 代理` : '直连' }}</dd></div><div class="llm-summary-proxy" :hidden="values.connectionMode === 'direct'"><dt>代理地址</dt><dd class="llm-summary-proxy-address">{{ values.host }}:{{ values.port }}</dd></div></dl>
+      <dl class="llm-summary"><div><dt>状态</dt><dd class="llm-summary-status">{{ summaryStatus }}</dd></div><div><dt>协议</dt><dd class="llm-summary-protocol">{{ values.apiProtocol === 'openai' ? 'OpenAI' : 'Anthropic' }}</dd></div><div v-if="values.apiProtocol === 'anthropic'"><dt>思考强度</dt><dd class="llm-summary-effort">{{ efforts[values.reasoningEffort] }}</dd></div><div><dt>连接方式</dt><dd class="llm-summary-connection">{{ values.connectionMode === 'proxy' ? `${proxyProtocols[values.protocol]} 代理` : '直连' }}</dd></div><div class="llm-summary-proxy" :hidden="values.connectionMode === 'direct'"><dt>代理地址</dt><dd class="llm-summary-proxy-address">{{ values.host }}:{{ values.port }}</dd></div></dl>
     </div></aside></div>
   </section>
 </template>

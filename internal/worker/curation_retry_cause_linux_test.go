@@ -79,7 +79,7 @@ func TestCuratorHTTPBackoffPreservesDeadlineCauseWithoutRetryingCancellation(t *
 			if tc.cancelled {
 				job.Budget.Timeout = 60
 			}
-			p := &provider.Anthropic{BaseURL: server.URL, Token: "fixture", Timeout: 5 * time.Second, Client: client}
+			p := &provider.Client{BaseURL: server.URL, Token: "fixture", Timeout: 5 * time.Second, Client: client}
 			opts := Options{RunDir: dir, Output: curatorReceiptBridge(t, dir), Provider: p}
 			result, err := Run(ctx, job, opts)
 			if calls.Load() != 1 {

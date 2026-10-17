@@ -88,6 +88,47 @@ func TestEnvironmentIdentityTracksPwnMeshSettings(t *testing.T) {
 	}
 }
 
+func TestEnvironmentIdentityTracksActiveModelProtocol(t *testing.T) {
+	s := Scheduler{}
+	identity := func(env map[string]string) string {
+		return s.environmentID(config.Worker{Type: "go", Env: env})
+	}
+	anthropic := map[string]string{"ANTHROPIC_BASE_URL": "https://model.invalid", "ANTHROPIC_MODEL": "model"}
+	explicit := maps.Clone(anthropic)
+	explicit["PWNMESH_MODEL_PROTOCOL"] = "anthropic"
+	if identity(anthropic) != identity(explicit) {
+		t.Fatal("explicit default protocol invalidated the existing Anthropic identity")
+	}
+	openai := map[string]string{"PWNMESH_MODEL_PROTOCOL": "openai", "OPENAI_BASE_URL": "https://model.invalid", "OPENAI_MODEL": "model", "OPENAI_API_KEY": "first-credential"}
+	if identity(anthropic) == identity(openai) || identity(openai) == "" {
+		t.Fatal("different model protocols share an identity or OpenAI is unrunnable")
+	}
+	for _, key := range []string{"OPENAI_BASE_URL", "OPENAI_MODEL"} {
+		changed := maps.Clone(openai)
+		changed[key] = "replacement"
+		if identity(openai) == identity(changed) {
+			t.Fatalf("changing %s retained recovery identity", key)
+		}
+	}
+	rotated := maps.Clone(openai)
+	rotated["OPENAI_API_KEY"] = "rotated-credential"
+	rotated["ANTHROPIC_BASE_URL"], rotated["ANTHROPIC_MODEL"] = "unused-base", "unused-model"
+	rotated["ANTHROPIC_AUTH_TOKEN"] = "unused-credential"
+	if identity(openai) != identity(rotated) {
+		t.Fatal("credentials or inactive provider metadata changed OpenAI identity")
+	}
+	unused := maps.Clone(anthropic)
+	unused["OPENAI_BASE_URL"], unused["OPENAI_MODEL"], unused["OPENAI_API_KEY"] = "unused-base", "unused-model", "unused-credential"
+	if identity(anthropic) != identity(unused) {
+		t.Fatal("inactive OpenAI metadata changed Anthropic identity")
+	}
+	for _, invalid := range []string{"unknown", "OpenAI", "openai "} {
+		if identity(map[string]string{"PWNMESH_MODEL_PROTOCOL": invalid}) != "" {
+			t.Fatal("invalid model protocol received a runnable identity")
+		}
+	}
+}
+
 func legacyDefaultEnvironmentID(s *Scheduler, w config.Worker) string {
 	env := map[string]string{}
 	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {

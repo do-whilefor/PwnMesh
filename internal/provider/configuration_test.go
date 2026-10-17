@@ -78,3 +78,32 @@ func TestFromEnvironmentRejectsInvalidExplicitSettings(t *testing.T) {
 		})
 	}
 }
+
+func TestFromEnvironmentSelectsOpenAIWithoutAnthropicFallback(t *testing.T) {
+	env := map[string]string{
+		"PWNMESH_MODEL_PROTOCOL": "openai", "OPENAI_API_KEY": "openai-fixture", "OPENAI_MODEL": "openai-model",
+		"ANTHROPIC_AUTH_TOKEN": "unused-fixture", "ANTHROPIC_MODEL": "unused-model", "ANTHROPIC_BASE_URL": "https://unused.invalid",
+	}
+	getenv := func(key string) string { return env[key] }
+	p, err := FromEnvironment(getenv, "")
+	if err != nil || p.Protocol != "openai" || p.BaseURL != DefaultOpenAIBaseURL || p.Token != env["OPENAI_API_KEY"] || p.Model != "openai-model" {
+		t.Fatal("OpenAI did not use isolated protocol settings", err)
+	}
+	env["OPENAI_BASE_URL"] = "https://gateway.invalid/v1"
+	p, err = FromEnvironment(getenv, "low")
+	if err != nil || p.BaseURL != env["OPENAI_BASE_URL"] || p.ReasoningEffort != "low" {
+		t.Fatal("OpenAI lost its endpoint or persisted policy", err)
+	}
+	for _, key := range []string{"OPENAI_MODEL", "OPENAI_API_KEY"} {
+		value := env[key]
+		delete(env, key)
+		if _, err := FromEnvironment(getenv, ""); err == nil {
+			t.Fatalf("missing %s fell back to Anthropic", key)
+		}
+		env[key] = value
+	}
+	env["PWNMESH_MODEL_PROTOCOL"] = "unknown"
+	if _, err := FromEnvironment(getenv, ""); err == nil {
+		t.Fatal("unknown model protocol accepted")
+	}
+}

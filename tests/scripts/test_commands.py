@@ -82,6 +82,7 @@ class CommandTests(unittest.TestCase):
 
     def test_offline_keeps_all_oracles_without_inherited_opt_ins(self):
         self.inherited_controls()
+        self.env["PWNMESH_MODEL_PROTOCOL"] = "openai"
         records = self.run_script("test-integration.sh", "offline")
         self.assertEqual([record["tool"] for record in records], ["npm", "go"])
         run = records[-1]

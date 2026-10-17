@@ -394,7 +394,7 @@ func TestLiveModelObservationSelectionKeepsOpenRouterThinking(t *testing.T) {
 	capture := func(base string) map[string]json.RawMessage {
 		t.Helper()
 		var payload map[string]json.RawMessage
-		p := provider.Anthropic{BaseURL: base, Token: "test-token", Model: "fixture-model", MaxTokens: 1000, ReasoningEffort: "high", Client: &http.Client{Transport: liveObservationTransport(func(r *http.Request) (*http.Response, error) {
+		p := provider.Client{BaseURL: base, Token: "test-token", Model: "fixture-model", MaxTokens: 1000, ReasoningEffort: "high", Client: &http.Client{Transport: liveObservationTransport(func(r *http.Request) (*http.Response, error) {
 			raw, err := io.ReadAll(r.Body)
 			if err != nil || json.Unmarshal(raw, &payload) != nil {
 				t.Fatal("cannot inspect generated request", err)

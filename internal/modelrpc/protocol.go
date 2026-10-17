@@ -17,6 +17,7 @@ const MaxResponseBytes = 64 << 20
 const DeliveryTimeout = 30 * time.Second
 
 type Settings struct {
+	Protocol        string        `json:"protocol,omitempty"`
 	Model           string        `json:"model"`
 	MaxTokens       int           `json:"max_tokens"`
 	ReasoningEffort string        `json:"reasoning_effort"`

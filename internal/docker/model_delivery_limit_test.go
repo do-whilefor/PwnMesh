@@ -21,7 +21,7 @@ func TestModelBridgeBoundsPendingDeliveriesAndReadmitsAfterRelease(t *testing.T)
 	})}
 	arrived := make(chan string, 32)
 	release := make(chan struct{})
-	bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: "fixture-token", Model: "fixture", MaxTokens: 32, Timeout: time.Second, Client: client}, protocol.Job{RunID: "run"}, func(ctx context.Context, response modelrpc.Response) error {
+	bridge := newModelBridge(context.Background(), &provider.Client{Token: "fixture-token", Model: "fixture", MaxTokens: 32, Timeout: time.Second, Client: client}, protocol.Job{RunID: "run"}, func(ctx context.Context, response modelrpc.Response) error {
 		select {
 		case arrived <- response.RequestID:
 		case <-ctx.Done():

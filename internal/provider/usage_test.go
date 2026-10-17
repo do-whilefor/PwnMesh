@@ -30,7 +30,7 @@ func TestReportedUsageSurvivesStreamAndJSON(t *testing.T) {
 				_, _ = io.WriteString(w, tc.body)
 			}))
 			defer server.Close()
-			p := Anthropic{BaseURL: server.URL, Token: "test-token"}
+			p := Client{BaseURL: server.URL, Token: "test-token"}
 			message, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "fixture")}, nil, nil)
 			if (err != nil) != tc.failed {
 				t.Fatalf("unexpected error: %v", err)

@@ -23,7 +23,8 @@ func (w Worker) ToolEnvironment() (map[string]string, error) {
 	env := map[string]string{}
 	mode := w.Env["PWNMESH_CONNECTION_MODE"]
 	for key, value := range w.Env {
-		if strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") || key == "PWNMESH_MODEL_BRIDGE" || key == "PWNMESH_LAUNCH_TOKEN" {
+		upper := strings.ToUpper(key)
+		if strings.HasPrefix(upper, "ANTHROPIC_") || strings.HasPrefix(upper, "OPENAI_") || upper == "PWNMESH_MODEL_PROTOCOL" || key == "PWNMESH_MODEL_BRIDGE" || key == "PWNMESH_LAUNCH_TOKEN" {
 			continue
 		}
 		if mode != "" {
@@ -72,7 +73,7 @@ func (w Worker) resolveEnv(common map[string]string) (map[string]string, error) 
 		var missing string
 		env[key] = os.Expand(value, func(name string) string {
 			value, ok := os.LookupEnv(name)
-			if !ok && !strings.HasPrefix(name, "ANTHROPIC_") {
+			if !ok && !strings.HasPrefix(name, "ANTHROPIC_") && !strings.HasPrefix(name, "OPENAI_") && name != "PWNMESH_MODEL_PROTOCOL" {
 				missing = name
 			}
 			return value

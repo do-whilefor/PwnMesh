@@ -8,7 +8,7 @@ import (
 )
 
 func TestToolEnvironmentPreservesOverridesAndOwnsItsValues(t *testing.T) {
-	input := map[string]string{"LANG": "", "PATH": "/tools", "HTTPS_PROXY": "http://legacy:8080", "ANTHROPIC_AUTH_TOKEN": "credential", "anthropic_custom": "private", "PWNMESH_LAUNCH_TOKEN": "launch", "PWNMESH_MODEL_BRIDGE": "override"}
+	input := map[string]string{"LANG": "", "PATH": "/tools", "HTTPS_PROXY": "http://legacy:8080", "ANTHROPIC_AUTH_TOKEN": "credential", "anthropic_custom": "private", "OPENAI_API_KEY": "credential", "openai_custom": "private", "OPENAI_BASE_URL": "https://model.invalid", "OPENAI_MODEL": "model", "PWNMESH_MODEL_PROTOCOL": "openai", "PWNMESH_LAUNCH_TOKEN": "launch", "PWNMESH_MODEL_BRIDGE": "override"}
 	before := maps.Clone(input)
 	env, err := (Worker{Env: input}).ToolEnvironment()
 	if err != nil || len(env) != 3 || env["PATH"] != "/tools" || env["HTTPS_PROXY"] != "http://legacy:8080" {
@@ -61,7 +61,7 @@ func TestWorkerGetenvUsesExactSettingNames(t *testing.T) {
 }
 
 func TestWorkerGetenvDoesNotInheritProcessSettings(t *testing.T) {
-	for _, key := range []string{"PWNMESH_CONTEXT_BYTES", "ANTHROPIC_AUTH_TOKEN"} {
+	for _, key := range []string{"PWNMESH_CONTEXT_BYTES", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "PWNMESH_MODEL_PROTOCOL"} {
 		t.Setenv(key, "process-only")
 		if got := (Worker{}).Getenv(key); got != "" {
 			t.Fatalf("worker inherited process setting %s", key)
@@ -75,24 +75,29 @@ func TestWorkerGetenvDoesNotInheritProcessSettings(t *testing.T) {
 
 func TestConfigRejectsMissingEnvironmentAlongsideOptionalModelVariables(t *testing.T) {
 	const required = "PWNMESH_CONFIG_TEST_REQUIRED"
-	const optional = "ANTHROPIC_CONFIG_TEST_OPTIONAL"
-	for _, key := range []string{required, optional} {
+	optionalKeys := []string{"ANTHROPIC_CONFIG_TEST_OPTIONAL", "OPENAI_CONFIG_TEST_OPTIONAL", "PWNMESH_MODEL_PROTOCOL"}
+	for _, key := range append([]string{required}, optionalKeys...) {
 		t.Setenv(key, "")
 		if err := os.Unsetenv(key); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for _, value := range []string{
-		"${" + required + "}${" + optional + "}",
-		"${" + optional + "}${" + required + "}",
-	} {
-		t.Run(value, func(t *testing.T) {
-			c := coldStartConfig()
-			c.CommonEnv["CONFIG_TEST_SETTING"] = value
-			if err := c.Validate(); err == nil || !strings.Contains(err.Error(), required) {
-				t.Fatalf("missing required variable was masked by an optional model variable: %v", err)
-			}
-		})
+	for _, optional := range optionalKeys {
+		for _, value := range []string{
+			"${" + required + "}${" + optional + "}",
+			"${" + optional + "}${" + required + "}",
+		} {
+			t.Run(value, func(t *testing.T) {
+				c := coldStartConfig()
+				c.CommonEnv["CONFIG_TEST_SETTING"] = value
+				if err := c.Validate(); err == nil || !strings.Contains(err.Error(), required) {
+					t.Fatalf("missing required variable was masked by an optional model variable: %v", err)
+				}
+			})
+		}
+		if env, err := (Worker{}).resolveEnv(map[string]string{optional: "${" + optional + "}"}); err != nil || env[optional] != "" {
+			t.Fatalf("missing optional provider setting %s did not resolve empty: %v", optional, err)
+		}
 	}
 }
 

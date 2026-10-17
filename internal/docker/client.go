@@ -119,7 +119,8 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 	hasModelEnvironment := func(env []string) bool {
 		for _, entry := range env {
 			key, value, _ := strings.Cut(entry, "=")
-			if (strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") && value != "") || containsModelCredential(entry, secrets...) {
+			upper := strings.ToUpper(key)
+			if ((strings.HasPrefix(upper, "ANTHROPIC_") || strings.HasPrefix(upper, "OPENAI_") || upper == "PWNMESH_MODEL_PROTOCOL") && value != "") || containsModelCredential(entry, secrets...) {
 				return true
 			}
 		}
@@ -153,7 +154,7 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 			return fmt.Errorf("project %s container predates or differs from the dispatcher model boundary; preserve and migrate its workspace before recreating the container", id)
 		}
 		if hasModelEnvironment(info.Config.Env) {
-			return fmt.Errorf("project %s container contains model provider environment; preserve and migrate its workspace before recreating the container without ANTHROPIC_ environment", id)
+			return fmt.Errorf("project %s container contains model provider environment; preserve and migrate its workspace before recreating the container without provider settings", id)
 		}
 		return nil
 	}
@@ -177,7 +178,7 @@ func (c *Client) ensure(ctx context.Context, id string, secrets ...string) (stri
 		return "", errors.New("Docker returned an empty ID for the configured worker image")
 	}
 	if hasModelEnvironment(desired.Config.Env) {
-		return "", errors.New("worker image contains model provider environment; rebuild it without ANTHROPIC_ environment and keep model configuration in the dispatcher")
+		return "", errors.New("worker image contains model provider environment; rebuild it without provider settings and keep model configuration in the dispatcher")
 	}
 	var workspaceRuntime map[string]string
 	if c.ownerID() != "" {

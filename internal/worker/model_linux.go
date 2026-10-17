@@ -21,7 +21,7 @@ import (
 )
 
 type bridgeModel struct {
-	sizer     *provider.Anthropic
+	sizer     *provider.Client
 	runDir    string
 	output    io.Writer
 	sessionID string
@@ -40,7 +40,8 @@ func modelForJob(j Job, o Options, sessionID string) (*bridgeModel, error) {
 	if err = json.Unmarshal(raw, &settings); err != nil {
 		return nil, errors.New("invalid dispatcher model settings")
 	}
-	if settings.MaxTokens <= 0 || settings.Timeout <= 0 ||
+	if (settings.Protocol != "" && settings.Protocol != "anthropic" && settings.Protocol != "openai") ||
+		settings.MaxTokens <= 0 || settings.Timeout <= 0 ||
 		(settings.ReasoningEffort != "low" && settings.ReasoningEffort != "high" && settings.ReasoningEffort != "max") ||
 		(j.Budget.ReasoningEffort != "" && j.Budget.ReasoningEffort != settings.ReasoningEffort) {
 		return nil, errors.New("invalid dispatcher model policy")
@@ -50,7 +51,7 @@ func modelForJob(j Job, o Options, sessionID string) (*bridgeModel, error) {
 	}
 	// This credential-free value is used only for exact request sizing. Model
 	// generation always crosses the dispatcher bridge, including child Agents.
-	sizer := &provider.Anthropic{Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
+	sizer := &provider.Client{Protocol: settings.Protocol, Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
 	if settings.Adaptive {
 		sizer.BaseURL = "https://openrouter.ai"
 	}

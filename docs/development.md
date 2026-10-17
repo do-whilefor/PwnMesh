@@ -57,6 +57,16 @@ Live runs use `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, and `ANTHROPIC_MODEL
 incur charges. See [integration suites](../tests/integration/README.md) for
 scenarios, opt-in controls and retained-artifact replay.
 
+Model settings support Anthropic Messages (default) and
+[OpenAI Chat Completions](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+Select the protocol in Model Access, then test and save the connection. For
+environment configuration, set `PWNMESH_MODEL_PROTOCOL=openai`, `OPENAI_BASE_URL`,
+`OPENAI_MODEL` and `OPENAI_API_KEY`; the default OpenAI URL is
+`https://api.openai.com/v1`. OpenAI uses the service's default reasoning behavior
+and `max_completion_tokens`; Anthropic reasoning controls do not apply.
+The OpenAI Responses API is not supported. Legacy live acceptance scripts still
+use Anthropic settings; offline protocol tests cover both adapters.
+
 Browser acceptance is separate from ordinary checks. After building the frontend,
 install Chromium with `npm --prefix web exec -- playwright install chromium`,
 then run `npm --prefix web run test:browser`. Append `-- models_browser_test` to

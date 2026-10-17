@@ -41,7 +41,7 @@ clear_model_env() {
     local name
     while IFS= read -r name; do
         case "$name" in
-            ANTHROPIC_*|OPENAI_*) unset "$name" ;;
+            ANTHROPIC_*|OPENAI_*|PWNMESH_MODEL_PROTOCOL) unset "$name" ;;
         esac
     done < <(compgen -e)
 }

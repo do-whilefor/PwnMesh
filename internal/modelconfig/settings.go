@@ -76,6 +76,15 @@ func Defaults(getenv func(string) string) Settings {
 	if s.Model == "" {
 		s.Model = provider.DefaultModel
 	}
+	if protocol := getenv("PWNMESH_MODEL_PROTOCOL"); protocol != "" {
+		s.Protocol = protocol
+	}
+	if s.Protocol == "openai" {
+		s.BaseURL, s.Model, s.Token = getenv("OPENAI_BASE_URL"), getenv("OPENAI_MODEL"), getenv("OPENAI_API_KEY")
+		if s.BaseURL == "" {
+			s.BaseURL = provider.DefaultOpenAIBaseURL
+		}
+	}
 	for key, target := range map[string]*int{"PWNMESH_MAX_OUTPUT_TOKENS": &s.MaxTokens, "PWNMESH_REQUEST_TIMEOUT": &s.RequestTimeout} {
 		if n, err := strconv.Atoi(getenv(key)); err == nil && n > 0 {
 			*target = n
@@ -94,8 +103,8 @@ func Defaults(getenv func(string) string) Settings {
 }
 
 func (s Settings) Validate(requireToken bool) error {
-	if s.Protocol != "anthropic" {
-		return errors.New("protocol must be anthropic (Messages API)")
+	if s.Protocol != "anthropic" && s.Protocol != "openai" {
+		return errors.New("protocol must be anthropic (Messages API) or openai (Chat Completions)")
 	}
 	u, err := url.Parse(s.BaseURL)
 	if err != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
@@ -140,10 +149,18 @@ func (s Settings) Validate(requireToken bool) error {
 func (s Settings) Overlay(env map[string]string) map[string]string {
 	out := make(map[string]string, len(env)+10)
 	for key, value := range env {
+		if !strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") && !strings.HasPrefix(strings.ToUpper(key), "OPENAI_") {
+			out[key] = value
+		}
+	}
+	for key, value := range map[string]string{"PWNMESH_MODEL_PROTOCOL": s.Protocol, "PWNMESH_CONNECTION_MODE": s.ConnectionMode, "PWNMESH_PROXY_URL": s.ProxyURL, "PWNMESH_MAX_OUTPUT_TOKENS": strconv.Itoa(s.MaxTokens), "PWNMESH_REQUEST_TIMEOUT": strconv.Itoa(s.RequestTimeout), "PWNMESH_REASONING_EFFORT": s.ReasoningEffort} {
 		out[key] = value
 	}
-	for key, value := range map[string]string{"ANTHROPIC_BASE_URL": s.BaseURL, "ANTHROPIC_MODEL": s.Model, "ANTHROPIC_DEFAULT_FABLE_MODEL": s.Model, "ANTHROPIC_AUTH_TOKEN": s.Token, "PWNMESH_CONNECTION_MODE": s.ConnectionMode, "PWNMESH_PROXY_URL": s.ProxyURL, "PWNMESH_MAX_OUTPUT_TOKENS": strconv.Itoa(s.MaxTokens), "PWNMESH_REQUEST_TIMEOUT": strconv.Itoa(s.RequestTimeout), "PWNMESH_REASONING_EFFORT": s.ReasoningEffort} {
-		out[key] = value
+	if s.Protocol == "openai" {
+		out["OPENAI_BASE_URL"], out["OPENAI_MODEL"], out["OPENAI_API_KEY"] = s.BaseURL, s.Model, s.Token
+	} else {
+		out["ANTHROPIC_BASE_URL"], out["ANTHROPIC_MODEL"], out["ANTHROPIC_AUTH_TOKEN"] = s.BaseURL, s.Model, s.Token
+		out["ANTHROPIC_DEFAULT_FABLE_MODEL"] = s.Model
 	}
 	return out
 }

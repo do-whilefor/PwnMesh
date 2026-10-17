@@ -36,7 +36,8 @@ func Execute(ctx context.Context, jobPath string, output io.Writer) error {
 	}
 	for _, entry := range os.Environ() {
 		key, value, _ := strings.Cut(entry, "=")
-		if value != "" && strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") {
+		upper := strings.ToUpper(key)
+		if value != "" && (strings.HasPrefix(upper, "ANTHROPIC_") || strings.HasPrefix(upper, "OPENAI_") || upper == "PWNMESH_MODEL_PROTOCOL") {
 			return errors.New("worker must not receive provider environment settings")
 		}
 	}

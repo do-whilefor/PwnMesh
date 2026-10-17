@@ -87,7 +87,7 @@ func TestModelBridgeRejectsEscapedCredentialEcho(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(agent.Message{Role: "assistant", Content: []agent.Block{block}, StopReason: "end_turn", Usage: usage})
 			}))
 			defer upstream.Close()
-			bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: secret, BaseURL: upstream.URL, Model: "fixture", MaxTokens: 32, Timeout: time.Second}, protocol.Job{RunID: "run"}, nil, nil)
+			bridge := newModelBridge(context.Background(), &provider.Client{Token: secret, BaseURL: upstream.URL, Model: "fixture", MaxTokens: 32, Timeout: time.Second}, protocol.Job{RunID: "run"}, nil, nil)
 			defer bridge.close()
 			response := bridge.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("a", 32), SessionID: "run", Messages: []agent.Message{agent.Text("user", "fixture")}})
 			if response.Error == nil || len(response.Message.Content) != 0 || len(response.Events) != 0 {
@@ -194,7 +194,7 @@ func TestModelBridgeCloseRacingAdmissionJoinsAllCalls(t *testing.T) {
 		return nil, r.Context().Err()
 	})}
 	for i := 0; i < 256; i++ {
-		bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: "fixture-token", Model: "fixture", MaxTokens: 32, Timeout: time.Second, Client: client}, protocol.Job{RunID: "run"}, func(context.Context, modelrpc.Response) error { return nil }, func(err error) { t.Error(err) })
+		bridge := newModelBridge(context.Background(), &provider.Client{Token: "fixture-token", Model: "fixture", MaxTokens: 32, Timeout: time.Second, Client: client}, protocol.Job{RunID: "run"}, func(context.Context, modelrpc.Response) error { return nil }, func(err error) { t.Error(err) })
 		start := make(chan struct{})
 		admitted := make(chan error, 1)
 		closed := make(chan struct{})

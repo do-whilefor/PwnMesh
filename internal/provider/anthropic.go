@@ -1,4 +1,4 @@
-// Package provider implements the configured Anthropic-compatible endpoint.
+// Package provider implements Anthropic Messages and OpenAI Chat Completions.
 package provider
 
 import (
@@ -29,7 +29,8 @@ const DefaultReasoningEffort = "max"
 const DefaultMaxTokens = 32768
 const DefaultRequestTimeout = 3 * time.Minute
 
-type Anthropic struct {
+type Client struct {
+	Protocol        string
 	BaseURL         string
 	Token           string
 	Model           string
@@ -45,7 +46,10 @@ type Anthropic struct {
 type HTTPError struct{ Status int }
 
 func (e *HTTPError) Error() string { return fmt.Sprintf("model endpoint returned HTTP %d", e.Status) }
-func (p *Anthropic) endpoint() string {
+func (p *Client) endpoint() string {
+	if p.Protocol == "openai" {
+		return p.openAIEndpoint()
+	}
 	base := strings.TrimRight(p.BaseURL, "/")
 	if base == "" {
 		base = DefaultBaseURL
@@ -58,22 +62,28 @@ func (p *Anthropic) endpoint() string {
 	}
 	return base + "/v1/messages"
 }
-func (p *Anthropic) Generate(ctx context.Context, messages []agent.Message, tools []agent.Definition, emit agent.Emit) (agent.Message, error) {
+func (p *Client) Generate(ctx context.Context, messages []agent.Message, tools []agent.Definition, emit agent.Emit) (agent.Message, error) {
 	return p.generate(ctx, messages, tools, p.MaxTokens, emit)
 }
 
-func (p *Anthropic) GenerateSummary(ctx context.Context, messages []agent.Message, maxTokens int, emit agent.Emit) (agent.Message, error) {
+func (p *Client) GenerateSummary(ctx context.Context, messages []agent.Message, maxTokens int, emit agent.Emit) (agent.Message, error) {
 	return p.generate(ctx, messages, nil, maxTokens, emit)
 }
 
 // InputBytes counts the complete serialized request, including system text,
 // tools and output controls, without exposing local transcript metadata.
-func (p *Anthropic) InputBytes(messages []agent.Message, tools []agent.Definition) (int, error) {
+func (p *Client) InputBytes(messages []agent.Message, tools []agent.Definition) (int, error) {
 	raw, err := p.payload(messages, tools, p.MaxTokens)
 	return len(raw), err
 }
 
-func (p *Anthropic) payload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
+func (p *Client) payload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
+	if p.Protocol == "openai" {
+		return p.openAIPayload(messages, tools, limit)
+	}
+	if p.Protocol != "" && p.Protocol != "anthropic" {
+		return nil, errors.New("unsupported model protocol")
+	}
 	model := p.Model
 	if model == "" {
 		model = DefaultModel
@@ -115,7 +125,7 @@ func (p *Anthropic) payload(messages []agent.Message, tools []agent.Definition, 
 	return json.Marshal(payload)
 }
 
-func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tools []agent.Definition, maxTokens int, emit agent.Emit) (agent.Message, error) {
+func (p *Client) generate(ctx context.Context, messages []agent.Message, tools []agent.Definition, maxTokens int, emit agent.Emit) (agent.Message, error) {
 	if strings.TrimSpace(p.Token) == "" {
 		return agent.Message{}, errors.New("missing model authentication token")
 	}
@@ -157,9 +167,11 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
-		req.Header.Set("anthropic-version", "2023-06-01")
 		req.Header.Set("Authorization", "Bearer "+p.Token)
-		req.Header.Set("x-api-key", p.Token)
+		if p.Protocol != "openai" {
+			req.Header.Set("anthropic-version", "2023-06-01")
+			req.Header.Set("x-api-key", p.Token)
+		}
 		req.Header.Set("User-Agent", "pwnmesh/0.1")
 		req.Header.Set("x-opencode-session", p.sessionID)
 		var retryErr error
@@ -199,6 +211,9 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 		}
 	}
 	defer res.Body.Close()
+	if p.Protocol == "openai" && !strings.Contains(res.Header.Get("Content-Type"), "text/event-stream") {
+		return consumeOpenAIJSON(res.Body)
+	}
 	if !strings.Contains(res.Header.Get("Content-Type"), "text/event-stream") {
 		var m struct {
 			Role    string        `json:"role"`
@@ -239,7 +254,11 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 		}
 		return agent.Message{Role: m.Role, Content: m.Content, StopReason: m.Stop, Usage: m.Usage}, nil
 	}
-	message, streamErr := consumeSSE(ctx, io.LimitReader(res.Body, 32<<20), emit)
+	consume := consumeSSE
+	if p.Protocol == "openai" {
+		consume = consumeOpenAISSE
+	}
+	message, streamErr := consume(ctx, io.LimitReader(res.Body, 32<<20), emit)
 	if streamErr != nil {
 		var modelErr *agent.ModelError
 		if !errors.As(streamErr, &modelErr) && !errors.Is(streamErr, context.Canceled) && !errors.Is(streamErr, context.DeadlineExceeded) {
@@ -280,6 +299,7 @@ func classifyEndpointError(status int, body []byte) *agent.ModelError {
 	var detail struct {
 		Error struct {
 			Type    string `json:"type"`
+			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
 	}
@@ -293,7 +313,7 @@ func classifyEndpointError(status int, body []byte) *agent.ModelError {
 		kind = agent.ErrorUnavailable
 	}
 	message := strings.ToLower(detail.Error.Message)
-	if detail.Error.Type == "context_length_exceeded" || detail.Error.Type == "context_window_exceeded" ||
+	if detail.Error.Code == "context_length_exceeded" || detail.Error.Type == "context_length_exceeded" || detail.Error.Type == "context_window_exceeded" ||
 		((status == 400 || status == 413 || status == 422) && (strings.Contains(message, "prompt is too long") || strings.Contains(message, "context length") || strings.Contains(message, "maximum context") || strings.Contains(message, "context window"))) {
 		kind = agent.ErrorContextOverflow
 	}

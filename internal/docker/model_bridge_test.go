@@ -72,6 +72,59 @@ func TestModelBridgeBindsPolicyAndKeepsCredentialsOutOfWorker(t *testing.T) {
 	}
 }
 
+func TestModelBridgeRetainsOpenAIProtocolForGenerationAndSummary(t *testing.T) {
+	const secret = "openai-private-fixture"
+	for _, summaryTokens := range []int{0, 512} {
+		model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var input struct {
+				Model     string `json:"model"`
+				MaxTokens int    `json:"max_completion_tokens"`
+			}
+			limit := 2048
+			if summaryTokens > 0 {
+				limit = summaryTokens
+			}
+			if r.URL.Path != "/v1/chat/completions" || r.Header.Get("Authorization") != "Bearer "+secret || r.Header.Get("x-api-key") != "" || json.NewDecoder(r.Body).Decode(&input) != nil || input.Model != "openai-model" || input.MaxTokens != limit {
+				t.Error("bridge lost OpenAI protocol or output budget")
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"complete"}}],"usage":{"prompt_tokens":12,"completion_tokens":3}}`)
+		}))
+		backend := config.Worker{Env: map[string]string{"PWNMESH_MODEL_PROTOCOL": "openai", "OPENAI_API_KEY": secret, "OPENAI_BASE_URL": model.URL, "OPENAI_MODEL": "openai-model", "PWNMESH_MAX_OUTPUT_TOKENS": "2048"}}
+		p, err := configuredModel(backend, protocol.Job{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings := publicModelSettings(p)
+		raw, _ := json.Marshal(settings)
+		if settings.Protocol != "openai" || settings.Adaptive || strings.Contains(string(raw), secret) || strings.Contains(string(raw), model.URL) {
+			t.Fatal("public settings lost protocol or exposed endpoint credentials")
+		}
+		bridge := newModelBridge(context.Background(), p, protocol.Job{}, nil, nil)
+		out := bridge.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("a", 32), SessionID: "run", SummaryTokens: summaryTokens, Messages: []agent.Message{agent.Text("user", "finish")}})
+		bridge.close()
+		model.Close()
+		if out.Error != nil || out.Message.Text() != "complete" || out.Message.Usage == nil || out.Message.Usage.Input() != 12 {
+			t.Fatalf("OpenAI response failed across bridge: %+v", out)
+		}
+	}
+}
+
+func TestModelBridgePreservesOpenAIArgumentRepairError(t *testing.T) {
+	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\",\"type\":\"function\",\"function\":{\"name\":\"inspect\",\"arguments\":\"{\\\"path\\\":\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":12}}\n\ndata: [DONE]\n\n")
+	}))
+	defer model.Close()
+	p := &provider.Client{Protocol: "openai", BaseURL: model.URL, Token: "fixture-secret", Model: "model", MaxTokens: 1024, Timeout: time.Second}
+	bridge := newModelBridge(context.Background(), p, protocol.Job{}, nil, nil)
+	defer bridge.close()
+	out := bridge.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("a", 32), Messages: []agent.Message{agent.Text("user", "inspect")}})
+	if out.Error == nil || out.Error.Kind != agent.ErrorToolArguments || out.Message.Usage == nil || out.Message.Usage.Input() != 12 {
+		t.Fatalf("OpenAI argument repair classification lost across bridge: %+v", out)
+	}
+}
+
 func TestModelBridgePreservesTypedErrorsWithoutDetails(t *testing.T) {
 	for _, kind := range []agent.ErrorKind{agent.ErrorTransport, agent.ErrorRateLimit, agent.ErrorUnavailable, agent.ErrorContextOverflow, agent.ErrorToolArguments, agent.ErrorProvider} {
 		err := errors.Join(&agent.ModelError{Kind: kind, Err: &provider.HTTPError{Status: 429}}, context.DeadlineExceeded, errors.New("https://private.invalid?token=fixture-secret"))
@@ -112,7 +165,7 @@ func TestModelBridgeRejectsSecretEchoIncludingSplitDeltas(t *testing.T) {
 				}
 			}))
 			defer model.Close()
-			b := newModelBridge(context.Background(), &provider.Anthropic{BaseURL: model.URL, Token: secret}, protocol.Job{}, nil, nil)
+			b := newModelBridge(context.Background(), &provider.Client{BaseURL: model.URL, Token: secret}, protocol.Job{}, nil, nil)
 			defer b.close()
 			out := b.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("b", 32), SessionID: "run"})
 			raw, _ := json.Marshal(out)
@@ -131,7 +184,7 @@ func TestModelBridgeConcurrentCancellationAndRunBinding(t *testing.T) {
 		<-r.Context().Done()
 	}))
 	defer model.Close()
-	p := &provider.Anthropic{BaseURL: model.URL, Token: "safe-private-key", MaxTokens: 1024, Timeout: time.Minute}
+	p := &provider.Client{BaseURL: model.URL, Token: "safe-private-key", MaxTokens: 1024, Timeout: time.Minute}
 	responses := make(chan modelrpc.Response, 16)
 	b := newModelBridge(context.Background(), p, protocol.Job{RunID: "run", Kind: "explore"}, func(_ context.Context, response modelrpc.Response) error { responses <- response; return nil }, func(error) { t.Error("unexpected delivery error") })
 	defer b.close()
@@ -216,7 +269,7 @@ func TestModelBridgeSharesAdmissionWithoutBlockingCancellationOrDelivery(t *test
 	responses := make(chan modelrpc.Response, 4)
 	deliveryRelease := make(chan struct{})
 	makeBridge := func(run string) *modelBridge {
-		b := newModelBridge(context.Background(), &provider.Anthropic{Token: "fixture", Model: "fixture", MaxTokens: 32, Timeout: 5 * time.Second, Client: client}, protocol.Job{RunID: run}, func(ctx context.Context, r modelrpc.Response) error {
+		b := newModelBridge(context.Background(), &provider.Client{Token: "fixture", Model: "fixture", MaxTokens: 32, Timeout: 5 * time.Second, Client: client}, protocol.Job{RunID: run}, func(ctx context.Context, r modelrpc.Response) error {
 			responses <- r
 			select {
 			case <-deliveryRelease:

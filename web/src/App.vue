@@ -171,6 +171,8 @@ dialog::backdrop{background:#233b4938;backdrop-filter:blur(2px)}.dialog-footer>s
 @supports (appearance:base-select){
   .llm-select-wrap select,.llm-select-wrap select::picker(select){appearance:base-select}
   .llm-select-wrap select{display:flex;align-items:center;cursor:pointer}
+  #llm-protocol{anchor-name:--llm-protocol}
+  #llm-protocol::picker(select){position-anchor:--llm-protocol}
   #llm-effort{anchor-name:--llm-effort}
   #llm-effort::picker(select){position-anchor:--llm-effort}
   #llm-connection-mode{anchor-name:--llm-connection-mode}

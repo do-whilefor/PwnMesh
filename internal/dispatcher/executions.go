@@ -40,8 +40,20 @@ func (s *Scheduler) environmentID(w config.Worker) string {
 	// Provider credentials rotate independently. Tool configuration is part of
 	// the assignment, including explicit empty overrides of image defaults.
 	env := map[string]string{}
-	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {
+	for _, key := range []string{"PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {
 		env[key] = w.Env[key]
+	}
+	protocol := w.Env["PWNMESH_MODEL_PROTOCOL"]
+	if protocol == "" || protocol == "anthropic" {
+		// Keep existing Anthropic identities stable when its default becomes explicit.
+		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL"} {
+			env[key] = w.Env[key]
+		}
+	} else if protocol == "openai" {
+		env["PWNMESH_MODEL_PROTOCOL"] = protocol
+		env["OPENAI_BASE_URL"], env["OPENAI_MODEL"] = w.Env["OPENAI_BASE_URL"], w.Env["OPENAI_MODEL"]
+	} else {
+		return ""
 	}
 	// Legacy hashes did not record tool values, even values since removed.
 	// They cannot authorize continuation; saved results bypass this fence.

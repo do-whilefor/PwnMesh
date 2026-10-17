@@ -5,13 +5,15 @@ export const providers = {
   custom: {name: '自定义', base_url: '', model: '', icon: ''},
 } as const;
 export type Provider = keyof typeof providers;
+export const apiProtocols = {anthropic: 'Anthropic Messages API', openai: 'OpenAI Chat Completions'} as const;
+export type APIProtocol = keyof typeof apiProtocols;
 export const proxyProtocols = {http: 'HTTP', https: 'HTTPS', socks5: 'SOCKS5', socks5h: 'SOCKS5h'} as const;
 export type ProxyProtocol = keyof typeof proxyProtocols;
 export const efforts = {low: '低 / 更快响应', high: '高 / 深入推理', max: '最高 / 充分推理'} as const;
 export type ReasoningEffort = keyof typeof efforts;
 export const defaultReasoningEffort: ReasoningEffort = 'max';
 export interface PublicSettings {
-  protocol?: string;
+  protocol?: APIProtocol;
   base_url: string;
   model: string;
   has_token: boolean;
@@ -20,6 +22,7 @@ export interface PublicSettings {
   reasoning_effort?: ReasoningEffort;
 }
 export interface SettingsValues {
+  protocol?: string;
   base_url: string;
   model: string;
   token: string;
@@ -30,7 +33,7 @@ export interface SettingsValues {
   reasoning_effort: string;
 }
 export interface SettingsPayload {
-  protocol: 'anthropic';
+  protocol: APIProtocol;
   base_url: string;
   model: string;
   token: string;
@@ -58,6 +61,8 @@ export function parseProxy(value?: string): ProxyDraft {
   } catch {return {protocol: 'http', host: 'host.docker.internal', port: '7897'};}
 }
 export function validate(values: SettingsValues, hasToken: boolean): SettingsPayload {
+  const protocol = values.protocol || 'anthropic';
+  if (!Object.hasOwn(apiProtocols, protocol)) throw new Error('Please select a supported API protocol.');
   const base = values.base_url.trim(), model = values.model.trim();
   let url: URL;
   try {url = new URL(base);} catch {throw new Error('请输入完整的 Base URL。');}
@@ -79,5 +84,5 @@ export function validate(values: SettingsValues, hasToken: boolean): SettingsPay
   }
   const effort = values.reasoning_effort || defaultReasoningEffort;
   if (!Object.hasOwn(efforts, effort)) throw new Error('思考强度无效。');
-  return {protocol: 'anthropic', base_url: base.replace(/\/+$/, ''), model, token, connection_mode: mode, proxy_url: proxy, reasoning_effort: effort as ReasoningEffort};
+  return {protocol: protocol as APIProtocol, base_url: base.replace(/\/+$/, ''), model, token, connection_mode: mode, proxy_url: proxy, reasoning_effort: effort as ReasoningEffort};
 }

@@ -101,8 +101,11 @@ func registerModelSettings(m *http.ServeMux, path string) {
 		p.MaxTokens = min(p.MaxTokens, provider.ProbeMaxTokens)
 		err = provider.Probe(ctx, p)
 		message := "Anthropic Messages and tool round trip verified"
+		if current.Protocol == "openai" {
+			message = "OpenAI Chat Completions and tool round trip verified"
+		}
 		if err != nil {
-			message = "Model did not complete the Messages tool round trip; check endpoint, protocol and model support"
+			message = "Model did not complete the tool round trip; check endpoint, protocol and model support"
 			var status *provider.HTTPError
 			if errors.As(err, &status) {
 				message = status.Error()

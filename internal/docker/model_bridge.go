@@ -26,7 +26,7 @@ type modelBridge struct {
 	ctx       context.Context
 	cancel    context.CancelFunc
 	job       protocol.Job
-	model     *provider.Anthropic
+	model     *provider.Client
 	deliver   func(context.Context, modelrpc.Response) error
 	fail      func(error)
 	mu        sync.Mutex
@@ -37,18 +37,18 @@ type modelBridge struct {
 	admission chan struct{}
 }
 
-func configuredModel(w config.Worker, j protocol.Job) (*provider.Anthropic, error) {
+func configuredModel(w config.Worker, j protocol.Job) (*provider.Client, error) {
 	return provider.FromEnvironment(w.Getenv, j.Budget.ReasoningEffort)
 }
 
-func publicModelSettings(p *provider.Anthropic) modelrpc.Settings {
+func publicModelSettings(p *provider.Client) modelrpc.Settings {
 	u, _ := url.Parse(p.BaseURL)
-	adaptive := u != nil && strings.EqualFold(u.Hostname(), "openrouter.ai")
+	adaptive := p.Protocol != "openai" && u != nil && strings.EqualFold(u.Hostname(), "openrouter.ai")
 	model := p.Model
 	if model == "" {
 		model = provider.DefaultModel
 	}
-	return modelrpc.Settings{Model: model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Timeout: p.Timeout, Adaptive: adaptive}
+	return modelrpc.Settings{Protocol: p.Protocol, Model: model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Timeout: p.Timeout, Adaptive: adaptive}
 }
 
 func modelWorkerEnv(w config.Worker, token string) ([]string, error) {
@@ -98,7 +98,7 @@ func jsonContainsModelCredential(raw []byte, secrets ...string) bool {
 	}
 }
 
-func newModelBridge(parent context.Context, p *provider.Anthropic, j protocol.Job, deliver func(context.Context, modelrpc.Response) error, fail func(error)) *modelBridge {
+func newModelBridge(parent context.Context, p *provider.Client, j protocol.Job, deliver func(context.Context, modelrpc.Response) error, fail func(error)) *modelBridge {
 	ctx, cancel := context.WithCancel(parent)
 	return &modelBridge{ctx: ctx, cancel: cancel, model: p, job: j, deliver: deliver, fail: fail, active: map[string]context.CancelFunc{}, seen: map[string]bool{}, slots: make(chan struct{}, 32)}
 }
@@ -245,7 +245,7 @@ func safeModelError(err error) *modelrpc.Error {
 func (b *modelBridge) generate(ctx context.Context, r modelrpc.Request) modelrpc.Response {
 	// A fresh provider keeps simultaneous child sessions independent. Their
 	// identity comes from this run, and all upstream policy remains fixed.
-	p := &provider.Anthropic{BaseURL: b.model.BaseURL, Token: b.model.Token, Model: b.model.Model, MaxTokens: b.model.MaxTokens, ReasoningEffort: b.model.ReasoningEffort, Timeout: b.model.Timeout, Client: b.model.Client, SessionID: r.SessionID}
+	p := &provider.Client{Protocol: b.model.Protocol, BaseURL: b.model.BaseURL, Token: b.model.Token, Model: b.model.Model, MaxTokens: b.model.MaxTokens, ReasoningEffort: b.model.ReasoningEffort, Timeout: b.model.Timeout, Client: b.model.Client, SessionID: r.SessionID}
 	out := modelrpc.Response{RequestID: r.RequestID}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

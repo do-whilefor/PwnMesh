@@ -143,7 +143,7 @@ func TestModelSettingsAPISecretPersistenceAndValidation(t *testing.T) {
 	if err != nil || saved.Token != "secret-fixture-only" {
 		t.Fatal("empty token destroyed saved secret")
 	}
-	for _, body := range []string{`{"protocol":"openai"}`, `{"connection_mode":"vpn"}`, `{"unknown":true}`, `null`, `{} {}`, `{"base_url":"https://user:secret@invalid"}`, `{"request_timeout":0}`, `{"base_url":"https://models.invalid:0","token":"replacement"}`, `{"base_url":"https://models.invalid:65536","token":"replacement"}`, `{"proxy_url":"http://proxy.invalid:0"}`, `{"proxy_url":"socks5h://proxy.invalid:65536"}`} {
+	for _, body := range []string{`{"protocol":"unknown"}`, `{"connection_mode":"vpn"}`, `{"unknown":true}`, `null`, `{} {}`, `{"base_url":"https://user:secret@invalid"}`, `{"request_timeout":0}`, `{"base_url":"https://models.invalid:0","token":"replacement"}`, `{"base_url":"https://models.invalid:65536","token":"replacement"}`, `{"proxy_url":"http://proxy.invalid:0"}`, `{"proxy_url":"socks5h://proxy.invalid:65536"}`} {
 		for method, route := range map[string]string{"PUT": "/model-settings", "POST": "/model-settings/test"} {
 			response := modelSettingsRequest(t, handler, method, route, body)
 			if response.Code != 422 {

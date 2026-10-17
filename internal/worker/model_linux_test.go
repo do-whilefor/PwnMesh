@@ -72,7 +72,7 @@ func TestModelForJobUsesOnlyPublicSettingsAndPersistedEffort(t *testing.T) {
 	}
 	history := []agent.Message{agent.Text("user", "fixture")}
 	definitions := []agent.Definition{{Name: "fixture", Schema: json.RawMessage(`{"type":"object"}`)}}
-	expected := &provider.Anthropic{BaseURL: "https://openrouter.ai/api", Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
+	expected := &provider.Client{BaseURL: "https://openrouter.ai/api", Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
 	want, err := expected.InputBytes(history, definitions)
 	got, gotErr := p.InputBytes(history, definitions)
 	if err != nil || gotErr != nil || got != want {
@@ -81,6 +81,28 @@ func TestModelForJobUsesOnlyPublicSettingsAndPersistedEffort(t *testing.T) {
 	j.Budget.ReasoningEffort = "low"
 	if _, err = modelForJob(j, Options{RunDir: dir, Output: io.Discard}, ""); err == nil {
 		t.Fatal("bridge accepted a changed persisted role policy")
+	}
+}
+
+func TestModelForJobSizesOpenAIRequestsWithPublicProtocol(t *testing.T) {
+	dir := t.TempDir()
+	settings := modelSettingsFixture(t, dir)
+	settings.Protocol, settings.Adaptive = "openai", false
+	raw, _ := json.Marshal(settings)
+	if err := os.WriteFile(filepath.Join(dir, "model-settings.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := modelForJob(Job{RunID: "run"}, Options{RunDir: dir, Output: io.Discard}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []agent.Message{agent.Text("user", "fixture")}
+	definitions := []agent.Definition{{Name: "fixture", Schema: json.RawMessage(`{"type":"object"}`)}}
+	expected := &provider.Client{Protocol: "openai", Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
+	want, wantErr := expected.InputBytes(history, definitions)
+	got, gotErr := p.InputBytes(history, definitions)
+	if p.sizer.Protocol != "openai" || p.sizer.Token != "" || p.sizer.BaseURL != "" || wantErr != nil || gotErr != nil || got != want {
+		t.Fatalf("OpenAI worker sizing mismatch: got=%d want=%d errors=%v/%v", got, want, gotErr, wantErr)
 	}
 }
 
@@ -117,11 +139,12 @@ func TestModelForJobRejectsMissingAndUnsafeSettings(t *testing.T) {
 }
 
 func TestWorkerCLIRequiresCredentialFreeDispatcherBeforeSession(t *testing.T) {
-	for _, mode := range []string{"no bridge", "auth token", "API key", "endpoint", "lowercase prefix", "mixed prefix"} {
+	for _, mode := range []string{"no bridge", "auth token", "API key", "endpoint", "lowercase prefix", "mixed prefix", "OpenAI API key", "OpenAI endpoint", "OpenAI model", "OpenAI lowercase prefix", "protocol"} {
 		t.Run(mode, func(t *testing.T) {
 			for _, entry := range os.Environ() {
 				key, _, _ := strings.Cut(entry, "=")
-				if strings.HasPrefix(strings.ToUpper(key), "ANTHROPIC_") {
+				upper := strings.ToUpper(key)
+				if strings.HasPrefix(upper, "ANTHROPIC_") || strings.HasPrefix(upper, "OPENAI_") || upper == "PWNMESH_MODEL_PROTOCOL" {
 					t.Setenv(key, "")
 				}
 			}
@@ -138,6 +161,16 @@ func TestWorkerCLIRequiresCredentialFreeDispatcherBeforeSession(t *testing.T) {
 				t.Setenv("ANTHROPIC_BASE_URL", "https://fixture-secret@example.invalid")
 			} else if mode == "lowercase prefix" {
 				t.Setenv("anthropic_auth_token", "fixture-secret")
+			} else if mode == "OpenAI API key" {
+				t.Setenv("OPENAI_API_KEY", "fixture-secret")
+			} else if mode == "OpenAI endpoint" {
+				t.Setenv("OPENAI_BASE_URL", "https://fixture-secret@example.invalid")
+			} else if mode == "OpenAI model" {
+				t.Setenv("OPENAI_MODEL", "fixture-secret")
+			} else if mode == "OpenAI lowercase prefix" {
+				t.Setenv("openai_api_key", "fixture-secret")
+			} else if mode == "protocol" {
+				t.Setenv("PWNMESH_MODEL_PROTOCOL", "openai")
 			} else {
 				t.Setenv("Anthropic_Model", "fixture-secret")
 			}
