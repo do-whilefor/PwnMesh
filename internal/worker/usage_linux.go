@@ -72,7 +72,7 @@ func childUsage(ctx context.Context, j Job, node dag.AgentNode) (DecisionMetrics
 	}
 	metrics := newDecisionMetrics()
 	path := filepath.Join(node.Dir, "events.jsonl")
-	err = eventlog.VisitCommittedEvents(ctx, path, state.Log, func(event agent.Event) error { metrics.observe(event); return nil })
+	err = eventlog.VisitRecordedEvents(ctx, path, state.Log, func(event agent.Event) error { metrics.observe(event); return nil })
 	if err != nil {
 		return DecisionMetrics{}, false, err
 	}

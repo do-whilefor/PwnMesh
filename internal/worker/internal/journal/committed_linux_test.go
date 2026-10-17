@@ -85,3 +85,28 @@ func TestCommittedEventsRejectInvalidRecordsAndCancellation(t *testing.T) {
 		t.Fatalf("journal scan ignored cancellation: calls=%d err=%v", calls, err)
 	}
 }
+
+func TestCommittedEventsRejectMalformedExclusions(t *testing.T) {
+	raw := []byte("{\"type\":\"first\"}\n{\"type\":\"second\"}\n")
+	path := filepath.Join(t.TempDir(), "events.jsonl")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, spans := range [][]ByteRange{
+		{{Start: -1, End: 5}}, {{Start: 0, End: 0}},
+		{{Start: 0, End: int64(len(raw) + 1)}},
+		{{Start: 1, End: int64(len(raw))}},
+		{{Start: 0, End: 2}},
+		{{Start: 0, End: 10}, {Start: 5, End: 12}},
+	} {
+		checkpoint := bytesCheckpoint(raw)
+		checkpoint.Excluded = spans
+		if err := VisitCommittedEvents(context.Background(), path, checkpoint, func(agent.Event) error { return nil }); err == nil {
+			t.Fatalf("invalid exclusions accepted: %+v", spans)
+		}
+		if log, err := Open(filepath.Dir(path), &checkpoint, nil); err == nil {
+			log.Close()
+			t.Fatalf("recovery accepted invalid exclusions: %+v", spans)
+		}
+	}
+}

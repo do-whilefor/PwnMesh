@@ -15,14 +15,68 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 
 	"pwnmesh/internal/agent"
 )
 
 // Checkpoint binds the exact committed prefix, including original JSON bytes.
 type Checkpoint struct {
-	Offset int64  `json:"offset"`
-	SHA256 string `json:"sha256"`
+	Offset   int64       `json:"offset"`
+	SHA256   string      `json:"sha256"`
+	Excluded []ByteRange `json:"excluded,omitempty"`
+}
+
+// ByteRange retains a complete crash tail for audit and usage replay without
+// promoting it to committed transcript evidence when later records are saved.
+type ByteRange struct {
+	Start int64 `json:"start"`
+	End   int64 `json:"end"`
+}
+
+func (c Checkpoint) validateExclusions() error {
+	var end int64
+	for _, span := range c.Excluded {
+		if span.Start < end || span.End <= span.Start || span.End > c.Offset {
+			return errors.New("invalid excluded journal range")
+		}
+		end = span.End
+	}
+	return nil
+}
+
+func (c Checkpoint) excludedRecord(start, end int64, cursor *int) (bool, error) {
+	for *cursor < len(c.Excluded) && c.Excluded[*cursor].End <= start {
+		*cursor++
+	}
+	if *cursor < len(c.Excluded) {
+		span := c.Excluded[*cursor]
+		if span.Start < end {
+			if span.Start > start || span.End < end {
+				return false, errors.New("excluded journal range is not at a record boundary")
+			}
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Prefix keeps server-owned exclusions when binding an older read checkpoint.
+func (c Checkpoint) Prefix(offset int64, sha256 string) (Checkpoint, error) {
+	if err := c.validateExclusions(); err != nil {
+		return Checkpoint{}, err
+	}
+	if offset < 0 || offset > c.Offset {
+		return Checkpoint{}, errors.New("invalid journal prefix offset")
+	}
+	bound := Checkpoint{Offset: offset, SHA256: sha256}
+	for _, span := range c.Excluded {
+		if span.Start >= offset {
+			break
+		}
+		bound.Excluded = append(bound.Excluded, ByteRange{Start: span.Start, End: min(span.End, offset)})
+	}
+	return bound, nil
 }
 
 // Recovery describes retained records when the journal was opened. These values
@@ -43,6 +97,7 @@ type Log struct {
 	lastCompaction uint64
 	uncommitted    int64
 	partialArchive string
+	excluded       []ByteRange
 }
 
 // Complete raw records are append-only. Only an incomplete, uncommitted final
@@ -71,6 +126,12 @@ func Open(runDir string, saved *Checkpoint, replay func(agent.Event)) (*Log, err
 	if saved != nil && (saved.Offset < 0 || saved.Offset > stat.Size()) {
 		return nil, errors.New("event log is shorter than its committed checkpoint")
 	}
+	if saved != nil {
+		if err := saved.validateExclusions(); err != nil {
+			return nil, err
+		}
+		j.excluded = slices.Clone(saved.Excluded)
+	}
 	verified := saved == nil
 	verify := func() error {
 		if saved != nil && j.offset == saved.Offset {
@@ -85,6 +146,7 @@ func Open(runDir string, saved *Checkpoint, replay func(agent.Event)) (*Log, err
 		return nil, err
 	}
 	r := bufio.NewReader(f)
+	exclusion := 0
 	for {
 		line, readErr := r.ReadBytes('\n')
 		if readErr != nil && readErr != io.EOF {
@@ -124,6 +186,11 @@ func Open(runDir string, saved *Checkpoint, replay func(agent.Event)) (*Log, err
 		if err = json.Unmarshal(line, &event); err != nil || event.Type == "" {
 			return nil, fmt.Errorf("invalid complete event record at byte %d", j.offset)
 		}
+		if saved != nil {
+			if _, err := saved.excludedRecord(j.offset, j.offset+int64(len(line)), &exclusion); err != nil {
+				return nil, err
+			}
+		}
 		// Only current transcript events advance recovery cursors. Other
 		// complete records remain in the raw journal without interpretation.
 		switch event.Type {
@@ -150,13 +217,16 @@ func Open(runDir string, saved *Checkpoint, replay func(agent.Event)) (*Log, err
 	}
 	if saved != nil {
 		j.uncommitted = j.offset - saved.Offset
+		if j.uncommitted > 0 {
+			j.excluded = append(j.excluded, ByteRange{Start: saved.Offset, End: j.offset})
+		}
 	}
 	ok = true
 	return j, nil
 }
 
 func (j *Log) checkpoint() Checkpoint {
-	return Checkpoint{Offset: j.offset, SHA256: hex.EncodeToString(j.digest.Sum(nil))}
+	return Checkpoint{Offset: j.offset, SHA256: hex.EncodeToString(j.digest.Sum(nil)), Excluded: slices.Clone(j.excluded)}
 }
 
 // Append retains the existing JSON representation of an event or terminal result.

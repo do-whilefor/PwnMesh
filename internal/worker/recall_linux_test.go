@@ -104,6 +104,13 @@ func TestWorkerRecallSurvivesCompactionAndRecoveryWithoutCrashTail(t *testing.T)
 	if err != nil || last.Status != "success" || effects != 2 {
 		t.Fatalf("recovery repeated work: %+v %v effects=%d", last, err, effects)
 	}
+	// Recovery saves a newer physical journal boundary. That must not turn
+	// the earlier crash-only records into authoritative work on the next read.
+	saved = outcomeSession(t, dir)
+	restored := restoreWorkerRecall(context.Background(), j, dir, saved.Log)
+	if strings.Contains(restored.contextData(), "crash-only.py") || !strings.Contains(restored.contextData(), "scripts/check.py") {
+		t.Fatalf("later checkpoint promoted crash-only work: %s", restored.contextData())
+	}
 }
 
 func TestWorkerRecallBoundsSeparateFilesFromCommandChurn(t *testing.T) {

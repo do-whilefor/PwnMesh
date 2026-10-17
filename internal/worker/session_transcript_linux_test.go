@@ -3,6 +3,7 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"os"
@@ -75,5 +76,60 @@ func TestCommittedTranscriptBindsResultAndExcludesCrashTail(t *testing.T) {
 	}
 	if err := transcript.visitOriginal(context.Background(), func(agent.Message) error { return nil }); err == nil {
 		t.Fatal("reader accepted changed committed journal bytes")
+	}
+}
+
+func TestSessionUpgradesLegacySchemaAndRejectsUnknownVersions(t *testing.T) {
+	job, dir := outcomeJob(t, "explore"), t.TempDir()
+	runtime, err := restoreSession(job, Options{RunDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.saveAgentState(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	legacy := runtime.state
+	legacy.SchemaVersion = 1
+	raw, _ := json.Marshal(legacy)
+	path := filepath.Join(dir, "session.json")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	message := agent.Text("assistant", "crash-only observation")
+	if err := runtime.journal.Append(agent.Event{Type: "message_end", Message: &message}); err != nil {
+		t.Fatal(err)
+	}
+	runtime.journal.Close()
+	runtime, err = restoreSession(job, Options{RunDir: dir})
+	if err != nil || runtime.state.SchemaVersion != 1 {
+		t.Fatalf("legacy session could not restore: %v", err)
+	}
+	if err := runtime.saveAgentState(nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	runtime.journal.Close()
+	upgraded := outcomeSession(t, dir)
+	if upgraded.SchemaVersion != 2 || len(upgraded.Log.Excluded) != 1 {
+		t.Fatalf("save did not fence legacy recovery semantics: %+v", upgraded.Log)
+	}
+	for _, version := range []int{1, 3} {
+		upgraded.SchemaVersion = version
+		raw, _ := json.Marshal(upgraded)
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		before, err := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if runtime, err := restoreSession(job, Options{RunDir: dir}); err == nil {
+			runtime.journal.Close()
+			t.Fatalf("unsupported schema %d accepted exclusions", version)
+		}
+		after, _ := os.ReadFile(filepath.Join(dir, "events.jsonl"))
+		saved, _ := os.ReadFile(path)
+		if !bytes.Equal(before, after) || !bytes.Equal(saved, raw) {
+			t.Fatal("unsupported session was changed on rejection")
+		}
 	}
 }

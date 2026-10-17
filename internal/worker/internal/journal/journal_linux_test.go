@@ -60,7 +60,9 @@ func TestRecoveryPreservesRawPrefixAndArchivesOnlyPartialTail(t *testing.T) {
 		t.Fatalf("complete records were rewritten or removed: %q, %v", raw, err)
 	}
 	checkpoint, err := log.SyncCheckpoint()
-	if err != nil || checkpoint != bytesCheckpoint(complete) {
+	want := bytesCheckpoint(complete)
+	want.Excluded = []ByteRange{{Start: int64(len(committed)), End: int64(len(complete))}}
+	if err != nil || !reflect.DeepEqual(checkpoint, want) {
 		t.Fatalf("checkpoint lost exact retained bytes: %+v, %v", checkpoint, err)
 	}
 	var sequences []uint64
@@ -78,7 +80,8 @@ func TestRecoveryPreservesRawPrefixAndArchivesOnlyPartialTail(t *testing.T) {
 	encoded, _ := json.Marshal(event)
 	complete = append(complete, append(encoded, '\n')...)
 	checkpoint, err = log.SyncCheckpoint()
-	if err != nil || checkpoint != bytesCheckpoint(complete) {
+	want.Offset, want.SHA256 = bytesCheckpoint(complete).Offset, bytesCheckpoint(complete).SHA256
+	if err != nil || !reflect.DeepEqual(checkpoint, want) {
 		t.Fatalf("append diverged from exact-byte hash: %+v, %v", checkpoint, err)
 	}
 }
@@ -94,7 +97,7 @@ func TestClosedJournalCannotPublishCheckpoint(t *testing.T) {
 	if err := log.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if checkpoint, err := log.SyncCheckpoint(); err == nil || checkpoint != (Checkpoint{}) {
+	if checkpoint, err := log.SyncCheckpoint(); err == nil || !reflect.DeepEqual(checkpoint, Checkpoint{}) {
 		t.Fatalf("closed journal published a boundary: %+v, %v", checkpoint, err)
 	}
 	if err := log.Append(agent.Event{Type: "recovery"}); err == nil {
@@ -132,5 +135,78 @@ func TestRecoveryCursorUsesCurrentEventKind(t *testing.T) {
 				t.Fatalf("event payload crossed recovery cursor boundaries: %+v", got)
 			}
 		})
+	}
+}
+
+func TestRecoveryKeepsCrashTailExcludedAcrossCheckpoints(t *testing.T) {
+	dir := t.TempDir()
+	log, err := Open(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendMessage := func(log *Log, sequence uint64, text string) {
+		message := agent.Text("assistant", text)
+		message.Sequence = sequence
+		if err := log.Append(agent.Event{Type: "message_end", Message: &message}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	appendMessage(log, 1, "committed")
+	saved, err := log.SyncCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendMessage(log, 2, "crash tail")
+	if err := log.Append(agent.Event{Type: "model_call_end", Text: "reported usage survives"}); err != nil {
+		t.Fatal(err)
+	}
+	log.Close()
+	reported := 0
+	log, err = Open(dir, &saved, func(event agent.Event) {
+		if event.Type == "model_call_end" {
+			reported++
+		}
+	})
+	if err != nil || reported != 1 {
+		t.Fatalf("recovery lost billed observations: %d %v", reported, err)
+	}
+	appendMessage(log, 3, "after recovery")
+	saved, err = log.SyncCheckpoint()
+	if err != nil || len(saved.Excluded) != 1 {
+		t.Fatalf("recovery lost exclusion: %+v %v", saved, err)
+	}
+	log.Close()
+	// Session serialization and repeated recovery must preserve the same
+	// original exclusion, even after newer messages become committed.
+	raw, _ := json.Marshal(saved)
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	log, err = Open(dir, &saved, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	again, err := log.SyncCheckpoint()
+	if err != nil || !reflect.DeepEqual(again, saved) {
+		t.Fatalf("later recovery changed exclusion: %+v %v", again, err)
+	}
+	var messages []string
+	if err := VisitCommitted(context.Background(), filepath.Join(dir, "events.jsonl"), again, func(message agent.Message) error {
+		messages = append(messages, message.Text())
+		return nil
+	}); err != nil || !reflect.DeepEqual(messages, []string{"committed", "after recovery"}) {
+		t.Fatalf("later save promoted crash-tail evidence: %v %v", messages, err)
+	}
+	file, err := os.OpenFile(filepath.Join(dir, "events.jsonl"), os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte(" "), saved.Excluded[0].Start); err != nil {
+		t.Fatal(err)
+	}
+	file.Close()
+	if err := VisitCommitted(context.Background(), filepath.Join(dir, "events.jsonl"), again, func(agent.Message) error { return nil }); err == nil {
+		t.Fatal("excluded bytes escaped full-prefix verification")
 	}
 }

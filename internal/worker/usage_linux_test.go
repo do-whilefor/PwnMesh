@@ -13,6 +13,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/worker/dag"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"pwnmesh/internal/workergraph"
 )
 
@@ -163,5 +164,49 @@ func TestChildUsageDamageRemainsExplicitlyPartial(t *testing.T) {
 				t.Fatalf("unverified usage was counted: %+v", got.Usage)
 			}
 		})
+	}
+}
+
+func TestChildUsageIncludesExcludedCallsButNotNewTail(t *testing.T) {
+	j, dir := graphWrapperJob(t), t.TempDir()
+	node := dag.AgentNode{Key: "source", Dir: dir, Spec: dag.Node{ID: "child"}, InputSHA256: "fixture"}
+	log, err := eventlog.Open(dir, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saved, err := log.SyncCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendUsage := func(log *eventlog.Log, tokens int) {
+		for _, event := range []agent.Event{
+			{Type: "model_call_start", Request: &agent.RequestObservation{Kind: "turn"}},
+			{Type: "model_call_end", Request: &agent.RequestObservation{Usage: &agent.Usage{CacheWriteTokens: tokens}}},
+		} {
+			if err := log.Append(event); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	appendUsage(log, 37)
+	log.Close()
+	log, err = eventlog.Open(dir, &saved, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	saved, err = log.SyncCheckpoint()
+	if err != nil || len(saved.Excluded) != 1 {
+		t.Fatalf("fixture did not retain a discarded call: %+v %v", saved, err)
+	}
+	state := graphAgentSession{RunID: j.RunID, GraphKey: node.Key, NodeID: node.Spec.ID, GraphInputSHA256: node.InputSHA256, Log: saved}
+	raw, _ := json.Marshal(state)
+	if err := os.WriteFile(filepath.Join(dir, "session.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	appendUsage(log, 999)
+	got, incomplete, err := childUsage(context.Background(), j, node)
+	if err != nil || !incomplete || got.ModelCalls != 1 || got.UsageCalls != 1 || got.Usage.CacheWriteTokens != 37 {
+		t.Fatalf("child accounting confused exclusions and new tail: %+v incomplete=%v err=%v", got, incomplete, err)
 	}
 }

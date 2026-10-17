@@ -157,3 +157,69 @@ func TestWorkerTraceOwnSubjectsRetainFailureAndExcludeCrashTail(t *testing.T) {
 		t.Fatalf("own command arguments reached another run: %s", page)
 	}
 }
+
+func TestWorkerTraceKeepsRecoveredCrashTailExcluded(t *testing.T) {
+	f := newTraceFixture(t, "original committed observation")
+	var original struct {
+		Version string `json:"trace_version"`
+	}
+	if err := json.Unmarshal([]byte(traceCall(t, f.tool(t), traceReadRequest{RunID: f.run.RunID})), &original); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(filepath.Join(f.dir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved session
+	if err := json.Unmarshal(raw, &saved); err != nil {
+		t.Fatal(err)
+	}
+	log, err := eventlog.Open(f.dir, &saved.Log, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ := json.Marshal("crash-only observation")
+	message := agent.Message{Role: "user", Sequence: 9, Content: []agent.Block{{Type: "tool_result", ToolUseID: "crash", Content: content}}}
+	start := agent.Event{Type: "tool_start", ToolID: "crash", ToolName: "bash"}
+	startRaw, _ := json.Marshal(start)
+	crashOffset := saved.Log.Offset + int64(len(startRaw)+1)
+	for _, event := range []agent.Event{start, {Type: "message_end", Message: &message}} {
+		if err := log.Append(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log.Close()
+	log, err = eventlog.Open(f.dir, &saved.Log, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	saved.Log, err = log.SyncCheckpoint()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ = json.Marshal(saved)
+	if err := os.WriteFile(filepath.Join(f.dir, "session.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	page := traceCall(t, f.tool(t), traceReadRequest{RunID: f.run.RunID})
+	var result struct {
+		Items   []traceObservation `json:"items"`
+		Version string             `json:"trace_version"`
+	}
+	if err := json.Unmarshal([]byte(page), &result); err != nil || len(result.Items) != 1 || strings.Contains(page, "crash-only") {
+		t.Fatalf("recovered trace promoted crash tail: %s %v", page, err)
+	}
+	detail := traceCall(t, f.tool(t), traceReadRequest{RunID: f.run.RunID, TraceVersion: result.Version, Record: result.Items[0].Record})
+	if !strings.Contains(detail, "original committed observation") {
+		t.Fatalf("bound trace lost original evidence: %s", detail)
+	}
+	old := traceCall(t, f.tool(t), traceReadRequest{RunID: f.run.RunID, TraceVersion: original.Version})
+	if !strings.Contains(old, "original committed observation") || strings.Contains(old, "crash-only") {
+		t.Fatalf("recovery changed a prior bound prefix: %s", old)
+	}
+	input, _ := json.Marshal(traceReadRequest{RunID: f.run.RunID, TraceVersion: result.Version, Record: fmt.Sprintf("%d:0", crashOffset)})
+	if got, err := f.tool(t).Execute(context.Background(), input); err == nil || got != "" {
+		t.Fatalf("detail lookup bypassed recovery exclusion: %q %v", got, err)
+	}
+}

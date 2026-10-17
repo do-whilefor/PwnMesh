@@ -52,6 +52,7 @@ type traceBinding struct {
 	Offset     int64  `json:"offset"`
 	SHA256     string `json:"sha256"`
 	Query      string `json:"query,omitempty"`
+	checkpoint eventlog.Checkpoint
 }
 
 type traceObservation struct {
@@ -197,7 +198,7 @@ func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceRead
 	total := 0
 	query := strings.ToLower(r.Query)
 	projection := traceProjector{Own: run.RunID == j.RunID}
-	err = eventlog.VisitCommittedFile(ctx, journal, eventlog.Checkpoint{Offset: binding.Offset, SHA256: binding.SHA256}, func(offset int64, event agent.Event) error {
+	err = eventlog.VisitCommittedFile(ctx, journal, binding.checkpoint, func(offset int64, event agent.Event) error {
 		return projection.observe(offset, event, func(item traceObservation) {
 			if r.Record != "" {
 				if item.Record == r.Record {
@@ -373,7 +374,7 @@ func openTraceJournal(ctx context.Context, workspace string, run board.TraceRun,
 		Identity      executionIdentity   `json:"identity"`
 		Log           eventlog.Checkpoint `json:"log_checkpoint"`
 	}
-	if json.Unmarshal(raw, &saved) != nil || saved.SchemaVersion != sessionSchemaVersion || saved.Identity.ProjectID != run.ProjectID || saved.Identity.RunID != run.RunID || saved.Identity.StepID != run.StepID || saved.Identity.Kind != "explore" || saved.Identity.Workspace != root || saved.Identity.WorkspaceTarget != root || saved.Identity.RunDir != filepath.Join(root, ".pwnmesh", "runs", run.RunID) || saved.Identity.RunDirTarget != saved.Identity.RunDir || saved.Identity.JobDigest != run.JobSHA256 {
+	if json.Unmarshal(raw, &saved) != nil || !supportedSessionSchema(saved.SchemaVersion, saved.Log) || saved.Identity.ProjectID != run.ProjectID || saved.Identity.RunID != run.RunID || saved.Identity.StepID != run.StepID || saved.Identity.Kind != "explore" || saved.Identity.Workspace != root || saved.Identity.WorkspaceTarget != root || saved.Identity.RunDir != filepath.Join(root, ".pwnmesh", "runs", run.RunID) || saved.Identity.RunDirTarget != saved.Identity.RunDir || saved.Identity.JobDigest != run.JobSHA256 {
 		return nil, bound, errors.New("trace unavailable: retained checkpoint does not match the registered execution")
 	}
 	bound = traceBinding{ProjectID: run.ProjectID, Generation: run.Generation, RunID: run.RunID, Offset: saved.Log.Offset, SHA256: saved.Log.SHA256}
@@ -382,6 +383,12 @@ func openTraceJournal(ctx context.Context, workspace string, run board.TraceRun,
 		if err != nil || json.Unmarshal(decoded, &bound) != nil || bound.ProjectID != run.ProjectID || bound.Generation != run.Generation || bound.RunID != run.RunID || bound.Offset > saved.Log.Offset || len(bound.Query) > 256 {
 			return nil, bound, errors.New("trace_changed: invalid prefix identity; restart the search")
 		}
+	}
+	// Continuation tokens select only the byte prefix; they cannot remove the
+	// saved exclusions and turn discarded crash records into observations.
+	bound.checkpoint, err = saved.Log.Prefix(bound.Offset, bound.SHA256)
+	if err != nil {
+		return nil, bound, err
 	}
 	digest, err := hex.DecodeString(bound.SHA256)
 	if err != nil || len(digest) != 32 || bound.Offset < 0 {

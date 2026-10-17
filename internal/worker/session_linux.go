@@ -18,8 +18,14 @@ import (
 	eventlog "pwnmesh/internal/worker/internal/journal"
 )
 
-const sessionSchemaVersion = 1
+const sessionSchemaVersion = 2
 const maxRunRecoveries = 2
+
+func supportedSessionSchema(version int, checkpoint eventlog.Checkpoint) bool {
+	// Version 1 never recorded crash-tail exclusions. Upgrade when saved;
+	// older binaries reject version 2 instead of silently dropping provenance.
+	return version == sessionSchemaVersion || version == 1 && len(checkpoint.Excluded) == 0
+}
 
 type executionIdentity struct {
 	ProjectID       string           `json:"project_id"`
@@ -95,7 +101,7 @@ type session struct {
 func (s *session) validate(i executionIdentity) error {
 	// Unversioned sessions cannot prove which immutable input produced their
 	// messages/results. Preserve them for audit; never invent identity on load.
-	if s.SchemaVersion != sessionSchemaVersion {
+	if !supportedSessionSchema(s.SchemaVersion, s.Log) {
 		return fmt.Errorf("unsupported session schema_version %d; automatic migration of unbound sessions is disabled", s.SchemaVersion)
 	}
 	a, _ := json.Marshal(s.Identity)
@@ -128,6 +134,7 @@ func (s *session) save(runDir string, journal *eventlog.Log) error {
 		return err
 	}
 	s.Log = checkpoint
+	s.SchemaVersion = sessionSchemaVersion
 	s.Phase = "execute"
 	if s.Concluding {
 		s.Phase = "conclude"

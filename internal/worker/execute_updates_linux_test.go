@@ -172,7 +172,7 @@ func TestExecuteUpdateCheckpointRecoversAfterJournalBeforeSessionSave(t *testing
 		t.Fatalf("did not fail between journal and session: %v", err)
 	}
 	saved := f.diskState()
-	if saved.ExecuteUpdates != nil || updateNoticeCount(saved.History) != 0 || f.state.ExecuteUpdates != nil || len(f.loop.ContextData) != 0 || saved.Log != before.Log {
+	if saved.ExecuteUpdates != nil || updateNoticeCount(saved.History) != 0 || f.state.ExecuteUpdates != nil || len(f.loop.ContextData) != 0 || !reflect.DeepEqual(saved.Log, before.Log) {
 		t.Fatal("failed save committed a cursor without its notice")
 	}
 	checkpoint, err := f.journal.SyncCheckpoint()
@@ -317,7 +317,7 @@ func TestExecuteUpdateRejectsOversizedResponseBeforeMutation(t *testing.T) {
 		t.Fatalf("unbounded update response accepted: %v", err)
 	}
 	after := f.diskState()
-	if after.ExecuteUpdates != nil || f.state.ExecuteUpdates != nil || after.Log != before.Log || !reflect.DeepEqual(after.History, before.History) {
+	if after.ExecuteUpdates != nil || f.state.ExecuteUpdates != nil || !reflect.DeepEqual(after.Log, before.Log) || !reflect.DeepEqual(after.History, before.History) {
 		t.Fatal("invalid large response mutated the checkpoint")
 	}
 }
@@ -468,7 +468,7 @@ func TestExecuteUpdateFrozenPhasesOnlyPersistDeferredStatus(t *testing.T) {
 				}
 			}
 			saved := f.diskState()
-			if saved.ExecuteUpdates.DeferredPhase != phase || saved.ExecuteUpdates.Cursor.Revision != 5 || saved.ExecuteUpdates.ObservedThrough != 5 || !reflect.DeepEqual(saved.History, before.History) || saved.Log != before.Log {
+			if saved.ExecuteUpdates.DeferredPhase != phase || saved.ExecuteUpdates.Cursor.Revision != 5 || saved.ExecuteUpdates.ObservedThrough != 5 || !reflect.DeepEqual(saved.History, before.History) || !reflect.DeepEqual(saved.Log, before.Log) {
 				t.Fatalf("frozen input changed while deferring %s: %+v", phase, saved.ExecuteUpdates)
 			}
 		})
