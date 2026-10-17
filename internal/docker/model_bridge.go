@@ -276,7 +276,9 @@ func (b *modelBridge) generate(ctx context.Context, r modelrpc.Request) modelrpc
 		text.WriteString(e.Text)
 	}
 	if tooLarge || marshalErr != nil || len(raw) > modelrpc.MaxResponseBytes || jsonContainsModelCredential(raw, p.Token) || containsModelCredential(text.String(), p.Token) {
-		return modelrpc.Response{RequestID: r.RequestID, Error: &modelrpc.Error{Kind: agent.ErrorProvider}}
+		// Numeric usage is independent of rejected content and remains an observation
+		// even when the response cannot cross the credential/size boundary.
+		return modelrpc.Response{RequestID: r.RequestID, Message: agent.Message{Usage: out.Message.Usage}, Error: &modelrpc.Error{Kind: agent.ErrorProvider}}
 	}
 	return out
 }

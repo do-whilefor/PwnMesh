@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"pwnmesh/internal/agent"
@@ -39,5 +40,43 @@ func TestReportedUsageSurvivesStreamAndJSON(t *testing.T) {
 				t.Fatalf("reported usage changed: %+v", message.Usage)
 			}
 		})
+	}
+}
+
+func TestStreamUsageDistinguishesZeroFromOmittedCounters(t *testing.T) {
+	start := `data: {"type":"message_start","message":{"usage":{"input_tokens":11,"output_tokens":1,"cache_creation_input_tokens":37,"cache_read_input_tokens":19}}}` + "\n\n" +
+		`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}` + "\n\n"
+	for _, tc := range []struct {
+		name, usage string
+		want        agent.Usage
+	}{
+		{"omitted", `{"output_tokens":7}`, agent.Usage{InputTokens: 11, OutputTokens: 7, CacheReadTokens: 19, CacheWriteTokens: 37}},
+		{"zero", `{"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}`, agent.Usage{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := start + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":` + tc.usage + "}\n\n" + `data: {"type":"message_stop"}` + "\n\n"
+			message, err := consumeSSE(context.Background(), strings.NewReader(body), nil)
+			if err != nil || message.Usage == nil || *message.Usage != tc.want {
+				t.Fatalf("reported counters changed: usage=%+v err=%v", message.Usage, err)
+			}
+		})
+	}
+}
+
+func TestRejectedJSONRetainsDecodedUsage(t *testing.T) {
+	const response = `{"role":"assistant","content":[{"type":"text","text":"unaccepted"}],"stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":7,"cache_creation_input_tokens":37,"cache_read_input_tokens":19}}`
+	for _, body := range []string{
+		response + `{}`,
+		response + `trailing garbage`,
+		strings.Replace(response, `"stop_reason":"end_turn"`, `"stop_reason":""`, 1),
+	} {
+		p := testProvider(func(req *http.Request) (*http.Response, error) {
+			return testResponse(req, http.StatusOK, "application/json", body), nil
+		})
+		message, err := p.Generate(context.Background(), nil, nil, nil)
+		want := agent.Usage{InputTokens: 11, OutputTokens: 7, CacheReadTokens: 19, CacheWriteTokens: 37}
+		if err == nil || len(message.Content) != 0 || message.Usage == nil || *message.Usage != want {
+			t.Fatalf("rejected response lost observed usage or retained content: usage=%+v content=%+v err=%v", message.Usage, message.Content, err)
+		}
 	}
 }

@@ -211,7 +211,11 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 		// limit from a real EOF while checking for trailing values or garbage.
 		body := &io.LimitedReader{R: res.Body, N: (32 << 20) + 1}
 		decoder := json.NewDecoder(body)
+		var observed agent.Message
 		if err = decoder.Decode(&m); err == nil {
+			// A later framing or semantic error rejects content, not usage that
+			// was already decoded from the provider's complete response object.
+			observed.Usage = m.Usage
 			var extra json.RawMessage
 			err = decoder.Decode(&extra)
 			if err == io.EOF {
@@ -221,17 +225,17 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 			}
 		}
 		if body.N == 0 {
-			return agent.Message{}, &agent.ModelError{Kind: agent.ErrorProvider, Err: errors.New("model response body exceeds 32 MiB")}
+			return observed, &agent.ModelError{Kind: agent.ErrorProvider, Err: errors.New("model response body exceeds 32 MiB")}
 		}
 		if err != nil {
 			kind := agent.ErrorProvider
 			if retryableTransport(err) {
 				kind = agent.ErrorTransport
 			}
-			return agent.Message{}, &agent.ModelError{Kind: kind, Err: fmt.Errorf("invalid or incomplete model response body: %w", err)}
+			return observed, &agent.ModelError{Kind: kind, Err: fmt.Errorf("invalid or incomplete model response body: %w", err)}
 		}
 		if m.Role != "assistant" || len(m.Content) == 0 || m.Stop == "" {
-			return agent.Message{}, &agent.ModelError{Kind: agent.ErrorProvider, Err: errors.New("invalid model response")}
+			return observed, &agent.ModelError{Kind: agent.ErrorProvider, Err: errors.New("invalid model response")}
 		}
 		return agent.Message{Role: m.Role, Content: m.Content, StopReason: m.Stop, Usage: m.Usage}, nil
 	}
@@ -296,24 +300,33 @@ func classifyEndpointError(status int, body []byte) *agent.ModelError {
 	return &agent.ModelError{Kind: kind, Err: &HTTPError{Status: status}}
 }
 
-func mergeUsage(dst **agent.Usage, src *agent.Usage) {
+// Stream usage fields are cumulative snapshots. Omitted fields retain the
+// previous snapshot; an explicitly reported zero replaces it.
+type streamUsage struct {
+	InputTokens      *int `json:"input_tokens"`
+	OutputTokens     *int `json:"output_tokens"`
+	CacheReadTokens  *int `json:"cache_read_input_tokens"`
+	CacheWriteTokens *int `json:"cache_creation_input_tokens"`
+}
+
+func mergeUsage(dst **agent.Usage, src *streamUsage) {
 	if src == nil {
 		return
 	}
 	if *dst == nil {
 		*dst = &agent.Usage{}
 	}
-	if src.InputTokens > 0 {
-		(*dst).InputTokens = src.InputTokens
+	if src.InputTokens != nil {
+		(*dst).InputTokens = *src.InputTokens
 	}
-	if src.OutputTokens > 0 {
-		(*dst).OutputTokens = src.OutputTokens
+	if src.OutputTokens != nil {
+		(*dst).OutputTokens = *src.OutputTokens
 	}
-	if src.CacheReadTokens > 0 {
-		(*dst).CacheReadTokens = src.CacheReadTokens
+	if src.CacheReadTokens != nil {
+		(*dst).CacheReadTokens = *src.CacheReadTokens
 	}
-	if src.CacheWriteTokens > 0 {
-		(*dst).CacheWriteTokens = src.CacheWriteTokens
+	if src.CacheWriteTokens != nil {
+		(*dst).CacheWriteTokens = *src.CacheWriteTokens
 	}
 }
 func consumeSSE(ctx context.Context, reader io.Reader, emit agent.Emit) (agent.Message, error) {
@@ -343,9 +356,9 @@ func consumeSSE(ctx context.Context, reader io.Reader, emit agent.Emit) (agent.M
 			Index   int         `json:"index"`
 			Block   agent.Block `json:"content_block"`
 			Message struct {
-				Usage *agent.Usage `json:"usage"`
+				Usage *streamUsage `json:"usage"`
 			} `json:"message"`
-			Usage *agent.Usage `json:"usage"`
+			Usage *streamUsage `json:"usage"`
 			Error struct {
 				Type    string `json:"type"`
 				Message string `json:"message"`

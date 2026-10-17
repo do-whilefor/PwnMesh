@@ -81,9 +81,10 @@ func TestModelBridgeRejectsEscapedCredentialEcho(t *testing.T) {
 		{Type: "tool_use", ID: "call", Name: "bash", Input: json.RawMessage(`{"command":"` + unicodeSecret(secret) + `"}`)},
 	} {
 		t.Run(block.Type, func(t *testing.T) {
+			usage := &agent.Usage{InputTokens: 11, OutputTokens: 7, CacheReadTokens: 19, CacheWriteTokens: 37}
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_ = json.NewEncoder(w).Encode(agent.Message{Role: "assistant", Content: []agent.Block{block}, StopReason: "end_turn"})
+				_ = json.NewEncoder(w).Encode(agent.Message{Role: "assistant", Content: []agent.Block{block}, StopReason: "end_turn", Usage: usage})
 			}))
 			defer upstream.Close()
 			bridge := newModelBridge(context.Background(), &provider.Anthropic{Token: secret, BaseURL: upstream.URL, Model: "fixture", MaxTokens: 32, Timeout: time.Second}, protocol.Job{RunID: "run"}, nil, nil)
@@ -91,6 +92,9 @@ func TestModelBridgeRejectsEscapedCredentialEcho(t *testing.T) {
 			response := bridge.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("a", 32), SessionID: "run", Messages: []agent.Message{agent.Text("user", "fixture")}})
 			if response.Error == nil || len(response.Message.Content) != 0 || len(response.Events) != 0 {
 				t.Fatal("upstream credential echo reached the worker response")
+			}
+			if response.Message.Usage == nil || *response.Message.Usage != *usage {
+				t.Fatalf("sanitizing response content discarded reported usage: %+v", response.Message.Usage)
 			}
 		})
 	}
