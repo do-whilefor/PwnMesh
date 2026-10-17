@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"pwnmesh/internal/agent"
 	"pwnmesh/internal/protocol"
 )
 
@@ -37,6 +38,64 @@ func TestResultSinkKeepsOnlyFramedRPCAndFinalResult(t *testing.T) {
 		}
 		if _, err := sink.Write([]byte("{\"type\":\"result\"}\n")); err == nil {
 			t.Fatal("duplicate result accepted")
+		}
+	}
+}
+
+func TestResultSinkRetainsCumulativeUsageBeforeFinalResult(t *testing.T) {
+	sink := &resultSink{runID: "run"}
+	for offset, tokens := range []int{37, 83} {
+		frame := protocol.UsageSnapshot{Type: "usage_snapshot", RunID: "run", JournalOffset: int64(offset + 1), Metrics: &protocol.DecisionMetrics{
+			Version: 1, UsageScope: "run", ModelCalls: offset + 1, CompletedCalls: offset + 1, UsageCalls: offset + 1,
+			Usage: agent.Usage{CacheWriteTokens: tokens}, UsageStatus: "partial", CostStatus: "unknown",
+		}}
+		raw, _ := json.Marshal(frame)
+		if _, err := sink.Write(append(raw, '\n')); err != nil {
+			t.Fatal(err)
+		}
+		if sink.found || sink.result.Metrics == nil || sink.result.Metrics.Usage.CacheWriteTokens != tokens {
+			t.Fatalf("usage snapshot was lost, added or treated as a result: %+v", sink)
+		}
+	}
+	if _, err := sink.Write([]byte(`{"type":"result","status":"success","metrics":{"version":1,"usage_scope":"run_and_children","usage":{"cache_creation_input_tokens":101}}}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if !sink.found || sink.result.Metrics.Usage.CacheWriteTokens != 101 {
+		t.Fatal("final metrics did not supersede the partial snapshot")
+	}
+}
+
+func TestResultSinkFinalWithoutMetricsRetainsObservedUsage(t *testing.T) {
+	sink := &resultSink{runID: "run"}
+	stream := `{"type":"usage_snapshot","run_id":"run","journal_offset":1,"metrics":{"version":1,"usage_scope":"run","model_calls":1,"completed_calls":1,"usage_calls":1,"usage":{"cache_creation_input_tokens":37}}}` + "\n" +
+		`{"type":"result","status":"failed","error":"response delivery failed"}` + "\n"
+	if _, err := sink.Write([]byte(stream)); err != nil {
+		t.Fatal(err)
+	}
+	if !sink.found || sink.result.Status != "failed" || sink.result.Metrics == nil || sink.result.Metrics.Usage.CacheWriteTokens != 37 {
+		t.Fatalf("final result without metrics erased reported usage: %+v", sink.result)
+	}
+}
+
+func TestResultSinkRejectsInvalidUsageSnapshots(t *testing.T) {
+	const valid = `{"type":"usage_snapshot","run_id":"run","journal_offset":2,"metrics":{"version":1,"usage_scope":"run","model_calls":1,"completed_calls":1,"usage_calls":1,"usage":{"cache_creation_input_tokens":37}}}`
+	for _, frame := range []string{
+		strings.Replace(valid, `"run_id":"run"`, `"run_id":"other"`, 1),
+		strings.Replace(valid, `"journal_offset":2`, `"journal_offset":1`, 1),
+		strings.Replace(valid, `"version":1`, `"version":2`, 1),
+		strings.Replace(valid, `"usage_scope":"run"`, `"usage_scope":"run_and_children"`, 1),
+		strings.Replace(valid, `"cache_creation_input_tokens":37`, `"cache_creation_input_tokens":-1`, 1),
+		strings.Replace(valid, `"model_calls":1`, `"model_calls":0`, 1),
+		strings.Replace(valid, `"model_calls":1`, `"model_calls":1,"summary_calls":-1`, 1),
+		strings.Replace(valid, `"model_calls":1`, `"model_calls":1,"summary_calls":2`, 1),
+		strings.Replace(valid, `"completed_calls":1`, `"completed_calls":1,"failed_calls":-1`, 1),
+		strings.Replace(valid, `"completed_calls":1`, `"completed_calls":1,"failed_calls":2`, 1),
+		strings.Replace(valid, `"journal_offset":2`, `"journal_offset":"bad"`, 1),
+		valid[:len(valid)-1] + `,"padding":"` + strings.Repeat("x", 16<<10) + `"}`,
+	} {
+		sink := &resultSink{runID: "run", usageOffset: 1}
+		if _, err := sink.Write([]byte(frame + "\n")); err == nil || sink.result.Metrics != nil || sink.found {
+			t.Fatalf("invalid usage snapshot accepted: %v", err)
 		}
 	}
 }

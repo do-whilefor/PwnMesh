@@ -413,6 +413,8 @@ func (c *Client) exec(ctx context.Context, name string, argv, env []string, out 
 }
 
 type resultSink struct {
+	runID       string
+	usageOffset int64
 	pending     []byte
 	result      protocol.Result
 	found       bool
@@ -440,6 +442,24 @@ func (s *resultSink) Write(p []byte) (int, error) {
 		}
 		_ = json.Unmarshal(s.pending, &envelope)
 		switch envelope.Type {
+		case "usage_snapshot":
+			if len(s.pending) > 16<<10 || s.found {
+				return 0, errors.New("invalid usage snapshot boundary")
+			}
+			var snapshot protocol.UsageSnapshot
+			decoder := json.NewDecoder(bytes.NewReader(s.pending))
+			decoder.DisallowUnknownFields()
+			if err := decoder.Decode(&snapshot); err != nil {
+				return 0, err
+			}
+			m := snapshot.Metrics
+			if s.runID == "" || snapshot.RunID != s.runID || snapshot.JournalOffset <= s.usageOffset || m == nil || m.Version != 1 || m.UsageScope != "run" || m.ChildUsage != nil ||
+				m.ModelCalls < 0 || m.CompletedCalls < 0 || m.CompletedCalls > m.ModelCalls || m.UsageCalls < 0 || m.UsageCalls > m.CompletedCalls ||
+				m.SummaryCalls < 0 || m.SummaryCalls > m.ModelCalls || m.FailedCalls < 0 || m.FailedCalls > m.CompletedCalls ||
+				m.Usage.InputTokens < 0 || m.Usage.OutputTokens < 0 || m.Usage.CacheReadTokens < 0 || m.Usage.CacheWriteTokens < 0 {
+				return 0, errors.New("invalid cumulative usage snapshot")
+			}
+			s.usageOffset, s.result.Metrics = snapshot.JournalOffset, m
 		case "model_request":
 			var event modelrpc.RequestEvent
 			if err := json.Unmarshal(s.pending, &event); err != nil {
@@ -483,6 +503,9 @@ func (s *resultSink) Write(p []byte) (int, error) {
 			var result protocol.Result
 			if err := json.Unmarshal(s.pending, &result); err != nil {
 				return 0, err
+			}
+			if result.Metrics == nil {
+				result.Metrics = s.result.Metrics
 			}
 			s.result = result
 			s.found = true
@@ -565,7 +588,7 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (prot
 	bridge := newModelBridge(bridgeCtx, p, j, c.modelDelivery(name, path.Dir(target)), abortBridge)
 	bridge.admission = c.modelAdmission()
 	defer bridge.close()
-	sink := &resultSink{graph: c.graphBridge(bridgeCtx, name, path.Dir(target), j), model: bridge.start, cancelModel: bridge.stop}
+	sink := &resultSink{runID: j.RunID, graph: c.graphBridge(bridgeCtx, name, path.Dir(target), j), model: bridge.start, cancelModel: bridge.stop}
 	err = c.exec(bridgeCtx, name, []string{"/usr/local/bin/pwnmesh", "worker", "--job", target}, env, sink)
 	if bridgeCtx.Err() != nil && ctx.Err() == nil {
 		err = context.Cause(bridgeCtx)

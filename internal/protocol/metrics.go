@@ -2,6 +2,15 @@ package protocol
 
 import "pwnmesh/internal/agent"
 
+// UsageSnapshot reports a durable parent journal prefix before a final result.
+// Receivers replace earlier snapshots for the same run; they never add them.
+type UsageSnapshot struct {
+	Type          string           `json:"type"`
+	RunID         string           `json:"run_id"`
+	JournalOffset int64            `json:"journal_offset"`
+	Metrics       *DecisionMetrics `json:"metrics"`
+}
+
 // DecisionMetrics reports observed work, not a bill or proof that proposed
 // changes were applied. The execution receipt and graph events remain the
 // authority for committed business actions.
@@ -53,9 +62,15 @@ type DecisionMetrics struct {
 // ChildUsage is the subtotal already included in a run's model/usage totals.
 // Missing or uncommitted child observations make those totals partial.
 type ChildUsage struct {
-	Sessions   int         `json:"sessions"`
-	Incomplete bool        `json:"incomplete,omitempty"`
-	ModelCalls int         `json:"model_calls"`
-	UsageCalls int         `json:"usage_calls"`
-	Usage      agent.Usage `json:"usage"`
+	Sessions        int         `json:"sessions"`
+	Incomplete      bool        `json:"incomplete,omitempty"`
+	ModelCalls      int         `json:"model_calls"`
+	SummaryCalls    int         `json:"summary_calls,omitempty"`
+	CompletedCalls  int         `json:"completed_calls,omitempty"`
+	FailedCalls     int         `json:"failed_calls,omitempty"`
+	UsageCalls      int         `json:"usage_calls"`
+	Usage           agent.Usage `json:"usage"`
+	ModelDurationMS int64       `json:"model_duration_ms,omitempty"`
+	TotalInputBytes int64       `json:"total_input_bytes,omitempty"`
+	InputBytesBasis string      `json:"input_bytes_basis,omitempty"`
 }

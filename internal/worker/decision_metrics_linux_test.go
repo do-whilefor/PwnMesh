@@ -15,6 +15,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/protocol"
 )
 
 func TestDecisionMetricsSeparateDraftsFromCommittedReceipts(t *testing.T) {
@@ -40,6 +41,57 @@ func TestDecisionMetricsSeparateDraftsFromCommittedReceipts(t *testing.T) {
 	m.observe((decisionOperation{Op: "decision_receipt", Committed: true, Actions: 2}).event())
 	if got := finish(); got.Outcome != "actions_committed" || !got.Committed || got.CommittedActions != 2 || got.ReceiptCalls != 3 || got.ReceiptFailures != 1 {
 		t.Fatalf("receipt recovery must confirm one batch: %+v", got)
+	}
+}
+
+func TestUsageSnapshotsSurviveCancellationAndResumeBeforeFinalResult(t *testing.T) {
+	job, dir := outcomeJob(t, "explore"), t.TempDir()
+	var output strings.Builder
+	runtime, err := restoreSession(job, Options{RunDir: dir, Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.save(nil); err != nil {
+		t.Fatal(err)
+	}
+	committed := runtime.state.Log
+	usage := agent.Usage{InputTokens: 11, OutputTokens: 7, CacheReadTokens: 19, CacheWriteTokens: 37}
+	runtime.emit(agent.Event{Type: "model_call_start", Request: &agent.RequestObservation{Kind: "turn"}})
+	runtime.emit(agent.Event{Type: "model_call_end", Request: &agent.RequestObservation{Kind: "turn", Usage: &usage}})
+	if runtime.logErr != nil {
+		t.Fatal(runtime.logErr)
+	}
+	readSnapshot := func() protocol.UsageSnapshot {
+		t.Helper()
+		var found protocol.UsageSnapshot
+		for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+			var snapshot protocol.UsageSnapshot
+			if json.Unmarshal([]byte(line), &snapshot) == nil && snapshot.Type == "usage_snapshot" {
+				found = snapshot
+			}
+		}
+		if found.Metrics == nil || found.RunID != job.RunID || found.Metrics.UsageScope != "run" || found.Metrics.UsageStatus != "partial" || found.Metrics.Usage != usage || found.Metrics.ModelCalls != 1 || found.Metrics.UsageCalls != 1 {
+			t.Fatalf("missing cumulative parent usage snapshot: %+v", found)
+		}
+		return found
+	}
+	first := readSnapshot()
+	info, err := os.Stat(filepath.Join(dir, "events.jsonl"))
+	if err != nil || first.JournalOffset != info.Size() || !reflect.DeepEqual(runtime.state.Log, committed) {
+		t.Fatal("usage snapshot did not bind the durable journal or advanced conversation state")
+	}
+	if err := runtime.journal.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output.Reset()
+	restored, err := restoreSession(job, Options{RunDir: dir, Output: &output})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restored.journal.Close()
+	second := readSnapshot()
+	if second.JournalOffset != first.JournalOffset || second.Metrics.Usage != first.Metrics.Usage {
+		t.Fatal("resume without another model response duplicated or lost usage")
 	}
 }
 

@@ -24,11 +24,14 @@ func TestRunPreservesOnlyDecodedMetricsAfterFailure(t *testing.T) {
 		name       string
 		cancel     bool
 		stopFailed bool
+		snapshot   bool
 	}{
 		{name: "worker exit"},
 		{name: "cancellation", cancel: true},
 		{name: "unconfirmed stop", stopFailed: true},
 		{name: "unconfirmed cancellation", cancel: true, stopFailed: true},
+		{name: "worker exit before result", snapshot: true},
+		{name: "cancellation before result", cancel: true, snapshot: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -44,6 +47,11 @@ func TestRunPreservesOnlyDecodedMetricsAfterFailure(t *testing.T) {
 				Type: "result", Status: "success", Text: "must not be accepted", Conclude: true,
 				StateVersion: "old-state", Metrics: metrics,
 			})
+			if tc.snapshot {
+				metrics.UsageScope, metrics.UsageStatus = "run", "partial"
+				metrics.CompletedCalls, metrics.ChildUsage = 2, nil
+				output, err = json.Marshal(protocol.UsageSnapshot{Type: "usage_snapshot", RunID: "run-1", JournalOffset: 137, Metrics: metrics})
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -75,6 +75,9 @@ func TestExploreUsageIncludesOriginalChildrenOnceAcrossReuseAndRecovery(t *testi
 	if runtime.metrics.Usage != usage {
 		t.Fatal("child subtotal mutated parent journal accumulator")
 	}
+	if first.ChildUsage.CompletedCalls != 2 || first.ChildUsage.FailedCalls != 1 || first.ChildUsage.ModelDurationMS > first.ModelDurationMS || first.ChildUsage.TotalInputBytes != first.TotalInputBytes || first.ChildUsage.InputBytesBasis == "" {
+		t.Fatalf("child runtime counters were not retained with usage: %+v", first.ChildUsage)
+	}
 	second := finish(runtime)
 	if second.Usage != first.Usage || !reflect.DeepEqual(second.ChildUsage, first.ChildUsage) {
 		t.Fatal("repeated finalization double counted children")

@@ -31,7 +31,17 @@ func withChildUsage(ctx context.Context, j Job, runDir string, parent DecisionMe
 			return nil
 		}
 		children.ModelCalls += metrics.ModelCalls
+		children.SummaryCalls += metrics.SummaryCalls
+		children.CompletedCalls += metrics.CompletedCalls
+		children.FailedCalls += metrics.FailedCalls
 		children.UsageCalls += metrics.UsageCalls
+		children.ModelDurationMS += metrics.ModelDurationMS
+		children.TotalInputBytes += metrics.TotalInputBytes
+		if children.InputBytesBasis == "" {
+			children.InputBytesBasis = metrics.InputBytesBasis
+		} else if metrics.InputBytesBasis != "" && children.InputBytesBasis != metrics.InputBytesBasis {
+			children.InputBytesBasis = "mixed"
+		}
 		addUsage(&children.Usage, metrics.Usage)
 		parent.ModelCalls += metrics.ModelCalls
 		parent.SummaryCalls += metrics.SummaryCalls

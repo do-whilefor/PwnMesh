@@ -361,6 +361,7 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 				result, err = s.Runner.Run(ctx, t.Worker, t.Job)
 			}
 			if result.Metrics != nil {
+				result.Metrics = retainKnownChildUsage(t.observedMetrics, result.Metrics)
 				t.observedMetrics = result.Metrics
 				slog.Info("decision observation", "project", t.Job.Graph.Project.ID, "run", t.Job.RunID, "metrics", result.Metrics)
 			}
@@ -432,6 +433,59 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 		return "rejected", nil
 	}
 	return "success", nil
+}
+
+// Partial observations cannot erase known child work. Retain a lower bound of
+// each child counter, replacing its old contribution rather than adding totals.
+// Complete final aggregation remains authoritative.
+func retainKnownChildUsage(previous, current *protocol.DecisionMetrics) *protocol.DecisionMetrics {
+	if previous == nil || current == nil || previous.UsageScope != "run_and_children" || previous.ChildUsage == nil ||
+		(current.UsageScope != "run" && (current.UsageScope != "run_and_children" || current.ChildUsage == nil || !current.ChildUsage.Incomplete)) {
+		return current
+	}
+	merged, old, children := *current, protocol.ChildUsage{}, *previous.ChildUsage
+	if current.ChildUsage != nil {
+		old = *current.ChildUsage
+	}
+	children.Sessions = max(children.Sessions, old.Sessions)
+	children.ModelCalls = max(children.ModelCalls, old.ModelCalls)
+	children.SummaryCalls = max(children.SummaryCalls, old.SummaryCalls)
+	children.CompletedCalls = max(children.CompletedCalls, old.CompletedCalls)
+	children.FailedCalls = max(children.FailedCalls, old.FailedCalls)
+	children.UsageCalls = max(children.UsageCalls, old.UsageCalls)
+	children.Usage.InputTokens = max(children.Usage.InputTokens, old.Usage.InputTokens)
+	children.Usage.OutputTokens = max(children.Usage.OutputTokens, old.Usage.OutputTokens)
+	children.Usage.CacheReadTokens = max(children.Usage.CacheReadTokens, old.Usage.CacheReadTokens)
+	children.Usage.CacheWriteTokens = max(children.Usage.CacheWriteTokens, old.Usage.CacheWriteTokens)
+	children.ModelDurationMS = max(children.ModelDurationMS, old.ModelDurationMS)
+	children.TotalInputBytes = max(children.TotalInputBytes, old.TotalInputBytes)
+	if children.InputBytesBasis == "" {
+		children.InputBytesBasis = old.InputBytesBasis
+	} else if old.InputBytesBasis != "" && children.InputBytesBasis != old.InputBytesBasis {
+		children.InputBytesBasis = "mixed"
+	}
+	// Legacy child subtotals lack completed-call counts. Reported usage proves
+	// at least that many model_call_end events, not an exact completion total.
+	children.CompletedCalls = max(children.CompletedCalls, children.UsageCalls)
+	children.Incomplete = true
+	merged.ChildUsage, merged.UsageScope, merged.UsageStatus = &children, "run_and_children", "partial"
+	merged.ModelCalls += children.ModelCalls - old.ModelCalls
+	merged.SummaryCalls += children.SummaryCalls - old.SummaryCalls
+	merged.CompletedCalls += children.CompletedCalls - old.CompletedCalls
+	merged.FailedCalls += children.FailedCalls - old.FailedCalls
+	merged.UsageCalls += children.UsageCalls - old.UsageCalls
+	merged.Usage.InputTokens += children.Usage.InputTokens - old.Usage.InputTokens
+	merged.Usage.OutputTokens += children.Usage.OutputTokens - old.Usage.OutputTokens
+	merged.Usage.CacheReadTokens += children.Usage.CacheReadTokens - old.Usage.CacheReadTokens
+	merged.Usage.CacheWriteTokens += children.Usage.CacheWriteTokens - old.Usage.CacheWriteTokens
+	merged.ModelDurationMS += children.ModelDurationMS - old.ModelDurationMS
+	merged.TotalInputBytes += children.TotalInputBytes - old.TotalInputBytes
+	if merged.InputBytesBasis == "" {
+		merged.InputBytesBasis = children.InputBytesBasis
+	} else if children.InputBytesBasis != "" && merged.InputBytesBasis != children.InputBytesBasis {
+		merged.InputBytesBasis = "mixed"
+	}
+	return &merged
 }
 
 // Publishing and applying a result share the same failure boundary. Invalid

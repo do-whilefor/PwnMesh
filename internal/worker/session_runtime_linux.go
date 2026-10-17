@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/process"
+	"pwnmesh/internal/protocol"
 	eventlog "pwnmesh/internal/worker/internal/journal"
 	"pwnmesh/internal/worker/internal/phase"
 	"time"
@@ -78,6 +79,10 @@ func restoreSession(j Job, o Options) (*sessionRuntime, error) {
 	}
 
 	runtime := &sessionRuntime{job: j, options: o, state: state, journal: journal, metrics: metrics, encoder: json.NewEncoder(o.Output), resuming: resuming}
+	if err := runtime.emitUsageSnapshot(); err != nil {
+		journal.Close()
+		return nil, err
+	}
 	return runtime, nil
 }
 
@@ -95,6 +100,29 @@ func (r *sessionRuntime) emit(e agent.Event) {
 	if r.logErr == nil {
 		r.logErr = enc.Encode(e)
 	}
+	if r.logErr == nil && e.Type == "model_call_end" && e.Request != nil {
+		r.logErr = r.emitUsageSnapshot()
+	}
+}
+
+func (r *sessionRuntime) emitUsageSnapshot() error {
+	if r.metrics.ModelCalls == 0 {
+		return nil
+	}
+	// Sync observed calls without advancing the conversation checkpoint: the
+	// provider has returned, but its message may not yet be accepted or saved.
+	checkpoint, err := r.journal.SyncCheckpoint()
+	if err != nil {
+		return err
+	}
+	metrics := r.metrics.finish(r.job, Result{}, r.state.StartedAt, r.options.Now())
+	metrics.UsageScope = "run"
+	if r.job.Kind == "explore" {
+		// Child journals are aggregated once at finalization, not rescanned on
+		// every model turn. An interrupted snapshot is explicitly parent-only.
+		metrics.UsageStatus = "partial"
+	}
+	return r.encoder.Encode(protocol.UsageSnapshot{Type: "usage_snapshot", RunID: r.job.RunID, JournalOffset: checkpoint.Offset, Metrics: &metrics})
 }
 
 // save is used at runtime-owned boundaries; Agent callbacks supply their exact

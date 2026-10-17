@@ -97,6 +97,84 @@ func TestRecoveryTerminalRetainsSavedUsage(t *testing.T) {
 	}
 }
 
+func TestParentUsageSnapshotRetainsKnownChildrenAcrossRetries(t *testing.T) {
+	s, runner, store, run := resultDeliveryFixture(t)
+	children := &protocol.ChildUsage{Sessions: 1, ModelCalls: 2, UsageCalls: 2, Usage: agent.Usage{CacheWriteTokens: 37}}
+	prior := &protocol.DecisionMetrics{Version: 1, UsageScope: "run_and_children", ModelCalls: 3, UsageCalls: 3, Usage: agent.Usage{CacheWriteTokens: 48}, ChildUsage: children}
+	var err error
+	run.Execution.Result, err = json.Marshal(protocol.Result{Metrics: prior})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.run = func(context.Context, protocol.Job) (protocol.Result, error) {
+		return protocol.Result{Metrics: &protocol.DecisionMetrics{Version: 1, UsageScope: "run", ModelCalls: 2, CompletedCalls: 2, UsageCalls: 2, UsageStatus: "partial", Usage: agent.Usage{CacheWriteTokens: 23}}}, errors.New("interrupted before final result")
+	}
+	if outcome, err := s.runTask(context.Background(), run); outcome != "failed" || err == nil {
+		t.Fatalf("unexpected result: %s %v", outcome, err)
+	}
+	var saved protocol.Result
+	if err := json.Unmarshal(curationExecution(t, store, run).Result, &saved); err != nil {
+		t.Fatal(err)
+	}
+	metrics := saved.Metrics
+	if metrics == nil || metrics.Usage.CacheWriteTokens != 60 || metrics.ModelCalls != 4 || metrics.CompletedCalls != 4 || metrics.UsageCalls != 4 || metrics.UsageScope != "run_and_children" || metrics.UsageStatus != "partial" || metrics.ChildUsage == nil || !metrics.ChildUsage.Incomplete || metrics.ChildUsage.Usage.CacheWriteTokens != 37 {
+		t.Fatalf("parent-only snapshots lost or duplicated known children: %+v", metrics)
+	}
+}
+
+func TestFinalUsageKeepsKnownChildrenOnlyWhenAggregationIsPartial(t *testing.T) {
+	for _, incomplete := range []bool{true, false} {
+		s, runner, store, run := resultDeliveryFixture(t)
+		prior := &protocol.DecisionMetrics{Version: 1, UsageScope: "run_and_children", ModelCalls: 3, CompletedCalls: 3, UsageCalls: 3, Usage: agent.Usage{CacheWriteTokens: 48}, ChildUsage: &protocol.ChildUsage{Sessions: 1, ModelCalls: 2, CompletedCalls: 2, SummaryCalls: 1, FailedCalls: 1, UsageCalls: 2, ModelDurationMS: 10, TotalInputBytes: 150, Usage: agent.Usage{CacheWriteTokens: 37}}}
+		var err error
+		run.Execution.Result, err = json.Marshal(protocol.Result{Metrics: prior})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner.run = func(context.Context, protocol.Job) (protocol.Result, error) {
+			return protocol.Result{Status: "failed", FailureKind: "fixture", Metrics: &protocol.DecisionMetrics{Version: 1, UsageScope: "run_and_children", ModelCalls: 2, CompletedCalls: 2, UsageCalls: 2, Usage: agent.Usage{CacheWriteTokens: 23}, ChildUsage: &protocol.ChildUsage{Incomplete: incomplete}}}, nil
+		}
+		if outcome, _ := s.runTask(context.Background(), run); outcome != "failed" {
+			t.Fatal(outcome)
+		}
+		var saved protocol.Result
+		if err := json.Unmarshal(curationExecution(t, store, run).Result, &saved); err != nil {
+			t.Fatal(err)
+		}
+		m := saved.Metrics
+		if incomplete {
+			if m.Usage.CacheWriteTokens != 60 || m.CompletedCalls != 4 || m.ModelCalls != 4 || m.SummaryCalls != 1 || m.FailedCalls != 1 || m.ModelDurationMS != 10 || m.TotalInputBytes != 150 || m.UsageStatus != "partial" {
+				t.Fatalf("incomplete final erased prior child observations: %+v", m)
+			}
+		} else if m.Usage.CacheWriteTokens != 23 || m.ModelCalls != 2 || m.CompletedCalls != 2 || m.ChildUsage.ModelCalls != 0 {
+			t.Fatalf("complete final did not replace retained subtotal: %+v", m)
+		}
+	}
+}
+
+func TestDispatcherShutdownPersistsUsageWithoutFinalResult(t *testing.T) {
+	s, runner, store, run := resultDeliveryFixture(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run.Root = ctx
+	metrics := &protocol.DecisionMetrics{Version: 1, UsageScope: "run", ModelCalls: 1, UsageCalls: 1, UsageStatus: "partial", Usage: agent.Usage{CacheWriteTokens: 37}}
+	runner.run = func(context.Context, protocol.Job) (protocol.Result, error) {
+		cancel()
+		return protocol.Result{Metrics: metrics}, context.Canceled
+	}
+	if outcome, err := s.runTask(ctx, run); outcome != "interrupted" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("shutdown changed recovery behavior: %s %v", outcome, err)
+	}
+	execution := curationExecution(t, store, run)
+	var saved protocol.Result
+	if err := json.Unmarshal(execution.Result, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if execution.Status != "running" || saved.Metrics == nil || saved.Metrics.Usage != metrics.Usage || saved.Status != "" || saved.Text != "" {
+		t.Fatalf("shutdown discarded usage or persisted acceptance: status=%s result=%+v", execution.Status, saved)
+	}
+}
+
 func resultDeliveryFixture(t *testing.T) (*Scheduler, *staleCuratorRunner, *board.Store, *task) {
 	t.Helper()
 	s, runner, store, graph := staleCuratorFixture(t)

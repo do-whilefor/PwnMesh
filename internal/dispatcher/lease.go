@@ -47,6 +47,13 @@ func (s *Scheduler) runTask(ctx context.Context, t *task) (outcome string, runEr
 		}
 		releaseCtx, c := context.WithTimeout(context.Background(), 5*time.Second)
 		defer c()
+		if outcome == "interrupted" && t.observedMetrics != nil && t.Execution.Status != "result_pending" {
+			// A graceful shutdown can end before a final Worker result. Retain
+			// the latest cumulative observation without settling business output.
+			if err := s.status(releaseCtx, t, "running", protocol.Result{Metrics: t.observedMetrics}); err != nil {
+				slog.Warn("interrupted execution observation could not be saved", "run", t.Job.RunID, "error", err)
+			}
+		}
 		_ = s.Client.Do(releaseCtx, "POST", s.leasePath(t)+"/release", map[string]string{"worker": t.Lease.Run}, nil, nil)
 	}()
 	return s.runRegistered(ctx, t, func() { stopLease(); <-heartbeatDone })
