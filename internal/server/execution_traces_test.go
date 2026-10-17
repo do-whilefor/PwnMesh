@@ -27,6 +27,13 @@ func TestTraceReadHTTPRequiresCurrentExecutionFence(t *testing.T) {
 	}
 	f.request("POST", path, read, false, http.StatusForbidden, nil)
 	read.IDs = []string{f.run}
+	page.Items, page.NextOffset = nil, nil
+	f.request("POST", path, read, true, http.StatusOK, &page)
+	if len(page.Items) != 1 || page.Items[0].RunID != f.run || page.NextOffset != nil {
+		t.Fatalf("current execution trace was not selected exactly: %+v", page)
+	}
+	f.request("POST", path, read, false, http.StatusForbidden, nil)
+	read.IDs = []string{f.run, "another-run"}
 	f.request("POST", path, read, true, http.StatusUnprocessableEntity, nil)
 	read.IDs = nil
 	read.AssetIDs = []string{"fabricated"}

@@ -7,12 +7,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pwnmesh/internal/agent"
 	eventlog "pwnmesh/internal/worker/internal/journal"
@@ -93,11 +95,21 @@ func TestWorkerTraceLargeCommittedJournalPages(t *testing.T) {
 		Next    *int               `json:"next_offset"`
 		Version string             `json:"trace_version"`
 	}
-	first := traceCall(t, f.tool(t), traceReadRequest{RunID: f.run.RunID, Query: "needle", Limit: 1})
+	// Exercise the large-journal correctness boundary independently of the
+	// tool's five-second latency budget, including under race instrumentation.
+	read := func(request traceReadRequest) string {
+		t.Helper()
+		raw, err := readWorkerTrace(context.Background(), f.job, f.run, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return raw
+	}
+	first := read(traceReadRequest{RunID: f.run.RunID, Query: "needle", Limit: 1})
 	if err := json.Unmarshal([]byte(first), &page); err != nil || len(page.Items) != 1 || page.Next == nil {
 		t.Fatalf("large journal lost first page: %s %v", first, err)
 	}
-	last := traceCall(t, f.tool(t), traceReadRequest{RunID: f.run.RunID, Offset: *page.Next, Limit: 1, TraceVersion: page.Version})
+	last := read(traceReadRequest{RunID: f.run.RunID, Offset: *page.Next, Limit: 1, TraceVersion: page.Version})
 	if !strings.Contains(last, "last needle") || strings.Contains(last, "first needle") {
 		t.Fatalf("large journal continuation lost bound observations: %s", last)
 	}
@@ -111,9 +123,29 @@ func TestWorkerTraceLargeCommittedJournalPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	file.Close()
-	input, _ := json.Marshal(traceReadRequest{RunID: f.run.RunID, Query: "first needle", Limit: 1})
-	if raw, err := f.tool(t).Execute(context.Background(), input); err == nil || raw != "" {
+	if raw, err := readWorkerTrace(context.Background(), f.job, f.run, traceReadRequest{RunID: f.run.RunID, Query: "first needle", Limit: 1}); err == nil || raw != "" {
 		t.Fatalf("late corruption released a page: %q %v", raw, err)
+	}
+}
+
+func TestWorkerTraceAuthorizationKeepsBoundedDeadline(t *testing.T) {
+	f := newTraceFixture(t)
+	for _, parentTimeout := range []time.Duration{time.Minute, time.Second} {
+		ctx, cancel := context.WithTimeout(context.Background(), parentTimeout)
+		parentDeadline, _ := ctx.Deadline()
+		boundary := errors.New("authorization boundary")
+		tool := workerTraceTool(f.job, &Options{}, func(ctx context.Context, _ GraphRequest) (string, error) {
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) > 5*time.Second || deadline.After(parentDeadline) {
+				t.Fatalf("trace authorization lost its bounded deadline: %v", deadline)
+			}
+			return "", boundary
+		})
+		_, err := tool.Execute(ctx, json.RawMessage(`{}`))
+		cancel()
+		if !errors.Is(err, boundary) {
+			t.Fatalf("authorization failure was not retained: %v", err)
+		}
 	}
 }
 
