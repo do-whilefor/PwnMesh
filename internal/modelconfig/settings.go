@@ -32,6 +32,9 @@ func ResolvePath() (string, error) {
 }
 
 type Settings struct {
+	AuthMode        string `json:"auth_mode,omitempty"`
+	CredentialID    string `json:"credential_id,omitempty"`
+	CredentialDir   string `json:"-"`
 	Protocol        string `json:"protocol"`
 	BaseURL         string `json:"base_url"`
 	Model           string `json:"model"`
@@ -52,8 +55,9 @@ type Public struct {
 }
 
 func (s Settings) Public() Public {
-	hasToken := s.Token != ""
+	hasToken := s.Token != "" || s.AuthMode == "kimi_oauth" && s.CredentialID != ""
 	s.Token = ""
+	s.CredentialID, s.CredentialDir = "", ""
 	proxy := ""
 	if s.ConnectionMode == "proxy" {
 		proxy, _ = provider.ProxyURL(s.ProxyURL, true)
@@ -103,6 +107,31 @@ func Defaults(getenv func(string) string) Settings {
 }
 
 func (s Settings) Validate(requireToken bool) error {
+	if s.AuthMode != "" && s.AuthMode != "api_key" && s.AuthMode != "kimi_oauth" && s.AuthMode != "glm_coding_plan" {
+		return errors.New("unsupported authentication mode")
+	}
+	if s.AuthMode == "kimi_oauth" || s.AuthMode == "glm_coding_plan" {
+		base := "https://api.kimi.com/coding"
+		if s.AuthMode == "glm_coding_plan" {
+			base = "https://open.bigmodel.cn/api/anthropic"
+		}
+		if s.Protocol != "anthropic" || strings.TrimRight(s.BaseURL, "/") != base {
+			return errors.New("subscription authentication requires its official Anthropic endpoint")
+		}
+	}
+	if s.AuthMode == "kimi_oauth" {
+		if s.Token != "" {
+			return errors.New("Kimi subscription credentials must come from sign-in")
+		}
+		if s.CredentialID != "" && !ValidCredentialID(s.CredentialID) {
+			return errors.New("invalid subscription credential reference")
+		}
+		if requireToken && s.CredentialID == "" {
+			return errors.New("sign in to Kimi Code first")
+		}
+	} else if s.CredentialID != "" {
+		return errors.New("subscription credential cannot be used as an API key")
+	}
 	if s.Protocol != "anthropic" && s.Protocol != "openai" {
 		return errors.New("protocol must be anthropic (Messages API) or openai (Chat Completions)")
 	}
@@ -122,7 +151,7 @@ func (s Settings) Validate(requireToken bool) error {
 	if strings.ContainsAny(s.Token, "\r\n\x00") || len(s.Token) > 8192 {
 		return errors.New("invalid token")
 	}
-	if requireToken && strings.TrimSpace(s.Token) == "" {
+	if requireToken && s.AuthMode != "kimi_oauth" && strings.TrimSpace(s.Token) == "" {
 		return errors.New("token is required")
 	}
 	if s.ConnectionMode != "direct" && s.ConnectionMode != "proxy" {
@@ -161,6 +190,10 @@ func (s Settings) Overlay(env map[string]string) map[string]string {
 	} else {
 		out["ANTHROPIC_BASE_URL"], out["ANTHROPIC_MODEL"], out["ANTHROPIC_AUTH_TOKEN"] = s.BaseURL, s.Model, s.Token
 		out["ANTHROPIC_DEFAULT_FABLE_MODEL"] = s.Model
+		out["ANTHROPIC_AUTH_MODE"] = s.AuthMode
+		if s.AuthMode == "kimi_oauth" {
+			out["ANTHROPIC_CREDENTIAL_ID"], out["ANTHROPIC_CREDENTIAL_DIR"] = s.CredentialID, s.CredentialDir
+		}
 	}
 	return out
 }
@@ -184,6 +217,9 @@ func Read(path string) (Settings, bool, error) {
 	if err = s.Validate(false); err != nil {
 		return s, false, fmt.Errorf("invalid model settings: %w", err)
 	}
+	if s.AuthMode == "kimi_oauth" {
+		s.CredentialDir = AuthDir(path)
+	}
 	return s, true, nil
 }
 
@@ -206,8 +242,21 @@ func (s *Store) Load() (Settings, error) {
 // Callers clear Token before applying a patch so omission is distinguishable
 // from explicitly supplying a credential for the new endpoint.
 func (s *Settings) ReuseToken(previous Settings) error {
+	mode := func(v string) string {
+		if v == "" {
+			return "api_key"
+		}
+		return v
+	}
+	if s.AuthMode == "kimi_oauth" {
+		return nil
+	}
+	s.CredentialID, s.CredentialDir = "", ""
 	if strings.TrimSpace(s.Token) != "" {
 		return nil
+	}
+	if mode(s.AuthMode) != mode(previous.AuthMode) {
+		return errors.New("authentication mode changed; enter a key for this mode")
 	}
 	origin := func(raw string) string {
 		u, err := url.Parse(raw)
@@ -253,6 +302,9 @@ func (s *Store) Update(patch func(*Settings) error) (Settings, error) {
 	}
 	if err = current.Validate(false); err != nil {
 		return current, err
+	}
+	if current.AuthMode == "kimi_oauth" {
+		current.CredentialDir = AuthDir(s.Path)
 	}
 	if s.Path == "" {
 		return current, errors.New("model settings storage is not configured")

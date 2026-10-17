@@ -13,7 +13,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,8 +30,11 @@ const DefaultRequestTimeout = 3 * time.Minute
 
 type Client struct {
 	Protocol        string
+	AuthMode        string
 	BaseURL         string
 	Token           string
+	TokenSource     func(context.Context) (string, error)
+	Secrets         func() []string
 	Model           string
 	MaxTokens       int
 	ReasoningEffort string
@@ -107,26 +109,52 @@ func (p *Client) payload(messages []agent.Message, tools []agent.Definition, lim
 		Messages  []agent.Message    `json:"messages"`
 		Tools     []agent.Definition `json:"tools,omitempty"`
 		Stream    bool               `json:"stream"`
-		Thinking  struct {
+		Thinking  *struct {
 			Type string `json:"type"`
-		} `json:"thinking"`
-		OutputConfig struct {
+		} `json:"thinking,omitempty"`
+		OutputConfig *struct {
 			Effort string `json:"effort"`
-		} `json:"output_config"`
+		} `json:"output_config,omitempty"`
 	}{Model: model, MaxTokens: limit, System: System, Messages: agent.WireHistory(messages), Tools: tools, Stream: true}
 	// The default DeepSeek gateway accepts enabled with output_config.effort.
 	// OpenRouter's Messages schema requires a token budget for enabled; adaptive
 	// uses output_config.effort without a second, independent thinking budget.
-	payload.Thinking.Type = "enabled"
-	if endpoint, err := url.Parse(p.endpoint()); err == nil && strings.EqualFold(endpoint.Hostname(), "openrouter.ai") {
-		payload.Thinking.Type = "adaptive"
+	if p.AuthMode != "glm_coding_plan" {
+		payload.Thinking = &struct {
+			Type string `json:"type"`
+		}{"enabled"}
+		if p.AdaptiveThinking() {
+			payload.Thinking.Type = "adaptive"
+		}
+		payload.OutputConfig = &struct {
+			Effort string `json:"effort"`
+		}{effort}
 	}
-	payload.OutputConfig.Effort = effort
 	return json.Marshal(payload)
 }
 
 func (p *Client) generate(ctx context.Context, messages []agent.Message, tools []agent.Definition, maxTokens int, emit agent.Emit) (agent.Message, error) {
-	if strings.TrimSpace(p.Token) == "" {
+	if err := p.validateAuthEndpoint(); err != nil {
+		return agent.Message{}, err
+	}
+	timeout := p.Timeout
+	if timeout <= 0 {
+		timeout = DefaultRequestTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return agent.Message{}, err
+	}
+	token := p.Token
+	if p.TokenSource != nil {
+		var err error
+		token, err = p.TokenSource(ctx)
+		if err != nil {
+			return agent.Message{}, err
+		}
+	}
+	if strings.TrimSpace(token) == "" {
 		return agent.Message{}, errors.New("missing model authentication token")
 	}
 	p.sessionOnce.Do(func() {
@@ -140,12 +168,6 @@ func (p *Client) generate(ctx context.Context, messages []agent.Message, tools [
 	if p.sessionErr != nil {
 		return agent.Message{}, p.sessionErr
 	}
-	timeout := p.Timeout
-	if timeout <= 0 {
-		timeout = DefaultRequestTimeout
-	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	data, err := p.payload(messages, tools, maxTokens)
 	if err != nil {
 		return agent.Message{}, err
@@ -167,10 +189,12 @@ func (p *Client) generate(ctx context.Context, messages []agent.Message, tools [
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Accept", "text/event-stream")
-		req.Header.Set("Authorization", "Bearer "+p.Token)
+		req.Header.Set("Authorization", "Bearer "+token)
 		if p.Protocol != "openai" {
 			req.Header.Set("anthropic-version", "2023-06-01")
-			req.Header.Set("x-api-key", p.Token)
+			if p.AuthMode != "kimi_oauth" {
+				req.Header.Set("x-api-key", token)
+			}
 		}
 		req.Header.Set("User-Agent", "pwnmesh/0.1")
 		req.Header.Set("x-opencode-session", p.sessionID)

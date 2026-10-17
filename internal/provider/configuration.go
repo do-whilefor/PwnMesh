@@ -51,6 +51,7 @@ func FromEnvironment(getenv func(string) string, effort string) (*Client, error)
 		return nil, errors.New("PWNMESH_REQUEST_TIMEOUT exceeds the supported duration")
 	}
 	p := &Client{
+		AuthMode: getenv("ANTHROPIC_AUTH_MODE"),
 		Protocol: protocol,
 		BaseURL:  getenv("ANTHROPIC_BASE_URL"), Token: getenv("ANTHROPIC_AUTH_TOKEN"), Model: getenv("ANTHROPIC_MODEL"),
 		ReasoningEffort: effort, MaxTokens: output, Timeout: time.Duration(timeout) * time.Second,
@@ -60,6 +61,7 @@ func FromEnvironment(getenv func(string) string, effort string) (*Client, error)
 	}
 	tokenKey := "ANTHROPIC_AUTH_TOKEN"
 	if protocol == "openai" {
+		p.AuthMode = ""
 		p.BaseURL, p.Model, p.Token = getenv("OPENAI_BASE_URL"), getenv("OPENAI_MODEL"), getenv("OPENAI_API_KEY")
 		if p.BaseURL == "" {
 			p.BaseURL = DefaultOpenAIBaseURL
@@ -69,12 +71,20 @@ func FromEnvironment(getenv func(string) string, effort string) (*Client, error)
 		}
 		tokenKey = "OPENAI_API_KEY"
 	}
-	if strings.TrimSpace(p.Token) == "" {
+	if strings.TrimSpace(p.Token) == "" && p.AuthMode != "kimi_oauth" {
 		return nil, fmt.Errorf("%s is required", tokenKey)
 	}
 	p.Client, err = connectionClient(getenv("PWNMESH_CONNECTION_MODE"), getenv("PWNMESH_PROXY_URL"))
 	if err != nil {
 		return nil, err
+	}
+	if p.AuthMode == "kimi_oauth" {
+		if err := p.validateAuthEndpoint(); err != nil {
+			return nil, err
+		}
+		if err := p.configureKimi(getenv("ANTHROPIC_CREDENTIAL_DIR"), getenv("ANTHROPIC_CREDENTIAL_ID")); err != nil {
+			return nil, err
+		}
 	}
 	return p, nil
 }

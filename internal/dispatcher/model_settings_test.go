@@ -129,6 +129,24 @@ func TestOldLaunchHealthDoesNotRejectRotatedCredentials(t *testing.T) {
 	}
 }
 
+func TestCurrentModelSettingsRejectsStaleProtocolAndAuthentication(t *testing.T) {
+	for _, key := range []string{"PWNMESH_MODEL_PROTOCOL", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "ANTHROPIC_AUTH_MODE", "ANTHROPIC_CREDENTIAL_ID", "ANTHROPIC_CREDENTIAL_DIR"} {
+		t.Run(key, func(t *testing.T) {
+			current := config.Worker{Name: "worker", Env: map[string]string{key: "current"}}
+			s := &Scheduler{Config: config.Config{ModelSettingsPath: "configured", Workers: []config.Worker{current}}}
+			if !s.currentModelSettings(current) {
+				t.Fatal("current model settings were treated as stale")
+			}
+			for _, oldValue := range []string{"previous", ""} {
+				old := config.Worker{Name: current.Name, Env: map[string]string{key: oldValue}}
+				if s.currentModelSettings(old) {
+					t.Fatal("stale model authentication may change the current readiness gate")
+				}
+			}
+		})
+	}
+}
+
 func TestSettingsRemovalRestoresConfiguredEnvironment(t *testing.T) {
 	for _, scenario := range []string{"hot_reload", "saved_at_startup", "removed_before_first_refresh"} {
 		t.Run(scenario, func(t *testing.T) {

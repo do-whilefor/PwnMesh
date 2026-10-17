@@ -129,6 +129,33 @@ func TestEnvironmentIdentityTracksActiveModelProtocol(t *testing.T) {
 	}
 }
 
+func TestEnvironmentIdentityTracksAuthModeButNotCredentialRotation(t *testing.T) {
+	s := Scheduler{}
+	identity := func(env map[string]string) string {
+		return s.environmentID(config.Worker{Type: "go", Env: env})
+	}
+	base := map[string]string{"PWNMESH_MODEL_PROTOCOL": "anthropic", "ANTHROPIC_BASE_URL": "https://api.kimi.com/coding", "ANTHROPIC_MODEL": "kimi-for-coding"}
+	explicit := maps.Clone(base)
+	explicit["ANTHROPIC_AUTH_MODE"] = "api_key"
+	if identity(base) != identity(explicit) {
+		t.Fatal("explicit API key mode invalidated the default recovery identity")
+	}
+	for _, mode := range []string{"kimi_oauth", "glm_coding_plan"} {
+		auth := maps.Clone(base)
+		auth["ANTHROPIC_AUTH_MODE"] = mode
+		if identity(auth) == identity(base) || identity(auth) == "" {
+			t.Fatalf("authentication mode %s did not change recovery identity", mode)
+		}
+		rotated := maps.Clone(auth)
+		rotated["ANTHROPIC_AUTH_TOKEN"] = "rotated-key"
+		rotated["ANTHROPIC_CREDENTIAL_ID"] = "rotated-reference"
+		rotated["ANTHROPIC_CREDENTIAL_DIR"] = "/private/new-store"
+		if identity(auth) != identity(rotated) {
+			t.Fatal("credential rotation changed the execution contract")
+		}
+	}
+}
+
 func legacyDefaultEnvironmentID(s *Scheduler, w config.Worker) string {
 	env := map[string]string{}
 	for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL", "PWNMESH_REASONING_EFFORT", "PWNMESH_MAX_OUTPUT_TOKENS", "PWNMESH_CONTEXT_BYTES", "PWNMESH_REQUEST_TIMEOUT"} {

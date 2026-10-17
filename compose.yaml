@@ -14,8 +14,10 @@ services:
       - "127.0.0.1:${PWNMESH_PORT:-8000}:8000"
     volumes:
       - pwnmesh-data:/data
+      - pwnmesh-model-auth:/auth
     environment:
       PWNMESH_MODEL_CONFIG_PATH: /data/model-settings.json
+      PWNMESH_AUTH_DIR: /auth
       PWNMESH_IN_CONTAINER: '1'
       PWNMESH_MODEL_PROTOCOL: ${PWNMESH_MODEL_PROTOCOL:-anthropic}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
@@ -37,6 +39,7 @@ services:
     command: ["dispatch", "--config", "/etc/pwnmesh/dispatch.yaml"]
     environment:
       PWNMESH_MODEL_CONFIG_PATH: /data/model-settings.json
+      PWNMESH_AUTH_DIR: /auth
       PWNMESH_IN_CONTAINER: '1'
       PWNMESH_MODEL_PROTOCOL: ${PWNMESH_MODEL_PROTOCOL:-anthropic}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
@@ -49,6 +52,7 @@ services:
       - host.docker.internal:host-gateway
     volumes:
       - pwnmesh-data:/data:ro
+      - pwnmesh-model-auth:/auth
       - /var/run/docker.sock:/var/run/docker.sock
       - ./dispatch.yaml:/etc/pwnmesh/dispatch.yaml:ro
     depends_on:
@@ -56,5 +60,6 @@ services:
         condition: service_healthy
     restart: unless-stopped
 volumes:
+  pwnmesh-model-auth:
   pwnmesh-data:
     name: ${PWNMESH_DATA_VOLUME:-${COMPOSE_PROJECT_NAME}_pwnmesh-data}

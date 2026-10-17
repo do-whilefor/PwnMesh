@@ -67,6 +67,22 @@ and `max_completion_tokens`; Anthropic reasoning controls do not apply.
 The OpenAI Responses API is not supported. Legacy live acceptance scripts still
 use Anthropic settings; offline protocol tests cover both adapters.
 
+Kimi supports API keys or [Kimi Code subscription sign-in](https://www.kimi.com/code/docs/en/kimi-code-cli/guides/getting-started)
+through device authorization. Authorize on Kimi's website, test, then save; draft
+credentials expire after 15 minutes. Saved access tokens refresh automatically.
+GLM supports API keys or [Coding Plan keys](https://docs.bigmodel.cn/cn/coding-plan/extension/coding-tool-helper);
+its subscription mode still requires a plan key. DeepSeek is unchanged.
+Subscription modes pin the official Anthropic endpoint. GLM keeps provider thinking
+defaults; Kimi uses adaptive thinking with the selected effort. OAuth credentials
+never enter worker containers.
+
+`PWNMESH_AUTH_DIR` selects the private OAuth store (default: `model-auth` beside
+model settings). Compose shares `/auth` between server and dispatcher through a
+separate writable volume for coordinated token rotation; settings stay read-only
+in the dispatcher. Back up this volume as a secret. Logout removes the current
+local credential; it does not revoke the account's authorization on Kimi. Older
+saved references are retained so existing runs can finish.
+
 Browser acceptance is separate from ordinary checks. After building the frontend,
 install Chromium with `npm --prefix web exec -- playwright install chromium`,
 then run `npm --prefix web run test:browser`. Append `-- models_browser_test` to

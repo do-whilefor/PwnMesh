@@ -110,6 +110,43 @@ func TestModelBridgeRetainsOpenAIProtocolForGenerationAndSummary(t *testing.T) {
 	}
 }
 
+func TestPublicModelSettingsPreservesSubscriptionRequestSizing(t *testing.T) {
+	for _, tc := range []struct {
+		name, protocol, mode, base string
+	}{
+		{"Kimi OAuth", "anthropic", "kimi_oauth", "https://api.kimi.com/coding"},
+		{"GLM plan", "anthropic", "glm_coding_plan", "https://open.bigmodel.cn/api/anthropic"},
+		{"Kimi key", "anthropic", "api_key", "https://api.kimi.com/coding"},
+		{"Kimi version", "anthropic", "api_key", "https://api.kimi.com/coding/v1/"},
+		{"Kimi full endpoint", "anthropic", "api_key", "https://api.kimi.com/coding/v1/messages"},
+		{"Kimi uppercase host", "anthropic", "api_key", "https://API.KIMI.COM/coding"},
+		{"Kimi explicit port", "anthropic", "api_key", "https://api.kimi.com:443/coding"},
+		{"Kimi user info", "anthropic", "api_key", "https://user@api.kimi.com/coding"},
+		{"Kimi query", "anthropic", "api_key", "https://api.kimi.com/coding/v1/messages?fixture=1"},
+		{"Kimi fragment", "anthropic", "api_key", "https://api.kimi.com/coding/v1/messages#fixture"},
+		{"Kimi OpenAI", "openai", "api_key", "https://api.kimi.com/coding/v1"},
+		{"DeepSeek", "anthropic", "api_key", provider.DefaultBaseURL},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &provider.Client{Protocol: tc.protocol, AuthMode: tc.mode, BaseURL: tc.base, Model: "fixture-model", MaxTokens: 2048, ReasoningEffort: "high"}
+			settings := publicModelSettings(p)
+			sizer := &provider.Client{Protocol: settings.Protocol, AuthMode: settings.AuthMode, Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
+			if settings.Adaptive {
+				sizer.BaseURL = "https://openrouter.ai"
+			}
+			messages := []agent.Message{agent.Text("user", "fixture request")}
+			actual, err := p.InputBytes(messages, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			public, err := sizer.InputBytes(messages, nil)
+			if err != nil || public != actual {
+				t.Fatalf("public sizer disagrees with model request: public=%d actual=%d err=%v", public, actual, err)
+			}
+		})
+	}
+}
+
 func TestModelBridgePreservesOpenAIArgumentRepairError(t *testing.T) {
 	model := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -171,6 +208,42 @@ func TestModelBridgeRejectsSecretEchoIncludingSplitDeltas(t *testing.T) {
 			raw, _ := json.Marshal(out)
 			if out.Error == nil || strings.Contains(string(raw), secret) || len(out.Events) != 0 || len(out.Message.Content) != 0 {
 				t.Fatalf("secret echo escaped dispatcher in %s", mode)
+			}
+		})
+	}
+}
+
+func TestModelBridgeRejectsRotatedKimiCredentialEcho(t *testing.T) {
+	for _, echoed := range []string{"initial-access", "initial-refresh", "rotated-access", "rotated-refresh", "safe-response"} {
+		t.Run(echoed, func(t *testing.T) {
+			secrets := []string{"initial-access", "initial-refresh"}
+			requests := 0
+			p := &provider.Client{Protocol: "anthropic", AuthMode: "kimi_oauth", BaseURL: "https://api.kimi.com/coding", Token: "initial-access", Model: "kimi-for-coding", MaxTokens: 1024, Timeout: time.Second}
+			p.TokenSource = func(context.Context) (string, error) {
+				secrets = append(secrets, "rotated-access", "rotated-refresh")
+				return "rotated-access", nil
+			}
+			p.Secrets = func() []string { return append([]string(nil), secrets...) }
+			p.Client = &http.Client{Transport: inputTestTransport(func(req *http.Request) (*http.Response, error) {
+				requests++
+				if req.URL.String() != "https://api.kimi.com/coding/v1/messages" || req.Header.Get("Authorization") != "Bearer rotated-access" || req.Header.Get("x-api-key") != "" {
+					t.Error("bridge changed subscription endpoint or refreshed authentication")
+				}
+				body := fmt.Sprintf(`{"role":"assistant","content":[{"type":"text","text":%q}],"stop_reason":"end_turn","usage":{"input_tokens":12}}`, echoed)
+				return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body)), Request: req}, nil
+			})}
+			bridge := newModelBridge(context.Background(), p, protocol.Job{}, nil, nil)
+			defer bridge.close()
+			out := bridge.generate(context.Background(), modelrpc.Request{RequestID: strings.Repeat("a", 32), Messages: []agent.Message{agent.Text("user", "fixture")}})
+			if requests != 1 || out.Message.Usage == nil || out.Message.Usage.Input() != 12 {
+				t.Fatal("bridge lost subscription execution or response usage")
+			}
+			if echoed == "safe-response" {
+				if out.Error != nil || out.Message.Text() != echoed {
+					t.Fatal("bridge rejected a response without credentials")
+				}
+			} else if out.Error == nil || out.Error.Kind != agent.ErrorProvider || len(out.Message.Content) != 0 {
+				t.Fatal("subscription credential escaped into the worker response")
 			}
 		})
 	}

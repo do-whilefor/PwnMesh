@@ -41,6 +41,7 @@ func modelForJob(j Job, o Options, sessionID string) (*bridgeModel, error) {
 		return nil, errors.New("invalid dispatcher model settings")
 	}
 	if (settings.Protocol != "" && settings.Protocol != "anthropic" && settings.Protocol != "openai") ||
+		(settings.AuthMode != "" && settings.AuthMode != "api_key" && settings.AuthMode != "kimi_oauth" && settings.AuthMode != "glm_coding_plan") ||
 		settings.MaxTokens <= 0 || settings.Timeout <= 0 ||
 		(settings.ReasoningEffort != "low" && settings.ReasoningEffort != "high" && settings.ReasoningEffort != "max") ||
 		(j.Budget.ReasoningEffort != "" && j.Budget.ReasoningEffort != settings.ReasoningEffort) {
@@ -51,7 +52,7 @@ func modelForJob(j Job, o Options, sessionID string) (*bridgeModel, error) {
 	}
 	// This credential-free value is used only for exact request sizing. Model
 	// generation always crosses the dispatcher bridge, including child Agents.
-	sizer := &provider.Client{Protocol: settings.Protocol, Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
+	sizer := &provider.Client{AuthMode: settings.AuthMode, Protocol: settings.Protocol, Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
 	if settings.Adaptive {
 		sizer.BaseURL = "https://openrouter.ai"
 	}

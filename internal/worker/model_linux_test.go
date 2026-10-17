@@ -138,6 +138,39 @@ func TestModelForJobRejectsMissingAndUnsafeSettings(t *testing.T) {
 	}
 }
 
+func TestModelForJobSizesSubscriptionRequestsWithoutCredentials(t *testing.T) {
+	for mode, base := range map[string]string{"kimi_oauth": "https://api.kimi.com/coding", "glm_coding_plan": "https://open.bigmodel.cn/api/anthropic"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			settings := modelSettingsFixture(t, dir)
+			settings.Protocol, settings.AuthMode, settings.Adaptive = "anthropic", mode, mode == "kimi_oauth"
+			raw, _ := json.Marshal(settings)
+			if err := os.WriteFile(filepath.Join(dir, "model-settings.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			p, err := modelForJob(Job{RunID: "run"}, Options{RunDir: dir, Output: io.Discard}, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			history := []agent.Message{agent.Text("user", "fixture")}
+			expected := &provider.Client{Protocol: "anthropic", AuthMode: mode, BaseURL: base, Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
+			want, wantErr := expected.InputBytes(history, nil)
+			got, gotErr := p.InputBytes(history, nil)
+			if p.sizer.AuthMode != mode || p.sizer.Token != "" || p.sizer.TokenSource != nil || wantErr != nil || gotErr != nil || got != want {
+				t.Fatalf("subscription sizing mismatch: got=%d want=%d errors=%v/%v", got, want, gotErr, wantErr)
+			}
+			settings.AuthMode = "unknown"
+			raw, _ = json.Marshal(settings)
+			if err := os.WriteFile(filepath.Join(dir, "model-settings.json"), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := modelForJob(Job{RunID: "run"}, Options{RunDir: dir, Output: io.Discard}, ""); err == nil {
+				t.Fatal("accepted unknown authentication mode")
+			}
+		})
+	}
+}
+
 func TestWorkerCLIRequiresCredentialFreeDispatcherBeforeSession(t *testing.T) {
 	for _, mode := range []string{"no bridge", "auth token", "API key", "endpoint", "lowercase prefix", "mixed prefix", "OpenAI API key", "OpenAI endpoint", "OpenAI model", "OpenAI lowercase prefix", "protocol"} {
 		t.Run(mode, func(t *testing.T) {

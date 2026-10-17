@@ -83,10 +83,11 @@ func TestFromEnvironmentSelectsOpenAIWithoutAnthropicFallback(t *testing.T) {
 	env := map[string]string{
 		"PWNMESH_MODEL_PROTOCOL": "openai", "OPENAI_API_KEY": "openai-fixture", "OPENAI_MODEL": "openai-model",
 		"ANTHROPIC_AUTH_TOKEN": "unused-fixture", "ANTHROPIC_MODEL": "unused-model", "ANTHROPIC_BASE_URL": "https://unused.invalid",
+		"ANTHROPIC_AUTH_MODE": "kimi_oauth", "ANTHROPIC_CREDENTIAL_ID": "unused-reference", "ANTHROPIC_CREDENTIAL_DIR": "/unused-store",
 	}
 	getenv := func(key string) string { return env[key] }
 	p, err := FromEnvironment(getenv, "")
-	if err != nil || p.Protocol != "openai" || p.BaseURL != DefaultOpenAIBaseURL || p.Token != env["OPENAI_API_KEY"] || p.Model != "openai-model" {
+	if err != nil || p.Protocol != "openai" || p.AuthMode != "" || p.TokenSource != nil || p.BaseURL != DefaultOpenAIBaseURL || p.Token != env["OPENAI_API_KEY"] || p.Model != "openai-model" {
 		t.Fatal("OpenAI did not use isolated protocol settings", err)
 	}
 	env["OPENAI_BASE_URL"] = "https://gateway.invalid/v1"

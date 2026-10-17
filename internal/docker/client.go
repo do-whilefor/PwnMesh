@@ -539,11 +539,12 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (prot
 	if p.Client != nil {
 		defer p.Client.CloseIdleConnections()
 	}
-	env, err := modelWorkerEnv(w, p.Token)
+	secrets := p.CredentialValues()
+	env, err := modelWorkerEnv(w, secrets...)
 	if err != nil {
 		return protocol.Result{}, err
 	}
-	name, err := c.ensure(ctx, j.Graph.Project.ID, p.Token)
+	name, err := c.ensure(ctx, j.Graph.Project.ID, secrets...)
 	if err != nil {
 		return protocol.Result{}, err
 	}
@@ -561,14 +562,14 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (prot
 	if err != nil {
 		return protocol.Result{}, err
 	}
-	if jsonContainsModelCredential(raw, p.Token) {
+	if jsonContainsModelCredential(raw, secrets...) {
 		return protocol.Result{}, errors.New("model credential must not be included in a worker job")
 	}
 	if err = c.archive(ctx, name, target, raw); err != nil {
 		return protocol.Result{}, err
 	}
 	settings, err := json.Marshal(publicModelSettings(p))
-	if err != nil || jsonContainsModelCredential(settings, p.Token) {
+	if err != nil || jsonContainsModelCredential(settings, secrets...) {
 		return protocol.Result{}, errors.New("invalid public model settings")
 	}
 	if err = c.archive(ctx, name, path.Join(path.Dir(target), "model-settings.json"), settings); err != nil {

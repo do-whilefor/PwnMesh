@@ -182,6 +182,54 @@ test('model protocol selection persists and requires a new probe after switching
   } finally {await browser.close();await server.close();}
 });
 
+test('Kimi subscription sign-in saves only after a probe and GLM plan still requires its dedicated key', {
+  timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE to check subscription authentication',
+}, async () => {
+  const server = await staticServer(), browser = await launch(), calls: SettingsCall[] = [];
+  let state: PublicSettings = {has_token:false,base_url:'https://api.kimi.com/coding',model:'kimi-for-coding',connection_mode:'direct',proxy_url:'',reasoning_effort:'max'};
+  try {
+    const page = await browser.newPage();
+    await page.route('**/projects',route=>route.fulfill({contentType:'application/json',body:'[]'}));
+    await page.route('**/model-settings**',route=>{
+      const request = route.request(), path = new URL(request.url()).pathname, body = request.postDataJSON() as SettingsPayload | null;
+      calls.push({path,body});
+      let result: unknown = state;
+      if (path === '/model-settings/kimi/login') result = {login_id:'browser-login',user_code:'KIMI-1234',verification_uri:'https://www.kimi.com/code',expires_in:60,interval:1};
+      else if (path === '/model-settings/kimi/login/browser-login') result = {status:'authorized'};
+      else if (path.endsWith('/test')) result = {ok:true};
+      else if (request.method() === 'PUT') {assert.ok(body);const {token,login_id,...saved}=body;state={...saved,has_token:true};result=state;}
+      return route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
+    });
+    await page.goto(server.url+'/#llm',{waitUntil:'networkidle'});
+    await page.locator('#llm-auth-mode').selectOption('kimi_oauth');
+    assert.equal(await page.locator('#llm-key').count(),0);
+    assert.equal(await page.locator('#llm-protocol').isDisabled(),true);
+    assert.equal(await page.locator('#llm-url').isDisabled(),true);
+    await page.locator('.llm-login-start').click();
+    await page.locator('.llm-login-code').waitFor();
+    assert.equal(await page.locator('.llm-login-code').textContent(),'KIMI-1234');
+    assert.equal(await page.locator('.llm-login-link').getAttribute('href'),'https://www.kimi.com/code');
+    await page.waitForFunction(()=>document.querySelector<HTMLButtonElement>('.llm-test')?.disabled === false);
+    assert.equal(await page.locator('.llm-save').isDisabled(),true);
+    await page.locator('.llm-test').click();await page.locator('.llm-save').click();
+    await page.waitForFunction(()=>document.querySelector('.llm-summary-status')?.textContent==='已保存');
+    assert.equal(lastSettingsBody(calls).auth_mode,'kimi_oauth');
+    assert.equal(lastSettingsBody(calls).login_id,'browser-login');
+    assert.equal(lastSettingsBody(calls).token,'');
+    await page.reload({waitUntil:'networkidle'});
+    assert.equal(await page.locator('#llm-auth-mode').inputValue(),'kimi_oauth');
+    await page.locator('.llm-test').click();
+    await page.waitForFunction(()=>document.querySelector<HTMLButtonElement>('.llm-save')?.disabled === false);
+    assert.equal(lastSettingsBody(calls).login_id,undefined);
+    await page.locator('[data-llm-provider="glm"]').click();
+    await page.locator('#llm-auth-mode').selectOption('glm_coding_plan');
+    assert.equal(await page.locator('.llm-login-start').count(),0);
+    assert.equal(await page.locator('#llm-key').isVisible(),true);
+    assert.equal(await page.locator('#llm-effort').count(),0);
+    assert.equal(await page.getByText('GLM Coding Plan 订阅与专用 API Key 说明').getAttribute('href'),'https://docs.bigmodel.cn/cn/coding-plan/extension/coding-tool-helper');
+  } finally {await browser.close();await server.close();}
+});
+
 test('model browser blocks cross-origin saved credentials and clears provider drafts', {
   timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE to check model credential binding in a browser',
 }, async () => {

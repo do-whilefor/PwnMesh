@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -42,23 +41,21 @@ func configuredModel(w config.Worker, j protocol.Job) (*provider.Client, error) 
 }
 
 func publicModelSettings(p *provider.Client) modelrpc.Settings {
-	u, _ := url.Parse(p.BaseURL)
-	adaptive := p.Protocol != "openai" && u != nil && strings.EqualFold(u.Hostname(), "openrouter.ai")
 	model := p.Model
 	if model == "" {
 		model = provider.DefaultModel
 	}
-	return modelrpc.Settings{Protocol: p.Protocol, Model: model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Timeout: p.Timeout, Adaptive: adaptive}
+	return modelrpc.Settings{Protocol: p.Protocol, AuthMode: p.AuthMode, Model: model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Timeout: p.Timeout, Adaptive: p.AdaptiveThinking()}
 }
 
-func modelWorkerEnv(w config.Worker, token string) ([]string, error) {
+func modelWorkerEnv(w config.Worker, secrets ...string) ([]string, error) {
 	values, err := w.ToolEnvironment()
 	if err != nil {
 		return nil, err
 	}
 	env := []string{"PWNMESH_MODEL_BRIDGE=dispatcher-v1"}
 	for key, value := range values {
-		if containsModelCredential(key+"="+value, token) {
+		if containsModelCredential(key+"="+value, secrets...) {
 			return nil, errors.New("model credential is duplicated in the tool environment")
 		}
 		env = append(env, key+"="+value)
@@ -245,7 +242,7 @@ func safeModelError(err error) *modelrpc.Error {
 func (b *modelBridge) generate(ctx context.Context, r modelrpc.Request) modelrpc.Response {
 	// A fresh provider keeps simultaneous child sessions independent. Their
 	// identity comes from this run, and all upstream policy remains fixed.
-	p := &provider.Client{Protocol: b.model.Protocol, BaseURL: b.model.BaseURL, Token: b.model.Token, Model: b.model.Model, MaxTokens: b.model.MaxTokens, ReasoningEffort: b.model.ReasoningEffort, Timeout: b.model.Timeout, Client: b.model.Client, SessionID: r.SessionID}
+	p := &provider.Client{AuthMode: b.model.AuthMode, TokenSource: b.model.TokenSource, Secrets: b.model.Secrets, Protocol: b.model.Protocol, BaseURL: b.model.BaseURL, Token: b.model.Token, Model: b.model.Model, MaxTokens: b.model.MaxTokens, ReasoningEffort: b.model.ReasoningEffort, Timeout: b.model.Timeout, Client: b.model.Client, SessionID: r.SessionID}
 	out := modelrpc.Response{RequestID: r.RequestID}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -275,7 +272,7 @@ func (b *modelBridge) generate(ctx context.Context, r modelrpc.Request) modelrpc
 	for _, e := range out.Events {
 		text.WriteString(e.Text)
 	}
-	if tooLarge || marshalErr != nil || len(raw) > modelrpc.MaxResponseBytes || jsonContainsModelCredential(raw, p.Token) || containsModelCredential(text.String(), p.Token) {
+	if tooLarge || marshalErr != nil || len(raw) > modelrpc.MaxResponseBytes || jsonContainsModelCredential(raw, p.CredentialValues()...) || containsModelCredential(text.String(), p.CredentialValues()...) {
 		// Numeric usage is independent of rejected content and remains an observation
 		// even when the response cannot cross the credential/size boundary.
 		return modelrpc.Response{RequestID: r.RequestID, Message: agent.Message{Usage: out.Message.Usage}, Error: &modelrpc.Error{Kind: agent.ErrorProvider}}

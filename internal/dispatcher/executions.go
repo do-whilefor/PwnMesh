@@ -45,6 +45,9 @@ func (s *Scheduler) environmentID(w config.Worker) string {
 	}
 	protocol := w.Env["PWNMESH_MODEL_PROTOCOL"]
 	if protocol == "" || protocol == "anthropic" {
+		if mode := w.Env["ANTHROPIC_AUTH_MODE"]; mode != "" && mode != "api_key" {
+			env["ANTHROPIC_AUTH_MODE"] = mode
+		}
 		// Keep existing Anthropic identities stable when its default becomes explicit.
 		for _, key := range []string{"ANTHROPIC_BASE_URL", "ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_FABLE_MODEL"} {
 			env[key] = w.Env[key]
