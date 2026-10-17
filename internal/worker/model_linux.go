@@ -147,11 +147,13 @@ func (p *bridgeModel) generate(parent context.Context, messages []agent.Message,
 			}
 			if parentErr := parent.Err(); parentErr != nil {
 				// A late success cannot restart the loop. Retain only an actual
-				// classified failure from this request for recovery policy.
+				// classified failure from this request for recovery policy, plus
+				// reported usage. Content and events cannot extend execution.
+				observed := agent.Message{Usage: response.Message.Usage}
 				if parentErr == context.DeadlineExceeded && response.Error != nil && (response.Error.Kind != "" || response.Error.HTTPStatus != 0) {
-					return agent.Message{}, errors.Join(parentErr, response.Error.Err())
+					return observed, errors.Join(parentErr, response.Error.Err())
 				}
-				return agent.Message{}, parentErr
+				return observed, parentErr
 			}
 			if emit != nil {
 				for _, event := range response.Events {

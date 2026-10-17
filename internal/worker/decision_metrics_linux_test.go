@@ -397,7 +397,7 @@ func TestExecutePersistsRequestObservationsWithoutDoubleCountingUsage(t *testing
 		if turns == 1 {
 			m = progressCall(1)
 		}
-		m.Usage = &agent.Usage{InputTokens: 19, OutputTokens: 7, CacheReadTokens: 3}
+		m.Usage = &agent.Usage{InputTokens: 19, OutputTokens: 7, CacheReadTokens: 3, CacheWriteTokens: 17}
 		return m, nil
 	})
 	result, err := runTestWorker(context.Background(), j, Options{RunDir: runDir, Provider: provider, Tools: []agent.Tool{progressTool(&toolCalls, false)}})
@@ -432,7 +432,7 @@ func TestExecutePersistsRequestObservationsWithoutDoubleCountingUsage(t *testing
 			}
 		}
 	}
-	wantUsage := agent.Usage{InputTokens: 38, OutputTokens: 14, CacheReadTokens: 6}
+	wantUsage := agent.Usage{InputTokens: 38, OutputTokens: 14, CacheReadTokens: 6, CacheWriteTokens: 34}
 	if requestStarts != 2 || requestEnds != 2 || messages != 2 || metrics.UsageCalls != 2 || metrics.Usage != wantUsage || metrics.UsageStatus != "reported_only" {
 		t.Fatalf("Execute usage duplicated or missing: starts=%d ends=%d messages=%d metrics=%+v", requestStarts, requestEnds, messages, metrics)
 	}

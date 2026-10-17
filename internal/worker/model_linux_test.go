@@ -186,7 +186,7 @@ func TestModelBridgeLargeRequestSummaryAndPartialTypedErrors(t *testing.T) {
 				calls++
 				lastRequest = event.Request
 				message := agent.Text("assistant", "retained partial output")
-				message.Usage = &agent.Usage{InputTokens: 123, OutputTokens: 7}
+				message.Usage = &agent.Usage{InputTokens: 123, OutputTokens: 7, CacheWriteTokens: 37}
 				message.StopReason = "end_turn"
 				err := modelResponseFixture(dir, modelrpc.Response{RequestID: event.Request.RequestID, Message: message, Events: []agent.Event{{Type: "text_delta", Text: "retained partial output"}}, Error: tc.failure})
 				return len(raw), err
@@ -206,7 +206,7 @@ func TestModelBridgeLargeRequestSummaryAndPartialTypedErrors(t *testing.T) {
 			if calls != 1 || emitted != 1 || lastRequest.SessionID != "run:graph:child" || lastRequest.SummaryTokens != 8192 || len(lastRequest.Tools) != 0 || !lastRequest.Deadline.Equal(deadline) {
 				t.Fatal("bridge lost the session, summary allowance, events or phase deadline")
 			}
-			if message.Text() != "retained partial output" || message.Usage == nil || message.Usage.InputTokens != 123 {
+			if message.Text() != "retained partial output" || message.Usage == nil || message.Usage.InputTokens != 123 || message.Usage.CacheWriteTokens != 37 {
 				t.Fatal("bridge discarded partial message or usage")
 			}
 			if tc.failure == nil {
@@ -301,6 +301,7 @@ func TestModelBridgePhaseDeadlineRetainsOnlyCurrentTypedFailure(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 			defer cancel()
 			requests, cancels, emitted := 0, 0, 0
+			usage := agent.Usage{InputTokens: 11, OutputTokens: 7, CacheReadTokens: 19, CacheWriteTokens: 37}
 			writer := modelBridgeWriter(func(raw []byte) (int, error) {
 				var event modelrpc.RequestEvent
 				if err := json.Unmarshal(raw, &event); err != nil {
@@ -315,6 +316,7 @@ func TestModelBridgePhaseDeadlineRetainsOnlyCurrentTypedFailure(t *testing.T) {
 				// makes the late-response ordering independent of timer races.
 				<-ctx.Done()
 				message := agent.Message{Role: "assistant", Content: []agent.Block{{Type: "tool_use", ID: "late", Name: "must_not_run", Input: json.RawMessage(`{}`)}}, StopReason: "tool_use"}
+				message.Usage = &usage
 				err := modelResponseFixture(dir, modelrpc.Response{RequestID: event.Request.RequestID, Message: message, Events: []agent.Event{{Type: "tool_delta", Text: "late tool"}}, Error: tc.failure})
 				return len(raw), err
 			})
@@ -325,6 +327,9 @@ func TestModelBridgePhaseDeadlineRetainsOnlyCurrentTypedFailure(t *testing.T) {
 			message, err := p.Generate(ctx, nil, nil, func(agent.Event) { emitted++ })
 			if !errors.Is(err, context.DeadlineExceeded) || len(message.Content) != 0 || emitted != 0 || requests != 1 || cancels != 0 {
 				t.Fatalf("late response extended execution or raced dispatcher cancellation: requests=%d cancels=%d events=%d error=%v", requests, cancels, emitted, err)
+			}
+			if message.Usage == nil || *message.Usage != usage {
+				t.Fatalf("late identity-checked response lost reported usage: %+v", message.Usage)
 			}
 			kind, retryable := classifyFailure(err, ctx)
 			if kind != "budget_exhausted" || retryable || infrastructureFailureCause(err) != tc.cause {

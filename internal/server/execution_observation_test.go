@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/protocol"
 )
@@ -16,7 +17,8 @@ import (
 func TestDecisionObservationIsIndependentOfImmutableBusinessResult(t *testing.T) {
 	f := newDecisionBatchFixture(t)
 	path := f.base() + "/executions/" + f.run + "/observation"
-	body := map[string]any{"metrics": protocol.DecisionMetrics{Version: 1, ModelCalls: 2, Committed: true, Outcome: "actions_committed"}}
+	usage := agent.Usage{InputTokens: 22, OutputTokens: 14, CacheReadTokens: 38, CacheWriteTokens: 74}
+	body := map[string]any{"metrics": protocol.DecisionMetrics{Version: 1, ModelCalls: 2, Usage: usage, Committed: true, Outcome: "actions_committed"}}
 	f.request("POST", path, body, true, http.StatusConflict, nil)
 	f.decision("commit", f.batch(batchAction("step", "next", `{"action":"add","from":["origin"],"description":"A fixture check"}`)), http.StatusOK)
 	before := f.state()
@@ -34,7 +36,7 @@ func TestDecisionObservationIsIndependentOfImmutableBusinessResult(t *testing.T)
 		t.Fatal("invalid stored result")
 	}
 	var metrics protocol.DecisionMetrics
-	if json.Unmarshal(newResult["metrics"], &metrics) != nil || metrics.ModelCalls != 2 {
+	if json.Unmarshal(newResult["metrics"], &metrics) != nil || metrics.ModelCalls != 2 || metrics.Usage != usage {
 		t.Fatal("observation was not persisted")
 	}
 	delete(newResult, "metrics")
