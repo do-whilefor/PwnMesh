@@ -3,6 +3,8 @@ package board
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,6 +12,54 @@ import (
 )
 
 type transactionQueries = sqlstore.Queries
+
+func TestStateActionAndRegistrationRollbackReleaseFailure(t *testing.T) {
+	for _, operation := range []string{"action", "registration"} {
+		t.Run(operation, func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			var execution Execution
+			if operation == "registration" {
+				execution = dependencyRun(f, "release", f.step("release fixture", ""))
+			}
+			before := f.state()
+			failure := errors.New("outer savepoint release failed")
+			f.do(func(tx *Tx) error {
+				original := tx.transactionQueries
+				injected := &outerReleaseFailureQueries{transactionQueries: original, failure: failure}
+				tx.transactionQueries = injected
+				var err error
+				if operation == "action" {
+					var result StateActionResult
+					result, err = tx.StateAction("p", f.planner, StateAction{Op: "goal", IdempotencyKey: "release", Payload: json.RawMessage(`{"action":"add","condition":"Uncommitted goal"}`)})
+					if !reflect.DeepEqual(result, StateActionResult{}) {
+						t.Error("failed action returned an uncommitted result")
+					}
+				} else {
+					err = tx.RegisterExecution(execution)
+				}
+				tx.transactionQueries = original
+				if !errors.Is(err, failure) || !injected.fired {
+					t.Fatalf("operation did not reach release failure: %v", err)
+				}
+				return tx.UpdateSettings(Settings{IntentTimeout: 25, ReasonTimeout: 35})
+			})
+			if !reflect.DeepEqual(f.state(), before) {
+				t.Error("handled release failure committed partial state")
+			}
+			f.do(func(tx *Tx) error {
+				if operation == "registration" {
+					_, err := tx.Execution("p", execution.ID)
+					requireAPIStatus(t, err, 404)
+				}
+				settings, err := tx.Settings()
+				if err == nil && (settings.IntentTimeout != 25 || settings.ReasonTimeout != 35) {
+					t.Error("operation rollback discarded caller writes")
+				}
+				return err
+			})
+		})
+	}
+}
 
 type failureProjectionQueries struct {
 	transactionQueries

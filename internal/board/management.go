@@ -86,15 +86,6 @@ func (t *Tx) CreateProject(input ProjectInput) (out Graph, err error) {
 
 // Management operations may be composed inside one Store.Do callback. A caller
 // handling one rejection must not commit its counters, leases or partial input.
-func (t *Tx) finishManagement(resultErr *error) {
-	if *resultErr != nil {
-		_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_management")
-		*resultErr = errors.Join(*resultErr, rollbackErr)
-	}
-	_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_management")
-	*resultErr = errors.Join(*resultErr, releaseErr)
-}
-
 func (t *Tx) DeleteProject(project string) error {
 	if _, err := t.Load(project); err != nil {
 		return err

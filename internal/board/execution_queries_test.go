@@ -40,16 +40,13 @@ func TestOperationsUseStorageBoundary(t *testing.T) {
 			}
 			switch method.Sel.Name {
 			case "Exec", "ExecContext", "Query", "QueryContext", "QueryRow", "QueryRowContext", "Prepare", "PrepareContext":
-				// Board still owns the local transaction boundary around the
-				// complete business operation, including archive and settlement.
+				// Decision preview owns an always-rollback scope. Ordinary
+				// business writes use the private store's Atomic operation.
 				if method.Sel.Name == "Exec" && len(call.Args) == 1 {
 					if literal, ok := call.Args[0].(*ast.BasicLit); ok && literal.Kind == token.STRING {
 						statement, _ := strconv.Unquote(literal.Value)
 						switch statement {
-						case "SAVEPOINT pwnmesh_management", "ROLLBACK TO pwnmesh_management", "RELEASE pwnmesh_management",
-							"SAVEPOINT pwnmesh_state_action", "ROLLBACK TO pwnmesh_state_action", "RELEASE pwnmesh_state_action",
-							"SAVEPOINT pwnmesh_execution_registration", "ROLLBACK TO pwnmesh_execution_registration", "RELEASE pwnmesh_execution_registration",
-							"SAVEPOINT pwnmesh_decision_batch", "ROLLBACK TO pwnmesh_decision_batch", "RELEASE pwnmesh_decision_batch":
+						case "SAVEPOINT pwnmesh_decision_batch", "ROLLBACK TO pwnmesh_decision_batch", "RELEASE pwnmesh_decision_batch":
 							return true
 						}
 					}

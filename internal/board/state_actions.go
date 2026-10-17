@@ -28,31 +28,27 @@ func (t *Tx) StateAction(project string, fence ExecutionFence, action StateActio
 	}
 	// The record, its asset anchors and the receipt form one write. Preserve
 	// this boundary even when an outer caller handles a failed action itself.
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_state_action"); err != nil {
-		return out, err
-	}
-	defer func() {
+	err = sqlstore.Atomic(t.transactionQueries, func() error {
+		if action.Op == "curate" {
+			if receipt, found, replayErr := t.replayCuration(project, fence, action); found || replayErr != nil {
+				out = receipt
+				return replayErr
+			}
+		}
+		s, err := t.State(project)
 		if err != nil {
-			_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_state_action")
-			err = errors.Join(err, rollbackErr)
+			return err
 		}
-		_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_state_action")
-		err = errors.Join(err, releaseErr)
-	}()
-	if action.Op == "curate" {
-		if receipt, found, replayErr := t.replayCuration(project, fence, action); found || replayErr != nil {
-			return receipt, replayErr
+		out, err = t.stateAction(&s, fence, action, directStateAction)
+		if err == nil && action.Op == "curate" {
+			err = t.CompleteCurationExecution(project, fence.Run)
 		}
-	}
-	s, err := t.State(project)
+		return err
+	})
 	if err != nil {
 		return StateActionResult{}, err
 	}
-	out, err = t.stateAction(&s, fence, action, directStateAction)
-	if err == nil && action.Op == "curate" {
-		err = t.CompleteCurationExecution(project, fence.Run)
-	}
-	return out, err
+	return out, nil
 }
 
 // A batch owns this snapshot for one transaction and replaces it only after a

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -59,18 +60,27 @@ func TestDecisionBatchReusesPersistedTransitionsThroughCompletion(t *testing.T) 
 	}
 }
 
-type decisionReleaseFailureQueries struct {
+type outerReleaseFailureQueries struct {
 	transactionQueries
 	failure error
+	depth   int
+	fired   bool
 }
 
-func (q *decisionReleaseFailureQueries) Exec(query string, args ...any) (sql.Result, error) {
-	if query == "RELEASE pwnmesh_decision_batch" && q.failure != nil {
-		err := q.failure
-		q.failure = nil
-		return nil, err
+func (q *outerReleaseFailureQueries) Exec(query string, args ...any) (sql.Result, error) {
+	if strings.HasPrefix(query, "RELEASE ") && q.depth == 1 && !q.fired {
+		q.fired = true
+		return nil, q.failure
 	}
-	return q.transactionQueries.Exec(query, args...)
+	result, err := q.transactionQueries.Exec(query, args...)
+	if err == nil {
+		if strings.HasPrefix(query, "SAVEPOINT ") {
+			q.depth++
+		} else if strings.HasPrefix(query, "RELEASE ") {
+			q.depth--
+		}
+	}
+	return result, err
 }
 
 func TestDecisionBatchReleaseFailurePreservesCallerAndRetry(t *testing.T) {
@@ -85,7 +95,7 @@ func TestDecisionBatchReleaseFailurePreservesCallerAndRetry(t *testing.T) {
 			var rejected DecisionReceipt
 			if err := f.store.Do(context.Background(), func(tx *Tx) error {
 				original := tx.transactionQueries
-				tx.transactionQueries = &decisionReleaseFailureQueries{original, failure}
+				tx.transactionQueries = &outerReleaseFailureQueries{transactionQueries: original, failure: failure}
 				var err error
 				if commit {
 					rejected, err = tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, f.batch(2))
