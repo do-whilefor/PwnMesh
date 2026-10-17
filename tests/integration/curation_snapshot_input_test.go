@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/worker"
 	"strings"
 	"testing"
@@ -93,6 +94,73 @@ func TestDiagnosticCollectionRejectsCorruptSnapshotChunks(t *testing.T) {
 }
 
 func curationSnapshotKey(id string) string { return "/server/input-snapshots/" + id + ".json" }
+
+func freezeCurationFixture(t *testing.T, files map[string][]byte, job worker.Job, input board.State) worker.Job {
+	t.Helper()
+	raw, err := json.Marshal(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.InputSnapshot = &board.InputSnapshot{Version: 1, ID: fmt.Sprintf("%x", sha256.Sum256(raw)), ProjectID: input.Graph.Project.ID, Generation: input.Graph.Project.Generation, Revision: input.Revision, DecisionRevision: input.DecisionRevision, StateVersion: board.DecisionStateVersion(input), FactCount: len(input.Graph.Facts), HintCount: len(input.Graph.Hints), OpenCount: input.Graph.OpenCount(), StepCount: len(input.Steps)}
+	job.InputView, err = board.CurationContextView(input, board.DefaultContextViewBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.Graph, job.State = board.Graph{Project: job.Graph.Project}, nil
+	files[curationSnapshotKey(job.InputSnapshot.ID)] = raw
+	return job
+}
+
+func curationFixtureInput(t *testing.T, files map[string][]byte, job worker.Job) board.State {
+	t.Helper()
+	input := retainedCurationInput(job, files)
+	if input == nil {
+		t.Fatal("fixture has no valid immutable curator input")
+	}
+	return *input
+}
+
+func TestRetainedCurationInputRejectsUnsupportedJobs(t *testing.T) {
+	for _, snapshot := range []bool{false, true} {
+		modes := []string{"valid", "retired_protocol", "retired_result_contract", "missing_run", "missing_bridge", "wrong_role", "intent", "decision", "mixed_graph"}
+		if snapshot {
+			modes = append(modes, "missing_view")
+		}
+		for _, mode := range modes {
+			t.Run(fmt.Sprintf("snapshot_%t/%s", snapshot, mode), func(t *testing.T) {
+				state := board.State{Graph: board.Graph{Project: board.Project{ID: "curation", OrchestrationVersion: 1}}, Revision: 3}
+				job := worker.Job{Kind: "curate", RunID: "curator", GraphRPC: true, ResultContractVersion: 2, Graph: state.Graph, State: &state}
+				files := map[string][]byte{}
+				if snapshot {
+					job = freezeCurationFixture(t, files, job, state)
+				}
+				switch mode {
+				case "retired_protocol":
+					job.Graph.Project.OrchestrationVersion = 0
+				case "retired_result_contract":
+					job.ResultContractVersion = 0
+				case "missing_run":
+					job.RunID = ""
+				case "missing_bridge":
+					job.GraphRPC = false
+				case "wrong_role":
+					job.Kind = "explore"
+				case "intent":
+					job.Intent = &board.Intent{ID: "step"}
+				case "decision":
+					job.Decision = &board.DecisionContext{Version: 2}
+				case "mixed_graph":
+					job.Graph.Facts = []board.Fact{{ID: "extra", Description: "Not in the frozen input"}}
+				case "missing_view":
+					job.InputView = nil
+				}
+				if got := retainedCurationInput(job, files); (got != nil) != (mode == "valid") {
+					t.Fatalf("unsupported retained input accepted: mode=%s snapshot=%t input=%+v", mode, snapshot, got)
+				}
+			})
+		}
+	}
+}
 
 // The immutable inputs live on the server, outside the Docker workspace.
 // Retain and verify their original bytes alongside the collected evidence.
@@ -192,21 +260,25 @@ func diagnosticSnapshotBytes(tx *fixtureSQLTx, project, id string) ([]byte, erro
 }
 
 // Never hydrate a contradictory job or substitute the final live state for an
-// omitted historical snapshot. Legacy inline jobs retain their old contract.
+// omitted historical snapshot. Supported inline recovery inputs still undergo
+// the same protocol validation as snapshot jobs.
 func retainedCurationInput(job worker.Job, files map[string][]byte) *board.State {
+	if job.Kind != "curate" || job.RunID == "" || job.ResultContractVersion != 2 || protocol.ValidateCuratorInput(job) != nil {
+		return nil
+	}
 	if job.InputSnapshot == nil {
 		return job.State
 	}
 	ref := job.InputSnapshot
-	if job.State != nil || len(job.Graph.Facts)+len(job.Graph.Intents)+len(job.Graph.Hints) != 0 || ref.Version != 1 || ref.ProjectID != job.Graph.Project.ID || ref.Generation != job.Graph.Project.Generation {
-		return nil
-	}
 	raw := files[curationSnapshotKey(ref.ID)]
 	if fmt.Sprintf("%x", sha256.Sum256(raw)) != ref.ID {
 		return nil
 	}
 	var state board.State
 	if json.Unmarshal(raw, &state) != nil || state.Graph.Project.ID != ref.ProjectID || state.Graph.Project.Generation != ref.Generation || state.Graph.Project.OrchestrationVersion != job.Graph.Project.OrchestrationVersion || state.Revision != ref.Revision || board.DecisionStateVersion(state) != ref.StateVersion {
+		return nil
+	}
+	if state.DecisionRevision != ref.DecisionRevision || len(state.Graph.Facts) != ref.FactCount || len(state.Graph.Hints) != ref.HintCount || state.Graph.OpenCount() != ref.OpenCount || len(state.Steps) != ref.StepCount {
 		return nil
 	}
 	return &state
@@ -221,19 +293,16 @@ func TestCurationDeliveryChecksRetainedSnapshotIdentityAndBytes(t *testing.T) {
 		if err := json.Unmarshal(files[path], &job); err != nil {
 			t.Fatal(err)
 		}
-		raw, _ := json.Marshal(job.State)
-		job.InputSnapshot = &board.InputSnapshot{Version: 1, ID: fmt.Sprintf("%x", sha256.Sum256(raw)), ProjectID: job.Graph.Project.ID, Generation: job.Graph.Project.Generation, Revision: job.State.Revision, StateVersion: board.DecisionStateVersion(*job.State)}
-		job.InputView, _ = board.CurationContextView(*job.State, board.DefaultContextViewBytes)
-		job.Graph, job.State = board.Graph{Project: job.Graph.Project}, nil
-		files[curationSnapshotKey(job.InputSnapshot.ID)] = raw
-		files[path], _ = json.Marshal(job)
+		if job.InputSnapshot == nil || job.State != nil {
+			t.Fatal("current curation fixture must use a frozen snapshot")
+		}
 		return state, files, path
 	}
 	state, files, _ := fixture(t)
 	if failures := validateCurationSupportDelivery(state, files); len(failures) != 0 {
 		t.Fatal(failures)
 	}
-	for _, mode := range []string{"missing", "changed_bytes", "mixed_inline", "wrong_generation", "wrong_version", "wrong_revision"} {
+	for _, mode := range []string{"missing", "changed_bytes", "mixed_inline", "wrong_generation", "wrong_version", "wrong_revision", "wrong_decision_revision", "wrong_fact_count", "wrong_hint_count", "wrong_open_count", "wrong_step_count"} {
 		t.Run(mode, func(t *testing.T) {
 			state, files, path := fixture(t)
 			var job worker.Job
@@ -252,6 +321,16 @@ func TestCurationDeliveryChecksRetainedSnapshotIdentityAndBytes(t *testing.T) {
 				job.InputSnapshot.StateVersion = "invalid"
 			case "wrong_revision":
 				job.InputSnapshot.Revision++
+			case "wrong_decision_revision":
+				job.InputSnapshot.DecisionRevision++
+			case "wrong_fact_count":
+				job.InputSnapshot.FactCount++
+			case "wrong_hint_count":
+				job.InputSnapshot.HintCount++
+			case "wrong_open_count":
+				job.InputSnapshot.OpenCount++
+			case "wrong_step_count":
+				job.InputSnapshot.StepCount++
 			}
 			files[path], _ = json.Marshal(job)
 			if failures := validateCurationSupportDelivery(state, files); len(failures) == 0 {

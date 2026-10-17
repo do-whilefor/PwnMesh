@@ -3,9 +3,7 @@
 package integration
 
 import (
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"slices"
 	"testing"
@@ -209,11 +207,6 @@ func TestScenarioReviewCurationInputRejectsCorruptOrIncompleteSnapshots(t *testi
 		if err := json.Unmarshal(files[path], &job); err != nil {
 			t.Fatal(err)
 		}
-		raw, _ := json.Marshal(job.State)
-		job.InputSnapshot = &board.InputSnapshot{Version: 1, ID: fmt.Sprintf("%x", sha256.Sum256(raw)), ProjectID: job.Graph.Project.ID, Generation: job.Graph.Project.Generation, Revision: job.State.Revision, StateVersion: board.DecisionStateVersion(*job.State)}
-		job.Graph, job.State = board.Graph{Project: job.Graph.Project}, nil
-		files[curationSnapshotKey(job.InputSnapshot.ID)] = raw
-		files[path], _ = json.Marshal(job)
 		return state, files, job
 	}
 	state, files, _ := fixture(t)

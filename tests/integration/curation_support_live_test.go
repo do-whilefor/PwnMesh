@@ -120,9 +120,9 @@ func curationSupportDeliveryFixture(t *testing.T) (board.State, map[string][]byt
 	if err := json.Unmarshal(files[path], &job); err != nil {
 		t.Fatal(err)
 	}
-	job.State.Candidates = state.Candidates
-	job.RunID, job.Graph = "curator-run", state.Graph
-	job.State.Graph = state.Graph
+	input := curationFixtureInput(t, files, job)
+	input.Candidates = state.Candidates
+	job = freezeCurationFixture(t, files, job, input)
 	files[path], _ = json.Marshal(job)
 	return state, files
 }
@@ -137,13 +137,17 @@ func TestCurationSupportDeliveryValidatesRetainedProof(t *testing.T) {
 		path := "/workspace/.pwnmesh/runs/curator-run/job.json"
 		var early worker.Job
 		_ = json.Unmarshal(files[path], &early)
-		early.State.Candidates = early.State.Candidates[:1]
+		input := curationFixtureInput(t, files, early)
+		input.Candidates = input.Candidates[:1]
+		early = freezeCurationFixture(t, files, early, input)
 		files[path], _ = json.Marshal(early)
 		state.Candidates[1].Revision = 4
 		state.Curation.ThroughRevision = 4
 		state.Curation.RunID = "controlled@later-curator"
 		state.Findings[0].CuratedRevision = 4
-		files["/workspace/.pwnmesh/runs/later-curator/job.json"], _ = json.Marshal(worker.Job{RunID: "later-curator", Kind: "curate", Graph: state.Graph, State: &board.State{Graph: state.Graph, Revision: 4, Candidates: state.Candidates}})
+		input.Revision, input.Candidates = 4, state.Candidates
+		later := freezeCurationFixture(t, files, worker.Job{RunID: "later-curator", Kind: "curate", GraphRPC: true, ResultContractVersion: 2, Graph: input.Graph}, input)
+		files["/workspace/.pwnmesh/runs/later-curator/job.json"], _ = json.Marshal(later)
 		if failures := validateCurationSupportDelivery(state, files); len(failures) != 0 {
 			t.Fatal("valid later curation rejected:", failures)
 		}
@@ -173,7 +177,9 @@ func TestCurationSupportDeliveryValidatesRetainedProof(t *testing.T) {
 			path := "/workspace/.pwnmesh/runs/curator-run/job.json"
 			var job worker.Job
 			_ = json.Unmarshal(f[path], &job)
-			job.State.Candidates = nil
+			input := curationFixtureInput(t, f, job)
+			input.Candidates = nil
+			job = freezeCurationFixture(t, f, job, input)
 			f[path], _ = json.Marshal(job)
 		}},
 	} {
@@ -187,19 +193,19 @@ func TestCurationSupportDeliveryValidatesRetainedProof(t *testing.T) {
 	}
 	for _, test := range []struct {
 		name   string
-		change func(*worker.Job)
+		change func(*worker.Job, *board.State)
 	}{
-		{"wrong_curator_run", func(job *worker.Job) { job.RunID = "other-run" }},
-		{"wrong_job_project", func(job *worker.Job) { job.Graph.Project.ID = "other-project" }},
-		{"wrong_input_project", func(job *worker.Job) { job.State.Graph.Project.ID = "other-project" }},
-		{"wrong_job_generation", func(job *worker.Job) { job.Graph.Project.Generation++ }},
-		{"wrong_input_generation", func(job *worker.Job) { job.State.Graph.Project.Generation++ }},
-		{"wrong_job_mode", func(job *worker.Job) { job.Graph.Project.OrchestrationVersion = 0 }},
-		{"wrong_input_mode", func(job *worker.Job) { job.State.Graph.Project.OrchestrationVersion = 0 }},
-		{"dropped_input_candidate", func(job *worker.Job) {
-			extra := job.State.Candidates[0]
+		{"wrong_curator_run", func(job *worker.Job, _ *board.State) { job.RunID = "other-run" }},
+		{"wrong_job_project", func(job *worker.Job, _ *board.State) { job.Graph.Project.ID = "other-project" }},
+		{"wrong_input_project", func(_ *worker.Job, input *board.State) { input.Graph.Project.ID = "other-project" }},
+		{"wrong_job_generation", func(job *worker.Job, _ *board.State) { job.Graph.Project.Generation++ }},
+		{"wrong_input_generation", func(_ *worker.Job, input *board.State) { input.Graph.Project.Generation++ }},
+		{"wrong_job_mode", func(job *worker.Job, _ *board.State) { job.Graph.Project.OrchestrationVersion = 0 }},
+		{"wrong_input_mode", func(_ *worker.Job, input *board.State) { input.Graph.Project.OrchestrationVersion = 0 }},
+		{"dropped_input_candidate", func(_ *worker.Job, input *board.State) {
+			extra := input.Candidates[0]
 			extra.ID = "third-historical-candidate"
-			job.State.Candidates = append(job.State.Candidates, extra)
+			input.Candidates = append(input.Candidates, extra)
 		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -209,7 +215,9 @@ func TestCurationSupportDeliveryValidatesRetainedProof(t *testing.T) {
 			if err := json.Unmarshal(files[path], &job); err != nil {
 				t.Fatal(err)
 			}
-			test.change(&job)
+			input := curationFixtureInput(t, files, job)
+			test.change(&job, &input)
+			job = freezeCurationFixture(t, files, job, input)
 			files[path], _ = json.Marshal(job)
 			if failures := validateCurationSupportDelivery(state, files); len(failures) == 0 {
 				t.Fatal("unbound curator input was accepted")

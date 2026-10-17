@@ -561,7 +561,10 @@ func curationRelationsDeliveryFixture(t *testing.T) (board.State, map[string][]b
 		files[base+"events.jsonl"] = append(files[base+"events.jsonl"], append(raw, '\n')...)
 	}
 	old.Status = "valid"
-	files["/workspace/.pwnmesh/runs/curator-run/job.json"], _ = json.Marshal(worker.Job{Kind: "curate", State: &board.State{Revision: 3, FactRecords: []board.FactRecord{old, corrected}}})
+	input := board.State{Graph: state.Graph, Revision: 3, FactRecords: []board.FactRecord{old, corrected}}
+	input.Graph.Project.Status = "active"
+	job := freezeCurationFixture(t, files, worker.Job{RunID: "curator-run", Kind: "curate", GraphRPC: true, ResultContractVersion: 2, Graph: input.Graph}, input)
+	files["/workspace/.pwnmesh/runs/curator-run/job.json"], _ = json.Marshal(job)
 	return state, files
 }
 

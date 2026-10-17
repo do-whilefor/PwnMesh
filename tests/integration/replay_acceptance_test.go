@@ -196,7 +196,7 @@ PY`
 			if err := os.MkdirAll(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
-			j := worker.Job{RunID: run, Kind: "explore", Workspace: workspace, Graph: board.Graph{Project: board.Project{ID: "timing", OrchestrationVersion: 1}}}
+			j := worker.Job{RunID: run, Kind: "explore", Workspace: workspace, GraphRPC: true, ResultContractVersion: 2, Intent: &board.Intent{ID: "timing-step"}, Graph: board.Graph{Project: board.Project{ID: "timing", OrchestrationVersion: 1}}}
 			o := worker.Options{RunDir: dir}
 			if err := worker.ConfigureRuntimeTools(j, &o); err != nil {
 				t.Fatal(err)

@@ -71,6 +71,9 @@ select one suite. Live service/model cases require their explicit opt-ins.
   for settings. Keep comments that explain constraints rather than narrate code.
 - Keep focused regressions beside their owning package, with required fixtures.
   Remove obsolete diagnostics and temporary test artifacts after validation.
+- Active execution fixtures use preparation, leases and current decision/curation
+  receipts. Reserve direct SQL or graph seeding for persistence, recovery and
+  malformed-state tests; inline Jobs belong to explicit recovery coverage.
 - For schema changes, check initialization, current-version reopen, rejection
   without mutation and atomic rollback. Preserve wire fixtures and the boundaries
   in [architecture](architecture.md), [formats](formats.md) and [recovery](recovery.md).
