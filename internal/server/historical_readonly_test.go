@@ -61,14 +61,18 @@ func TestUnsupportedProjectRequestsPreserveStoredState(t *testing.T) {
 			return err
 		}
 		job, _ := json.Marshal(map[string]any{"run_id": f.run, "kind": "reason", "graph": graph, "workspace": "/workspace"})
-		original = board.Execution{ProjectID: f.project, ID: f.run, Namespace: "protocol-test", Backend: "planner", Kind: "reason", Lease: f.lease, Job: job, RetryKey: "reason:historical"}
-		if err := tx.RegisterExecution(original); err != nil {
-			return err
-		}
-		original, err = tx.Execution(f.project, f.run)
-		return err
+		original = board.Execution{ProjectID: f.project, ID: f.run, Namespace: "protocol-test", Backend: "planner", Kind: "reason", Lease: f.lease, Job: job, RetryKey: "reason:historical", Status: "prepared", CreatedAt: tx.Now, UpdatedAt: tx.Now}
+		return nil
 	})
 	if err != nil {
+		t.Fatal(err)
+	}
+	// Retained records are imported storage, not newly authorized executions.
+	if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+		_, err := tx.Exec(`INSERT INTO pwnmesh_executions(project_id,id,namespace,backend,kind,intent,lease,job,retry_key,status,created_at,updated_at,fact_count,metadata_version)
+			VALUES(?,?,?,?,?,'',?,?,?,?,?,?,2,1)`, original.ProjectID, original.ID, original.Namespace, original.Backend, original.Kind, original.Lease, []byte(original.Job), original.RetryKey, original.Status, original.CreatedAt, original.UpdatedAt)
+		return err
+	}); err != nil {
 		t.Fatal(err)
 	}
 	storedState := func() board.State {
