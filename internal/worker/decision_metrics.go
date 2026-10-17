@@ -67,10 +67,7 @@ func (m *decisionMetrics) observe(event agent.Event) {
 		}
 		if usage := event.Request.Usage; usage != nil {
 			m.UsageCalls++
-			m.Usage.InputTokens += usage.InputTokens
-			m.Usage.OutputTokens += usage.OutputTokens
-			m.Usage.CacheReadTokens += usage.CacheReadTokens
-			m.Usage.CacheWriteTokens += usage.CacheWriteTokens
+			addUsage(&m.Usage, *usage)
 		}
 	case "tool_start":
 		if event.ToolName == "read_graph" || event.ToolName == "read_evidence" {
@@ -91,13 +88,24 @@ func (m *decisionMetrics) observe(event agent.Event) {
 	}
 	// Reported usage can exclude provider-internal HTTP retries even when every
 	// logical call supplied usage. Never describe these totals as a full bill.
-	if m.UsageCalls == 0 {
-		m.UsageStatus = "unknown"
-	} else if m.UsageCalls < m.ModelCalls {
-		m.UsageStatus = "partial"
-	} else {
-		m.UsageStatus = "reported_only"
+	m.UsageStatus = reportedUsageStatus(m.ModelCalls, m.UsageCalls)
+}
+
+func addUsage(total *agent.Usage, usage agent.Usage) {
+	total.InputTokens += usage.InputTokens
+	total.OutputTokens += usage.OutputTokens
+	total.CacheReadTokens += usage.CacheReadTokens
+	total.CacheWriteTokens += usage.CacheWriteTokens
+}
+
+func reportedUsageStatus(calls, reported int) string {
+	if reported == 0 {
+		return "unknown"
 	}
+	if reported < calls {
+		return "partial"
+	}
+	return "reported_only"
 }
 
 func (m *decisionMetrics) observeDecisionOperation(operation decisionOperation) {

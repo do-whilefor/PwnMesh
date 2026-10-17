@@ -99,6 +99,7 @@ func TestGraphResultWriterStreamsEventsAndFiltersSplitResults(t *testing.T) {
 
 func TestGraphWrapperVerificationFailurePublishesOnlyFailedResult(t *testing.T) {
 	j, dir := graphWrapperJob(t), t.TempDir()
+	metrics := &DecisionMetrics{Version: 1, UsageScope: "run_and_children", Usage: agent.Usage{CacheWriteTokens: 37}}
 	target := filepath.Join(j.Workspace, "report.txt")
 	if err := os.WriteFile(target, []byte("already good"), 0600); err != nil {
 		t.Fatal(err)
@@ -108,12 +109,15 @@ func TestGraphWrapperVerificationFailurePublishesOnlyFailedResult(t *testing.T) 
 	sessionRun := func(ctx context.Context, job Job, o Options) (Result, error) {
 		// The session emits success, but it lacks the matching repair receipt.
 		// The graph verifier must reject it before any result reaches Docker.
-		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput})
+		return graphSessionFixture(ctx, job, o, Result{Type: "result", Status: "success", Text: completedOutput, Metrics: metrics})
 	}
 	r, err := runWorkerAcceptance(context.Background(), j, Options{RunDir: dir, Output: &output}, sessionRun)
 	results := graphOutputResults(t, output.Bytes())
 	if err != nil || r.Status != "failed" || r.FailureKind != "graph_checkpoint" || !strings.Contains(r.Error, "repair target changed") || len(results) != 1 || results[0].Status != "failed" {
 		t.Fatalf("unaccepted success leaked: %+v %v output=%s", r, err, &output)
+	}
+	if r.Metrics == nil || r.Metrics.Usage != metrics.Usage || results[0].Metrics == nil || results[0].Metrics.Usage != metrics.Usage {
+		t.Fatal("acceptance failure discarded observed model usage")
 	}
 }
 

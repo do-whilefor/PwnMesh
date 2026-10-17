@@ -6,7 +6,11 @@ import "pwnmesh/internal/agent"
 // changes were applied. The execution receipt and graph events remain the
 // authority for committed business actions.
 type DecisionMetrics struct {
-	Version              int         `json:"version"`
+	Version int `json:"version"`
+	// Empty scope in retained v1 records means the original parent session.
+	// run_and_children includes each original child session once, never reuse.
+	UsageScope           string      `json:"usage_scope,omitempty"`
+	ChildUsage           *ChildUsage `json:"child_usage,omitempty"`
 	ModelCalls           int         `json:"model_calls"`
 	SummaryCalls         int         `json:"summary_calls"`
 	CompletedCalls       int         `json:"completed_calls"`
@@ -44,4 +48,14 @@ type DecisionMetrics struct {
 	ViewMode             string      `json:"view_mode,omitempty"`
 	BaselineViewBytes    int         `json:"baseline_view_bytes,omitempty"`
 	SelectedViewBytes    int         `json:"selected_view_bytes,omitempty"`
+}
+
+// ChildUsage is the subtotal already included in a run's model/usage totals.
+// Missing or uncommitted child observations make those totals partial.
+type ChildUsage struct {
+	Sessions   int         `json:"sessions"`
+	Incomplete bool        `json:"incomplete,omitempty"`
+	ModelCalls int         `json:"model_calls"`
+	UsageCalls int         `json:"usage_calls"`
+	Usage      agent.Usage `json:"usage"`
 }

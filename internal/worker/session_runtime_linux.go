@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/process"
-	"pwnmesh/internal/protocol"
 	eventlog "pwnmesh/internal/worker/internal/journal"
 	"pwnmesh/internal/worker/internal/phase"
 	"time"
@@ -169,13 +168,15 @@ func (runtime *sessionRuntime) finish(ctx context.Context, r Result) (Result, er
 		state.GraphVersion, state.DecisionConflict = runtime.roles.graph.Version, runtime.roles.graph.Conflict
 	}
 	r.StateVersion = state.GraphVersion
-	if protocol.ControlJob(j) {
-		metrics := runtime.metrics.finish(j, r, state.StartedAt, o.Now())
-		if runtime.roles != nil && runtime.roles.curation != nil && runtime.roles.curation.committed {
-			metrics.Committed, metrics.Outcome = true, "curation_committed"
-		}
-		r.Metrics = &metrics
+	metrics := runtime.metrics.finish(j, r, state.StartedAt, o.Now())
+	metrics.UsageScope = "run"
+	if j.Kind == "explore" {
+		metrics = withChildUsage(ctx, j, o.RunDir, metrics)
 	}
+	if runtime.roles != nil && runtime.roles.curation != nil && runtime.roles.curation.committed {
+		metrics.Committed, metrics.Outcome = true, "curation_committed"
+	}
+	r.Metrics = &metrics
 	if err := journal.Append(r); err != nil {
 		return r, err
 	}

@@ -218,7 +218,7 @@ func runWorkerAcceptance(ctx context.Context, j Job, o Options, sessionRun func(
 			}
 			return Result{}, err
 		}
-		result = Result{Type: "result", Status: "failed", FailureKind: "graph_checkpoint", Error: err.Error()}
+		result = Result{Type: "result", Status: "failed", FailureKind: "graph_checkpoint", Error: err.Error(), Metrics: result.Metrics}
 		return publish(result)
 	}
 	if err := json.Unmarshal(accepted.Value, &result); err != nil {

@@ -436,4 +436,20 @@ func TestExecutePersistsRequestObservationsWithoutDoubleCountingUsage(t *testing
 	if requestStarts != 2 || requestEnds != 2 || messages != 2 || metrics.UsageCalls != 2 || metrics.Usage != wantUsage || metrics.UsageStatus != "reported_only" {
 		t.Fatalf("Execute usage duplicated or missing: starts=%d ends=%d messages=%d metrics=%+v", requestStarts, requestEnds, messages, metrics)
 	}
+	if result.Metrics == nil || result.Metrics.Usage != wantUsage || result.Metrics.UsageScope != "run_and_children" {
+		t.Fatalf("Explore result omitted reported usage: %+v", result.Metrics)
+	}
+	if err := func() error {
+		restored, err := restoreSession(j, Options{RunDir: runDir})
+		if err != nil {
+			return err
+		}
+		defer restored.journal.Close()
+		if restored.metrics.Usage != wantUsage {
+			t.Fatalf("journal replay changed usage: %+v", restored.metrics.Usage)
+		}
+		return nil
+	}(); err != nil {
+		t.Fatal(err)
+	}
 }

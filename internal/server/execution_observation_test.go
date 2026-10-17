@@ -79,3 +79,31 @@ func TestDecisionChangesReturnOnlyBoundedGraphIndex(t *testing.T) {
 		t.Fatalf("invalid revision interval: %v", err)
 	}
 }
+
+func TestExploreReportedUsageSurvivesStorageAndDuplicateDelivery(t *testing.T) {
+	f := newExecutionProtocolFixture(t)
+	f.register("explore")
+	metrics := &protocol.DecisionMetrics{
+		Version: 1, ModelCalls: 3, UsageCalls: 3, UsageScope: "run_and_children", UsageStatus: "reported_only",
+		Usage:      agent.Usage{InputTokens: 33, OutputTokens: 21, CacheReadTokens: 57, CacheWriteTokens: 111},
+		ChildUsage: &protocol.ChildUsage{Sessions: 2, ModelCalls: 2, UsageCalls: 2, Usage: agent.Usage{InputTokens: 22, OutputTokens: 14, CacheReadTokens: 38, CacheWriteTokens: 74}},
+	}
+	result := protocol.Result{Type: "result", Status: "failed", FailureKind: "execution", Error: "fixture failure", Metrics: metrics}
+	path := f.base() + "/executions/" + f.run
+	for i := 0; i < 2; i++ {
+		want := http.StatusOK
+		if i > 0 {
+			want = http.StatusConflict
+		} // Terminal authority rejects delivery retries.
+		f.request("POST", path+"/status", map[string]any{"status": "failed", "result": result}, true, want, nil)
+	}
+	var execution board.Execution
+	f.request("GET", path+"?namespace=protocol-test", nil, false, http.StatusOK, &execution)
+	var saved protocol.Result
+	if err := json.Unmarshal(execution.Result, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(saved.Metrics, metrics) {
+		t.Fatalf("usage scope/subtotal changed on storage: %+v", saved.Metrics)
+	}
+}
