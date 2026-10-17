@@ -158,26 +158,55 @@ func TestKimiOAuthDoesNotFollowRedirects(t *testing.T) {
 	}
 }
 
-func TestGLMCodingPlanUsesProviderThinkingDefaults(t *testing.T) {
-	messages := []agent.Message{agent.Text("user", "fixture")}
-	p := &Client{AuthMode: "glm_coding_plan", Protocol: "anthropic", BaseURL: "https://open.bigmodel.cn/api/anthropic", Token: "plan-key", Model: "glm-fixture", MaxTokens: 512}
-	sizer := &Client{AuthMode: p.AuthMode, Protocol: p.Protocol, Model: p.Model, MaxTokens: p.MaxTokens}
-	wantBytes, err := sizer.InputBytes(messages, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		raw, _ := io.ReadAll(req.Body)
-		if req.URL.String() != "https://open.bigmodel.cn/api/anthropic/v1/messages" || req.Header.Get("Authorization") != "Bearer plan-key" || req.Header.Get("x-api-key") != "plan-key" {
-			t.Error("GLM plan lost its fixed endpoint or API key authentication")
-		}
-		if strings.Contains(string(raw), `"thinking"`) || strings.Contains(string(raw), `"output_config"`) || len(raw) != wantBytes {
-			t.Error("GLM plan sent unverified effort controls or differs from public sizing")
-		}
-		return testResponse(req, 200, "application/json", subscriptionResponse), nil
-	})}
-	if _, err := p.Generate(context.Background(), messages, nil, nil); err != nil {
-		t.Fatal(err)
+func TestGLMCodingPlanTransmitsEffortForTurnsAndSummaries(t *testing.T) {
+	for _, effort := range []string{"", "low", "high", "max"} {
+		t.Run("effort="+effort, func(t *testing.T) {
+			wantEffort := effort
+			if wantEffort == "" {
+				wantEffort = "max"
+			}
+			messages := []agent.Message{agent.Text("user", "fixture")}
+			p := &Client{AuthMode: "glm_coding_plan", Protocol: "anthropic", BaseURL: "https://open.bigmodel.cn/api/anthropic", Token: "plan-key", Model: "glm-5.3", MaxTokens: 512, ReasoningEffort: effort}
+			sizer := &Client{AuthMode: p.AuthMode, Protocol: p.Protocol, Model: p.Model, MaxTokens: p.MaxTokens, ReasoningEffort: effort}
+			wantBytes, err := sizer.InputBytes(messages, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			requests := 0
+			p.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				requests++
+				raw, _ := io.ReadAll(req.Body)
+				if req.URL.String() != "https://open.bigmodel.cn/api/anthropic/v1/messages" || req.Header.Get("Authorization") != "Bearer plan-key" || req.Header.Get("x-api-key") != "plan-key" {
+					t.Error("GLM plan lost its fixed endpoint or API key authentication")
+				}
+				var payload struct {
+					Model        string            `json:"model"`
+					MaxTokens    int               `json:"max_tokens"`
+					Thinking     map[string]string `json:"thinking"`
+					OutputConfig map[string]string `json:"output_config"`
+				}
+				limit := 512
+				if requests == 2 {
+					limit = 128
+				}
+				if json.Unmarshal(raw, &payload) != nil || payload.Model != "glm-5.3" || payload.MaxTokens != limit || len(payload.Thinking) != 1 || payload.Thinking["type"] != "enabled" || len(payload.OutputConfig) != 1 || payload.OutputConfig["effort"] != wantEffort {
+					t.Errorf("GLM request %d lost selected effort or output allowance: %s", requests, raw)
+				}
+				if requests == 1 && len(raw) != wantBytes {
+					t.Errorf("public request sizing=%d actual=%d", wantBytes, len(raw))
+				}
+				return testResponse(req, 200, "application/json", subscriptionResponse), nil
+			})}
+			if _, err := p.Generate(context.Background(), messages, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := p.GenerateSummary(context.Background(), messages, 128, nil); err != nil {
+				t.Fatal(err)
+			}
+			if requests != 2 || p.MaxTokens != 512 {
+				t.Fatal("GLM summary changed the regular output allowance")
+			}
+		})
 	}
 }
 

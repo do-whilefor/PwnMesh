@@ -109,27 +109,23 @@ func (p *Client) payload(messages []agent.Message, tools []agent.Definition, lim
 		Messages  []agent.Message    `json:"messages"`
 		Tools     []agent.Definition `json:"tools,omitempty"`
 		Stream    bool               `json:"stream"`
-		Thinking  *struct {
+		Thinking  struct {
 			Type string `json:"type"`
-		} `json:"thinking,omitempty"`
-		OutputConfig *struct {
+		} `json:"thinking"`
+		OutputConfig struct {
 			Effort string `json:"effort"`
-		} `json:"output_config,omitempty"`
+		} `json:"output_config"`
 	}{Model: model, MaxTokens: limit, System: System, Messages: agent.WireHistory(messages), Tools: tools, Stream: true}
 	// The default DeepSeek gateway accepts enabled with output_config.effort.
+	// GLM Coding Plan supports the same field for low/high/max:
+	// https://docs.bigmodel.cn/cn/coding-plan/latest-model
 	// OpenRouter's Messages schema requires a token budget for enabled; adaptive
 	// uses output_config.effort without a second, independent thinking budget.
-	if p.AuthMode != "glm_coding_plan" {
-		payload.Thinking = &struct {
-			Type string `json:"type"`
-		}{"enabled"}
-		if p.AdaptiveThinking() {
-			payload.Thinking.Type = "adaptive"
-		}
-		payload.OutputConfig = &struct {
-			Effort string `json:"effort"`
-		}{effort}
+	payload.Thinking.Type = "enabled"
+	if p.AdaptiveThinking() {
+		payload.Thinking.Type = "adaptive"
 	}
+	payload.OutputConfig.Effort = effort
 	return json.Marshal(payload)
 }
 

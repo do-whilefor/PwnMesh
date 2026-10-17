@@ -161,14 +161,19 @@ test('model protocol selection persists and requires a new probe after switching
     await page.goto(server.url+'/#llm',{waitUntil:'networkidle'});
     assert.equal(await page.locator('#llm-protocol').inputValue(),'anthropic');
     assert.deepEqual(await page.locator('#llm-protocol option').allTextContents(),['Anthropic Messages API','OpenAI Chat Completions']);
+    await page.locator('#llm-effort').selectOption('high');
     await page.locator('#llm-protocol').selectOption('openai');
     assert.equal(await page.locator('#llm-url').inputValue(),state.base_url);
     assert.equal(await page.locator('#llm-model').inputValue(),state.model);
-    assert.equal(await page.locator('#llm-effort').count(),0);
+    assert.equal(await page.locator('#llm-effort').isVisible(),true);
+    assert.equal(await page.locator('#llm-effort').isEnabled(),true);
+    assert.equal(await page.locator('#llm-effort').inputValue(),'high');
+    assert.equal(await page.locator('.llm-summary-effort').textContent(),'中 / 均衡推理');
     assert.equal(await page.locator('.llm-summary-protocol').textContent(),'OpenAI');
     await page.locator('.llm-test').click();
     await page.waitForFunction(()=>document.querySelector<HTMLButtonElement>('.llm-save')?.disabled === false);
     assert.equal(lastSettingsBody(calls).protocol,'openai');
+    assert.equal(lastSettingsBody(calls).reasoning_effort,'high');
     await page.locator('#llm-protocol').selectOption('anthropic');
     assert.equal(await page.locator('.llm-save').isDisabled(),true);
     await page.locator('#llm-protocol').selectOption('openai');
@@ -201,7 +206,9 @@ test('Kimi subscription sign-in saves only after a probe and GLM plan still requ
       return route.fulfill({contentType:'application/json',body:JSON.stringify(result)});
     });
     await page.goto(server.url+'/#llm',{waitUntil:'networkidle'});
+    await page.locator('#llm-effort').selectOption('high');
     await page.locator('#llm-auth-mode').selectOption('kimi_oauth');
+    assert.equal(await page.locator('#llm-effort').inputValue(),'high');
     assert.equal(await page.locator('#llm-key').count(),0);
     assert.equal(await page.locator('#llm-protocol').isDisabled(),true);
     assert.equal(await page.locator('#llm-url').isDisabled(),true);
@@ -214,6 +221,7 @@ test('Kimi subscription sign-in saves only after a probe and GLM plan still requ
     await page.locator('.llm-test').click();await page.locator('.llm-save').click();
     await page.waitForFunction(()=>document.querySelector('.llm-summary-status')?.textContent==='已保存');
     assert.equal(lastSettingsBody(calls).auth_mode,'kimi_oauth');
+    assert.equal(lastSettingsBody(calls).reasoning_effort,'high');
     assert.equal(lastSettingsBody(calls).login_id,'browser-login');
     assert.equal(lastSettingsBody(calls).token,'');
     await page.reload({waitUntil:'networkidle'});
@@ -225,7 +233,8 @@ test('Kimi subscription sign-in saves only after a probe and GLM plan still requ
     await page.locator('#llm-auth-mode').selectOption('glm_coding_plan');
     assert.equal(await page.locator('.llm-login-start').count(),0);
     assert.equal(await page.locator('#llm-key').isVisible(),true);
-    assert.equal(await page.locator('#llm-effort').count(),0);
+    assert.equal(await page.locator('#llm-effort').isVisible(),true);
+    assert.equal(await page.locator('#llm-effort').isEnabled(),true);
     assert.equal(await page.getByText('GLM Coding Plan 订阅与专用 API Key 说明').getAttribute('href'),'https://docs.bigmodel.cn/cn/coding-plan/extension/coding-tool-helper');
   } finally {await browser.close();await server.close();}
 });

@@ -52,6 +52,7 @@ func TestOpenAIRequestsUseConfiguredEndpointAndOwnWireFormat(t *testing.T) {
 					Messages      []openAIMessage `json:"messages"`
 					Tools         []openAITool    `json:"tools"`
 					MaxTokens     int             `json:"max_completion_tokens"`
+					Effort        string          `json:"reasoning_effort"`
 					Stream        bool            `json:"stream"`
 					StreamOptions struct {
 						IncludeUsage bool `json:"include_usage"`
@@ -60,12 +61,12 @@ func TestOpenAIRequestsUseConfiguredEndpointAndOwnWireFormat(t *testing.T) {
 				if err := json.Unmarshal(raw, &payload); err != nil {
 					t.Fatal(err)
 				}
-				for _, forbidden := range []string{`"thinking"`, `"output_config"`, `"reasoning_effort"`, `"max_tokens"`, `"sequence"`, `"stop_reason"`, `"usage"`, `private reasoning`} {
+				for _, forbidden := range []string{`"thinking"`, `"output_config"`, `"max_tokens"`, `"sequence"`, `"stop_reason"`, `"usage"`, `private reasoning`} {
 					if strings.Contains(string(raw), forbidden) {
 						t.Fatalf("unexpected request field %s", forbidden)
 					}
 				}
-				if payload.Model != "test-model" || !payload.Stream || !payload.StreamOptions.IncludeUsage || len(payload.Messages) != 5 || payload.Messages[0].Role != "system" || *payload.Messages[0].Content != System {
+				if payload.Model != "test-model" || payload.Effort != "high" || !payload.Stream || !payload.StreamOptions.IncludeUsage || len(payload.Messages) != 5 || payload.Messages[0].Role != "system" || *payload.Messages[0].Content != System {
 					t.Fatalf("incorrect OpenAI payload: %+v", payload)
 				}
 				call, result := payload.Messages[2], payload.Messages[3]
@@ -98,6 +99,86 @@ func TestOpenAIRequestsUseConfiguredEndpointAndOwnWireFormat(t *testing.T) {
 				t.Fatal("request changed caller state")
 			}
 		})
+	}
+}
+
+func TestOpenAIReasoningEffortAppliesToTurnsSummariesAndRequestSizing(t *testing.T) {
+	for _, tc := range []struct{ selected, wire string }{{"", ""}, {"low", "low"}, {"high", "medium"}, {"max", "high"}} {
+		t.Run(tc.selected, func(t *testing.T) {
+			messages := []agent.Message{agent.Text("user", "Inspect the fixture")}
+			tools := []agent.Definition{{Name: "inspect", Schema: json.RawMessage(`{"type":"object"}`)}}
+			var requestSizes []int
+			p := openAIProvider(func(req *http.Request) (*http.Response, error) {
+				raw, err := io.ReadAll(req.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				requestSizes = append(requestSizes, len(raw))
+				var payload struct {
+					Effort    *string      `json:"reasoning_effort"`
+					MaxTokens int          `json:"max_completion_tokens"`
+					Tools     []openAITool `json:"tools"`
+				}
+				if err := json.Unmarshal(raw, &payload); err != nil {
+					t.Fatal(err)
+				}
+				if tc.wire == "" {
+					if payload.Effort != nil {
+						t.Fatal("unset effort changed the model default")
+					}
+				} else if payload.Effort == nil || *payload.Effort != tc.wire {
+					t.Fatalf("selected effort %q was not sent as %q", tc.selected, tc.wire)
+				}
+				if len(requestSizes) == 1 {
+					if payload.MaxTokens != 2048 || len(payload.Tools) != 1 {
+						t.Fatal("normal output budget or tools changed")
+					}
+				} else if payload.MaxTokens != 512 || len(payload.Tools) != 0 {
+					t.Fatal("summary inherited normal output budget or tools")
+				}
+				return testResponse(req, http.StatusOK, "application/json", openAITextResponse), nil
+			})
+			p.ReasoningEffort, p.MaxTokens = tc.selected, 2048
+			if _, err := p.Generate(context.Background(), messages, tools, nil); err != nil {
+				t.Fatal(err)
+			}
+			if size, err := p.InputBytes(messages, tools); err != nil || size != requestSizes[0] {
+				t.Fatalf("normal request size differs from wire: size=%d wire=%d err=%v", size, requestSizes[0], err)
+			}
+			if _, err := p.GenerateSummary(context.Background(), messages, 512, nil); err != nil {
+				t.Fatal(err)
+			}
+			summarySizer := &Client{Protocol: "openai", Model: p.Model, ReasoningEffort: tc.selected, MaxTokens: 512}
+			if size, err := summarySizer.InputBytes(messages, nil); err != nil || size != requestSizes[1] {
+				t.Fatalf("summary request size differs from wire: size=%d wire=%d err=%v", size, requestSizes[1], err)
+			}
+			if len(requestSizes) != 2 || p.ReasoningEffort != tc.selected || p.MaxTokens != 2048 {
+				t.Fatal("request changed configured reasoning or output allowance")
+			}
+		})
+	}
+}
+
+func TestOpenAIUnsupportedReasoningEffortDoesNotSilentlyChangeModelRequest(t *testing.T) {
+	calls := 0
+	p := openAIProvider(func(req *http.Request) (*http.Response, error) {
+		calls++
+		var payload struct {
+			Effort string `json:"reasoning_effort"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.Effort != "medium" {
+			t.Fatal("configured effort was dropped or replaced")
+		}
+		return testResponse(req, http.StatusBadRequest, "application/json", `{"error":{"type":"invalid_request_error","param":"reasoning_effort","message":"Unsupported parameter"}}`), nil
+	})
+	p.ReasoningEffort = "high"
+	_, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "Inspect")}, nil, nil)
+	var endpoint *HTTPError
+	if !errors.As(err, &endpoint) || endpoint.Status != http.StatusBadRequest || calls != 1 {
+		t.Fatalf("unsupported effort was silently retried or accepted: calls=%d err=%v", calls, err)
 	}
 }
 

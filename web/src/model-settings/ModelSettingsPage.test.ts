@@ -59,8 +59,8 @@ describe('model settings page', () => {
     expect(wrapper.get<HTMLInputElement>('#llm-url').element.value).toBe('https://api.deepseek.com/v1');
     expect(wrapper.get<HTMLInputElement>('#llm-model').element.value).toBe('custom-chat');
     expect(wrapper.get<HTMLInputElement>('#llm-key').element.value).toBe('saved-key');
-    expect(wrapper.find('#llm-effort').exists()).toBe(false);
-    expect(wrapper.find('.llm-summary-effort').exists()).toBe(false);
+    expect(wrapper.find('#llm-effort').exists()).toBe(true);
+    expect(wrapper.find('.llm-summary-effort').exists()).toBe(true);
     expect(wrapper.get('.llm-summary-protocol').text()).toBe('OpenAI');
     await wrapper.get('.llm-test').trigger('click'); await flushPromises();
     expect(calls.at(-1)?.body?.protocol).toBe('openai');
@@ -98,6 +98,27 @@ describe('model settings page', () => {
     expect(wrapper.get<HTMLInputElement>('#llm-key').element.value).toBe('');
     await wrapper.get('[data-llm-provider="deepseek"]').trigger('click');
     expect(wrapper.get<HTMLInputElement>('#llm-url').element.value).toBe('https://other.invalid/anthropic');
+    wrapper.unmount();
+  });
+  it('keeps reasoning effort visible and selected across protocols, providers, and subscription modes', async () => {
+    const {client} = fixture(), wrapper = mount(ModelSettingsPage, {props: {client}}); await flushPromises();
+    await wrapper.get('#llm-effort').setValue('high');
+    const expectEffort = () => {
+      expect(wrapper.find('#llm-effort').exists()).toBe(true);
+      expect(wrapper.get<HTMLSelectElement>('#llm-effort').element.disabled).toBe(false);
+      expect(wrapper.get<HTMLSelectElement>('#llm-effort').element.value).toBe('high');
+      expect(wrapper.get('.llm-summary-effort').text()).toBe(wrapper.get('#llm-effort option[value="high"]').text());
+    };
+    await wrapper.get('#llm-protocol').setValue('openai'); expectEffort();
+    expect(wrapper.findAll('#llm-effort option').map(option => option.text())).toEqual(['低 / 更快响应', '中 / 均衡推理', '高 / 深入推理']);
+    expect(wrapper.get('.llm-summary-effort').text()).toBe('中 / 均衡推理');
+    await wrapper.get('[data-llm-provider="kimi"]').trigger('click'); expectEffort();
+    expect(wrapper.get('.llm-summary-effort').text()).toBe('高 / 深入推理');
+    await wrapper.get('#llm-auth-mode').setValue('kimi_oauth'); expectEffort();
+    await wrapper.get('#llm-auth-mode').setValue('api_key'); expectEffort();
+    await wrapper.get('[data-llm-provider="glm"]').trigger('click'); expectEffort();
+    await wrapper.get('#llm-auth-mode').setValue('glm_coding_plan'); expectEffort();
+    await wrapper.get('[data-llm-provider="deepseek"]').trigger('click'); expectEffort();
     wrapper.unmount();
   });
   it('enters with direct/max while keeping the saved proxy draft and aborts late tests on return', async () => {
@@ -199,7 +220,7 @@ describe('subscription authentication', () => {
     expect(wrapper.get<HTMLInputElement>('#llm-key').element.value).toBe('');
     expect(wrapper.get<HTMLSelectElement>('#llm-protocol').element.disabled).toBe(true);
     expect(wrapper.get<HTMLInputElement>('#llm-url').element.value).toBe(providers.glm.base_url);
-    expect(wrapper.find('#llm-effort').exists()).toBe(false);
+    expect(wrapper.find('#llm-effort').exists()).toBe(true);
     expect(wrapper.find('.llm-login-start').exists()).toBe(false);
     expect(wrapper.find('a[href="https://docs.bigmodel.cn/cn/coding-plan/extension/coding-tool-helper"]').exists()).toBe(true);
     await wrapper.get('.llm-test').trigger('click'); await flushPromises();

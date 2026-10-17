@@ -62,8 +62,10 @@ Model settings support Anthropic Messages (default) and
 Select the protocol in Model Access, then test and save the connection. For
 environment configuration, set `PWNMESH_MODEL_PROTOCOL=openai`, `OPENAI_BASE_URL`,
 `OPENAI_MODEL` and `OPENAI_API_KEY`; the default OpenAI URL is
-`https://api.openai.com/v1`. OpenAI uses the service's default reasoning behavior
-and `max_completion_tokens`; Anthropic reasoning controls do not apply.
+`https://api.openai.com/v1`. OpenAI uses `max_completion_tokens` and
+`reasoning_effort`: the stored project levels `low/high/max` map to `low/medium/high`,
+shown as low/medium/high in the UI. The model must support the selected effort;
+connection tests report unsupported settings without silently dropping them.
 The OpenAI Responses API is not supported. Legacy live acceptance scripts still
 use Anthropic settings; offline protocol tests cover both adapters.
 
@@ -72,9 +74,9 @@ through device authorization. Authorize on Kimi's website, test, then save; draf
 credentials expire after 15 minutes. Saved access tokens refresh automatically.
 GLM supports API keys or [Coding Plan keys](https://docs.bigmodel.cn/cn/coding-plan/extension/coding-tool-helper);
 its subscription mode still requires a plan key. DeepSeek is unchanged.
-Subscription modes pin the official Anthropic endpoint. GLM keeps provider thinking
-defaults; Kimi uses adaptive thinking with the selected effort. OAuth credentials
-never enter worker containers.
+Subscription modes pin the official Anthropic endpoint. [GLM-5.3](https://docs.bigmodel.cn/cn/coding-plan/latest-model)
+uses enabled thinking and the selected effort; Kimi uses adaptive thinking with
+the selected effort. OAuth credentials never enter worker containers.
 
 `PWNMESH_AUTH_DIR` selects the private OAuth store (default: `model-auth` beside
 model settings). Compose shares `/auth` between server and dispatcher through a

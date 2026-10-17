@@ -62,6 +62,18 @@ func (p *Client) openAIPayload(messages []agent.Message, tools []agent.Definitio
 	if limit <= 0 {
 		limit = DefaultMaxTokens
 	}
+	// Map the project's three tiers to portable OpenAI values. Model support
+	// remains the endpoint's decision; an unset direct client keeps its default.
+	effort := p.ReasoningEffort
+	switch effort {
+	case "", "low":
+	case "high":
+		effort = "medium"
+	case "max":
+		effort = "high"
+	default:
+		return nil, errors.New("reasoning effort must be low, high, or max")
+	}
 	var wireTools []openAITool
 	for _, tool := range tools {
 		wireTools = append(wireTools, openAITool{"function", openAIFunction{Name: tool.Name, Description: tool.Description, Parameters: tool.Schema}})
@@ -97,18 +109,17 @@ func (p *Client) openAIPayload(messages []agent.Message, tools []agent.Definitio
 			wire = append(wire, entry)
 		}
 	}
-	// Reasoning controls vary by model. Leave the OpenAI model's defaults intact
-	// rather than sending Anthropic's effort enum to non-reasoning models.
 	return json.Marshal(struct {
-		Model         string          `json:"model"`
-		Messages      []openAIMessage `json:"messages"`
-		Tools         []openAITool    `json:"tools,omitempty"`
-		MaxTokens     int             `json:"max_completion_tokens"`
-		Stream        bool            `json:"stream"`
-		StreamOptions struct {
+		Model           string          `json:"model"`
+		Messages        []openAIMessage `json:"messages"`
+		Tools           []openAITool    `json:"tools,omitempty"`
+		MaxTokens       int             `json:"max_completion_tokens"`
+		ReasoningEffort string          `json:"reasoning_effort,omitempty"`
+		Stream          bool            `json:"stream"`
+		StreamOptions   struct {
 			IncludeUsage bool `json:"include_usage"`
 		} `json:"stream_options"`
-	}{Model: p.Model, Messages: wire, Tools: wireTools, MaxTokens: limit, Stream: true, StreamOptions: struct {
+	}{Model: p.Model, Messages: wire, Tools: wireTools, MaxTokens: limit, ReasoningEffort: effort, Stream: true, StreamOptions: struct {
 		IncludeUsage bool `json:"include_usage"`
 	}{true}})
 }
