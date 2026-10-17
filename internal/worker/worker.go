@@ -84,8 +84,9 @@ func runSession(parent context.Context, j Job, o Options) (Result, error) {
 		return Result{}, err
 	}
 	defer runtime.journal.Close()
+	retained := runtime.state.Log
 	if result, done, err := runtime.recover(ctx); done || err != nil {
 		return result, err
 	}
-	return runtime.runAgent(ctx)
+	return runtime.runAgent(ctx, retained)
 }

@@ -172,8 +172,8 @@ func validateTraceRunRequest(j Job, r GraphRequest) error {
 	if r.Section != "" || r.ByteOffset != nil || r.ExpectedVersion != "" || r.RecordVersion != "" || r.Updates != nil || r.Batch != nil || r.Action.Op != "" || len(r.IDs) > 1 || r.Offset < 0 || r.Limit < 0 || r.Limit > 20 {
 		return errors.New("trace reads accept only one run ID or an offset/limit page")
 	}
-	if len(r.IDs) == 1 && (strings.TrimSpace(r.IDs[0]) == "" || len(r.IDs[0]) > 256 || r.IDs[0] == j.RunID || r.Offset != 0) {
-		return errors.New("trace run must identify another execution in the current project")
+	if len(r.IDs) == 1 && (strings.TrimSpace(r.IDs[0]) == "" || len(r.IDs[0]) > 256 || r.Offset != 0) {
+		return errors.New("trace run must identify a registered execution in the current project")
 	}
 	return nil
 }

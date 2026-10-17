@@ -3,10 +3,12 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"pwnmesh/internal/protocol"
@@ -18,6 +20,45 @@ import (
 	"pwnmesh/internal/board"
 	"pwnmesh/internal/worker/dag"
 )
+
+// Small fixture helpers retain test assertions about raw journal bytes; runtime
+// searches use a streaming visitor and never allocate the whole journal.
+func readTraceJournal(ctx context.Context, workspace string, run board.TraceRun, version string) ([]byte, traceBinding, error) {
+	file, binding, err := openTraceJournal(ctx, workspace, run, version)
+	if err != nil {
+		return nil, binding, err
+	}
+	defer file.Close()
+	err = eventlog.VisitCommittedFile(ctx, file, eventlog.Checkpoint{Offset: binding.Offset, SHA256: binding.SHA256}, func(int64, agent.Event) error { return nil })
+	if err != nil {
+		return nil, binding, err
+	}
+	raw, err := io.ReadAll(io.NewSectionReader(file, 0, binding.Offset))
+	return raw, binding, err
+}
+
+func traceObservations(ctx context.Context, raw []byte) ([]traceObservation, error) {
+	projection := traceProjector{}
+	items := []traceObservation{}
+	var offset int64
+	for _, line := range bytes.SplitAfter(raw, []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		var event agent.Event
+		if err := json.Unmarshal(line, &event); err != nil {
+			return nil, err
+		}
+		if err := projection.observe(offset, event, func(item traceObservation) { items = append(items, item) }); err != nil {
+			return nil, err
+		}
+		offset += int64(len(line))
+	}
+	return items, nil
+}
 
 type traceFixture struct {
 	job Job

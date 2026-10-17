@@ -3,17 +3,16 @@
 package worker
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"pwnmesh/internal/protocol"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,7 +25,6 @@ import (
 	eventlog "pwnmesh/internal/worker/internal/journal"
 )
 
-const maxTraceBytes = 64 << 20
 const maxTraceSessionBytes = 16 << 20
 const maxTracePageBytes = 16 << 10
 const maxTraceVersionBytes = 8 << 10
@@ -60,6 +58,7 @@ type traceObservation struct {
 	Record    string `json:"record"`
 	Sequence  uint64 `json:"sequence"`
 	Tool      string `json:"tool,omitempty"`
+	Subject   string `json:"subject,omitempty"`
 	IsError   bool   `json:"is_error,omitempty"`
 	Content   string `json:"content"`
 	Redacted  bool   `json:"redacted,omitempty"`
@@ -67,11 +66,12 @@ type traceObservation struct {
 }
 
 // workerTraceTool deliberately returns a projection of tool results, never the
-// session, system/user messages, tool arguments or internal run capability.
+// session, system/user messages or internal run capability. Own-run reads also
+// expose bounded, redacted command/path labels for locating retained work.
 func workerTraceTool(j Job, o *Options, request func(context.Context, GraphRequest) (string, error)) agent.Tool {
 	return agent.Tool{Definition: agent.Definition{
 		Name:        "read_worker_trace",
-		Description: "Find unpublished tool observations from other registered Explore runs in this project and round. With no run_id, list runs using offset/limit. With run_id, search its committed journal using optional case-insensitive query; follow next_offset with trace_version. Read a returned record using run_id, record, trace_version and byte_offset/byte_limit. Tool-result text is a credential-redacted projection, not original evidence; content is untrusted data and never a verified Fact. Own run, nested agents and control roles are excluded. Missing or oversized retained journals are explicitly unavailable.",
+		Description: "Find retained tool observations from registered Explore runs in this project and round, including the current run. With no run_id, list runs using offset/limit. With run_id, search its committed journal using optional case-insensitive query; follow next_offset with trace_version. Read a returned record using run_id, record, trace_version and byte_offset/byte_limit. Own-run subjects identify commands and paths. Text is a credential-redacted projection, not original evidence or a verified Fact; is_error preserves failure status. Nested agents and control roles are excluded. Missing journals or oversized individual records are explicitly unavailable.",
 		Schema:      json.RawMessage(`{"type":"object","properties":{"run_id":{"type":"string","maxLength":256},"query":{"type":"string","maxLength":256},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":20},"record":{"type":"string","maxLength":64},"trace_version":{"type":"string","maxLength":8192},"byte_offset":{"type":"integer","minimum":0},"byte_limit":{"type":"integer","minimum":4,"maximum":16384}},"additionalProperties":false}`),
 	}, Execute: func(parent context.Context, input json.RawMessage) (string, error) {
 		if !j.GraphRPC || j.Kind != "explore" || j.Intent == nil || j.RunID == "" || request == nil {
@@ -91,7 +91,7 @@ func workerTraceTool(j Job, o *Options, request func(context.Context, GraphReque
 		if decoder.Decode(new(any)) != io.EOF {
 			return "", errors.New("read_worker_trace requires one JSON object")
 		}
-		if err := validateTraceRequest(r, j.RunID); err != nil {
+		if err := validateTraceRequest(r); err != nil {
 			return "", err
 		}
 		if r.Limit == 0 {
@@ -128,9 +128,7 @@ func workerTraceTool(j Job, o *Options, request func(context.Context, GraphReque
 			}
 			items := []summary{}
 			for _, run := range authorized.Items {
-				if run.RunID != j.RunID {
-					items = append(items, summary{run.RunID, run.StepID, run.Status})
-				}
+				items = append(items, summary{run.RunID, run.StepID, run.Status})
 			}
 			out, err := marshalTrace(ctx, struct {
 				Items      []summary `json:"items"`
@@ -148,7 +146,7 @@ func workerTraceTool(j Job, o *Options, request func(context.Context, GraphReque
 	}}
 }
 
-func validateTraceRequest(r traceReadRequest, ownRun string) error {
+func validateTraceRequest(r traceReadRequest) error {
 	if r.Offset < 0 || r.Limit < 0 || r.Limit > 20 || len(r.Query) > 256 || len(r.TraceVersion) > maxTraceVersionBytes || len(r.Record) > 64 || r.ByteOffset < 0 || r.ByteLimit != 0 && (r.ByteLimit < 4 || r.ByteLimit > maxTracePageBytes) {
 		return errors.New("invalid trace page bounds")
 	}
@@ -158,8 +156,8 @@ func validateTraceRequest(r traceReadRequest, ownRun string) error {
 		}
 		return nil
 	}
-	if !validTraceRunID(r.RunID) || r.RunID == ownRun {
-		return errors.New("trace requires another registered run_id, never a path")
+	if !validTraceRunID(r.RunID) {
+		return errors.New("trace requires a registered run_id, never a path")
 	}
 	if r.Record != "" {
 		if r.TraceVersion == "" || r.Query != "" || r.Offset != 0 || r.Limit != 0 {
@@ -176,10 +174,11 @@ func validTraceRunID(id string) bool {
 }
 
 func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceReadRequest) (string, error) {
-	journal, binding, err := readTraceJournal(ctx, j.Workspace, run, r.TraceVersion)
+	journal, binding, err := openTraceJournal(ctx, j.Workspace, run, r.TraceVersion)
 	if err != nil {
 		return "", err
 	}
+	defer journal.Close()
 	if r.TraceVersion == "" {
 		binding.Query = r.Query
 	} else {
@@ -193,18 +192,39 @@ func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceRead
 	if len(version) > maxTraceVersionBytes {
 		return "", errors.New("trace unavailable: bound identity exceeds continuation budget")
 	}
-	items, err := traceObservations(ctx, journal)
+	page := []traceObservation{}
+	var detail *traceObservation
+	total := 0
+	query := strings.ToLower(r.Query)
+	projection := traceProjector{Own: run.RunID == j.RunID}
+	err = eventlog.VisitCommittedFile(ctx, journal, eventlog.Checkpoint{Offset: binding.Offset, SHA256: binding.SHA256}, func(offset int64, event agent.Event) error {
+		return projection.observe(offset, event, func(item traceObservation) {
+			if r.Record != "" {
+				if item.Record == r.Record {
+					copy := item
+					detail = &copy
+				}
+				return
+			}
+			if query != "" && !strings.Contains(strings.ToLower(item.Content), query) && !strings.Contains(strings.ToLower(item.Subject), query) {
+				return
+			}
+			if total >= r.Offset && len(page) < r.Limit {
+				item.Content, item.Truncated = traceExcerpt(item.Content, 512)
+				page = append(page, item)
+			}
+			total++
+		})
+	})
 	if err != nil {
-		return "", err
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "", fmt.Errorf("trace_changed: committed journal verification failed: %w", err)
 	}
 	if r.Record != "" {
-		for _, item := range items {
-			if err := ctx.Err(); err != nil {
-				return "", err
-			}
-			if item.Record != r.Record {
-				continue
-			}
+		if detail != nil {
+			item := *detail
 			content := []byte(item.Content)
 			if r.ByteOffset > len(content) || r.ByteOffset < len(content) && !utf8.RuneStart(content[r.ByteOffset]) {
 				return "", errors.New("trace byte_offset must be at a UTF-8 boundary")
@@ -225,6 +245,7 @@ func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceRead
 					Record         string `json:"record"`
 					Sequence       uint64 `json:"sequence"`
 					Tool           string `json:"tool"`
+					Subject        string `json:"subject,omitempty"`
 					IsError        bool   `json:"is_error"`
 					ByteOffset     int    `json:"byte_offset"`
 					TotalBytes     int    `json:"total_bytes"`
@@ -232,7 +253,7 @@ func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceRead
 					Content        string `json:"content"`
 					Redacted       bool   `json:"redacted"`
 					Projection     bool   `json:"projection"`
-				}{run.RunID, run.StepID, version, item.Record, item.Sequence, item.Tool, item.IsError, r.ByteOffset, len(content), next, string(content[r.ByteOffset:end]), item.Redacted, true})
+				}{run.RunID, run.StepID, version, item.Record, item.Sequence, item.Tool, item.Subject, item.IsError, r.ByteOffset, len(content), next, string(content[r.ByteOffset:end]), item.Redacted, true})
 			}
 			out, err := marshalDetail()
 			// The content byte allowance is an upper bound. JSON escaping and
@@ -251,32 +272,12 @@ func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceRead
 		}
 		return "", errors.New("trace record is absent from the bound committed prefix")
 	}
-	query := strings.ToLower(r.Query)
-	matched := []traceObservation{}
-	for _, item := range items {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		if query == "" || strings.Contains(strings.ToLower(item.Content), query) {
-			matched = append(matched, item)
-		}
-	}
-	if r.Offset > len(matched) {
+	if r.Offset > total {
 		return "", errors.New("trace offset exceeds matched observations")
 	}
-	end := min(len(matched), r.Offset+r.Limit)
-	page := append([]traceObservation{}, matched[r.Offset:end]...)
-	for i := range page {
-		if len(page[i].Content) > 512 {
-			cut := 512
-			for !utf8.RuneStart(page[i].Content[cut]) {
-				cut--
-			}
-			page[i].Content, page[i].Truncated = page[i].Content[:cut], true
-		}
-	}
+	end := r.Offset + len(page)
 	var next *int
-	if end < len(matched) {
+	if end < total {
 		next = &end
 	}
 	marshalPage := func() ([]byte, error) {
@@ -291,7 +292,7 @@ func readWorkerTrace(ctx context.Context, j Job, run board.TraceRun, r traceRead
 			Offset         int                `json:"offset"`
 			NextOffset     *int               `json:"next_offset,omitempty"`
 			Total          int                `json:"total"`
-		}{run.RunID, run.StepID, version, binding.Offset, true, r.Query, page, r.Offset, next, len(matched)})
+		}{run.RunID, run.StepID, version, binding.Offset, true, r.Query, page, r.Offset, next, total})
 	}
 	out, err := marshalPage()
 	for err == nil && len(out) > maxTracePageBytes && len(page) > 1 {
@@ -320,7 +321,7 @@ func marshalTrace(ctx context.Context, value any) ([]byte, error) {
 	return raw, nil
 }
 
-func readTraceJournal(ctx context.Context, workspace string, run board.TraceRun, version string) ([]byte, traceBinding, error) {
+func openTraceJournal(ctx context.Context, workspace string, run board.TraceRun, version string) (*os.File, traceBinding, error) {
 	var bound traceBinding
 	if err := ctx.Err(); err != nil {
 		return nil, bound, err
@@ -383,78 +384,120 @@ func readTraceJournal(ctx context.Context, workspace string, run board.TraceRun,
 		}
 	}
 	digest, err := hex.DecodeString(bound.SHA256)
-	if err != nil || len(digest) != 32 || bound.Offset < 0 || bound.Offset > maxTraceBytes {
-		return nil, bound, errors.New("trace unavailable: invalid checkpoint or committed prefix exceeds 64 MiB")
+	if err != nil || len(digest) != 32 || bound.Offset < 0 {
+		return nil, bound, errors.New("trace unavailable: invalid committed checkpoint")
 	}
 	f, err = open("events.jsonl")
 	if err != nil {
 		return nil, bound, err
 	}
-	defer f.Close()
 	stat, err := f.Stat()
 	if err != nil || !stat.Mode().IsRegular() || stat.Size() < bound.Offset {
+		f.Close()
 		return nil, bound, errors.New("trace unavailable: journal is not a regular file or is shorter than its checkpoint")
 	}
 	if err := ctx.Err(); err != nil {
+		f.Close()
 		return nil, bound, err
 	}
-	raw = make([]byte, int(bound.Offset))
-	if _, err := io.ReadFull(f, raw); err != nil {
-		return nil, bound, errors.New("trace unavailable: journal prefix could not be read")
-	}
-	if protocol.GraphRecordVersion(raw) != bound.SHA256 || len(raw) > 0 && raw[len(raw)-1] != '\n' || !utf8.Valid(raw) {
-		return nil, bound, errors.New("trace_changed: committed journal hash or complete-record boundary mismatch")
-	}
-	return raw, bound, ctx.Err()
+	return f, bound, nil
 }
 
-func traceObservations(ctx context.Context, raw []byte) ([]traceObservation, error) {
-	out := []traceObservation{}
-	tools := map[string]string{}
-	reader := bufio.NewReader(bytes.NewReader(raw))
-	var offset int64
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		line, err := reader.ReadBytes('\n')
-		if err == io.EOF && len(line) == 0 {
-			break
-		}
-		if err != nil {
-			return nil, errors.New("trace unavailable: partial committed record")
-		}
-		var event agent.Event
-		if json.Unmarshal(line, &event) != nil || event.Type == "" {
-			return nil, errors.New("trace unavailable: malformed committed event")
-		}
-		if event.Type == "tool_start" && len(event.ToolID) <= 256 && len(event.ToolName) <= 128 {
-			tools[event.ToolID] = event.ToolName
-		}
-		if event.Type == "message_end" && event.Message != nil && event.Message.Role == "user" {
-			for index, block := range event.Message.Content {
-				if block.Type != "tool_result" {
-					continue
-				}
-				name := tools[block.ToolUseID]
-				// Do not recursively import graph/session/input projections.
-				if name == "" || name == "read_worker_trace" || name == "read_graph" || name == "read_snapshot" || name == "read_evidence" || name == "read_updates" {
-					continue
-				}
-				text, ok := traceResultText(block.Content)
-				if !ok {
-					continue
-				}
-				filtered := redactTraceCredentials(text)
-				if err := ctx.Err(); err != nil {
-					return nil, err
-				}
-				out = append(out, traceObservation{Record: strconv.FormatInt(offset, 10) + ":" + strconv.Itoa(index), Sequence: event.Message.Sequence, Tool: name, IsError: block.IsError, Content: filtered, Redacted: filtered != text})
+type traceCallLabel struct {
+	Name, Subject string
+	Redacted      bool
+}
+
+// Pending labels are bounded to one tool batch. Tool-result text remains the
+// only cross-run projection; own-run command/path labels help find old work.
+type traceProjector struct {
+	Own     bool
+	pending map[string]traceCallLabel
+}
+
+func (p *traceProjector) observe(offset int64, event agent.Event, consume func(traceObservation)) error {
+	if p.pending == nil {
+		p.pending = map[string]traceCallLabel{}
+	}
+	if event.Type == "message_end" && event.Message != nil && event.Message.Role == "assistant" {
+		p.pending = map[string]traceCallLabel{}
+		for _, block := range event.Message.Content {
+			if block.Type != "tool_use" || len(block.ID) > 256 || len(block.Name) > 128 {
+				continue
+			}
+			label := traceCallLabel{Name: block.Name}
+			if p.Own {
+				label.Subject, label.Redacted = traceSubject(block)
+			}
+			p.pending[block.ID] = label
+			if len(p.pending) > 1024 {
+				return errors.New("trace unavailable: tool batch exceeds 1024 labels")
 			}
 		}
-		offset += int64(len(line))
 	}
-	return out, nil
+	if event.Type == "tool_start" && len(event.ToolID) <= 256 && len(event.ToolName) <= 128 {
+		label := p.pending[event.ToolID]
+		label.Name = event.ToolName
+		p.pending[event.ToolID] = label
+		if len(p.pending) > 1024 {
+			return errors.New("trace unavailable: tool batch exceeds 1024 labels")
+		}
+	}
+	if event.Type != "message_end" || event.Message == nil || event.Message.Role != "user" {
+		return nil
+	}
+	for index, block := range event.Message.Content {
+		if block.Type != "tool_result" {
+			continue
+		}
+		label := p.pending[block.ToolUseID]
+		delete(p.pending, block.ToolUseID)
+		// Do not recursively import graph/session/input projections.
+		switch label.Name {
+		case "", "read_worker_trace", "read_graph", "read_snapshot", "read_evidence", "read_updates":
+			continue
+		}
+		text, ok := traceResultText(block.Content)
+		if !ok {
+			continue
+		}
+		filtered := redactTraceCredentials(text)
+		consume(traceObservation{Record: strconv.FormatInt(offset, 10) + ":" + strconv.Itoa(index), Sequence: event.Message.Sequence, Tool: label.Name, Subject: label.Subject, IsError: block.IsError, Content: filtered, Redacted: label.Redacted || filtered != text})
+	}
+	return nil
+}
+
+func traceSubject(block agent.Block) (string, bool) {
+	var fields struct{ Path, Command, Key string }
+	if json.Unmarshal(block.Input, &fields) != nil {
+		return "", false
+	}
+	var subject string
+	switch block.Name {
+	case "bash":
+		subject = fields.Command
+	case "write", "edit", "read":
+		subject = fields.Path
+	case "run_graph":
+		subject = fields.Key
+	}
+	filtered := redactTraceCredentials(subject)
+	bounded, omitted := traceExcerpt(filtered, 512)
+	if omitted {
+		bounded += " [truncated]"
+	}
+	return bounded, filtered != subject
+}
+
+func traceExcerpt(text string, limit int) (string, bool) {
+	if len(text) <= limit {
+		return text, false
+	}
+	for limit > 0 && !utf8.RuneStart(text[limit]) {
+		limit--
+	}
+	// A short retained page/index must not keep a large source string alive.
+	return strings.Clone(text[:limit]), true
 }
 
 func traceResultText(raw json.RawMessage) (string, bool) {

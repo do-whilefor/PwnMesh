@@ -211,8 +211,12 @@ func TestWorkerTraceRunProtocolRequiresRegisteredExecuteScope(t *testing.T) {
 	if err := protocol.ValidateGraphRequest(j, r); err != nil {
 		t.Fatal(err)
 	}
+	own := r
+	own.IDs = []string{j.RunID}
+	if err := protocol.ValidateGraphRequest(j, own); err != nil {
+		t.Fatalf("registered own-run trace rejected: %v", err)
+	}
 	for name, change := range map[string]func(*Job, *GraphRequest){
-		"own run":         func(_ *Job, r *GraphRequest) { r.IDs = []string{"self"} },
 		"curator":         func(j *Job, _ *GraphRequest) { j.Kind = "curate" },
 		"offline":         func(j *Job, _ *GraphRequest) { j.GraphRPC = false },
 		"multiple":        func(_ *Job, r *GraphRequest) { r.IDs = []string{"one", "two"} },

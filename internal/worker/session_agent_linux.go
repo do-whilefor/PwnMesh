@@ -8,13 +8,25 @@ import (
 	"os"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/protocol"
+	eventlog "pwnmesh/internal/worker/internal/journal"
 	"pwnmesh/internal/worker/internal/phase"
 	"strconv"
 )
 
-func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
+func (runtime *sessionRuntime) runAgent(ctx context.Context, retained eventlog.Checkpoint) (Result, error) {
 	j, o, state := runtime.job, runtime.options, &runtime.state
 	emit := runtime.emit
+	var recall *workerRecall
+	if j.Kind == "explore" && j.GraphRPC && j.Intent != nil {
+		recall = restoreWorkerRecall(ctx, j, o.RunDir, retained)
+		emit = func(event agent.Event) {
+			runtime.emit(event)
+			if err := recall.observe(event); err != nil {
+				recall.Unavailable = "Some observations exceeded the bounded index; inspect the committed trace."
+				recall.projection = traceProjector{Own: true}
+			}
+		}
+	}
 	finish := func(r Result) (Result, error) { return runtime.finish(ctx, r) }
 	var err error
 	o = contextOptions(o)
@@ -22,13 +34,23 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 		Checkpoint: state.ContextCheckpoint, SaveState: runtime.saveAgentState,
 		ContextBytes: o.ContextBytes, ContextTokens: o.ContextTokens, ContextTargetTokens: o.ContextTargetTokens,
 		ObserveRequests: true, ContextData: state.ExecuteUpdates.contextData()}
+	if recall != nil {
+		l.ContextDataPrefixes = []string{recallPrefix}
+	}
 	runtime.roles.bindLoop(l)
 
 	runtime.options, runtime.loop = o, l
 	runtime.applyPhase()
 	phases := &sessionPhases{runtime: runtime, ctx: ctx, phaseCtx: ctx, endCancel: func() {}}
 	defer func() { phases.endCancel() }()
-	l.BeforeRequest, l.OnTurnEnd = phases.beforeRequest, phases.onTurnEnd
+	l.BeforeRequest = func(ctx context.Context, loop *agent.Loop) (context.Context, error) {
+		next, err := phases.beforeRequest(ctx, loop)
+		if err == nil && recall != nil {
+			recall.pin(loop)
+		}
+		return next, err
+	}
+	l.OnTurnEnd = phases.onTurnEnd
 	runCtx, prompt := ctx, ""
 	if state.Concluding {
 		runCtx, err = phases.startConclusion()
@@ -111,6 +133,16 @@ func (runtime *sessionRuntime) runAgent(ctx context.Context) (Result, error) {
 			return Result{}, err
 		}
 		if err := l.AppendInstruction("The uncommitted decision draft was discarded on recovery. Read the current overview and affected facts, then restage the whole plan. Old $aliases, draft receipts and completion_assessment reuse are invalid. Completion now requires preview and review of completion_review in a subsequent model turn before commit; ordinary plans can commit directly."); err != nil {
+			return Result{}, err
+		}
+	}
+	if runtime.resuming && recall != nil && recall.contextData() != "" {
+		// Settle incomplete tool groups before appending the bounded recovery
+		// notice. Rebuilding the index reads only the original saved prefix.
+		if err := l.RepairHistory(); err != nil {
+			return Result{}, err
+		}
+		if err := l.AppendInstruction(recall.contextData()); err != nil {
 			return Result{}, err
 		}
 	}
