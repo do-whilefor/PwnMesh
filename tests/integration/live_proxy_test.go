@@ -740,7 +740,7 @@ func TestLiveModelProxyPreservesStreamAndRecordsOnlyMetrics(t *testing.T) {
 	got, err := io.ReadAll(response.Body)
 	response.Body.Close()
 	if err != nil || string(got) != stream {
-		t.Fatal("proxy altered the streamed response", err)
+		t.Fatalf("proxy streamed %d of %d bytes: %v; observations: %+v", len(got), len(stream), err, recorder.Snapshot())
 	}
 	items := liveFinishedObservations(t, recorder)
 	o := items[0]
