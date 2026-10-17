@@ -48,7 +48,6 @@ func TestOperationsUseStorageBoundary(t *testing.T) {
 						switch statement {
 						case "SAVEPOINT pwnmesh_management", "ROLLBACK TO pwnmesh_management", "RELEASE pwnmesh_management",
 							"SAVEPOINT pwnmesh_state_action", "ROLLBACK TO pwnmesh_state_action", "RELEASE pwnmesh_state_action",
-							"SAVEPOINT pwnmesh_input_batch", "ROLLBACK TO pwnmesh_input_batch", "RELEASE pwnmesh_input_batch",
 							"SAVEPOINT pwnmesh_execution_registration", "ROLLBACK TO pwnmesh_execution_registration", "RELEASE pwnmesh_execution_registration",
 							"SAVEPOINT pwnmesh_decision_batch", "ROLLBACK TO pwnmesh_decision_batch", "RELEASE pwnmesh_decision_batch":
 							return true

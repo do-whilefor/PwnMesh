@@ -17,6 +17,10 @@ func stagedInputFixture(name, data string) InputBatchFile {
 	return InputBatchFile{Name: name, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Data: strings.NewReader(data)}
 }
 
+type panickingInputSource struct{}
+
+func (panickingInputSource) Read([]byte) (int, error) { panic("staged source panic") }
+
 func TestInputBatchOwnsSemanticReceiptWithoutReadingReplays(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	files := []InputBatchFile{stagedInputFixture("client.apk", "APK bytes"), stagedInputFixture("capture.har", "HAR bytes")}
@@ -60,7 +64,7 @@ func TestInputBatchOwnsSemanticReceiptWithoutReadingReplays(t *testing.T) {
 }
 
 func TestInputBatchHandledFailureRollsBackWholeSupplement(t *testing.T) {
-	for _, mode := range []string{"short source", "grown source", "wrong digest", "missing source", "receipt failure"} {
+	for _, mode := range []string{"short source", "grown source", "wrong digest", "missing source", "receipt failure", "source panic"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newOrchestrationFixture(t)
 			before := f.state()
@@ -75,13 +79,22 @@ func TestInputBatchHandledFailureRollsBackWholeSupplement(t *testing.T) {
 					files[1].Data = strings.NewReader("WRONG!")
 				case "missing source":
 					files[1].Data = nil
+				case "source panic":
+					files[1].Data = panickingInputSource{}
 				case "receipt failure":
 					if _, err := tx.transactionQueries.Exec(`CREATE TRIGGER fail_batch_receipt BEFORE INSERT ON pwnmesh_input_batches BEGIN SELECT RAISE(ABORT,'receipt failed'); END`); err != nil {
 						return err
 					}
 				}
-				if receipt, err := tx.AddInputBatch("p", files, "Accompanying instruction", "failed-batch"); err == nil || receipt != nil {
-					t.Fatalf("failed batch returned success or partial receipt: %+v %v", receipt, err)
+				var panicked any
+				func() {
+					defer func() { panicked = recover() }()
+					if receipt, err := tx.AddInputBatch("p", files, "Accompanying instruction", "failed-batch"); err == nil || receipt != nil {
+						t.Fatalf("failed batch returned success or partial receipt: %+v %v", receipt, err)
+					}
+				}()
+				if mode == "source panic" && panicked != "staged source panic" || mode != "source panic" && panicked != nil {
+					t.Fatalf("unexpected source panic: %v", panicked)
 				}
 				// Keep the outer transaction successful to test the operation itself.
 				_, err := tx.SetProjectTitle("p", "unrelated update")

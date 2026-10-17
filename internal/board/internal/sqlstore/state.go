@@ -62,7 +62,7 @@ func SaveStateMetadata(q Queries, project, raw string, revision, decision int64)
 	if err != nil {
 		return err
 	}
-	return writeStateMetadata(q, func() error {
+	return Atomic(q, func() error {
 		if _, err := q.Exec("INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision", project, remainder, revision, decision); err != nil {
 			return err
 		}
@@ -87,7 +87,7 @@ func AppendStateRecord(q Queries, project, header, kind string, position int, re
 	if !emptyStateArray(fields[kind]) {
 		return errors.New("state append requires an array marker")
 	}
-	return writeStateMetadata(q, func() error {
+	return Atomic(q, func() error {
 		result, err := q.Exec(`INSERT INTO pwnmesh_state(project_id,data,revision,decision_revision) VALUES(?,?,?,?)
 			ON CONFLICT(project_id) DO UPDATE SET data=excluded.data,revision=excluded.revision,decision_revision=excluded.decision_revision
 			WHERE pwnmesh_state.revision=?`, project, header, revision, decision, revision-1)
@@ -125,7 +125,7 @@ func UpdateStateMetadata(q Queries, project, raw string) error {
 	if err != nil {
 		return err
 	}
-	return writeStateMetadata(q, func() error {
+	return Atomic(q, func() error {
 		result, err := q.Exec("UPDATE pwnmesh_state SET data=? WHERE project_id=?", remainder, project)
 		if err != nil {
 			return err
@@ -139,23 +139,6 @@ func UpdateStateMetadata(q Queries, project, raw string) error {
 		}
 		return saveStateRecords(q, project, records)
 	})
-}
-
-// Metadata remains one atomic write even if the surrounding caller handles an
-// error and commits other work. Invalidation triggers share this savepoint.
-func writeStateMetadata(q Queries, write func() error) (err error) {
-	if _, err = q.Exec("SAVEPOINT pwnmesh_state_metadata"); err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_, rollbackErr := q.Exec("ROLLBACK TO pwnmesh_state_metadata")
-			err = errors.Join(err, rollbackErr)
-		}
-		_, releaseErr := q.Exec("RELEASE pwnmesh_state_metadata")
-		err = errors.Join(err, releaseErr)
-	}()
-	return write()
 }
 
 // Ordered records preserve duplicate IDs and orphan observations.

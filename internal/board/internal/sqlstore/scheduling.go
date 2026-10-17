@@ -2,7 +2,6 @@ package sqlstore
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -95,33 +94,23 @@ func ScheduleSteps(q Queries, project string, offset, limit int) ([]model.Schedu
 	return steps, rows.Err()
 }
 
-func SaveSchedule(q Queries, project string, header []byte, steps []model.ScheduleStep) (err error) {
-	if _, err = q.Exec("SAVEPOINT pwnmesh_schedule"); err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_, rollbackErr := q.Exec("ROLLBACK TO pwnmesh_schedule")
-			err = errors.Join(err, rollbackErr)
-		}
-		_, releaseErr := q.Exec("RELEASE pwnmesh_schedule")
-		err = errors.Join(err, releaseErr)
-	}()
-	if _, err = q.Exec("DELETE FROM pwnmesh_schedule_cache WHERE project_id=?", project); err != nil {
-		return err
-	}
-	if _, err = q.Exec("INSERT INTO pwnmesh_schedule_cache(project_id,header,step_count) VALUES(?,?,?)", project, header, len(steps)); err != nil {
-		return err
-	}
-	for position, step := range steps {
-		var raw []byte
-		raw, err = json.Marshal(storedScheduleStep{ScheduleStep: step, WritePaths: step.WritePaths})
-		if err != nil {
+func SaveSchedule(q Queries, project string, header []byte, steps []model.ScheduleStep) error {
+	return Atomic(q, func() error {
+		if _, err := q.Exec("DELETE FROM pwnmesh_schedule_cache WHERE project_id=?", project); err != nil {
 			return err
 		}
-		if _, err = q.Exec("INSERT INTO pwnmesh_schedule_steps(project_id,position,data) VALUES(?,?,?)", project, position, raw); err != nil {
+		if _, err := q.Exec("INSERT INTO pwnmesh_schedule_cache(project_id,header,step_count) VALUES(?,?,?)", project, header, len(steps)); err != nil {
 			return err
 		}
-	}
-	return nil
+		for position, step := range steps {
+			raw, err := json.Marshal(storedScheduleStep{ScheduleStep: step, WritePaths: step.WritePaths})
+			if err != nil {
+				return err
+			}
+			if _, err := q.Exec("INSERT INTO pwnmesh_schedule_steps(project_id,position,data) VALUES(?,?,?)", project, position, raw); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

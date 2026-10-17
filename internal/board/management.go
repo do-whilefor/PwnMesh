@@ -54,32 +54,45 @@ func (t *Tx) CreateProject(input ProjectInput) (out Graph, err error) {
 			return Graph{}, Err(422, "hint content and creator must be non-empty strings")
 		}
 	}
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
-		return Graph{}, err
-	}
-	defer t.finishManagement(&err)
-	id, err := t.Next("", "project")
+	err = sqlstore.Atomic(t.transactionQueries, func() error {
+		id, err := t.Next("", "project")
+		if err != nil {
+			return err
+		}
+		out = Graph{Project: Project{ID: id, Title: input.Title, Status: "active", CreatedAt: t.Now, Scenario: input.Scenario, OrchestrationVersion: 1}, Facts: []Fact{{ID: "origin", Description: input.Origin}, {ID: "goal", Description: input.Goal}}, Intents: []Intent{}, Hints: []Hint{}}
+		if input.StartPaused {
+			out.Project.Status = "stopped"
+		}
+		if err := t.Save(out); err != nil {
+			return err
+		}
+		for _, input := range input.Hints {
+			id, err := t.Next(out.Project.ID, "hint")
+			if err != nil {
+				return err
+			}
+			out.Hints = append(out.Hints, Hint{ID: id, Content: input.Content, Creator: input.Creator, CreatedAt: t.Now})
+		}
+		if err := t.Save(out); err != nil {
+			return err
+		}
+		return t.CheckContextCapacity(out.Project.ID)
+	})
 	if err != nil {
 		return Graph{}, err
 	}
-	g := Graph{Project: Project{ID: id, Title: input.Title, Status: "active", CreatedAt: t.Now, Scenario: input.Scenario, OrchestrationVersion: 1}, Facts: []Fact{{ID: "origin", Description: input.Origin}, {ID: "goal", Description: input.Goal}}, Intents: []Intent{}, Hints: []Hint{}}
-	if input.StartPaused {
-		g.Project.Status = "stopped"
+	return out, nil
+}
+
+// Management operations may be composed inside one Store.Do callback. A caller
+// handling one rejection must not commit its counters, leases or partial input.
+func (t *Tx) finishManagement(resultErr *error) {
+	if *resultErr != nil {
+		_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_management")
+		*resultErr = errors.Join(*resultErr, rollbackErr)
 	}
-	if err = t.Save(g); err != nil {
-		return Graph{}, err
-	}
-	for _, input := range input.Hints {
-		id, err := t.Next(g.Project.ID, "hint")
-		if err != nil {
-			return Graph{}, err
-		}
-		g.Hints = append(g.Hints, Hint{ID: id, Content: input.Content, Creator: input.Creator, CreatedAt: t.Now})
-	}
-	if err = t.Save(g); err != nil {
-		return Graph{}, err
-	}
-	return g, t.CheckContextCapacity(g.Project.ID)
+	_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_management")
+	*resultErr = errors.Join(*resultErr, releaseErr)
 }
 
 func (t *Tx) DeleteProject(project string) error {
@@ -105,7 +118,7 @@ func (t *Tx) SetProjectTitle(project, title string) (Project, error) {
 	return state.Graph.Project, err
 }
 
-func (t *Tx) SetProjectStatus(project, status string, expected *int64) (out Project, err error) {
+func (t *Tx) SetProjectStatus(project, status string, expected *int64) (Project, error) {
 	g, err := t.Load(project)
 	if err != nil {
 		return Project{}, err
@@ -113,14 +126,16 @@ func (t *Tx) SetProjectStatus(project, status string, expected *int64) (out Proj
 	if expected != nil && *expected != g.Project.Generation {
 		return Project{}, Err(409, "Project round changed; refresh before changing status")
 	}
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	err = sqlstore.Atomic(t.transactionQueries, func() error {
+		if err := t.SetStatus(&g, status); err != nil {
+			return err
+		}
+		return t.Save(g)
+	})
+	if err != nil {
 		return Project{}, err
 	}
-	defer t.finishManagement(&err)
-	if err = t.SetStatus(&g, status); err != nil {
-		return Project{}, err
-	}
-	return g.Project, t.Save(g)
+	return g.Project, nil
 }
 
 func (t *Tx) AddProjectHint(project string, input HintInput, run string) (out Hint, err error) {
@@ -134,17 +149,19 @@ func (t *Tx) AddProjectHint(project string, input HintInput, run string) (out Hi
 	if g.Project.Status != "active" && g.Project.Status != "stopped" && g.Project.Status != "completed" {
 		return Hint{}, Err(403, "Project is "+g.Project.Status)
 	}
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
-		return Hint{}, err
-	}
-	defer t.finishManagement(&err)
-	id, err := t.Next(project, "hint")
+	err = sqlstore.Atomic(t.transactionQueries, func() error {
+		id, err := t.Next(project, "hint")
+		if err != nil {
+			return err
+		}
+		out = Hint{ID: id, Content: input.Content, Creator: input.Creator, CreatedAt: t.Now}
+		g.Hints = append(g.Hints, out)
+		return t.SaveUserInput(g, "hint", out.ID, run, out, out)
+	})
 	if err != nil {
 		return Hint{}, err
 	}
-	hint := Hint{ID: id, Content: input.Content, Creator: input.Creator, CreatedAt: t.Now}
-	g.Hints = append(g.Hints, hint)
-	return hint, t.SaveUserInput(g, "hint", hint.ID, run, hint, hint)
+	return out, nil
 }
 
 func (t *Tx) ReopenProject(project, description, creator, run string) (out Reopened, err error) {
@@ -174,41 +191,32 @@ func (t *Tx) ReopenProject(project, description, creator, run string) (out Reope
 	if len(old.From) == 0 {
 		return Reopened{}, Err(409, "Completion intent is missing its source facts")
 	}
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
-		return Reopened{}, err
-	}
-	defer t.finishManagement(&err)
-	if err = t.RevokeRuns(project); err != nil {
-		return Reopened{}, err
-	}
-	fid, err := t.Next(project, "fact")
+	err = sqlstore.Atomic(t.transactionQueries, func() error {
+		if err := t.RevokeRuns(project); err != nil {
+			return err
+		}
+		fid, err := t.Next(project, "fact")
+		if err != nil {
+			return err
+		}
+		iid, err := t.Next(project, "intent")
+		if err != nil {
+			return err
+		}
+		if err := sqlstore.DeleteIntent(t.transactionQueries, project, old.ID); err != nil {
+			return err
+		}
+		fact := Fact{ID: fid, Description: description}
+		intent := Intent{ID: iid, From: old.From, To: &fid, Description: "external_feedback", Creator: creator, Worker: &creator, Heartbeat: Ptr(t.Now), CreatedAt: t.Now, ConcludedAt: Ptr(t.Now)}
+		g.Intents = append(g.Intents[:index], g.Intents[index+1:]...)
+		g.Intents = append(g.Intents, intent)
+		g.Facts = append(g.Facts, fact)
+		g.Project.Status, g.Project.Reason = "active", nil
+		out = Reopened{Project: g.Project, Fact: fact, Intent: intent}
+		return t.SaveUserInput(g, "reopen", fact.ID, run, map[string]string{"description": description, "creator": creator}, out)
+	})
 	if err != nil {
 		return Reopened{}, err
 	}
-	iid, err := t.Next(project, "intent")
-	if err != nil {
-		return Reopened{}, err
-	}
-	if err = sqlstore.DeleteIntent(t.transactionQueries, project, old.ID); err != nil {
-		return Reopened{}, err
-	}
-	fact := Fact{ID: fid, Description: description}
-	intent := Intent{ID: iid, From: old.From, To: &fid, Description: "external_feedback", Creator: creator, Worker: &creator, Heartbeat: Ptr(t.Now), CreatedAt: t.Now, ConcludedAt: Ptr(t.Now)}
-	g.Intents = append(g.Intents[:index], g.Intents[index+1:]...)
-	g.Intents = append(g.Intents, intent)
-	g.Facts = append(g.Facts, fact)
-	g.Project.Status, g.Project.Reason = "active", nil
-	result := Reopened{Project: g.Project, Fact: fact, Intent: intent}
-	return result, t.SaveUserInput(g, "reopen", fact.ID, run, map[string]string{"description": description, "creator": creator}, result)
-}
-
-// Management operations may be composed inside one Store.Do callback. A caller
-// handling one rejection must not commit its counters, leases or partial input.
-func (t *Tx) finishManagement(resultErr *error) {
-	if *resultErr != nil {
-		_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_management")
-		*resultErr = errors.Join(*resultErr, rollbackErr)
-	}
-	_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_management")
-	*resultErr = errors.Join(*resultErr, releaseErr)
+	return out, nil
 }

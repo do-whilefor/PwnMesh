@@ -147,28 +147,19 @@ ORDER BY entry.key`, string(encoded), project, snapshotChunkMax)
 
 // SaveInputSnapshot retains chunks and their manifest in the caller's transaction.
 // A local savepoint also removes partial chunks when the caller handles a failure.
-func SaveInputSnapshot(q Queries, project, id string, metadata, raw []byte) (err error) {
+func SaveInputSnapshot(q Queries, project, id string, metadata, raw []byte) error {
 	var exists bool
-	if err = q.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?)", project, id).Scan(&exists); err != nil || exists {
+	if err := q.QueryRow("SELECT EXISTS(SELECT 1 FROM pwnmesh_input_snapshots WHERE project_id=? AND id=?)", project, id).Scan(&exists); err != nil || exists {
 		return err
 	}
-	if _, err = q.Exec("SAVEPOINT pwnmesh_input_snapshot"); err != nil {
-		return err
-	}
-	defer func() {
+	return Atomic(q, func() error {
+		stored, err := encodeInputSnapshot(q, project, raw)
 		if err != nil {
-			_, rollbackErr := q.Exec("ROLLBACK TO pwnmesh_input_snapshot")
-			err = errors.Join(err, rollbackErr)
+			return err
 		}
-		_, releaseErr := q.Exec("RELEASE pwnmesh_input_snapshot")
-		err = errors.Join(err, releaseErr)
-	}()
-	stored, err := encodeInputSnapshot(q, project, raw)
-	if err != nil {
+		_, err = q.Exec("INSERT OR IGNORE INTO pwnmesh_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", project, id, metadata, stored)
 		return err
-	}
-	_, err = q.Exec("INSERT OR IGNORE INTO pwnmesh_input_snapshots(project_id,id,metadata,state) VALUES(?,?,?,?)", project, id, metadata, stored)
-	return err
+	})
 }
 
 func ReadInputSnapshotMetadata(q Queries, project, id string) ([]byte, error) {

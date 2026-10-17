@@ -242,22 +242,26 @@ func TestManagementOperationsRollbackHandledFailure(t *testing.T) {
 				}
 				oversized := strings.Repeat("x", DefaultContextViewBytes+1)
 				var err error
+				var output any
 				switch operation {
 				case "create":
-					_, err = tx.CreateProject(ProjectInput{Title: "Rejected fixture", Origin: oversized, Goal: "Explain it"})
+					output, err = tx.CreateProject(ProjectInput{Title: "Rejected fixture", Origin: oversized, Goal: "Explain it"})
 				case "hint":
-					_, err = tx.AddProjectHint("p", HintInput{Content: oversized, Creator: "user"}, "request")
+					output, err = tx.AddProjectHint("p", HintInput{Content: oversized, Creator: "user"}, "request")
 				case "reopen":
-					_, err = tx.ReopenProject("p", oversized, "user", "request")
+					output, err = tx.ReopenProject("p", oversized, "user", "request")
 				case "status":
-					_, err = tx.SetProjectStatus("p", "stopped", nil)
+					output, err = tx.SetProjectStatus("p", "stopped", nil)
 				case "restart_archive", "restart_reset":
-					_, err = tx.RestartProject("p", nil)
+					output, err = tx.RestartProject("p", nil)
 				case "terminate":
-					_, err = tx.TerminateProject("p", nil)
+					output, err = tx.TerminateProject("p", nil)
 				}
 				if err == nil {
 					t.Fatal("invalid operation unexpectedly succeeded")
+				}
+				if !reflect.ValueOf(output).IsZero() {
+					t.Fatal("failed operation returned an uncommitted result")
 				}
 				if (strings.HasPrefix(operation, "restart_") || operation == "terminate") && !strings.Contains(err.Error(), "lifecycle persistence failed") {
 					t.Fatalf("operation failed before reaching the injected fault: %v", err)

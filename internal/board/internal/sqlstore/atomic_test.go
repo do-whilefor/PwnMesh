@@ -1,10 +1,14 @@
 package sqlstore
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"testing"
+
+	"pwnmesh/internal/board/model"
 )
 
 func TestAtomicNestedScopesPreserveCallerWrites(t *testing.T) {
@@ -78,6 +82,89 @@ func TestAtomicNestedScopesPreserveCallerWrites(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+type operationFailureQueries struct {
+	Queries
+	panicAt    string
+	releaseErr error
+}
+
+func (q *operationFailureQueries) Exec(query string, args ...any) (sql.Result, error) {
+	if q.panicAt != "" && strings.HasPrefix(query, q.panicAt) {
+		panic("operation panic")
+	}
+	if q.releaseErr != nil && strings.HasPrefix(query, "RELEASE ") {
+		err := q.releaseErr
+		q.releaseErr = nil
+		return nil, err
+	}
+	return q.Queries.Exec(query, args...)
+}
+
+func TestComposedWritesRollbackHandledPanicAndReleaseFailure(t *testing.T) {
+	for _, operation := range []struct {
+		name, panicAt string
+		write         func(Queries) error
+	}{
+		{"state", "INSERT INTO pwnmesh_fact_metadata", func(q Queries) error {
+			return SaveStateMetadata(q, "p", `{"facts":[{"id":"f"}]}`, 1, 1)
+		}},
+		{"snapshot", "INSERT OR IGNORE INTO pwnmesh_input_snapshots", func(q Queries) error {
+			return SaveInputSnapshot(q, "p", "snapshot", []byte(`{}`), bytes.Repeat([]byte("snapshot data"), snapshotChunkMax))
+		}},
+		{"schedule", "INSERT INTO pwnmesh_schedule_steps", func(q Queries) error {
+			return SaveSchedule(q, "p", []byte(`{}`), []model.ScheduleStep{{ID: "step"}})
+		}},
+	} {
+		for _, outcome := range []string{"panic", "release"} {
+			t.Run(operation.name+"/"+outcome, func(t *testing.T) {
+				store := actionReceiptStore(t)
+				if err := store.Do(context.Background(), func(q Queries) error {
+					if _, err := q.Exec("UPDATE settings SET reason_timeout=77"); err != nil {
+						return err
+					}
+					failure := errors.New("release failed")
+					injected := &operationFailureQueries{Queries: q}
+					if outcome == "panic" {
+						injected.panicAt = operation.panicAt
+					} else {
+						injected.releaseErr = failure
+					}
+					var panicked any
+					var writeErr error
+					func() {
+						defer func() { panicked = recover() }()
+						writeErr = operation.write(injected)
+					}()
+					if outcome == "panic" && panicked != "operation panic" || outcome == "release" && (!errors.Is(writeErr, failure) || panicked != nil) {
+						t.Fatalf("injected failure was lost: %v, %v", writeErr, panicked)
+					}
+					return nil // The caller deliberately handles the failure.
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.View(context.Background(), func(q Queries) error {
+					for _, table := range []string{"pwnmesh_state", "pwnmesh_fact_metadata", "pwnmesh_snapshot_chunks", "pwnmesh_input_snapshots", "pwnmesh_schedule_cache", "pwnmesh_schedule_steps"} {
+						var count int
+						if err := q.QueryRow("SELECT COUNT(*) FROM " + table).Scan(&count); err != nil {
+							return err
+						}
+						if count != 0 {
+							t.Fatalf("handled %s committed %d partial rows in %s", outcome, count, table)
+						}
+					}
+					settings, err := ReadSettings(q)
+					if err == nil && settings.ReasonTimeout != 77 {
+						t.Fatal("operation rollback discarded caller writes")
+					}
+					return err
+				}); err != nil {
+					t.Fatal(err)
+				}
+			})
+		}
 	}
 }
 

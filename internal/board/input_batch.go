@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 	"unicode/utf8"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 // InputBatchFile describes a private, already-staged source. The caller owns
@@ -22,7 +24,7 @@ type InputBatchFile struct {
 
 // AddInputBatch atomically accepts files and an optional accompanying user hint.
 // It owns the semantic receipt identity independently of multipart encoding.
-func (t *Tx) AddInputBatch(project string, files []InputBatchFile, content, key string) (out []InputFile, err error) {
+func (t *Tx) AddInputBatch(project string, files []InputBatchFile, content, key string) ([]InputFile, error) {
 	if key != "" && !validInputBatchKey(key) {
 		return nil, Err(422, "Idempotency key must contain 1 to 128 ASCII letters, digits, underscores or hyphens")
 	}
@@ -50,7 +52,7 @@ func (t *Tx) AddInputBatch(project string, files []InputBatchFile, content, key 
 		}
 		total += file.Size
 	}
-	if err = t.RequireCurrentProject(project); err != nil {
+	if err := t.RequireCurrentProject(project); err != nil {
 		return nil, err
 	}
 	// Preserve the original receipt encoding, including [] for text-only input.
@@ -69,53 +71,42 @@ func (t *Tx) AddInputBatch(project string, files []InputBatchFile, content, key 
 	if saved, found, err := t.inputBatchReceipt(project, key, requestSHA256); found || err != nil {
 		return saved, err
 	}
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_input_batch"); err != nil {
-		return nil, err
-	}
-	defer func() {
-		if err != nil {
-			_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_input_batch")
-			err = errors.Join(err, rollbackErr)
-		}
-		_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_input_batch")
-		err = errors.Join(err, releaseErr)
-		if err != nil {
-			out = nil
-		}
-	}()
 	inputs := make([]InputFile, 0, len(files))
-	for _, file := range files {
-		if file.Data == nil {
-			return nil, errors.New("missing staged input source")
-		}
-		// Materialize only one file with an exact allocation, then detect growth.
-		data := make([]byte, file.Size)
-		if _, err := io.ReadFull(file.Data, data); err != nil {
-			return nil, err
-		}
-		var extra [1]byte
-		if _, err := io.ReadFull(file.Data, extra[:]); err != io.EOF {
-			if err != nil {
-				return nil, err
+	err = sqlstore.Atomic(t.transactionQueries, func() error {
+		for _, file := range files {
+			if file.Data == nil {
+				return errors.New("missing staged input source")
 			}
-			return nil, errors.New("staged input size mismatch")
+			// Materialize only one file with an exact allocation, then detect growth.
+			data := make([]byte, file.Size)
+			if _, err := io.ReadFull(file.Data, data); err != nil {
+				return err
+			}
+			var extra [1]byte
+			if _, err := io.ReadFull(file.Data, extra[:]); err != io.EOF {
+				if err != nil {
+					return err
+				}
+				return errors.New("staged input size mismatch")
+			}
+			sum := sha256.Sum256(data)
+			if int64(len(data)) != file.Size || hex.EncodeToString(sum[:]) != file.SHA256 {
+				return errors.New("staged input size or digest mismatch")
+			}
+			input, err := t.AddInput(project, file.Name, data)
+			if err != nil {
+				return err
+			}
+			inputs = append(inputs, input)
 		}
-		sum := sha256.Sum256(data)
-		if int64(len(data)) != file.Size || hex.EncodeToString(sum[:]) != file.SHA256 {
-			return nil, errors.New("staged input size or digest mismatch")
+		if content != "" {
+			if _, err = t.AddProjectHint(project, HintInput{Content: content, Creator: "user"}, ""); err != nil {
+				return err
+			}
 		}
-		input, err := t.AddInput(project, file.Name, data)
-		if err != nil {
-			return nil, err
-		}
-		inputs = append(inputs, input)
-	}
-	if content != "" {
-		if _, err = t.AddProjectHint(project, HintInput{Content: content, Creator: "user"}, ""); err != nil {
-			return nil, err
-		}
-	}
-	if err = t.saveInputBatchReceipt(project, key, requestSHA256, inputs); err != nil {
+		return t.saveInputBatchReceipt(project, key, requestSHA256, inputs)
+	})
+	if err != nil {
 		return nil, err
 	}
 	return inputs, nil

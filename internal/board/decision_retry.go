@@ -32,7 +32,7 @@ func automaticDecisionRetryEligible(kind, status, resultStatus, failureKind, fai
 // existing registry is the durable allowance: a second registered attempt with
 // this retry key exhausts it, even after dispatcher restart. Human retry remains
 // a separate operation and does not replenish the automatic allowance.
-func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
+func (t *Tx) RequestAutomaticDecisionRetry(e Execution) error {
 	current, failure, err := sqlstore.ExecutionSummaryWithFailure(t.transactionQueries, e.ProjectID, e.ID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Err(404, "Execution not found")
@@ -94,29 +94,27 @@ func (t *Tx) RequestAutomaticDecisionRetry(e Execution) (err error) {
 	}
 	// A caller may handle a failed grant and continue its transaction. Keep
 	// revocation, lease release and authorization indivisible in that case too.
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
-		return err
-	}
-	defer t.finishManagement(&err)
-	// Terminal failures are already revoked. Revoke defensively and release
-	// only this attempt's lease in the same transaction as its one-use grant.
-	if err = sqlstore.RevokeRun(t.transactionQueries, current.ProjectID, current.Lease); err != nil {
-		return err
-	}
-	if leaseWorker != nil {
-		if current.Kind == "curate" {
-			err = t.ReleaseCurator(current.ProjectID, current.Lease)
-		} else {
-			err = sqlstore.SaveReasonLease(t.transactionQueries, current.ProjectID, nil)
-		}
-		if err != nil {
+	return sqlstore.Atomic(t.transactionQueries, func() error {
+		// Terminal failures are already revoked. Revoke defensively and release
+		// only this attempt's lease in the same transaction as its one-use grant.
+		if err = sqlstore.RevokeRun(t.transactionQueries, current.ProjectID, current.Lease); err != nil {
 			return err
 		}
-	}
-	// Eligibility and the grant share this transaction. Preserve the saved Job
-	// and Result in place: authorizing a successor never restores the old run.
-	if current.Status == "retry_requested" {
-		return nil
-	}
-	return sqlstore.SaveExecutionRetryGrant(t.transactionQueries, current.ProjectID, current.ID, t.Now)
+		if leaseWorker != nil {
+			if current.Kind == "curate" {
+				err = t.ReleaseCurator(current.ProjectID, current.Lease)
+			} else {
+				err = sqlstore.SaveReasonLease(t.transactionQueries, current.ProjectID, nil)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		// Eligibility and the grant share this transaction. Preserve the saved Job
+		// and Result in place: authorizing a successor never restores the old run.
+		if current.Status == "retry_requested" {
+			return nil
+		}
+		return sqlstore.SaveExecutionRetryGrant(t.transactionQueries, current.ProjectID, current.ID, t.Now)
+	})
 }
