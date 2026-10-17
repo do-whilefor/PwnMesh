@@ -75,7 +75,7 @@ async function logout() {
   finally {if (!disposed && currentVersion === version) {busy.value = false; request = null;}}
 }
 function payload() {
-  if (!oauth.value && !token.value.trim() && serverSettings.value?.has_token && !retained.value) throw new Error('服务地址或认证方式已变更，请输入该服务新的 API Key。');
+  if (!oauth.value && !token.value.trim() && serverSettings.value?.has_token && !retained.value) throw new Error('服务地址或接入方式已变更，请输入该服务新的 API Key。');
   return validate({protocol: values.apiProtocol, auth_mode: values.authMode, login_id: login.state.phase === 'authorized' ? login.state.id : undefined, base_url: values.url, model: values.model, token: token.value, reasoning_effort: values.reasoningEffort, connection_mode: values.connectionMode, proxy_protocol: values.protocol, proxy_host: values.host, proxy_port: values.port}, retained.value);
 }
 function fill(settings: PublicSettings, entering = false) {
@@ -138,7 +138,7 @@ onBeforeUnmount(dispose);
         </button>
       </div></section>
       <section class="llm-section llm-connection"><div class="llm-section-title"><h2>连接配置</h2></div>
-        <div v-if="provider === 'kimi' || provider === 'glm'" class="llm-field"><label for="llm-auth-mode">认证方式</label><div class="llm-select-wrap"><select id="llm-auth-mode" v-model="values.authMode" name="authMode" :disabled="disabled" @change="selectAuth"><option value="api_key">API Key</option><option v-if="provider === 'kimi'" value="kimi_oauth">Kimi Code 订阅登录</option><option v-else value="glm_coding_plan">GLM Coding Plan</option></select><Icon name="chevron-down" /></div><p class="llm-field-hint"><a v-if="provider === 'kimi'" href="https://www.kimi.com/code" target="_blank" rel="noopener noreferrer">Kimi Code 订阅说明</a><a v-else href="https://docs.bigmodel.cn/cn/coding-plan/extension/coding-tool-helper" target="_blank" rel="noopener noreferrer">GLM Coding Plan 订阅与专用 API Key 说明</a></p></div>
+        <div v-if="provider === 'kimi' || provider === 'glm'" class="llm-field"><label for="llm-auth-mode">接入方式</label><div class="llm-select-wrap"><select id="llm-auth-mode" v-model="values.authMode" name="authMode" :disabled="disabled" @change="selectAuth"><option value="api_key">API Key</option><option v-if="provider === 'kimi'" value="kimi_oauth">订阅（Kimi Code）</option><option v-else value="glm_coding_plan">订阅（GLM Coding Plan）</option></select><Icon name="chevron-down" /></div><p class="llm-field-hint"><a v-if="provider === 'kimi'" href="https://www.kimi.com/code" target="_blank" rel="noopener noreferrer">Kimi Code 订阅说明</a><a v-else href="https://docs.bigmodel.cn/cn/coding-plan/extension/coding-tool-helper" target="_blank" rel="noopener noreferrer">GLM Coding Plan 订阅与专用 API Key 说明</a></p></div>
         <div class="llm-field llm-protocol"><label for="llm-protocol">API 协议</label><div class="llm-select-wrap"><select id="llm-protocol" v-model="values.apiProtocol" name="protocol" :disabled="disabled || subscription"><option v-for="protocol in apiProtocolIDs" :key="protocol" :value="protocol">{{ apiProtocols[protocol] }}</option></select><Icon name="chevron-down" /></div></div>
         <div class="llm-field llm-endpoint"><label for="llm-url">Base URL</label><input id="llm-url" v-model="values.url" name="url" type="url" placeholder="https://api.example.com/v1" spellcheck="false" :disabled="disabled || subscription"></div>
         <div class="llm-field"><label for="llm-model">模型名称</label><input id="llm-model" v-model="values.model" name="model" type="text" placeholder="输入模型 ID" spellcheck="false" :disabled="disabled"></div>

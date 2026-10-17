@@ -152,6 +152,8 @@ describe('subscription authentication', () => {
   it('authorizes a Kimi device code before testing and saving, then reuses only the server credential', async () => {
     vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'Date']});
     const {client, calls} = fixture(), wrapper = mount(ModelSettingsPage, {props: {client}}); await flushPromises();
+    expect(wrapper.get('label[for="llm-auth-mode"]').text()).toBe('接入方式');
+    expect(wrapper.findAll('#llm-auth-mode option').map(option => option.text())).toEqual(['API Key', '订阅（Kimi Code）']);
     await wrapper.get('#llm-key').setValue('discard-this-key');
     await wrapper.get('#llm-protocol').setValue('openai');
     await wrapper.get('#llm-auth-mode').setValue('kimi_oauth');
@@ -190,6 +192,8 @@ describe('subscription authentication', () => {
   it('requires a dedicated GLM plan key and never starts OAuth for GLM or DeepSeek', async () => {
     const {client, calls} = fixture({...settings(), base_url: providers.glm.base_url, model: providers.glm.model});
     const wrapper = mount(ModelSettingsPage, {props: {client}}); await flushPromises();
+    expect(wrapper.get('label[for="llm-auth-mode"]').text()).toBe('接入方式');
+    expect(wrapper.findAll('#llm-auth-mode option').map(option => option.text())).toEqual(['API Key', '订阅（GLM Coding Plan）']);
     await wrapper.get('#llm-key').setValue('api-key-draft');
     await wrapper.get('#llm-auth-mode').setValue('glm_coding_plan');
     expect(wrapper.get<HTMLInputElement>('#llm-key').element.value).toBe('');
