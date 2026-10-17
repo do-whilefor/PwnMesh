@@ -289,7 +289,8 @@ func TestDecisionMetricsRuntimeReceiptCounts(t *testing.T) {
 			err := os.WriteFile(filepath.Join(dir, "graph-response-"+event.Request.RequestID+".json"), response, 0600)
 			return len(raw), err
 		})
-		j := Job{Kind: "reason", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: version}}
+		j := scenarioJob(t, "", "reason")
+		j.Decision.StateVersion = version
 		oRuntime := configureRoleTools(t, j, &o)
 		oRuntime.emit = m.observe
 		batch := board.DecisionBatch{ExpectedVersion: version, Actions: []board.DecisionAction{}}
@@ -345,7 +346,8 @@ func TestDecisionMetricsRuntimeOperationsAndLostCommit(t *testing.T) {
 		}
 		return len(raw), err
 	})
-	j := Job{Kind: "reason", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: version}}
+	j := scenarioJob(t, "", "reason")
+	j.Decision.StateVersion = version
 	oRuntime := configureRoleTools(t, j, &o)
 	oRuntime.emit = m.observe
 	call := func(name, input string, wantError bool) {

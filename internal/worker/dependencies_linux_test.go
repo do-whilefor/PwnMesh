@@ -35,8 +35,8 @@ func TestDependencySchemaIsLimitedToReason(t *testing.T) {
 }
 
 func TestDecisionDependencyDraftCommitsEarlierStepAliases(t *testing.T) {
-	j := Job{Kind: "reason", GraphRPC: true, Graph: board.Graph{Project: board.Project{OrchestrationVersion: 1}},
-		Decision: &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}}
+	j := scenarioJob(t, "", "reason")
+	j.Decision.StateVersion = strings.Repeat("a", 64)
 	opts := Options{RunDir: t.TempDir()}
 	requests := 0
 	opts.Output = &draftTestBridge{dir: opts.RunDir, handle: func(request GraphRequest) (any, error) {

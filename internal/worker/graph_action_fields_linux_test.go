@@ -24,7 +24,7 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			opts := Options{Tools: []agent.Tool{}}
-			configureRoleTools(t, Job{Kind: tc.kind}, &opts)
+			configureRoleTools(t, scenarioJob(t, "", tc.kind), &opts)
 			var schema struct {
 				Properties struct {
 					Payload struct {
@@ -99,10 +99,7 @@ func TestGraphActionSchemaPreservesOperationPayloads(t *testing.T) {
 		{"explore", "candidate", `{"claim":"Observed","scope":"fixture","status":"refuted","sources":["fact002"],"reason":"Corrected","supersedes":"prior-note","evidence":[{"path":"retained.txt","run_id":"previous-run","excerpt":"exact text","start_line":0,"end_line":0}]}`},
 	} {
 		t.Run(tc.kind+"/"+tc.op+"/"+tc.payload, func(t *testing.T) {
-			job := Job{Kind: tc.kind}
-			if tc.kind == "reason" {
-				job.Decision = &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}
-			}
+			job := scenarioJob(t, "", tc.kind)
 			opts := Options{Tools: []agent.Tool{}}
 			configureRoleTools(t, job, &opts)
 			raw := json.RawMessage(`{"op":"` + tc.op + `","idempotency_key":"probe","payload":` + tc.payload + `}`)
@@ -139,7 +136,8 @@ func TestGraphActionSchemaRejectsMalformedScalarFields(t *testing.T) {
 }
 
 func TestGraphActionSchemaPreservesFrozenAndHistoricalEvidence(t *testing.T) {
-	job := Job{Kind: "explore", RunID: "schema-evidence", GraphRPC: true, Workspace: t.TempDir()}
+	job := scenarioJob(t, "", "explore")
+	job.RunID = "schema-evidence"
 	opts := Options{Tools: []agent.Tool{}, RunDir: t.TempDir()}
 	original := "first\nselected\nlast\n"
 	source := filepath.Join(job.Workspace, "result.txt")
@@ -191,7 +189,8 @@ func TestGraphActionSchemaPreservesFrozenAndHistoricalEvidence(t *testing.T) {
 }
 
 func TestGraphActionFactRejectsHistoricalEvidenceWithCorrectionGuidance(t *testing.T) {
-	job := Job{Kind: "explore", RunID: "consumer", GraphRPC: true, Workspace: t.TempDir()}
+	job := scenarioJob(t, "", "explore")
+	job.RunID = "consumer"
 	opts := Options{Tools: []agent.Tool{}, RunDir: t.TempDir()}
 	const original = "independently observed producer bytes\n"
 	source := filepath.Join(job.Workspace, "producer.txt")

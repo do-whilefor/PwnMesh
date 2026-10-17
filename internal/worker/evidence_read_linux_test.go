@@ -45,7 +45,9 @@ func retainedReadFixture(t *testing.T, workspace, run, original string) board.Ev
 
 func retainedReadTool(t *testing.T, workspace string, state *board.State) agent.Tool {
 	t.Helper()
-	job := Job{Kind: "reason", RunID: "reader", Workspace: workspace, Graph: state.Graph, State: state, GraphRPC: true}
+	state.Graph.Project.OrchestrationVersion = 1
+	job := Job{Kind: "explore", RunID: "reader", Workspace: workspace, Graph: state.Graph, State: state, GraphRPC: true, ResultContractVersion: 2,
+		Intent: &board.Intent{ID: "read-original"}}
 	runDir := t.TempDir()
 	options := Options{RunDir: runDir, Output: &draftTestBridge{dir: runDir, handle: func(request GraphRequest) (any, error) {
 		return protocol.GraphPage(*state, request)

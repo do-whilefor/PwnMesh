@@ -391,7 +391,8 @@ func draftTestTools(t *testing.T, handle func(GraphRequest) (any, error)) (*role
 	t.Helper()
 	opts := &Options{RunDir: t.TempDir()}
 	opts.Output = &draftTestBridge{dir: opts.RunDir, handle: handle}
-	job := Job{Kind: "reason", RunID: "draft-test", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}}
+	job := scenarioJob(t, "", "reason")
+	job.RunID, job.Decision.StateVersion = "draft-test", strings.Repeat("a", 64)
 	optsRuntime := configureRoleTools(t, job, opts)
 	return optsRuntime, opts.Tools[0], opts.Tools[1]
 }

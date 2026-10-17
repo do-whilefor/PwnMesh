@@ -5,7 +5,6 @@ package worker
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"io"
 	"pwnmesh/internal/protocol"
@@ -59,7 +58,12 @@ func runTestWorker(ctx context.Context, job Job, options Options) (Result, error
 }
 
 func TestWorkerRejectsRetiredProtocolsBeforeCallingProvider(t *testing.T) {
-	for name, run := range map[string]func(context.Context, Job, Options) (Result, error){"worker": Run, "session": runSession} {
+	for name, run := range map[string]func(context.Context, Job, Options) (Result, error){
+		"worker": Run, "session": runSession,
+		"tools": func(_ context.Context, job Job, options Options) (Result, error) {
+			return Result{}, ConfigureRuntimeTools(job, &options)
+		},
+	} {
 		for variant, mutate := range map[string]func(*Job){
 			"historical project": func(j *Job) { j.Graph.Project.OrchestrationVersion = 0 },
 			"unversioned result": func(j *Job) { j.ResultContractVersion = 0 },
@@ -82,22 +86,5 @@ func TestWorkerRejectsRetiredProtocolsBeforeCallingProvider(t *testing.T) {
 				}
 			})
 		}
-	}
-}
-
-func TestRuntimeGraphReadRequiresDispatcherBridge(t *testing.T) {
-	for _, kind := range []string{"reason", "explore"} {
-		t.Run(kind, func(t *testing.T) {
-			job := outcomeJob(t, kind)
-			job.GraphRPC = false
-			var output bytes.Buffer
-			options := Options{RunDir: t.TempDir(), Output: &output}
-			configureRoleTools(t, job, &options)
-			read := snapshotRuntimeTool(t, options, "read_graph")
-			raw, err := read.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["origin"]}`))
-			if err == nil || !strings.Contains(err.Error(), "requires the dispatcher graph bridge") || raw != "" || output.Len() != 0 {
-				t.Fatalf("offline graph read bypassed the bridge: raw=%q err=%v output=%q", raw, err, output.String())
-			}
-		})
 	}
 }

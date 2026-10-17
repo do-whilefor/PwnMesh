@@ -116,14 +116,14 @@ func TestCommandGraphEvidenceReceiptIsByteExactAndDoesNotFinishStep(t *testing.T
 		t.Fatal(err)
 	}
 	var receipt struct {
-		ObservedAt   string         `json:"observed_at"`
+		VerifiedAt   string         `json:"verified_at"`
 		Verification string         `json:"verification"`
 		Evidence     []dag.Evidence `json:"verified_evidence"`
 	}
 	if err := json.Unmarshal([]byte(result), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := time.Parse(time.RFC3339Nano, receipt.ObservedAt); err != nil || len(receipt.Evidence) != 4 || !strings.Contains(receipt.Verification, "not task meaning") {
+	if _, err := time.Parse(time.RFC3339Nano, receipt.VerifiedAt); err != nil || len(receipt.Evidence) != 4 || !strings.Contains(receipt.Verification, "not task meaning") {
 		t.Fatalf("bad verified evidence receipt: %+v %v", receipt, err)
 	}
 	var exact dag.Evidence
@@ -200,7 +200,7 @@ func TestCommandGraphActualLoopUsesDefaultToolWithoutExtraPlanning(t *testing.T)
 	if _, err := os.Stat(filepath.Join(dir, "graph-tools", "loop", "graph.json")); err != nil {
 		t.Fatal(err)
 	}
-	job.Kind = "reason"
+	job = scenarioJob(t, "", "reason")
 	options := Options{RunDir: dir}
 	configureRoleTools(t, job, &options)
 	if slices.ContainsFunc(options.Tools, func(tool agent.Tool) bool { return tool.Name == "run_graph" }) {

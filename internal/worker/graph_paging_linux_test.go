@@ -59,7 +59,7 @@ func TestReadGraphRuntimeContinuesOversizedOverview(t *testing.T) {
 	state := board.State{Graph: board.Graph{Facts: []board.Fact{{ID: "origin", Description: strings.Repeat("λ", MaxGraphRPCBytes)}, {ID: "goal", Description: "goal"}}}}
 	for _, kind := range []string{"reason", "explore"} {
 		t.Run(kind, func(t *testing.T) {
-			job := Job{Kind: kind, GraphRPC: true}
+			job := scenarioJob(t, "", kind)
 			if kind == "reason" {
 				job.Decision = &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}
 			}

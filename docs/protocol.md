@@ -44,9 +44,10 @@ HTTP failures retain `detail` and add an authoritative `code`. Graph bridge
 responses retain legacy `error` text and add `failure: {code, status, detail}`.
 Recovery uses codes such as `state_changed`, `dependency_invalidated` and
 `recovery_exhausted`, with HTTP status checks. Unclassified failures use
-`request_failed`; only the transport compatibility adapter parses old uncoded
-responses. Worker role policy accepts a narrow Graph round-trip function, with
-the existing container bridge as the default transport.
+`request_failed`; live HTTP never infers codes from display text. Only retained
+bridge responses use the uncoded-response adapter. Worker role policy accepts a
+narrow Graph round-trip function, with the existing container bridge as the
+default transport.
 
 ## Observations and coordinated checks
 
@@ -133,8 +134,7 @@ outputs must fall within the registered Step's `write_paths`; ordinary artifacts
 remain private to the node directory. Declarations are advisory coordination,
 not a filesystem sandbox or a guarantee against undeclared shell side effects.
 
-`verified_evidence[].verified_at` records byte verification. The response's legacy
-`observed_at` is an alias of verification time. `execution_started_at` and
+`verified_evidence[].verified_at` records byte verification. `execution_started_at` and
 `execution_finished_at` identify the original execution window, including in
 `reused_from` provenance. Verification/reuse does not establish target freshness.
 Reuse from an interrupted graph requires a successful, verified dependency

@@ -13,10 +13,8 @@ import (
 )
 
 func TestGraphReadSchemasPreserveCurrentSectionsAndSnapshotContract(t *testing.T) {
-	orchestrated := Job{Kind: "explore"}
-	orchestrated.Graph.Project.OrchestrationVersion = 1
-	planner := orchestrated
-	planner.Kind = "reason"
+	orchestrated := scenarioJob(t, "", "explore")
+	planner := scenarioJob(t, "", "reason")
 	snapshot, _ := snapshotRuntimeFixture(t, "explore")
 	snapshot.Graph.Project.OrchestrationVersion = 1
 	for name, job := range map[string]Job{
@@ -120,10 +118,8 @@ func TestGraphActionRejectsMalformedCollectionsBeforeExecution(t *testing.T) {
 				requests++
 				return board.DecisionReceipt{}, nil
 			}}
-			job := Job{Kind: tc.kind, RunID: "schema-test", GraphRPC: true}
-			if tc.kind == "reason" {
-				job.Decision = &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}
-			}
+			job := scenarioJob(t, "", tc.kind)
+			job.RunID = "schema-test"
 			optsRuntime := configureRoleTools(t, job, &opts)
 			executed := 0
 			for n := range opts.Tools {
@@ -199,7 +195,7 @@ func TestGraphActionCorrectedArrayReusesKeyAndPreviews(t *testing.T) {
 
 func TestGraphActionCollectionSchemaPreservesSupportedPayloads(t *testing.T) {
 	opts := Options{Tools: []agent.Tool{}}
-	configureRoleTools(t, Job{Kind: "explore"}, &opts)
+	configureRoleTools(t, scenarioJob(t, "", "explore"), &opts)
 	action := opts.Tools[1]
 	for _, payload := range []string{
 		`{}`,
@@ -331,11 +327,9 @@ func TestGraphActionOptionalPayloadOnlyForDraftControls(t *testing.T) {
 			}
 		})
 	}
-	for _, kind := range []string{"reason", "explore"} {
-		opts := Options{Tools: []agent.Tool{}}
-		configureRoleTools(t, Job{Kind: kind}, &opts)
-		if err := agent.ValidateArguments(opts.Tools[1].Schema, json.RawMessage(`{"op":"step","idempotency_key":"missing"}`)); err == nil || !strings.Contains(err.Error(), "missing argument arguments.payload") {
-			t.Fatalf("non-batch %s no longer requires payload: %v", kind, err)
-		}
+	opts := Options{Tools: []agent.Tool{}}
+	configureRoleTools(t, scenarioJob(t, "", "explore"), &opts)
+	if err := agent.ValidateArguments(opts.Tools[1].Schema, json.RawMessage(`{"op":"fact","idempotency_key":"missing"}`)); err == nil || !strings.Contains(err.Error(), "missing argument arguments.payload") {
+		t.Fatalf("observation publication no longer requires payload: %v", err)
 	}
 }

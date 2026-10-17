@@ -30,8 +30,8 @@ func configureRoleTools(t *testing.T, job Job, options *Options) *roleRuntime {
 // A caller can reuse or change its configuration while already assembled tools
 // continue to use their own bridge and graph cursor.
 func TestRoleRuntimeOwnsBridgeAndGraphState(t *testing.T) {
-	job := Job{Kind: "reason", RunID: "owned", GraphRPC: true,
-		Decision: &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}}
+	job := scenarioJob(t, "", "reason")
+	job.RunID, job.Decision.StateVersion = "owned", strings.Repeat("a", 64)
 	config := Options{RunDir: t.TempDir()}
 	calls := 0
 	config.Output = &draftTestBridge{dir: config.RunDir, handle: func(GraphRequest) (any, error) {

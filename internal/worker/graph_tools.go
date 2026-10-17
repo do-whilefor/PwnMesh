@@ -28,8 +28,11 @@ func ConfigureRuntimeTools(j Job, o *Options) error {
 }
 
 func newRoleRuntime(j Job, config Options, emit agent.Emit) (*roleRuntime, error) {
+	if err := validateWorkerProtocol(j); err != nil {
+		return nil, err
+	}
 	runtime := &roleRuntime{emit: emit}
-	if j.Kind == "reason" && j.Decision != nil {
+	if j.Kind == "reason" {
 		runtime.graph.Version = j.Decision.StateVersion
 	}
 	if j.Kind == "curate" {
@@ -52,7 +55,7 @@ func newRoleRuntime(j Job, config Options, emit agent.Emit) (*roleRuntime, error
 		return graphRPC(ctx, config.RunDir, config.Output, request)
 	})
 	runtime.request = request
-	if batchDecision(j) {
+	if j.Kind == "reason" {
 		runtime.decision = &decisionDraft{closureProtocol: j.Decision.ClosureProtocol == 1, request: request}
 	}
 	if j.Kind == "curate" {
@@ -73,9 +76,7 @@ func newRoleRuntime(j Job, config Options, emit agent.Emit) (*roleRuntime, error
 		return result, err
 	}}
 	read.Description += " assets lists project identities; anchors maps nodes to assets; asset_ids narrows records without changing evidence status. relations matches source/target fact IDs. history summaries link to original steps/facts. Preserve filters when following next_offset."
-	if protocol.OrchestrationJob(j) {
-		read.Description += " candidates/disputes retain original judgments and review questions; overview includes the curation boundary."
-	}
+	read.Description += " candidates/disputes retain original judgments and review questions; overview includes the curation boundary."
 	if j.Kind == "curate" {
 		read.Description = strings.Replace(read.Description, "Overview refreshes the decision view; after state_changed, read it and affected evidence before replanning.", "All reads use the immutable curation snapshot; a state_changed commit requires a new run.", 1)
 	}
@@ -93,10 +94,10 @@ func newRoleRuntime(j Job, config Options, emit agent.Emit) (*roleRuntime, error
 	if runtime.decision != nil {
 		allowed = append(allowed, "complete", "preview", "commit", "reset")
 		description += " Actions are private drafts until commit. Keys are letters/digits/underscore/hyphen, start with a letter, at most 64 characters. New goal/step returns $key for later id/goal_id/parent_id references. Ordinary plan actions and commit can share one response; preview is optional. complete payload contains only {from:[fact IDs],description:proof}, with no action, and must be last; first explicitly abandon unnecessary active Steps and withdraw only auxiliary subgoals. Completion requires preview and review of completion_review in a subsequent model turn before commit. commit publishes the entire batch and ends this run; an empty batch requires a valid open or running Step. reset discards the draft. preview/commit/reset omit payload or use {}; other actions require payload. A state_changed conflict discards the draft; read the current overview and affected graph section, then rebuild under the original deadline. InvalidSources require review before further execution."
-		if j.Decision != nil && j.Decision.CompletionAssessment != nil {
+		if j.Decision.CompletionAssessment != nil {
 			description += " The supplied completion_assessment can replace that completion review only with empty omitted_fact_ids, no omitted notes/disputes or their evidence, unchanged state/evidence, and no other draft actions, reset or recovery; runtime still previews. If reuse is unavailable or rejected, follow the preview/review sequence."
 		}
-	} else if !protocol.ControlJob(j) && j.ResultContractVersion >= 2 {
+	} else if j.Kind == "explore" {
 		description += " Reuse a published evidence Fact in completed.data.fact_id to finish this Step."
 	}
 	if j.Kind != "curate" {
@@ -161,18 +162,14 @@ func newRoleRuntime(j Job, config Options, emit agent.Emit) (*roleRuntime, error
 		if o.Tools == nil {
 			set := tools.Set{Dir: j.Workspace, RunDir: o.RunDir}
 			o.Tools = set.All()
-			if protocol.OrchestrationJob(j) && j.Kind == "explore" {
-				o.Tools = append(o.Tools, commandGraphTool(j, *o))
-			}
+			o.Tools = append(o.Tools, commandGraphTool(j, *o))
 		}
 		o.Tools = append(o.Tools, read, action)
-		if protocol.OrchestrationJob(j) && j.Kind == "explore" && j.ResultContractVersion == 2 {
-			runtime.stepFinish = &stepFinish{job: j, runDir: o.RunDir}
-			o.Tools = append(o.Tools, runtime.stepFinish.tool())
-		}
+		runtime.stepFinish = &stepFinish{job: j, runDir: o.RunDir}
+		o.Tools = append(o.Tools, runtime.stepFinish.tool())
 	}
 	o.Tools = append(o.Tools, rawEvidenceTool(j, runtime, request))
-	if j.Kind == "explore" && j.GraphRPC && j.Intent != nil && j.RunID != "" {
+	if j.Kind == "explore" && j.Intent != nil && j.RunID != "" {
 		o.Tools = append(o.Tools, workerTraceTool(j, o, request))
 	}
 	o.Tools = scenarioTools(j, o.Tools)

@@ -20,7 +20,7 @@ func snapshotRuntimeFixture(t *testing.T, kind string) (Job, board.State) {
 	intent := board.Intent{ID: "step_original", From: []string{"origin"}, Description: "Inspect the local fixture"}
 	state := board.State{
 		Graph: board.Graph{
-			Project: board.Project{ID: "snapshot_project", Generation: 3, Status: "active"},
+			Project: board.Project{ID: "snapshot_project", Generation: 3, Status: "active", OrchestrationVersion: 1},
 			Facts:   []board.Fact{{ID: "origin", Description: "Original user input remains intact"}, {ID: "goal", Description: "Read the local fixture"}},
 			Intents: []board.Intent{intent},
 		},

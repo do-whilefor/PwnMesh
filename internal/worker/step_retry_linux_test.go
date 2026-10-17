@@ -7,25 +7,23 @@ import (
 	"testing"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/board"
 )
 
 func TestStepRetryToolsAndPromptDescribeAuthorization(t *testing.T) {
-	const protocol = 1
-	j := Job{Kind: "reason", GraphRPC: true, Graph: board.Graph{Project: board.Project{OrchestrationVersion: protocol}}}
+	j := scenarioJob(t, "", "reason")
 	opts := Options{}
 	configureRoleTools(t, j, &opts)
 	action := opts.Tools[1]
 	err := agent.ValidateArguments(action.Schema, json.RawMessage(`{"op":"step","idempotency_key":"retry","payload":{"action":"retry","id":"failed-step","latest_run_id":"failed-run","reason":"The prerequisite is now ready"}}`))
 	if err != nil {
-		t.Fatalf("protocol %d has incorrect retry schema: %v", protocol, err)
+		t.Fatalf("planner has incorrect retry schema: %v", err)
 	}
 	prompt, err := Prompt(j, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(prompt, "Use step retry") || !strings.Contains(action.Description, "retry authorizes one new execution") {
-		t.Fatalf("protocol %d advertises the wrong retry contract", protocol)
+		t.Fatal("planner advertises the wrong retry contract")
 	}
 }
 

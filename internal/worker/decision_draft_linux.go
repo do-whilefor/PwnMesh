@@ -106,10 +106,6 @@ func (d *decisionDraft) observeRead(section string, raw ...string) {
 	}
 }
 
-func batchDecision(j Job) bool {
-	return j.Kind == "reason" && j.Decision != nil && j.Decision.Version == 2
-}
-
 func (d *decisionDraft) result() (string, bool) { return committedDecisionText, d.committed }
 
 func (d *decisionDraft) recover(ctx context.Context) (string, error) {

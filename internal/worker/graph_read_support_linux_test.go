@@ -173,7 +173,8 @@ func TestModelGraphReadLargeFindingKeepsMetadataAndPagedSupport(t *testing.T) {
 
 	t.Run("decision_refresh", func(t *testing.T) {
 		dir := t.TempDir()
-		job := Job{Kind: "reason", GraphRPC: true, Decision: &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}}
+		job := scenarioJob(t, "", "reason")
+		job.Decision.StateVersion = board.DecisionStateVersion(state)
 		options := Options{RunDir: dir, Output: &draftTestBridge{dir: dir, handle: func(r GraphRequest) (any, error) { return protocol.GraphPage(state, r) }}}
 		optionsRuntime := configureRoleTools(t, job, &options)
 		optionsRuntime.decision.invalidate()

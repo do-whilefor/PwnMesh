@@ -200,36 +200,40 @@ func TestCuratorStaleInputEndsWithoutRefreshingOrRepairing(t *testing.T) {
 
 func TestOrchestrationRuntimePermissionsAndCandidateEvidence(t *testing.T) {
 	for _, tc := range []struct {
-		kind, op      string
-		orchestration int
-		allowed       bool
+		kind, op string
+		allowed  bool
 	}{
-		{"reason", "goal", 1, true}, {"reason", "step", 1, true}, {"reason", "fact_relation", 1, false}, {"reason", "candidate", 1, false},
-		{"curate", "curate", 1, true}, {"curate", "step", 1, false}, {"curate", "fact", 1, false}, {"curate", "fact_relation", 1, false},
-		{"explore", "candidate", 1, true}, {"explore", "fact", 1, true}, {"explore", "finding", 1, false}, {"explore", "step", 1, false},
-		{"reason", "curation_request", 1, true}, {"curate", "curation_request", 1, false},
-		{"explore", "curation_request", 1, false},
+		{"reason", "goal", true}, {"reason", "step", true}, {"reason", "fact_relation", false}, {"reason", "candidate", false},
+		{"curate", "curate", true}, {"curate", "step", false}, {"curate", "fact", false}, {"curate", "fact_relation", false},
+		{"explore", "candidate", true}, {"explore", "fact", true}, {"explore", "finding", false}, {"explore", "step", false},
+		{"reason", "curation_request", true}, {"curate", "curation_request", false},
+		{"explore", "curation_request", false},
 	} {
-		name := tc.kind + "/" + tc.op
-		if tc.orchestration == 0 {
-			name += "/legacy"
-		}
-		t.Run(name, func(t *testing.T) {
-			j := curationJob(t)
-			j.Kind, j.Graph.Project.OrchestrationVersion = tc.kind, tc.orchestration
-			j.State.Graph.Project.OrchestrationVersion = tc.orchestration
+		t.Run(tc.kind+"/"+tc.op, func(t *testing.T) {
+			j := scenarioJob(t, "", tc.kind)
+			if tc.kind == "curate" {
+				j = curationJob(t)
+			}
 			payload := json.RawMessage(`{}`)
-			if tc.op == "curate" {
+			switch tc.op {
+			case "goal":
+				payload = json.RawMessage(`{"action":"add","condition":"Verify the fixture"}`)
+			case "step":
+				payload = json.RawMessage(`{"action":"add","from":["origin"],"description":"Inspect the fixture"}`)
+			case "curate":
 				payload = json.RawMessage(`{"groups":[]}`)
-			} else if tc.op == "curation_request" {
+			case "curation_request":
 				payload = json.RawMessage(`{"sources":["left","right"],"reason":"The retained observations conflict"}`)
 			}
-			r := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: tc.op, IdempotencyKey: "key", Payload: payload, ExpectedVersion: board.DecisionStateVersion(*j.State)}}
-			if err := protocol.ValidateGraphRequest(j, r); (err == nil) != tc.allowed {
-				t.Fatalf("bridge permission differs: allowed=%v err=%v", tc.allowed, err)
+			r := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: tc.op, IdempotencyKey: "key", Payload: payload, ExpectedVersion: j.CurationVersion()}}
+			// Planner actions are private drafts. The bridge accepts only their
+			// version-bound batch, never the retired single-action path.
+			bridgeAllowed := tc.allowed && tc.kind != "reason"
+			if err := protocol.ValidateGraphRequest(j, r); (err == nil) != bridgeAllowed {
+				t.Fatalf("bridge permission differs: allowed=%v err=%v", bridgeAllowed, err)
 			}
 			options := Options{Tools: []agent.Tool{}}
-			configureRoleTools(t, j, &options)
+			runtime := configureRoleTools(t, j, &options)
 			tool := snapshotRuntimeTool(t, options, "graph_action")
 			fields := map[string]any{"op": tc.op, "payload": payload}
 			if tc.kind != "curate" {
@@ -243,13 +247,17 @@ func TestOrchestrationRuntimePermissionsAndCandidateEvidence(t *testing.T) {
 				if _, err := tool.Execute(context.Background(), input); err == nil {
 					t.Fatal("forbidden action reached execution")
 				}
-			} else if tc.op == "curation_request" && !strings.Contains(string(tool.Schema), "concrete evidence conflict or merge") {
+			} else if tc.kind == "reason" {
+				if _, err := tool.Execute(context.Background(), input); err != nil || len(runtime.decision.actions) != 1 || runtime.decision.actions[0].Op != tc.op {
+					t.Fatalf("planner action did not stay in its draft: %+v %v", runtime.decision, err)
+				}
+			}
+			if tc.allowed && tc.op == "curation_request" && !strings.Contains(string(tool.Schema), "concrete evidence conflict or merge") {
 				t.Fatal("curation request schema omits its decision criterion")
 			}
 		})
 	}
-	j, dir := curationJob(t), t.TempDir()
-	j.Kind = "explore"
+	j, dir := outcomeJob(t, "explore"), t.TempDir()
 	if err := os.WriteFile(filepath.Join(j.Workspace, "source.txt"), []byte("Original evidence bytes\n"), 0600); err != nil {
 		t.Fatal(err)
 	}

@@ -108,7 +108,7 @@ func configureGraphRequest(j Job, o Options, runtime *roleRuntime, roundTrip fun
 		if frozen {
 			return raw, err
 		}
-		if batchDecision(j) && runtime.emit != nil {
+		if runtime.decision != nil && runtime.emit != nil {
 			operation := decisionOperation{Op: r.Op, ElapsedMS: time.Since(started).Milliseconds(), Failed: err != nil, StateChanged: graphStateConflict(err)}
 			if err == nil && (r.Op == "decision_commit" || r.Op == "decision_receipt") {
 				var receipt board.DecisionReceipt

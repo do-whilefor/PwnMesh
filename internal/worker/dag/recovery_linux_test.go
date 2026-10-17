@@ -64,7 +64,6 @@ func TestInterruptedGraphReusesIndependentSuccessWithoutReplayingUnknown(t *test
 			t.Fatal(err)
 		}
 		var response struct {
-			ObservedAt string                  `json:"observed_at"`
 			VerifiedAt string                  `json:"verified_at"`
 			Evidence   []Evidence              `json:"verified_evidence"`
 			Nodes      []workergraph.NodeState `json:"nodes"`
@@ -73,8 +72,11 @@ func TestInterruptedGraphReusesIndependentSuccessWithoutReplayingUnknown(t *test
 			t.Fatal(err)
 		}
 		good, _ := commandNodeValue(t, original, "a-good")
-		if len(response.Evidence) != 1 || response.VerifiedAt != response.ObservedAt {
+		if len(response.Evidence) != 1 || strings.Contains(reply, `"observed_at"`) {
 			t.Fatalf("missing verification provenance: %s", reply)
+		}
+		if verified, err := time.Parse(time.RFC3339Nano, response.VerifiedAt); err != nil || verified.Before(good.FinishedAt) {
+			t.Fatalf("invalid graph verification time: %s %v", reply, err)
 		}
 		ref := response.Evidence[0]
 		if ref.ExecutionStartedAt != good.StartedAt.Format(time.RFC3339Nano) || ref.ExecutionFinishedAt != good.FinishedAt.Format(time.RFC3339Nano) {
