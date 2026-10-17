@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"reflect"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -39,7 +37,7 @@ func TestDispatchCandidateRequestCounts(t *testing.T) {
 	t.Logf("standalone candidate checks: Decide=%d, Execute=%d", reason.Load(), explore.Load())
 }
 
-func TestSchedulingControlChecksMatchFallbackWithoutExtraRequests(t *testing.T) {
+func TestSchedulingControlChecksRequireSnapshot(t *testing.T) {
 	s, _, _, graph := pendingCurationFixture(t)
 	ctx := context.Background()
 	var input board.SchedulePage
@@ -47,13 +45,6 @@ func TestSchedulingControlChecksMatchFallbackWithoutExtraRequests(t *testing.T) 
 	s.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(r *http.Request) (*http.Response, error) {
 		if strings.HasSuffix(r.URL.Path, "/executions/check") {
 			requests.Add(1)
-			key := input.RetryKey
-			if r.URL.Query().Get("kind") == "curate" {
-				key = input.CurationRetryKey
-			}
-			if r.URL.Query().Get("retry_key") != key || r.URL.Query().Get("generation") != strconv.FormatInt(input.Project.Generation, 10) {
-				t.Errorf("direct admission lost its current scheduling identity: %s", r.URL)
-			}
 		}
 		return http.DefaultTransport.RoundTrip(r)
 	})}
@@ -61,29 +52,30 @@ func TestSchedulingControlChecksMatchFallbackWithoutExtraRequests(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	s.schedules[graph.Project.ID] = board.SchedulePage{RetryKey: "stale-reason", CurationRetryKey: "stale-curation"}
 	if !input.CurationNeeded {
 		t.Fatal("fixture requires pending curation")
 	}
 	for _, kind := range []string{"reason", "curate"} {
-		before := requests.Load()
-		check, err := s.candidateCheck(ctx, input, kind, "")
-		if err != nil || requests.Load() != before {
-			t.Fatalf("%s scheduling repeated a registry request: %v", kind, err)
-		}
-		// A page without precomputed checks retains direct admission using its
-		// own identity, even if the previous cached page is already stale.
-		withoutChecks := input
-		withoutChecks.ExecutionChecks = nil
-		fallback, err := s.candidateCheck(ctx, withoutChecks, kind, "")
-		if err != nil || requests.Load() != before+1 || !reflect.DeepEqual(check, fallback) {
-			t.Fatalf("%s snapshot differs from direct admission: snapshot=%+v fallback=%+v err=%v", kind, check, fallback, err)
+		if _, err := candidateCheck(input, kind, ""); err != nil {
+			t.Fatalf("%s scheduling omitted its admission check: %v", kind, err)
 		}
 	}
-	requests.Store(0)
 	retryTicks(t, s, 4)
 	if requests.Load() != 0 {
 		t.Fatalf("control dispatch made %d redundant registry requests", requests.Load())
+	}
+}
+
+func TestCandidateCheckRejectsIncompleteSnapshot(t *testing.T) {
+	for _, candidate := range []struct{ kind, intent string }{{"reason", ""}, {"curate", ""}, {"explore", "step-1"}} {
+		t.Run(candidate.kind, func(t *testing.T) {
+			for _, checks := range []map[string]board.ExecutionCheck{nil, {"explore:other-step": {}}} {
+				_, err := candidateCheck(board.SchedulePage{ExecutionChecks: checks}, candidate.kind, candidate.intent)
+				if err == nil || !strings.Contains(err.Error(), candidate.kind+":"+candidate.intent) {
+					t.Fatalf("missing admission check was not reported: %v", err)
+				}
+			}
+		})
 	}
 }
 

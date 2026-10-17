@@ -232,7 +232,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 	var curationCheck board.ExecutionCheck
 	curationReady := false
 	if input.CurationNeeded && !localCurator {
-		check, err := s.candidateCheck(ctx, input, "curate", "")
+		check, err := candidateCheck(input, "curate", "")
 		if err != nil {
 			return false, err
 		}
@@ -246,7 +246,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		curationCheck = check
 		curationReady = g.Project.Curator == nil && curating && (input.CurationRequested || check.PreviousRunID != "" || !s.waitForCuration(g, input.Revision, time.Now()))
 	}
-	reasonCheck, err := s.candidateCheck(ctx, input, "reason", "")
+	reasonCheck, err := candidateCheck(input, "reason", "")
 	if err != nil {
 		return false, err
 	}
@@ -304,7 +304,7 @@ func (s *Scheduler) dispatch(ctx context.Context, id string) (bool, error) {
 		if !step.Ready {
 			continue
 		}
-		check, err := s.candidateCheck(ctx, input, "explore", step.ID)
+		check, err := candidateCheck(input, "explore", step.ID)
 		if err != nil {
 			return false, err
 		}

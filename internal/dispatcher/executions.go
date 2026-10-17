@@ -71,26 +71,13 @@ func (s *Scheduler) releaseIdleAdmissions() {
 	}
 }
 
-// Scheduling asks the registry only about this input. Historical Jobs and
-// Results remain on the Server and never accumulate in a dispatcher snapshot.
-func (s *Scheduler) candidateCheck(ctx context.Context, input board.SchedulePage, kind, intent string) (board.ExecutionCheck, error) {
+// Admission checks must belong to the same snapshot as the scheduling input.
+func candidateCheck(input board.SchedulePage, kind, intent string) (board.ExecutionCheck, error) {
 	key := kind + ":" + intent
 	if check, ok := input.ExecutionChecks[key]; ok {
 		return check, nil
 	}
-	// Targeted callers may not carry the precomputed scheduling checks.
-	if kind == "reason" {
-		key = input.RetryKey
-	} else if kind == "curate" {
-		key = input.CurationRetryKey
-	}
-	query := url.Values{"namespace": {s.namespace()}, "generation": {strconv.FormatInt(input.Project.Generation, 10)}, "kind": {kind}, "retry_key": {key}}
-	if intent != "" {
-		query.Set("intent", intent)
-	}
-	var check board.ExecutionCheck
-	err := s.Client.Do(ctx, "GET", projectPath(input.Project.ID)+"/executions/check?"+query.Encode(), nil, &check, nil)
-	return check, err
+	return board.ExecutionCheck{}, fmt.Errorf("scheduling response missing execution check %q", key)
 }
 
 func (s *Scheduler) restoreDecisionBoundary(project string, latest *board.ExecutionSummary) {
