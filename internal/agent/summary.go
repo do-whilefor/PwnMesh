@@ -14,7 +14,7 @@ import (
 const summaryViewPrefix = "Earlier execution memory. Notes are model-generated and unverified; quotes preserve tool-result bytes, not the truth of their claims. Use original evidence for exact values:\n"
 const summaryOmission = "\n[Middle omitted; original retained in transcript.]\n"
 
-// SummaryQuote identifies exact bytes in the original successful tool result.
+// SummaryQuote identifies exact bytes and error status in the original tool result.
 // SourceSHA256 hashes that entire result; SHA256 hashes only the selected bytes.
 // Both refer to UTF-8 text after decoding the tool_result JSON string, not the
 // JSON envelope or a file that the tool may have read.
@@ -26,6 +26,7 @@ type SummaryQuote struct {
 	Text         string `json:"text"`
 	SHA256       string `json:"sha256"`
 	SourceSHA256 string `json:"source_sha256"`
+	IsError      bool   `json:"is_error,omitempty"`
 }
 
 type summarySource struct {
@@ -39,8 +40,9 @@ type summarySourceLine struct {
 }
 
 type displayedSummarySource struct {
-	ID    string              `json:"id"`
-	Lines []summarySourceLine `json:"lines"`
+	ID      string              `json:"id"`
+	IsError bool                `json:"is_error,omitempty"`
+	Lines   []summarySourceLine `json:"lines"`
 }
 
 type summaryEntry struct {
@@ -56,7 +58,7 @@ type summaryReferences struct {
 }
 
 func displaySummarySource(source summarySource) displayedSummarySource {
-	display := displayedSummarySource{ID: source.ID}
+	display := displayedSummarySource{ID: source.ID, IsError: source.IsError}
 	for pos := 0; pos < len(source.Text); {
 		next := len(source.Text)
 		if n := strings.IndexByte(source.Text[pos:], '\n'); n >= 0 {
@@ -96,7 +98,7 @@ func (l *Loop) summarySources(head []Message) ([]summarySource, error) {
 			continue
 		}
 		for i, b := range m.Content {
-			if b.Type != "tool_result" || b.IsError {
+			if b.Type != "tool_result" {
 				continue
 			}
 			var text string
@@ -105,7 +107,7 @@ func (l *Loop) summarySources(head []Message) ([]summarySource, error) {
 			}
 			sources = append(sources, summarySource{fmt.Sprintf("m%db%d", m.Sequence, i), SummaryQuote{
 				Sequence: m.Sequence, Block: i, EndByte: len(text), Text: text,
-				SHA256: textDigest(text), SourceSHA256: textDigest(text),
+				SHA256: textDigest(text), SourceSHA256: textDigest(text), IsError: b.IsError,
 			}})
 		}
 	}
@@ -238,7 +240,7 @@ func (l *Loop) summaryEntries(head []Message, references map[string]summaryRefer
 					*raw = clipped
 				}
 			}
-			if m.Role == "user" && b.Type == "tool_result" && !b.IsError {
+			if m.Role == "user" && b.Type == "tool_result" {
 				if ref, ok := references[fmt.Sprintf("m%db%d", m.Sequence, i)]; ok {
 					raw, err := json.Marshal(ref)
 					if err != nil {

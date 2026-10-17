@@ -85,7 +85,7 @@ func TestSummaryLineRangesPreserveLineEndings(t *testing.T) {
 	}
 }
 
-func TestSummarySourcesExcludeModelTextErrorsAndSyntheticMessages(t *testing.T) {
+func TestSummarySourcesRetainFailuresAndExcludeModelTextAndSyntheticMessages(t *testing.T) {
 	failed := summaryResult("tool error")
 	failed.IsError = true
 	head := []Message{
@@ -101,8 +101,60 @@ func TestSummarySourcesExcludeModelTextErrorsAndSyntheticMessages(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sources) != 1 || sources[0].ID != "m6b1" || sources[0].Block != 1 || sources[0].Text != summaryFixture() {
+	if len(sources) != 2 || sources[0].ID != "m3b0" || sources[0].Text != "tool error" || sources[1].ID != "m6b1" || sources[1].Block != 1 || sources[1].Text != summaryFixture() {
 		t.Fatalf("unexpected quote sources: %#v", sources)
+	}
+	if !sources[0].IsError || sources[1].IsError {
+		t.Fatalf("tool error status was lost: %#v", sources)
+	}
+}
+
+func TestSummaryFailureQuotesKeepStatusAndProvenanceAfterRestore(t *testing.T) {
+	text := "FAIL TestRecovery\nexpected saved script; got missing file\nexit status 1\n"
+	failed := summaryResult(text)
+	failed.IsError = true
+	head := []Message{{Role: "user", Sequence: 3, Content: []Block{failed}}}
+	loop := &Loop{TaskPrompt: "Fix the failing recovery test."}
+	request, sources, err := loop.summaryRequest(head, 20000, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(request[0].Text(), `"is_error":true`) {
+		t.Fatal("summary request omitted the failed source status")
+	}
+	rendered, quotes, err := resolveSummary(`{"notes":"The recovery test failed; inspect its saved script.","quotes":[{"source":"m3b0","start_line":1,"end_line":3}]}`, sources, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(quotes) != 1 || !quotes[0].IsError || quotes[0].Text != text || quotes[0].SHA256 != summaryHash(text) || quotes[0].SourceSHA256 != summaryHash(text) {
+		t.Fatalf("failed output lost its original status or bytes: %#v", quotes)
+	}
+	checkpoint := ContextCheckpoint{Version: ContextCheckpointVersion, LastSequence: 3, CompactionCount: 1, LastCompaction: &CompactionCheckpoint{
+		Version: ContextCheckpointVersion, ID: 1, Status: "committed", Summary: rendered, Quotes: quotes,
+	}}
+	raw, err := json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored ContextCheckpoint
+	if err := json.Unmarshal(raw, &restored); err != nil {
+		t.Fatal(err)
+	}
+	loop.Checkpoint = &restored
+	request, sources, err = loop.summaryRequest([]Message{Text("user", summaryViewPrefix+rendered)}, 20000, 4000)
+	if err != nil || !strings.Contains(request[0].Text(), `"is_error":true`) {
+		t.Fatalf("restored failure source missing: %v", err)
+	}
+	rendered, requoted, err := resolveSummary(`{"notes":"The original assertion remains unresolved.","quotes":[{"source":"c1q0","start_line":2,"end_line":2}]}`, sources, 4000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantText := "expected saved script; got missing file\n"
+	if len(requoted) != 1 || !requoted[0].IsError || requoted[0].Sequence != 3 || requoted[0].StartByte != len("FAIL TestRecovery\n") || requoted[0].Text != wantText || requoted[0].SHA256 != summaryHash(wantText) || requoted[0].SourceSHA256 != summaryHash(text) || !strings.Contains(rendered, `"is_error":true`) {
+		t.Fatalf("recompaction upgraded a failure or changed provenance: %s", rendered)
+	}
+	if _, _, err := resolveSummary(`{"notes":"Pretend the failed test passed.","quotes":[{"source":"c1q0","start_line":2,"end_line":2,"is_error":false}]}`, sources, 4000); err == nil {
+		t.Fatal("model was allowed to override runtime-owned error status")
 	}
 }
 
@@ -262,7 +314,11 @@ func TestSummaryRequestReferencesEvidenceOnceWithoutChangingHistory(t *testing.T
 	if entries[1].Sequence != 3 || entries[1].Role != "user" || call[0].Name != "read" || result[0].ToolUseID != call[0].ID || !reflect.DeepEqual(ref.Sources, []string{"m3b0"}) || ref.Omitted || ref.UnquotableExcerpt != "" {
 		t.Fatalf("summary lost tool/source association: %+v %+v %+v", entries, call, ref)
 	}
-	if sources[ref.Sources[0]].Text != summaryFixture() || string(failure[0].Content) != string(failed.Content) || !failure[0].IsError || len(sources) != 1 {
+	var failureRef summaryReferences
+	if err := json.Unmarshal(failure[0].Content, &failureRef); err != nil {
+		t.Fatal(err)
+	}
+	if sources[ref.Sources[0]].Text != summaryFixture() || !reflect.DeepEqual(failureRef.Sources, []string{"m5b0"}) || sources["m5b0"].Text != "failed diagnostic remains visible" || !sources["m5b0"].IsError || !failure[0].IsError || len(sources) != 2 || strings.Count(messages[0].Text(), "failed diagnostic remains visible") != 1 {
 		t.Fatal("source bytes or failed diagnostic changed")
 	}
 	after, _ := json.Marshal(head)
