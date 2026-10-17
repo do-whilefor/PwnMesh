@@ -30,6 +30,10 @@ type Loop struct {
 	// ContextData retains bounded runtime task data verbatim during compaction.
 	// Callers persist and restore it separately from task and phase instructions.
 	ContextData []string
+	// ContextDataPrefixes identifies runtime-owned text snapshots superseded by
+	// current ContextData. Only single-text user messages match; originals remain
+	// in the transcript. Empty prefixes are ignored. Callers supply trusted values.
+	ContextDataPrefixes []string
 	// BeforeRequest prepares external task data at a settled history boundary,
 	// before compaction and each normal model request. Summary requests and an
 	// immediate context-overflow retry reuse that boundary without calling it.

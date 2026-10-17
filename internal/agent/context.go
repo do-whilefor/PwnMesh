@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 const ContextCheckpointVersion = 1
@@ -205,8 +206,8 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 	if target <= 0 {
 		return -1, budgetError("input budget is too small for pinned instructions")
 	}
-	// Runtime task data remains verbatim too. Exclude exact copies from the
-	// summary and tail, and charge the retained data to the same hard budget.
+	// Runtime task data remains verbatim too. Exclude exact copies and obsolete
+	// runtime snapshots from the summary/tail, charging current data to the budget.
 	instructions := append([]string(nil), l.PinnedInstructions...)
 	pinned := map[string]bool{l.TaskPrompt: true}
 	for _, instruction := range instructions {
@@ -221,9 +222,15 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 	}
 	body := make([]Message, 0, len(l.History))
 	for _, m := range l.History {
-		if m.Role == "user" && len(m.Content) == 1 && m.Content[0].Type == "text" &&
-			pinned[m.Text()] {
-			continue
+		if m.Role == "user" && len(m.Content) == 1 && m.Content[0].Type == "text" {
+			text := m.Content[0].Text
+			omit := pinned[text]
+			for _, prefix := range l.ContextDataPrefixes {
+				omit = omit || prefix != "" && strings.HasPrefix(text, prefix)
+			}
+			if omit {
+				continue
+			}
 		}
 		body = append(body, m)
 	}

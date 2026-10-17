@@ -397,3 +397,69 @@ func TestContextDataCompactionSaveFailurePreservesOriginalView(t *testing.T) {
 		t.Fatalf("failed save changed the original view/checkpoint: err=%v saves=%d history=%v checkpoint=%+v", err, saves, reflect.DeepEqual(loop.History, history), loop.Checkpoint)
 	}
 }
+
+func TestCompactionOmitsSupersededRuntimeSnapshotsWithoutChangingEvidence(t *testing.T) {
+	for _, saveFailure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "committed", true: "failed_save"}[saveFailure], func(t *testing.T) {
+			const prefix = "Runtime-owned index:\n"
+			current := prefix + "current-only"
+			loop := summaryTestLoop(nil)
+			loop.RecentBytes = 1
+			loop.ContextData = []string{current}
+			loop.ContextDataPrefixes = []string{"", prefix}
+			loop.History = append(loop.History,
+				Text("user", prefix+"retired-only"),
+				Text("assistant", prefix+"assistant-marker"),
+				Message{Role: "user", Content: []Block{{Type: "text", Text: prefix + "paired-user-marker"}, {Type: "text", Text: "additional user content"}}},
+				Text("user", "embedded-marker "+prefix),
+			)
+			for n := 4; n < len(loop.History); n++ {
+				loop.History[n].Sequence = uint64(n + 1)
+			}
+			loop.Checkpoint.LastSequence = uint64(len(loop.History))
+			original := cloneMessages(loop.History)
+			failure := errors.New("save failed")
+			loop.Provider = summaryTestProvider(func(messages []Message) (Message, error) {
+				if !reflect.DeepEqual(loop.History, original) {
+					t.Fatal("request filtering rewrote original evidence")
+				}
+				text := messages[0].Text()
+				if strings.Contains(text, "retired-only") || strings.Contains(text, "current-only") {
+					t.Fatal("runtime snapshot recursively entered summary input")
+				}
+				for _, marker := range []string{"assistant-marker", "paired-user-marker", "embedded-marker"} {
+					if !strings.Contains(text, marker) {
+						t.Fatalf("prefix filtering erased other content: %s", marker)
+					}
+				}
+				return Text("assistant", `{"notes":"Continue.","quotes":[]}`), nil
+			})
+			loop.SaveState = func(messages []Message, _ *ContextCheckpoint) error {
+				count := 0
+				for _, m := range messages {
+					if m.Text() == current {
+						count++
+					}
+					if strings.Contains(m.Text(), "retired-only") {
+						t.Fatal("retired snapshot survived in request view")
+					}
+				}
+				if count != 1 {
+					t.Fatalf("current snapshot duplicated or omitted: %d", count)
+				}
+				if saveFailure {
+					return failure
+				}
+				return nil
+			}
+			_, err := loop.compactRequest(context.Background(), false)
+			if saveFailure {
+				if !errors.Is(err, failure) || !reflect.DeepEqual(loop.History, original) {
+					t.Fatalf("failed compaction rewrote original history: %v", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

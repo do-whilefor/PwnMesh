@@ -9,6 +9,7 @@ func (l *Loop) ownState() {
 		l.History = cloneMessages(l.History)
 		l.Checkpoint = cloneCheckpoint(l.Checkpoint)
 		l.PinnedInstructions = slices.Clone(l.PinnedInstructions)
+		l.ContextDataPrefixes = slices.Clone(l.ContextDataPrefixes)
 		l.stateOwned = true
 	}
 }
