@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/board/model"
 )
 
 func closureFixture(t *testing.T, protocol int) (*orchestrationFixture, string, string, string) {
@@ -219,7 +221,7 @@ func TestRootAssessmentRejectsInvalidShapesAndFutureProtocols(t *testing.T) {
 			case "duplicate_input":
 				a.Gaps[0].InputIDs = []string{"goal", "goal"}
 			}
-			if ValidateRootAssessmentShape(a) == nil {
+			if model.ValidateRootAssessmentShape(a) == nil {
 				t.Fatal("malformed root assessment accepted")
 			}
 		})

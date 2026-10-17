@@ -8,9 +8,6 @@ type RequirementGap = model.RequirementGap
 func ValidateRootAssessment(a *RootAssessment, inputs []Fact, hints []Hint) error {
 	return model.ValidateRootAssessment(a, inputs, hints)
 }
-func ValidateRootAssessmentShape(a *RootAssessment) error {
-	return model.ValidateRootAssessmentShape(a)
-}
 func ValidateClosureActions(a *RootAssessment, actions []DecisionAction) error {
 	return model.ValidateClosureActions(a, actions)
 }

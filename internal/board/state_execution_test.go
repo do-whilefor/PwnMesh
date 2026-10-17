@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
+
+type transactionQueries = sqlstore.Queries
 
 type failureProjectionQueries struct {
 	transactionQueries

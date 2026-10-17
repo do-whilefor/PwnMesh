@@ -24,9 +24,9 @@ func TestCurationCandidateHintsSurviveBodyOmissionWithoutChangingSnapshot(t *tes
 		t.Fatalf("unbounded candidate hints: %v bytes=%d", err, len(raw))
 	}
 	var view struct {
-		Candidates []CandidateView `json:"candidates"`
-		Omitted    map[string]int  `json:"omitted"`
-		Overview   contextOverview `json:"overview"`
+		Candidates []model.CandidateView `json:"candidates"`
+		Omitted    map[string]int        `json:"omitted"`
+		Overview   contextOverview       `json:"overview"`
 	}
 	if err := json.Unmarshal(raw, &view); err != nil {
 		t.Fatal(err)

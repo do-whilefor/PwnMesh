@@ -3,6 +3,7 @@ package board
 import (
 	"context"
 	"encoding/json"
+	"pwnmesh/internal/board/model"
 	"reflect"
 	"testing"
 )
@@ -47,7 +48,7 @@ func TestCurationRelationBatchWakesUnsupportedFindingOnce(t *testing.T) {
 				t.Fatal(err)
 			}
 			var view struct {
-				Candidates []CandidateView       `json:"candidates"`
+				Candidates []model.CandidateView `json:"candidates"`
 				Coverage   curationInputCoverage `json:"curation_input"`
 			}
 			if err := json.Unmarshal(raw, &view); err != nil {

@@ -1,6 +1,7 @@
 package board
 
 import (
+	"pwnmesh/internal/board/model"
 	"reflect"
 	"slices"
 	"testing"
@@ -41,8 +42,8 @@ func TestAssetDiscoveryDoesNotCreateSupportOrDependencyEdges(t *testing.T) {
 	var snapshot *InputSnapshot
 	f.do(func(tx *Tx) (err error) { snapshot, err = tx.FreezeInput(before); return err })
 	beforeHistory := before.History()
-	if !slices.ContainsFunc(beforeHistory, func(entry HistoryEntry) bool { return entry.ID == sibling }) ||
-		slices.ContainsFunc(beforeHistory, func(entry HistoryEntry) bool { return entry.ID == upstream }) {
+	if !slices.ContainsFunc(beforeHistory, func(entry model.HistoryEntry) bool { return entry.ID == sibling }) ||
+		slices.ContainsFunc(beforeHistory, func(entry model.HistoryEntry) bool { return entry.ID == upstream }) {
 		t.Fatal("asset identity either kept unrelated history hot or folded live dependency support")
 	}
 
@@ -98,7 +99,7 @@ func TestAssetDiscoveryDoesNotCreateSupportOrDependencyEdges(t *testing.T) {
 			t.Fatal("the explicit correction chain was folded into cold history")
 		}
 	}
-	if !slices.ContainsFunc(afterCorrection.History(), func(entry HistoryEntry) bool { return entry.ID == sibling }) {
+	if !slices.ContainsFunc(afterCorrection.History(), func(entry model.HistoryEntry) bool { return entry.ID == sibling }) {
 		t.Fatal("asset equality pulled unrelated completed work into the correction chain")
 	}
 	for _, anchor := range before.AssetAnchors {

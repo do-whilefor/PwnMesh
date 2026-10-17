@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	b "pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
 	"pwnmesh/internal/protocol"
 )
 
@@ -115,7 +116,7 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 		if err != nil {
 			return Prepared{}, b.Err(422, err.Error())
 		}
-		assessment, assessmentErr := t.CompletionAssessment(state)
+		assessment, assessmentErr := model.CompletionAssessment(state)
 		if assessmentErr != nil {
 			return Prepared{}, assessmentErr
 		}

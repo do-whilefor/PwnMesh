@@ -2,6 +2,7 @@ package board
 
 import (
 	"encoding/json"
+	"pwnmesh/internal/board/model"
 	"reflect"
 	"strings"
 	"testing"
@@ -93,8 +94,10 @@ func TestCompletionAssessmentPreservesRepeatedReopenRequirements(t *testing.T) {
 		})
 		want = append(want, feedback)
 		state := f.state()
-		var assessment *CompletionReview
-		f.do(func(tx *Tx) error { var err error; assessment, err = tx.CompletionAssessment(state); return err })
+		assessment, err := model.CompletionAssessment(state)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if assessment == nil || !reflect.DeepEqual(assessment.UserInputs, want) || !reflect.DeepEqual(assessment.From, []string{fact}) {
 			t.Fatalf("mechanically ready completion lost reopened requirements or promoted feedback to evidence: %+v", assessment)
 		}

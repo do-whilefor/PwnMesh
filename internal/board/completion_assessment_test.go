@@ -3,6 +3,7 @@ package board
 import (
 	"encoding/json"
 	"fmt"
+	"pwnmesh/internal/board/model"
 	"reflect"
 	"strings"
 	"testing"
@@ -13,12 +14,10 @@ func TestCompletionAssessmentDoesNotWaitForPlannerWorkOrAcceptCoverage(t *testin
 	assess := func(want bool) *CompletionReview {
 		t.Helper()
 		before := f.state()
-		var review *CompletionReview
-		f.do(func(tx *Tx) error {
-			var err error
-			review, err = tx.CompletionAssessment(before)
-			return err
-		})
+		review, err := model.CompletionAssessment(before)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if (review != nil) != want || !reflect.DeepEqual(before, f.state()) {
 			t.Fatalf("assessment readiness=%v want %v, or assessment mutated state: %+v", review != nil, want, review)
 		}
@@ -57,7 +56,7 @@ func TestCompletionAssessmentDoesNotBypassDisputes(t *testing.T) {
 	f.finish(curator, "")
 	state := f.state()
 	f.do(func(tx *Tx) error {
-		review, err := tx.CompletionAssessment(state)
+		review, err := model.CompletionAssessment(state)
 		if review == nil || len(review.Disputes) == 0 || review.Acceptance != "not_checked" {
 			t.Fatal("root assessment lost the unresolved conflict")
 		}

@@ -10,9 +10,6 @@ const MaxCompletionReviewBytes = model.MaxCompletionReviewBytes
 type CompletionReview = model.CompletionReview
 
 func HasCompletionEvidence(state State) bool { return model.HasCompletionEvidence(state) }
-func (t *Tx) CompletionAssessment(state State) (*CompletionReview, error) {
-	return model.CompletionAssessment(state)
-}
 func UseCompletionAssessment(state State, decision *DecisionContext, assessment *CompletionReview) error {
 	return model.UseCompletionAssessment(state, decision, assessment)
 }

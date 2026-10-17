@@ -13,8 +13,6 @@ type Store struct {
 	Now     func() time.Time
 }
 
-type transactionQueries = sqlstore.Queries
-
 type Tx struct {
 	transactionQueries sqlstore.Queries
 	Now                string
