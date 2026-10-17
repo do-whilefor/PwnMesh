@@ -2,9 +2,11 @@ package board
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -54,6 +56,78 @@ func TestDecisionBatchReusesPersistedTransitionsThroughCompletion(t *testing.T) 
 		return err
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+type decisionReleaseFailureQueries struct {
+	transactionQueries
+	failure error
+}
+
+func (q *decisionReleaseFailureQueries) Exec(query string, args ...any) (sql.Result, error) {
+	if query == "RELEASE pwnmesh_decision_batch" && q.failure != nil {
+		err := q.failure
+		q.failure = nil
+		return nil, err
+	}
+	return q.transactionQueries.Exec(query, args...)
+}
+
+func TestDecisionBatchReleaseFailurePreservesCallerAndRetry(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		name := "preview"
+		if commit {
+			name = "commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, true)
+			failure := errors.New("decision savepoint release failed")
+			var rejected DecisionReceipt
+			if err := f.store.Do(context.Background(), func(tx *Tx) error {
+				original := tx.transactionQueries
+				tx.transactionQueries = &decisionReleaseFailureQueries{original, failure}
+				var err error
+				if commit {
+					rejected, err = tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, f.batch(2))
+				} else {
+					rejected, err = tx.PreviewDecision(stateBenchmarkProject, stateBenchmarkPlanner, f.batch(2))
+				}
+				tx.transactionQueries = original
+				if !errors.Is(err, failure) {
+					t.Fatalf("release failure was lost: %v", err)
+				}
+				return tx.UpdateSettings(Settings{IntentTimeout: 25, ReasonTimeout: 35})
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.store.Do(context.Background(), func(tx *Tx) error {
+				state, err := tx.State(stateBenchmarkProject)
+				if err != nil {
+					return err
+				}
+				var count int
+				if err := tx.transactionQueries.QueryRow("SELECT (SELECT COUNT(*) FROM pwnmesh_state_events)+(SELECT COUNT(*) FROM pwnmesh_state_actions)").Scan(&count); err != nil {
+					return err
+				}
+				if count != 0 || state.Revision != 0 || DecisionStateVersion(state) != f.version || state.Graph.Project.Reason == nil {
+					t.Fatal("handled release failure committed a decision or released its lease")
+				}
+				if !reflect.DeepEqual(rejected, emptyDecisionReceipt()) {
+					t.Fatal("failed decision returned uncommitted results")
+				}
+				settings, err := tx.Settings()
+				if err != nil || settings.IntentTimeout != 25 || settings.ReasonTimeout != 35 {
+					t.Fatalf("decision rollback discarded caller writes: %+v %v", settings, err)
+				}
+				result, err := tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, f.batch(2))
+				if err == nil && (!result.Committed || result.IDs["step0"] != "i017" || result.IDs["step1"] != "i018") {
+					t.Fatal("failed decision consumed counters or prevented retry")
+				}
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

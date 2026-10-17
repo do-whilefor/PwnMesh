@@ -271,14 +271,18 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_decision_batch"); err != nil {
 		return out, err
 	}
-	keep := false
+	released := false
 	defer func() {
-		if !keep {
+		if !released {
+			// Preview always rolls back, including successful validation. A
+			// failed commit release must also discard every staged transition.
 			_, rollbackErr := t.transactionQueries.Exec("ROLLBACK TO pwnmesh_decision_batch")
-			err = errors.Join(err, rollbackErr)
+			_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_decision_batch")
+			err = errors.Join(err, rollbackErr, releaseErr)
 		}
-		_, releaseErr := t.transactionQueries.Exec("RELEASE pwnmesh_decision_batch")
-		err = errors.Join(err, releaseErr)
+		if err != nil {
+			out = emptyDecisionReceipt()
+		}
 	}()
 	for n, action := range actions {
 		payload, resolveErr := resolveDecisionReferences(action.Payload, out.IDs)
@@ -344,8 +348,9 @@ func (t *Tx) decisionBatch(project string, fence ExecutionFence, batch DecisionB
 			return out, err
 		}
 	}
-	keep = true
-	return out, nil
+	_, err = t.transactionQueries.Exec("RELEASE pwnmesh_decision_batch")
+	released = err == nil
+	return out, err
 }
 
 // A nonempty plan can still strand the project (for example, adding only a
