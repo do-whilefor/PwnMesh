@@ -27,6 +27,7 @@ const DefaultBaseURL = "https://api.deepseek.com/anthropic"
 const DefaultModel = "deepseek-flash"
 const DefaultReasoningEffort = "max"
 const DefaultMaxTokens = 32768
+const DefaultRequestTimeout = 3 * time.Minute
 
 type Anthropic struct {
 	BaseURL         string
@@ -131,7 +132,7 @@ func (p *Anthropic) generate(ctx context.Context, messages []agent.Message, tool
 	}
 	timeout := p.Timeout
 	if timeout <= 0 {
-		timeout = 3 * time.Minute
+		timeout = DefaultRequestTimeout
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

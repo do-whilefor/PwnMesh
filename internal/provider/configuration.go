@@ -36,7 +36,7 @@ func FromEnvironment(getenv func(string) string, effort string) (*Anthropic, err
 	if err != nil {
 		return nil, err
 	}
-	timeout, err := positive("PWNMESH_REQUEST_TIMEOUT", 180)
+	timeout, err := positive("PWNMESH_REQUEST_TIMEOUT", int(DefaultRequestTimeout/time.Second))
 	if err != nil {
 		return nil, err
 	}

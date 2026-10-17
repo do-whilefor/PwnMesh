@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"pwnmesh/internal/provider"
 )
@@ -65,7 +66,7 @@ func (s Settings) Public() Public {
 }
 
 func Defaults(getenv func(string) string) Settings {
-	s := Settings{Protocol: "anthropic", BaseURL: getenv("ANTHROPIC_BASE_URL"), Model: getenv("ANTHROPIC_MODEL"), Token: getenv("ANTHROPIC_AUTH_TOKEN"), ConnectionMode: "direct", ProxyURL: "http://host.docker.internal:7897", MaxTokens: provider.DefaultMaxTokens, RequestTimeout: 180, ReasoningEffort: provider.DefaultReasoningEffort}
+	s := Settings{Protocol: "anthropic", BaseURL: getenv("ANTHROPIC_BASE_URL"), Model: getenv("ANTHROPIC_MODEL"), Token: getenv("ANTHROPIC_AUTH_TOKEN"), ConnectionMode: "direct", ProxyURL: "http://host.docker.internal:7897", MaxTokens: provider.DefaultMaxTokens, RequestTimeout: int(provider.DefaultRequestTimeout / time.Second), ReasoningEffort: provider.DefaultReasoningEffort}
 	if s.BaseURL == "" {
 		s.BaseURL = provider.DefaultBaseURL
 	}

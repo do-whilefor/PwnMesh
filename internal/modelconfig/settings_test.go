@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"pwnmesh/internal/provider"
 )
@@ -14,6 +15,9 @@ func TestDefaultsMatchProvider(t *testing.T) {
 	settings := Defaults(func(string) string { return "" })
 	if settings.BaseURL != provider.DefaultBaseURL || settings.Model != provider.DefaultModel {
 		t.Fatalf("saved settings and provider defaults differ: base_url=%q model=%q", settings.BaseURL, settings.Model)
+	}
+	if settings.RequestTimeout != int(provider.DefaultRequestTimeout/time.Second) || settings.MaxTokens != provider.DefaultMaxTokens || settings.ReasoningEffort != provider.DefaultReasoningEffort {
+		t.Fatalf("saved request defaults differ from provider: timeout=%d max_tokens=%d effort=%q", settings.RequestTimeout, settings.MaxTokens, settings.ReasoningEffort)
 	}
 }
 
