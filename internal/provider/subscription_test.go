@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/modelwire"
 )
 
 const subscriptionResponse = `{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`
@@ -150,7 +151,7 @@ func TestKimiOAuthDoesNotFollowRedirects(t *testing.T) {
 				return response, nil
 			})}
 			_, err := p.Generate(context.Background(), nil, nil, nil)
-			var httpErr *HTTPError
+			var httpErr *modelwire.HTTPError
 			if !errors.As(err, &httpErr) || httpErr.Status != status || requests != 1 || redirects != 0 {
 				t.Fatalf("redirect boundary failed: requests=%d redirects=%d err=%v", requests, redirects, err)
 			}
@@ -220,7 +221,7 @@ func TestKimiThinkingWithEmptySignatureSurvivesReplay(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := &Client{AuthMode: "kimi_oauth", Model: "kimi-for-coding"}
-	raw, err := p.payload([]agent.Message{message}, nil, 512)
+	raw, err := p.RequestFormat().Payload([]agent.Message{message}, nil, 512)
 	if err != nil || !strings.Contains(string(raw), `"thinking":"reasoning","signature":""`) {
 		t.Fatal("unsigned Kimi thinking was dropped during replay", err)
 	}

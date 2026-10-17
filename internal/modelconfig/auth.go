@@ -1,7 +1,6 @@
 package modelconfig
 
 import (
-	"encoding/hex"
 	"os"
 	"path/filepath"
 )
@@ -15,12 +14,4 @@ func AuthDir(settingsPath string) string {
 		settingsPath, _ = ResolvePath()
 	}
 	return filepath.Join(filepath.Dir(settingsPath), "model-auth")
-}
-
-func ValidCredentialID(id string) bool {
-	if len(id) != 32 {
-		return false
-	}
-	_, err := hex.DecodeString(id)
-	return err == nil
 }

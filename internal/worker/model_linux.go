@@ -17,11 +17,11 @@ import (
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/modelrpc"
-	"pwnmesh/internal/provider"
+	"pwnmesh/internal/modelwire"
 )
 
 type bridgeModel struct {
-	sizer     provider.RequestFormat
+	sizer     modelwire.RequestFormat
 	runDir    string
 	output    io.Writer
 	sessionID string

@@ -19,13 +19,10 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/modelwire"
 )
 
-const System = "Work toward the assigned task using available tools. Distinguish confirmed facts from guesses. Follow the current request's output contract."
 const DefaultBaseURL = "https://api.deepseek.com/anthropic"
-const DefaultModel = "deepseek-flash"
-const DefaultReasoningEffort = "max"
-const DefaultMaxTokens = 32768
 const DefaultRequestTimeout = 3 * time.Minute
 
 type Client struct {
@@ -45,9 +42,7 @@ type Client struct {
 	sessionID       string
 	sessionErr      error
 }
-type HTTPError struct{ Status int }
 
-func (e *HTTPError) Error() string { return fmt.Sprintf("model endpoint returned HTTP %d", e.Status) }
 func (p *Client) endpoint() string {
 	if p.Protocol == "openai" {
 		return p.openAIEndpoint()
@@ -78,8 +73,8 @@ func (p *Client) InputBytes(messages []agent.Message, tools []agent.Definition) 
 	return p.RequestFormat().InputBytes(messages, tools)
 }
 
-func (p *Client) payload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
-	return p.RequestFormat().payload(messages, tools, limit)
+func (p *Client) RequestFormat() modelwire.RequestFormat {
+	return modelwire.RequestFormat{Protocol: p.Protocol, Model: p.Model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Adaptive: p.AdaptiveThinking()}
 }
 
 func (p *Client) generate(ctx context.Context, messages []agent.Message, tools []agent.Definition, maxTokens int, emit agent.Emit) (agent.Message, error) {
@@ -117,7 +112,7 @@ func (p *Client) generate(ctx context.Context, messages []agent.Message, tools [
 	if p.sessionErr != nil {
 		return agent.Message{}, p.sessionErr
 	}
-	data, err := p.payload(messages, tools, maxTokens)
+	data, err := p.RequestFormat().Payload(messages, tools, maxTokens)
 	if err != nil {
 		return agent.Message{}, err
 	}
@@ -290,7 +285,7 @@ func classifyEndpointError(status int, body []byte) *agent.ModelError {
 		((status == 400 || status == 413 || status == 422) && (strings.Contains(message, "prompt is too long") || strings.Contains(message, "context length") || strings.Contains(message, "maximum context") || strings.Contains(message, "context window"))) {
 		kind = agent.ErrorContextOverflow
 	}
-	return &agent.ModelError{Kind: kind, Err: &HTTPError{Status: status}}
+	return &agent.ModelError{Kind: kind, Err: &modelwire.HTTPError{Status: status}}
 }
 
 // Stream usage fields are cumulative snapshots. Omitted fields retain the

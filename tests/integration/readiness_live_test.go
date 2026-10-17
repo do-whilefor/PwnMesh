@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/provider"
+	"pwnmesh/internal/modelwire"
 )
 
 type readinessLiveEvidence struct {
@@ -52,7 +52,7 @@ func readinessLiveResult(model, origin string, started, finished time.Time, err 
 	} else if errors.Is(err, context.Canceled) {
 		evidence.FailureKind = "cancelled"
 	}
-	var endpointError *provider.HTTPError
+	var endpointError *modelwire.HTTPError
 	if errors.As(err, &endpointError) {
 		evidence.HTTPStatus = endpointError.Status
 	}
@@ -67,7 +67,7 @@ func TestReadinessLiveEvidenceOmitsProviderErrorDetails(t *testing.T) {
 		errors.New("endpoint failure with " + secret),
 		&agent.ModelError{Kind: agent.ErrorProvider, Err: errors.New("response contained " + secret)},
 		&agent.ModelError{Kind: agent.ErrorKind(secret), Err: errors.New(secret)},
-		&agent.ModelError{Kind: agent.ErrorRateLimit, Err: &provider.HTTPError{Status: 429}},
+		&agent.ModelError{Kind: agent.ErrorRateLimit, Err: &modelwire.HTTPError{Status: 429}},
 		context.DeadlineExceeded,
 	} {
 		evidence := readinessLiveResult("fixture-model", "https://example.invalid", started, started.Add(time.Second), err)

@@ -13,6 +13,7 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelrpc"
+	"pwnmesh/internal/modelwire"
 	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/provider"
 )
@@ -36,14 +37,14 @@ type modelBridge struct {
 	admission chan struct{}
 }
 
-func configuredModel(w config.Worker, j protocol.Job) (*provider.Client, error) {
-	return provider.FromEnvironment(w.Getenv, j.Budget.ReasoningEffort)
+func configuredModel(ctx context.Context, w config.Worker, j protocol.Job) (*provider.Client, error) {
+	return provider.FromEnvironment(ctx, w.Getenv, j.Budget.ReasoningEffort)
 }
 
 func publicModelSettings(p *provider.Client) modelrpc.Settings {
 	model := p.Model
 	if model == "" {
-		model = provider.DefaultModel
+		model = modelwire.DefaultModel
 	}
 	return modelrpc.Settings{Protocol: p.Protocol, Model: model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Timeout: p.Timeout, Adaptive: p.AdaptiveThinking()}
 }
@@ -232,7 +233,7 @@ func safeModelError(err error) *modelrpc.Error {
 	} else if out.Canceled || out.Deadline {
 		out.Kind = ""
 	}
-	var endpoint *provider.HTTPError
+	var endpoint *modelwire.HTTPError
 	if errors.As(err, &endpoint) && endpoint.Status >= 100 && endpoint.Status <= 599 {
 		out.HTTPStatus = endpoint.Status
 	}

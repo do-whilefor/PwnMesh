@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/provider"
+	"pwnmesh/internal/modelwire"
 )
 
 // Measure instructions independently from graph bodies, assignments and run
@@ -60,7 +60,7 @@ func TestFixedPromptOverhead(t *testing.T) {
 				if fixed <= 0 || fixed > 10000 || len(declarations) > 32000 {
 					t.Fatalf("unexpected fixed overhead: prompt=%d tools=%d", fixed, len(declarations))
 				}
-				t.Logf("system=%d fixed_prompt=%d tool_declarations=%d task_data=%d bytes", len(provider.System), fixed, len(declarations), dataBytes)
+				t.Logf("system=%d fixed_prompt=%d tool_declarations=%d task_data=%d bytes", len(modelwire.System), fixed, len(declarations), dataBytes)
 			})
 		}
 	}

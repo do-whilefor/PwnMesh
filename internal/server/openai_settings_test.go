@@ -74,7 +74,7 @@ func TestOpenAISettingsProbeSaveAndReload(t *testing.T) {
 	}
 	response = modelSettingsRequest(t, NewWithModelSettings(nil, path), "GET", "/model-settings", "")
 	var saved modelconfig.Public
-	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &saved) != nil || saved.Protocol != "openai" || !saved.HasToken || saved.Token != "" {
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &saved) != nil || saved.Protocol != "openai" || !saved.HasToken || strings.Contains(response.Body.String(), "openai-fixture") {
 		t.Fatal("OpenAI settings did not survive server restart")
 	}
 }

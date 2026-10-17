@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/modelwire"
 )
 
 func TestGenerateDoesNotForwardCredentialsOrPromptsOnRedirect(t *testing.T) {
@@ -43,7 +44,7 @@ func TestGenerateDoesNotForwardCredentialsOrPromptsOnRedirect(t *testing.T) {
 					}
 					_, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "private fixture prompt")}, nil, nil)
 					var modelErr *agent.ModelError
-					var httpErr *HTTPError
+					var httpErr *modelwire.HTTPError
 					if !errors.As(err, &modelErr) || modelErr.Kind != agent.ErrorProvider || !errors.As(err, &httpErr) || httpErr.Status != status {
 						t.Fatalf("redirect did not fail as an endpoint error: %v", err)
 					}

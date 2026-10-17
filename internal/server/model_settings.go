@@ -2,17 +2,16 @@ package server
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	b "pwnmesh/internal/board"
 	"pwnmesh/internal/kimi"
+	"pwnmesh/internal/modelauth"
 	"pwnmesh/internal/modelconfig"
 	"pwnmesh/internal/provider"
 )
@@ -39,7 +38,7 @@ func registerModelSettingsWithKimi(m *http.ServeMux, path string, factory kimiCl
 			writeError(w, r, b.Err(503, err.Error()))
 			return
 		}
-		modelJSON(w, models.public(current))
+		modelJSON(w, models.public(r.Context(), current))
 	})
 	m.HandleFunc("PUT /model-settings", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := modelPatch(w, r)
@@ -47,12 +46,12 @@ func registerModelSettingsWithKimi(m *http.ServeMux, path string, factory kimiCl
 			writeError(w, r, b.Err(422, err.Error()))
 			return
 		}
-		current, err := models.save(raw)
+		current, err := models.save(r.Context(), raw)
 		if err != nil {
 			writeError(w, r, b.Err(422, err.Error()))
 			return
 		}
-		modelJSON(w, models.public(current))
+		modelJSON(w, models.public(r.Context(), current))
 	})
 	m.HandleFunc("POST /model-settings/kimi/logout", func(w http.ResponseWriter, r *http.Request) {
 		current, err := models.logout()
@@ -68,85 +67,12 @@ func registerModelSettingsWithKimi(m *http.ServeMux, path string, factory kimiCl
 			writeError(w, r, b.Err(422, err.Error()))
 			return
 		}
-		current, err := settings.Load()
+		result, err := models.probe(r.Context(), raw)
 		if err != nil {
-			writeError(w, r, b.Err(503, err.Error()))
+			writeError(w, r, err)
 			return
 		}
-		previous := current
-		current.Token = ""
-		loginID, err := decodeModelPatch(raw, &current)
-		if err != nil {
-			writeError(w, r, b.Err(422, err.Error()))
-			return
-		}
-		if err = current.ReuseToken(previous); err != nil {
-			writeError(w, r, b.Err(422, err.Error()))
-			return
-		}
-		var draft *kimiLogin
-		if loginID != "" && loginID != current.CredentialID {
-			draft, err = logins.authorized(loginID, current)
-			if err != nil {
-				writeError(w, r, b.Err(422, err.Error()))
-				return
-			}
-			current.CredentialID = loginID
-		}
-		if err = current.Validate(true); err != nil {
-			writeError(w, r, b.Err(422, err.Error()))
-			return
-		}
-		env := current.Overlay(nil)
-		if draft != nil {
-			// Draft credentials remain in memory until an explicit save.
-			env["ANTHROPIC_AUTH_MODE"], env["ANTHROPIC_AUTH_TOKEN"] = "", draft.credential.AccessToken
-		}
-		p, err := provider.FromEnvironment(func(key string) string { return env[key] }, "")
-		if err != nil {
-			message := "invalid model connection settings"
-			if errors.Is(err, kimi.ErrLoginRequired) {
-				message = "Kimi Code sign-in is required; sign in again"
-			}
-			writeError(w, r, b.Err(422, message))
-			return
-		}
-		if draft != nil {
-			p.AuthMode, p.Client = "kimi_oauth", draft.client.HTTP
-		}
-		if p.Client != nil {
-			defer p.Client.CloseIdleConnections()
-		}
-		ctx, cancel := context.WithTimeout(r.Context(), time.Duration(min(current.RequestTimeout, 45))*time.Second)
-		defer cancel()
-		if draft != nil {
-			stop := context.AfterFunc(draft.ctx, cancel)
-			defer stop()
-			if draft.ctx.Err() != nil {
-				cancel()
-			}
-		}
-		started := time.Now()
-		p.MaxTokens = min(p.MaxTokens, provider.ProbeMaxTokens)
-		err = provider.Probe(ctx, p)
-		message := "Anthropic Messages and tool round trip verified"
-		if current.Protocol == "openai" {
-			message = "OpenAI Chat Completions and tool round trip verified"
-		}
-		if err != nil {
-			message = "Model did not complete the tool round trip; check endpoint, protocol and model support"
-			var status *provider.HTTPError
-			if errors.As(err, &status) {
-				message = status.Error()
-			}
-			if errors.Is(err, kimi.ErrLoginRequired) {
-				message = "Kimi Code sign-in is required; sign in again"
-			}
-			if errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-				message = "Model connection test timed out or was cancelled"
-			}
-		}
-		modelJSON(w, map[string]any{"ok": err == nil, "latency_ms": time.Since(started).Milliseconds(), "message": message, "model": current.Model, "connection_mode": current.ConnectionMode})
+		modelJSON(w, result)
 	})
 	return models
 }
@@ -182,7 +108,7 @@ func decodeModelPatch(raw []byte, current *modelconfig.Settings) (string, error)
 	if current.AuthMode != "kimi_oauth" || previousMode != "kimi_oauth" {
 		current.CredentialID, current.CredentialDir = "", ""
 	}
-	if patch.LoginID != "" && (current.AuthMode != "kimi_oauth" || !modelconfig.ValidCredentialID(patch.LoginID)) {
+	if patch.LoginID != "" && (current.AuthMode != "kimi_oauth" || !modelauth.ValidCredentialID(patch.LoginID)) {
 		return "", errors.New("invalid Kimi login reference")
 	}
 	return patch.LoginID, nil

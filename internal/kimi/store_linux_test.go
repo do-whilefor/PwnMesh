@@ -29,7 +29,7 @@ func TestStoreRoundTripPermissionsAndIdentifierValidation(t *testing.T) {
 	if err := store.Save(fixtureID, credential); err != nil {
 		t.Fatal(err)
 	}
-	got, err := store.Read(fixtureID)
+	got, err := store.Read(context.Background(), fixtureID)
 	if err != nil || got.AccessToken != credential.AccessToken || got.RefreshToken != credential.RefreshToken || !got.ExpiresAt.Equal(credential.ExpiresAt) {
 		t.Fatalf("stored credential changed: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestStoreRoundTripPermissionsAndIdentifierValidation(t *testing.T) {
 		if err := store.Save(id, credential); err == nil {
 			t.Fatal("invalid credential identifier accepted")
 		}
-		if _, err := store.Read(id); err == nil {
+		if _, err := store.Read(context.Background(), id); err == nil {
 			t.Fatal("invalid credential identifier read")
 		}
 		if err := store.Delete(id); err == nil {
@@ -60,7 +60,7 @@ func TestStoreRoundTripPermissionsAndIdentifierValidation(t *testing.T) {
 	if err := store.Delete(fixtureID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Read(fixtureID); !errors.Is(err, ErrLoginRequired) {
+	if _, err := store.Read(context.Background(), fixtureID); !errors.Is(err, ErrLoginRequired) {
 		t.Fatalf("deleted credential remained available: %v", err)
 	}
 }
@@ -91,7 +91,7 @@ func TestStoreConcurrentResolveRefreshesOnceAndPersistsRotation(t *testing.T) {
 		}()
 	}
 	group.Wait()
-	credential, err := store.Read(fixtureID)
+	credential, err := store.Read(context.Background(), fixtureID)
 	if err != nil || credential.RefreshToken != "new-refresh" || refreshes.Load() != 1 {
 		t.Fatalf("rotation not persisted once: requests=%d err=%v", refreshes.Load(), err)
 	}
@@ -161,7 +161,7 @@ func TestStorePreservesTransientFailureAndDeletesRevokedCredentials(t *testing.T
 			if _, err := store.Resolve(context.Background(), fixtureID); err == nil || errors.Is(err, ErrLoginRequired) != tc.revoked {
 				t.Fatalf("wrong refresh failure: %v", err)
 			}
-			after, err := store.Read(fixtureID)
+			after, err := store.Read(context.Background(), fixtureID)
 			if tc.revoked {
 				if !errors.Is(err, ErrLoginRequired) {
 					t.Fatal("revoked credential was retained")
@@ -199,7 +199,7 @@ func TestStoreLockWaitHonorsContextAndRejectsUnsafeFiles(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`secret-upstream-body`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Read(fixtureID); err == nil {
+	if _, err := store.Read(context.Background(), fixtureID); err == nil {
 		t.Fatal("malformed credential accepted")
 	}
 	outside := filepath.Join(t.TempDir(), "outside.json")
@@ -212,7 +212,7 @@ func TestStoreLockWaitHonorsContextAndRejectsUnsafeFiles(t *testing.T) {
 	if err := os.Symlink(outside, path); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Read(fixtureID); err == nil {
+	if _, err := store.Read(context.Background(), fixtureID); err == nil {
 		t.Fatal("credential symlink followed")
 	}
 	if err := os.Remove(path); err != nil {
@@ -221,7 +221,7 @@ func TestStoreLockWaitHonorsContextAndRejectsUnsafeFiles(t *testing.T) {
 	if err := unix.Mkfifo(path, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Read(fixtureID); err == nil {
+	if _, err := store.Read(context.Background(), fixtureID); err == nil {
 		t.Fatal("nonregular credential file accepted")
 	}
 }

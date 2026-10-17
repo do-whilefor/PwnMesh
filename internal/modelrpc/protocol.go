@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/provider"
+	"pwnmesh/internal/modelwire"
 )
 
 const MaxRequestBytes = 32 << 20
@@ -25,8 +25,8 @@ type Settings struct {
 	Adaptive        bool          `json:"adaptive"`
 }
 
-func (s Settings) RequestFormat() provider.RequestFormat {
-	return provider.RequestFormat{Protocol: s.Protocol, Model: s.Model, MaxTokens: s.MaxTokens, ReasoningEffort: s.ReasoningEffort, Adaptive: s.Adaptive}
+func (s Settings) RequestFormat() modelwire.RequestFormat {
+	return modelwire.RequestFormat{Protocol: s.Protocol, Model: s.Model, MaxTokens: s.MaxTokens, ReasoningEffort: s.ReasoningEffort, Adaptive: s.Adaptive}
 }
 
 type Request struct {
@@ -69,7 +69,7 @@ func (e *Error) Err() error {
 	}
 	var err error = errors.New("dispatcher model request failed")
 	if e.HTTPStatus != 0 {
-		err = &provider.HTTPError{Status: e.HTTPStatus}
+		err = &modelwire.HTTPError{Status: e.HTTPStatus}
 	}
 	if e.Canceled {
 		err = errors.Join(err, context.Canceled)

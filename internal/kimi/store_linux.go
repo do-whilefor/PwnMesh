@@ -2,7 +2,6 @@ package kimi
 
 import (
 	"context"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -11,6 +10,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"pwnmesh/internal/modelauth"
 )
 
 type Store struct {
@@ -18,18 +19,10 @@ type Store struct {
 	Client *Client
 }
 
-func validID(id string) bool {
-	if len(id) != 32 {
-		return false
-	}
-	_, err := hex.DecodeString(id)
-	return err == nil
-}
-
 func storageError() error { return &Error{Kind: "storage"} }
 
 func (s *Store) locked(ctx context.Context, id string, action func() error) error {
-	if !validID(id) {
+	if !modelauth.ValidCredentialID(id) {
 		return &Error{Kind: "invalid_id"}
 	}
 	if s.Dir == "" {
@@ -156,8 +149,8 @@ func (s *Store) Save(id string, credential Credential) error {
 	return s.locked(context.Background(), id, func() error { return s.save(id, credential) })
 }
 
-func (s *Store) Read(id string) (credential Credential, err error) {
-	err = s.locked(context.Background(), id, func() error {
+func (s *Store) Read(ctx context.Context, id string) (credential Credential, err error) {
+	err = s.locked(ctx, id, func() error {
 		credential, err = s.read(id)
 		return err
 	})

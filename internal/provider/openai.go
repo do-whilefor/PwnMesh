@@ -11,35 +11,10 @@ import (
 	"strings"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/modelwire"
 )
 
 const DefaultOpenAIBaseURL = "https://api.openai.com/v1"
-
-type openAIFunction struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	Parameters  json.RawMessage `json:"parameters,omitempty"`
-	Arguments   string          `json:"arguments,omitempty"`
-}
-
-type openAIToolCall struct {
-	ID       string         `json:"id"`
-	Type     string         `json:"type"`
-	Function openAIFunction `json:"function"`
-}
-
-type openAITool struct {
-	Type     string         `json:"type"`
-	Function openAIFunction `json:"function"`
-}
-
-type openAIMessage struct {
-	Role      string           `json:"role"`
-	Content   *string          `json:"content,omitempty"`
-	Refusal   string           `json:"refusal,omitempty"`
-	ToolCalls []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolID    string           `json:"tool_call_id,omitempty"`
-}
 
 func (p *Client) openAIEndpoint() string {
 	base := strings.TrimRight(p.BaseURL, "/")
@@ -53,75 +28,6 @@ func (p *Client) openAIEndpoint() string {
 		return base + "/chat/completions"
 	}
 	return base + "/v1/chat/completions"
-}
-
-func (p RequestFormat) openAIPayload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
-	if strings.TrimSpace(p.Model) == "" {
-		return nil, errors.New("missing OpenAI model")
-	}
-	if limit <= 0 {
-		limit = DefaultMaxTokens
-	}
-	// Map the project's three tiers to portable OpenAI values. Model support
-	// remains the endpoint's decision; an unset direct client keeps its default.
-	effort := p.ReasoningEffort
-	switch effort {
-	case "", "low":
-	case "high":
-		effort = "medium"
-	case "max":
-		effort = "high"
-	default:
-		return nil, errors.New("reasoning effort must be low, high, or max")
-	}
-	var wireTools []openAITool
-	for _, tool := range tools {
-		wireTools = append(wireTools, openAITool{"function", openAIFunction{Name: tool.Name, Description: tool.Description, Parameters: tool.Schema}})
-	}
-	system := System
-	wire := []openAIMessage{{Role: "system", Content: &system}}
-	for _, message := range agent.WireHistory(messages) {
-		var text []string
-		var calls []openAIToolCall
-		for _, block := range message.Content {
-			switch block.Type {
-			case "text":
-				text = append(text, block.Text)
-			case "tool_use":
-				calls = append(calls, openAIToolCall{ID: block.ID, Type: "function", Function: openAIFunction{Name: block.Name, Arguments: string(block.Input)}})
-			case "tool_result":
-				var content string
-				if json.Unmarshal(block.Content, &content) != nil {
-					content = string(block.Content)
-				}
-				if block.IsError {
-					content = "Tool error: " + content
-				}
-				wire = append(wire, openAIMessage{Role: "tool", Content: &content, ToolID: block.ToolUseID})
-			}
-		}
-		if len(text) > 0 || len(calls) > 0 {
-			entry := openAIMessage{Role: message.Role, ToolCalls: calls}
-			if len(text) > 0 {
-				content := strings.Join(text, "\n")
-				entry.Content = &content
-			}
-			wire = append(wire, entry)
-		}
-	}
-	return json.Marshal(struct {
-		Model           string          `json:"model"`
-		Messages        []openAIMessage `json:"messages"`
-		Tools           []openAITool    `json:"tools,omitempty"`
-		MaxTokens       int             `json:"max_completion_tokens"`
-		ReasoningEffort string          `json:"reasoning_effort,omitempty"`
-		Stream          bool            `json:"stream"`
-		StreamOptions   struct {
-			IncludeUsage bool `json:"include_usage"`
-		} `json:"stream_options"`
-	}{Model: p.Model, Messages: wire, Tools: wireTools, MaxTokens: limit, ReasoningEffort: effort, Stream: true, StreamOptions: struct {
-		IncludeUsage bool `json:"include_usage"`
-	}{true}})
 }
 
 type openAIUsage struct {
@@ -187,9 +93,9 @@ func finishOpenAI(message *agent.Message, reason string) error {
 func consumeOpenAIJSON(reader io.Reader) (agent.Message, error) {
 	var response struct {
 		Choices []struct {
-			Index   int           `json:"index"`
-			Message openAIMessage `json:"message"`
-			Finish  string        `json:"finish_reason"`
+			Index   int                     `json:"index"`
+			Message modelwire.OpenAIMessage `json:"message"`
+			Finish  string                  `json:"finish_reason"`
 		} `json:"choices"`
 		Usage *openAIUsage `json:"usage"`
 	}
@@ -275,10 +181,10 @@ func consumeOpenAISSE(ctx context.Context, reader io.Reader, emit agent.Emit) (a
 					Content   *string `json:"content"`
 					Refusal   *string `json:"refusal"`
 					ToolCalls []struct {
-						Index    *int           `json:"index"`
-						ID       string         `json:"id"`
-						Type     string         `json:"type"`
-						Function openAIFunction `json:"function"`
+						Index    *int                     `json:"index"`
+						ID       string                   `json:"id"`
+						Type     string                   `json:"type"`
+						Function modelwire.OpenAIFunction `json:"function"`
 					} `json:"tool_calls"`
 				} `json:"delta"`
 				Finish string `json:"finish_reason"`

@@ -14,12 +14,78 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/kimi"
+	"pwnmesh/internal/modelauth"
 	"pwnmesh/internal/modelconfig"
 )
 
 type kimiRoundTrip func(*http.Request) (*http.Response, error)
+
+func TestKimiSettingsCredentialReadsRespectRequestBounds(t *testing.T) {
+	for _, test := range []struct {
+		name, method string
+		cancelled    bool
+	}{
+		{"get_cancelled", http.MethodGet, true},
+		{"save_cancelled", http.MethodPut, true},
+		{"probe_cancelled", http.MethodPost, true},
+		{"probe_timeout", http.MethodPost, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			h := newKimiHarness(t)
+			id := h.authorized()
+			draft := kimiDraft(id)
+			draft["request_timeout"] = 1
+			body := encodeKimiDraft(draft)
+			if response := h.request(http.MethodPut, "/model-settings", body); response.Code != http.StatusOK {
+				t.Fatal("subscription setup failed")
+			}
+			lock, err := os.OpenFile(filepath.Join(modelconfig.AuthDir(h.path), id+".lock"), os.O_RDWR, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if err := unix.Flock(int(lock.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+				t.Fatal(err)
+			}
+			defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+			route := "/model-settings"
+			if test.method == http.MethodPost {
+				route += "/test"
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if test.cancelled {
+				cancel()
+			}
+			request := httptest.NewRequest(test.method, route, strings.NewReader(body)).WithContext(ctx)
+			response := httptest.NewRecorder()
+			done := make(chan struct{})
+			go func() {
+				h.mux.ServeHTTP(response, request)
+				close(done)
+			}()
+			limit := time.Second
+			if !test.cancelled {
+				limit = 2 * time.Second
+			}
+			select {
+			case <-done:
+			case <-time.After(limit):
+				cancel()
+				_ = unix.Flock(int(lock.Fd()), unix.LOCK_UN)
+				<-done
+				t.Fatal("settings credential read ignored request cancellation or timeout")
+			}
+			if test.method == http.MethodPost && (response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"ok":false`) || !strings.Contains(response.Body.String(), "timed out or was cancelled")) {
+				t.Fatalf("interrupted probe reported incorrect result: %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
 
 func (f kimiRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
@@ -121,7 +187,7 @@ func (h *kimiHarness) start() string {
 		UserCode string `json:"user_code"`
 		URI      string `json:"verification_uri"`
 	}
-	if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &response) != nil || !modelconfig.ValidCredentialID(response.LoginID) || response.UserCode != "CODE" || response.URI != "https://kimi.com/verify?code=CODE" || r.Header().Get("Cache-Control") != "no-store" {
+	if r.Code != 200 || json.Unmarshal(r.Body.Bytes(), &response) != nil || !modelauth.ValidCredentialID(response.LoginID) || response.UserCode != "CODE" || response.URI != "https://kimi.com/verify?code=CODE" || r.Header().Get("Cache-Control") != "no-store" {
 		h.t.Fatalf("cannot start Kimi login: %d %s", r.Code, r.Body.String())
 	}
 	return response.LoginID
@@ -319,7 +385,7 @@ func TestKimiAuthorizedDraftTestsSavesReloadsAndLogsOut(t *testing.T) {
 	if r.Code != 200 || !strings.Contains(r.Body.String(), `"has_token":false`) {
 		t.Fatalf("logout failed: %d %s", r.Code, r.Body.String())
 	}
-	if _, err := credentials.Read(id); !errors.Is(err, kimi.ErrLoginRequired) {
+	if _, err := credentials.Read(context.Background(), id); !errors.Is(err, kimi.ErrLoginRequired) {
 		t.Fatal("logout retained OAuth credentials")
 	}
 	saved, _, err = modelconfig.Read(h.path)
@@ -403,7 +469,7 @@ func TestKimiPartialCredentialWriteRollsBackAndKeepsRetryableDraft(t *testing.T)
 	if r := h.request("PUT", "/model-settings", body); r.Code != 422 {
 		t.Fatal("credential sync failure was accepted")
 	}
-	if _, err := credentials.Read(id); !errors.Is(err, kimi.ErrLoginRequired) {
+	if _, err := credentials.Read(context.Background(), id); !errors.Is(err, kimi.ErrLoginRequired) {
 		t.Fatal("failed credential save left an unreferenced credential")
 	}
 	if _, found, err := modelconfig.Read(h.path); err != nil || found {
@@ -431,7 +497,7 @@ func TestKimiLogoutRemainsRevokedAfterSettingsWriteFailure(t *testing.T) {
 	if r := h.request("POST", "/model-settings/kimi/logout", ""); r.Code != 422 {
 		t.Fatal("logout did not report settings persistence failure")
 	}
-	if _, err := h.settings.credentials.Read(id); !errors.Is(err, kimi.ErrLoginRequired) {
+	if _, err := h.settings.credentials.Read(context.Background(), id); !errors.Is(err, kimi.ErrLoginRequired) {
 		t.Fatal("failed settings write restored revoked credentials")
 	}
 	h.settings.store.Path = h.path
@@ -481,7 +547,7 @@ func TestKimiRepeatedSavePreservesRotatedCredentials(t *testing.T) {
 	if r := h.request("PUT", "/model-settings", body); r.Code != 200 || !strings.Contains(r.Body.String(), `"has_token":true`) {
 		t.Fatalf("lost-response save retry failed: %d %s", r.Code, r.Body.String())
 	}
-	after, err := credentials.Read(id)
+	after, err := credentials.Read(context.Background(), id)
 	if err != nil || after.AccessToken != rotated.AccessToken || after.RefreshToken != rotated.RefreshToken || !after.ExpiresAt.Equal(rotated.ExpiresAt) {
 		t.Fatal("save retry overwrote rotated credentials")
 	}

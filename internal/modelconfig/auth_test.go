@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/modelauth"
 )
 
 const testCredentialID = "0123456789abcdef0123456789abcdef"
@@ -61,7 +63,7 @@ func TestSubscriptionAuthenticationValidationPinsModeAndEndpoint(t *testing.T) {
 	}
 	for _, id := range []string{"../credential", strings.Repeat("x", 32), testCredentialID + "a"} {
 		kimi.CredentialID = id
-		if err := kimi.Validate(false); err == nil || ValidCredentialID(id) {
+		if err := kimi.Validate(false); err == nil || modelauth.ValidCredentialID(id) {
 			t.Fatal("invalid credential reference accepted")
 		}
 	}
@@ -90,13 +92,13 @@ func TestSubscriptionPublicSettingsRedactSecretsAndCredentialLocations(t *testin
 				t.Fatal("public settings expose credentials or storage references")
 			}
 		}
-		if !public.HasToken || public.TokenHint != "••••••••" || public.AuthMode != mode || public.CredentialDir != "" || public.CredentialID != "" || public.Token != "" {
+		if !public.HasToken || public.AuthMode != mode {
 			t.Fatal("public credential state is incorrect")
 		}
 	}
 	s := subscriptionSettings("kimi_oauth")
 	s.CredentialID = ""
-	if s.Public().HasToken || s.Public().TokenHint != "" {
+	if s.Public().HasToken {
 		t.Fatal("unsigned subscription claims credentials")
 	}
 }

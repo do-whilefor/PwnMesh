@@ -15,6 +15,7 @@ import (
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/config"
 	"pwnmesh/internal/modelrpc"
+	"pwnmesh/internal/modelwire"
 	"pwnmesh/internal/protocol"
 	"pwnmesh/internal/provider"
 )
@@ -27,7 +28,7 @@ func TestModelBridgeBindsPolicyAndKeepsCredentialsOutOfWorker(t *testing.T) {
 		"PWNMESH_REASONING_EFFORT": "low", "PWNMESH_MAX_OUTPUT_TOKENS": "2048", "PWNMESH_REQUEST_TIMEOUT": "45", "TOOL_SETTING": "kept",
 	}}
 	j := protocol.Job{RunID: "run", Kind: "explore", Budget: config.Task{ReasoningEffort: "high"}}
-	p, err := configuredModel(backend, j)
+	p, err := configuredModel(context.Background(), backend, j)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +92,7 @@ func TestModelBridgeRetainsOpenAIProtocolForGenerationAndSummary(t *testing.T) {
 			_, _ = io.WriteString(w, `{"choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"complete"}}],"usage":{"prompt_tokens":12,"completion_tokens":3}}`)
 		}))
 		backend := config.Worker{Env: map[string]string{"PWNMESH_MODEL_PROTOCOL": "openai", "OPENAI_API_KEY": secret, "OPENAI_BASE_URL": model.URL, "OPENAI_MODEL": "openai-model", "PWNMESH_MAX_OUTPUT_TOKENS": "2048"}}
-		p, err := configuredModel(backend, protocol.Job{})
+		p, err := configuredModel(context.Background(), backend, protocol.Job{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -165,11 +166,11 @@ func TestModelBridgePreservesOpenAIArgumentRepairError(t *testing.T) {
 
 func TestModelBridgePreservesTypedErrorsWithoutDetails(t *testing.T) {
 	for _, kind := range []agent.ErrorKind{agent.ErrorTransport, agent.ErrorRateLimit, agent.ErrorUnavailable, agent.ErrorContextOverflow, agent.ErrorToolArguments, agent.ErrorProvider} {
-		err := errors.Join(&agent.ModelError{Kind: kind, Err: &provider.HTTPError{Status: 429}}, context.DeadlineExceeded, errors.New("https://private.invalid?token=fixture-secret"))
+		err := errors.Join(&agent.ModelError{Kind: kind, Err: &modelwire.HTTPError{Status: 429}}, context.DeadlineExceeded, errors.New("https://private.invalid?token=fixture-secret"))
 		wire := safeModelError(err)
 		raw, _ := json.Marshal(wire)
 		var restored *agent.ModelError
-		var endpoint *provider.HTTPError
+		var endpoint *modelwire.HTTPError
 		if strings.Contains(string(raw), "fixture-secret") || !errors.As(wire.Err(), &restored) || restored.Kind != kind || !errors.As(wire.Err(), &endpoint) || endpoint.Status != 429 || !errors.Is(wire.Err(), context.DeadlineExceeded) {
 			t.Fatalf("error classification lost for %s", kind)
 		}

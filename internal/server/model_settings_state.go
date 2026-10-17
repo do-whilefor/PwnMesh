@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 
 	"pwnmesh/internal/kimi"
@@ -16,21 +17,21 @@ type modelSettings struct {
 }
 
 type savedCredentials interface {
-	Read(string) (kimi.Credential, error)
+	Read(context.Context, string) (kimi.Credential, error)
 	Save(string, kimi.Credential) error
 	Delete(string) error
 }
 
-func (m *modelSettings) public(s modelconfig.Settings) modelconfig.Public {
+func (m *modelSettings) public(ctx context.Context, s modelconfig.Settings) modelconfig.Public {
 	if s.AuthMode == "kimi_oauth" && s.CredentialID != "" {
-		if _, err := m.credentials.Read(s.CredentialID); err != nil {
+		if _, err := m.credentials.Read(ctx, s.CredentialID); err != nil {
 			s.CredentialID = ""
 		}
 	}
 	return s.Public()
 }
 
-func (m *modelSettings) save(raw []byte) (modelconfig.Settings, error) {
+func (m *modelSettings) save(ctx context.Context, raw []byte) (modelconfig.Settings, error) {
 	created := ""
 	locked := false
 	defer func() {
@@ -46,7 +47,7 @@ func (m *modelSettings) save(raw []byte) (modelconfig.Settings, error) {
 		// A completed PUT may lose its response. Retrying its login ID must
 		// reuse the saved credential, never replay or overwrite rotated tokens.
 		if id == s.CredentialID {
-			_, err := m.credentials.Read(id)
+			_, err := m.credentials.Read(ctx, id)
 			return err
 		}
 		// Always acquire the settings lock first. Keep the draft alive until

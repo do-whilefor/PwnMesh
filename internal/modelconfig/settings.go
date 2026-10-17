@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"pwnmesh/internal/modelauth"
+	"pwnmesh/internal/modelwire"
 	"pwnmesh/internal/provider"
 )
 
@@ -47,30 +49,30 @@ type Settings struct {
 }
 
 type Public struct {
-	Settings
-	HasToken          bool   `json:"has_token"`
-	TokenHint         string `json:"token_hint"`
-	AppliesTo         string `json:"applies_to"`
-	EffectiveProxyURL string `json:"effective_proxy_url"`
+	AuthMode        string `json:"auth_mode,omitempty"`
+	Protocol        string `json:"protocol"`
+	BaseURL         string `json:"base_url"`
+	Model           string `json:"model"`
+	ConnectionMode  string `json:"connection_mode"`
+	ProxyURL        string `json:"proxy_url"`
+	MaxTokens       int    `json:"max_tokens"`
+	RequestTimeout  int    `json:"request_timeout"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	HasToken        bool   `json:"has_token"`
 }
 
+// Public exposes only operator-facing fields, independently of the disk schema.
 func (s Settings) Public() Public {
-	hasToken := s.Token != "" || s.AuthMode == "kimi_oauth" && s.CredentialID != ""
-	s.Token = ""
-	s.CredentialID, s.CredentialDir = "", ""
-	proxy := ""
-	if s.ConnectionMode == "proxy" {
-		proxy, _ = provider.ProxyURL(s.ProxyURL, true)
+	return Public{
+		AuthMode: s.AuthMode, Protocol: s.Protocol, BaseURL: s.BaseURL, Model: s.Model,
+		ConnectionMode: s.ConnectionMode, ProxyURL: s.ProxyURL,
+		MaxTokens: s.MaxTokens, RequestTimeout: s.RequestTimeout, ReasoningEffort: s.ReasoningEffort,
+		HasToken: s.Token != "" || s.AuthMode == "kimi_oauth" && s.CredentialID != "",
 	}
-	hint := ""
-	if hasToken {
-		hint = "••••••••"
-	}
-	return Public{Settings: s, HasToken: hasToken, TokenHint: hint, AppliesTo: "new_runs", EffectiveProxyURL: proxy}
 }
 
 func Defaults(getenv func(string) string) Settings {
-	s := Settings{Protocol: "anthropic", BaseURL: getenv("ANTHROPIC_BASE_URL"), Model: getenv("ANTHROPIC_MODEL"), Token: getenv("ANTHROPIC_AUTH_TOKEN"), ConnectionMode: "direct", ProxyURL: "http://host.docker.internal:7897", MaxTokens: provider.DefaultMaxTokens, RequestTimeout: int(provider.DefaultRequestTimeout / time.Second), ReasoningEffort: provider.DefaultReasoningEffort}
+	s := Settings{Protocol: "anthropic", BaseURL: getenv("ANTHROPIC_BASE_URL"), Model: getenv("ANTHROPIC_MODEL"), Token: getenv("ANTHROPIC_AUTH_TOKEN"), ConnectionMode: "direct", ProxyURL: "http://host.docker.internal:7897", MaxTokens: modelwire.DefaultMaxTokens, RequestTimeout: int(provider.DefaultRequestTimeout / time.Second), ReasoningEffort: modelwire.DefaultReasoningEffort}
 	if s.BaseURL == "" {
 		s.BaseURL = provider.DefaultBaseURL
 	}
@@ -78,7 +80,7 @@ func Defaults(getenv func(string) string) Settings {
 		s.Model = getenv("ANTHROPIC_DEFAULT_FABLE_MODEL")
 	}
 	if s.Model == "" {
-		s.Model = provider.DefaultModel
+		s.Model = modelwire.DefaultModel
 	}
 	if protocol := getenv("PWNMESH_MODEL_PROTOCOL"); protocol != "" {
 		s.Protocol = protocol
@@ -107,23 +109,14 @@ func Defaults(getenv func(string) string) Settings {
 }
 
 func (s Settings) Validate(requireToken bool) error {
-	if s.AuthMode != "" && s.AuthMode != "api_key" && s.AuthMode != "kimi_oauth" && s.AuthMode != "glm_coding_plan" {
-		return errors.New("unsupported authentication mode")
-	}
-	if s.AuthMode == "kimi_oauth" || s.AuthMode == "glm_coding_plan" {
-		base := "https://api.kimi.com/coding"
-		if s.AuthMode == "glm_coding_plan" {
-			base = "https://open.bigmodel.cn/api/anthropic"
-		}
-		if s.Protocol != "anthropic" || strings.TrimRight(s.BaseURL, "/") != base {
-			return errors.New("subscription authentication requires its official Anthropic endpoint")
-		}
+	if err := modelauth.ValidateEndpoint(s.Protocol, s.AuthMode, strings.TrimRight(s.BaseURL, "/")+"/v1/messages"); err != nil {
+		return err
 	}
 	if s.AuthMode == "kimi_oauth" {
 		if s.Token != "" {
 			return errors.New("Kimi subscription credentials must come from sign-in")
 		}
-		if s.CredentialID != "" && !ValidCredentialID(s.CredentialID) {
+		if s.CredentialID != "" && !modelauth.ValidCredentialID(s.CredentialID) {
 			return errors.New("invalid subscription credential reference")
 		}
 		if requireToken && s.CredentialID == "" {

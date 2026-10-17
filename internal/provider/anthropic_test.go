@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/modelwire"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -162,7 +163,7 @@ func TestGenerateBackoffDeadlinePreservesInfrastructureCause(t *testing.T) {
 					t.Fatalf("backoff lost transport cause: %v", err)
 				}
 			} else {
-				var httpErr *HTTPError
+				var httpErr *modelwire.HTTPError
 				if !errors.As(err, &httpErr) || httpErr.Status != tc.status {
 					t.Fatalf("backoff lost HTTP status: %v", err)
 				}
@@ -214,7 +215,7 @@ func TestEndpointErrorClassificationPreservesStatus(t *testing.T) {
 		{http.StatusUnauthorized, agent.ErrorProvider},
 	} {
 		err := classifyEndpointError(tc.status, nil)
-		var httpErr *HTTPError
+		var httpErr *modelwire.HTTPError
 		if err.Kind != tc.kind || !errors.As(err, &httpErr) || httpErr.Status != tc.status {
 			t.Fatalf("status=%d error=%+v", tc.status, err)
 		}

@@ -132,7 +132,7 @@ func TestModelSettingsAPISecretPersistenceAndValidation(t *testing.T) {
 	if err := json.Unmarshal(get.Body.Bytes(), &public); err != nil {
 		t.Fatal(err)
 	}
-	if !public.HasToken || public.Token != "" || public.Model != "fixture" || public.EffectiveProxyURL != "http://host.docker.internal:7897" {
+	if !public.HasToken || public.Model != "fixture" || public.ProxyURL != "http://localhost:7897" {
 		t.Fatal("invalid public model settings")
 	}
 	put = modelSettingsRequest(t, handler, "PUT", "/model-settings", `{"token":"","model":"changed"}`)

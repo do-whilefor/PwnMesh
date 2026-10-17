@@ -1,17 +1,20 @@
 package provider
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
+
+	"pwnmesh/internal/modelwire"
 )
 
 // FromEnvironment keeps execution and readiness checks on the same model
 // settings. getenv selects the process or isolated worker environment.
-func FromEnvironment(getenv func(string) string, effort string) (*Client, error) {
+func FromEnvironment(ctx context.Context, getenv func(string) string, effort string) (*Client, error) {
 	protocol := getenv("PWNMESH_MODEL_PROTOCOL")
 	if protocol == "" {
 		protocol = "anthropic"
@@ -23,7 +26,7 @@ func FromEnvironment(getenv func(string) string, effort string) (*Client, error)
 		effort = getenv("PWNMESH_REASONING_EFFORT")
 	}
 	if effort == "" {
-		effort = DefaultReasoningEffort
+		effort = modelwire.DefaultReasoningEffort
 	}
 	if !slices.Contains([]string{"low", "high", "max"}, effort) {
 		return nil, errors.New("reasoning effort must be low, high or max")
@@ -39,7 +42,7 @@ func FromEnvironment(getenv func(string) string, effort string) (*Client, error)
 		}
 		return n, nil
 	}
-	output, err := positive("PWNMESH_MAX_OUTPUT_TOKENS", DefaultMaxTokens)
+	output, err := positive("PWNMESH_MAX_OUTPUT_TOKENS", modelwire.DefaultMaxTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -74,15 +77,15 @@ func FromEnvironment(getenv func(string) string, effort string) (*Client, error)
 	if strings.TrimSpace(p.Token) == "" && p.AuthMode != "kimi_oauth" {
 		return nil, fmt.Errorf("%s is required", tokenKey)
 	}
+	if err := p.validateAuthEndpoint(); err != nil {
+		return nil, err
+	}
 	p.Client, err = ConnectionClient(getenv("PWNMESH_CONNECTION_MODE"), getenv("PWNMESH_PROXY_URL"))
 	if err != nil {
 		return nil, err
 	}
 	if p.AuthMode == "kimi_oauth" {
-		if err := p.validateAuthEndpoint(); err != nil {
-			return nil, err
-		}
-		if err := p.configureKimi(getenv("ANTHROPIC_CREDENTIAL_DIR"), getenv("ANTHROPIC_CREDENTIAL_ID")); err != nil {
+		if err := p.configureKimi(ctx, getenv("ANTHROPIC_CREDENTIAL_DIR"), getenv("ANTHROPIC_CREDENTIAL_ID")); err != nil {
 			return nil, err
 		}
 	}

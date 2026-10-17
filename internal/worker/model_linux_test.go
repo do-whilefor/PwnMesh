@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"pwnmesh/internal/modelwire"
 	"pwnmesh/internal/protocol"
 	"strings"
 	"sync"
@@ -296,7 +297,7 @@ func TestModelBridgeLargeRequestSummaryAndPartialTypedErrors(t *testing.T) {
 					}
 				}
 				if tc.failure.HTTPStatus != 0 {
-					var httpErr *provider.HTTPError
+					var httpErr *modelwire.HTTPError
 					if !errors.As(err, &httpErr) || httpErr.Status != tc.failure.HTTPStatus {
 						t.Fatal("provider status was lost")
 					}
@@ -408,7 +409,7 @@ func TestModelBridgePhaseDeadlineRetainsOnlyCurrentTypedFailure(t *testing.T) {
 				t.Fatalf("late response changed exhaustion diagnosis: kind=%q retryable=%v cause=%q", kind, retryable, infrastructureFailureCause(err))
 			}
 			if tc.failure != nil && tc.failure.HTTPStatus != 0 {
-				var httpErr *provider.HTTPError
+				var httpErr *modelwire.HTTPError
 				if !errors.As(err, &httpErr) || httpErr.Status != tc.failure.HTTPStatus {
 					t.Fatal("late response lost HTTP classification")
 				}

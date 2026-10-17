@@ -12,7 +12,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/config"
-	"pwnmesh/internal/provider"
+	"pwnmesh/internal/modelwire"
 )
 
 type healthProvider func(context.Context, []agent.Message, []agent.Definition) (agent.Message, error)
@@ -122,6 +122,36 @@ func TestHealthBlocksKnownIncompatibilityUntilSuccessfulRecheck(t *testing.T) {
 	}
 }
 
+func TestHealthCredentialCancellationDoesNotBlockWorkerConfiguration(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			if cause == context.DeadlineExceeded {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), time.Nanosecond)
+				defer cancel()
+				<-ctx.Done()
+			} else {
+				cancel()
+			}
+			w := config.Worker{Name: "fixture", Env: map[string]string{
+				"ANTHROPIC_AUTH_MODE": "kimi_oauth", "ANTHROPIC_BASE_URL": "https://api.kimi.com/coding",
+				"ANTHROPIC_CREDENTIAL_DIR": t.TempDir(), "ANTHROPIC_CREDENTIAL_ID": "0123456789abcdef0123456789abcdef",
+			}}
+			s := &Scheduler{Config: config.Config{Runtime: config.Runtime{HealthTimeout: 5}}}
+			err := s.health(ctx, w)
+			var failure *healthFailure
+			if !errors.Is(err, cause) || !errors.As(err, &failure) || failure.Kind != "unverified" {
+				t.Fatalf("cancelled credential read was classified as a configuration failure: %v", err)
+			}
+			s.recordHealth(w.Name, err)
+			if s.incompatible[w.Name] != "" || s.unhealthy[w.Name].IsZero() {
+				t.Fatal("cancelled credential read permanently blocked the worker")
+			}
+		})
+	}
+}
+
 func TestHealthRejectsIncompleteOrIncompatibleProtocolWithoutExtraTurns(t *testing.T) {
 	for _, scenario := range []string{"text_only", "wrong_tool", "invalid_arguments", "multiple_calls", "truncated_first", "wrong_first_role", "wrong_first_stop", "wrong_receipt", "duplicate_receipt", "extra_call", "truncated_last", "wrong_last_role", "wrong_last_stop"} {
 		t.Run(scenario, func(t *testing.T) {
@@ -209,18 +239,18 @@ func TestHealthPreservesFailureClassificationAndCancellation(t *testing.T) {
 	if !errors.As(err, &failure) || failure.Kind != "unverified" || !errors.Is(err, context.DeadlineExceeded) || calls != 2 {
 		t.Fatalf("probe did not share its deadline: calls=%d err=%v", calls, err)
 	}
-	unauthorized := &agent.ModelError{Kind: agent.ErrorProvider, Err: &provider.HTTPError{Status: 401}}
+	unauthorized := &agent.ModelError{Kind: agent.ErrorProvider, Err: &modelwire.HTTPError{Status: 401}}
 	if !errors.As(healthRequestFailure(unauthorized), &failure) || failure.Kind != "configuration" {
 		t.Fatal("authentication failure was classified as model incompatibility")
 	}
 	for _, status := range []int{400, 404, 405, 415, 422} {
-		cause := &agent.ModelError{Kind: agent.ErrorProvider, Err: &provider.HTTPError{Status: status}}
+		cause := &agent.ModelError{Kind: agent.ErrorProvider, Err: &modelwire.HTTPError{Status: status}}
 		if !errors.As(healthRequestFailure(cause), &failure) || failure.Kind != "incompatible" {
 			t.Fatalf("explicit HTTP protocol rejection was not retained: %d", status)
 		}
 	}
 	for _, kind := range []agent.ErrorKind{agent.ErrorContextOverflow, agent.ErrorBudget} {
-		bounded := &agent.ModelError{Kind: kind, Err: &provider.HTTPError{Status: 400}}
+		bounded := &agent.ModelError{Kind: kind, Err: &modelwire.HTTPError{Status: 400}}
 		if !errors.As(healthRequestFailure(bounded), &failure) || failure.Kind != "unverified" || !errors.Is(failure, bounded) {
 			t.Fatalf("a bounded probe's %s was treated as backend incompatibility: %v", kind, failure)
 		}

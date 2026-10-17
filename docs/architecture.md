@@ -45,6 +45,7 @@ reported while launch cancellation still stops delivery.
 | `internal/worker/` | Durable sessions, tools and evidence acceptance |
 | `internal/worker/dag/`, `internal/workergraph/` | Local dependency execution and verified artifact reuse |
 | `internal/agent/`, `internal/provider/`, `internal/modelrpc/` | Model/tool loop, provider client and bridge contract |
+| `internal/modelwire/`, `internal/modelauth/` | Pure request encoding and shared authentication policy |
 
 Execution clients depend on `board/model`, not aggregate Board or SQLite. Board
 composes policy and mutations; its private store persists values in the caller's
@@ -182,6 +183,9 @@ prior phase and cursor values.
 Worker translates durable phases into generic Agent request policy: pinned
 instructions and a tool-disable reason. The Agent loop does not know Worker
 phases, and request policy does not change the session checkpoint schema.
+Worker and model RPC depend on credential-free wire encoding and typed errors,
+without importing Provider or OAuth storage. Provider uses the same encoding for
+upstream requests, so input sizing and transport cannot drift.
 Native parallel tool groups run at most 16 callbacks at once, preserving result
 order and serial/terminal barriers. Cancellation settles queued calls without
 starting their tools.
@@ -248,6 +252,11 @@ Server settings coordination owns persistence and saved subscription credentials
 Kimi device authorization owns only pending login sessions. Ordinary API-key
 saves do not acquire the login-session lock. Authorized drafts remain in memory
 until save, and retries preserve credentials already rotated by Dispatcher.
+Settings and Provider share subscription endpoint policy; invalid authentication
+fails before Worker launch. Public settings explicitly select operator fields
+instead of embedding the persistence schema. Connection probes own preparation
+and execution separately from HTTP routing, and their timeout includes credential
+lock acquisition. Credential reads honor the caller's cancellation.
 
 View transitions expose their leaving state; feature containers own interaction
 blocking so navigation can interrupt a fade. Cached inactive views settle without

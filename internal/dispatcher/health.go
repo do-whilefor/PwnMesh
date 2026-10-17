@@ -9,6 +9,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/config"
+	"pwnmesh/internal/modelwire"
 	"pwnmesh/internal/provider"
 )
 
@@ -85,8 +86,11 @@ func (s *Scheduler) health(ctx context.Context, w config.Worker, budgets ...conf
 	}
 	seen := map[string]bool{}
 	for _, budget := range budgets {
-		p, err := provider.FromEnvironment(w.Getenv, budget.ReasoningEffort)
+		p, err := provider.FromEnvironment(ctx, w.Getenv, budget.ReasoningEffort)
 		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				return healthRequestFailure(err)
+			}
 			return &healthFailure{Kind: "configuration", Err: err}
 		}
 		if p.Client != nil {
@@ -109,7 +113,7 @@ func (s *Scheduler) health(ctx context.Context, w config.Worker, budgets ...conf
 func healthRequestFailure(err error) error {
 	kind := "unverified"
 	var model *agent.ModelError
-	var status *provider.HTTPError
+	var status *modelwire.HTTPError
 	switch {
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		kind = "unverified"

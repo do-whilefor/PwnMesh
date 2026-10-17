@@ -7,11 +7,12 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/kimi"
+	"pwnmesh/internal/modelwire"
 )
 
-func (p *Client) configureKimi(dir, id string) error {
+func (p *Client) configureKimi(ctx context.Context, dir, id string) error {
 	store := &kimi.Store{Dir: dir, Client: &kimi.Client{HTTP: p.Client}}
-	initial, err := store.Read(id)
+	initial, err := store.Read(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -55,7 +56,7 @@ func classifyCredentialError(err error) error {
 		kind = agent.ErrorRateLimit
 	}
 	if auth.Status >= 100 && auth.Status <= 599 {
-		err = errors.Join(err, &HTTPError{Status: auth.Status})
+		err = errors.Join(err, &modelwire.HTTPError{Status: auth.Status})
 	}
 	return &agent.ModelError{Kind: kind, Err: err}
 }

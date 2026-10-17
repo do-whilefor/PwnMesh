@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/agent"
+	"pwnmesh/internal/modelwire"
 )
 
 const openAITextResponse = `{"choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":31,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":11}}}`
@@ -48,12 +49,12 @@ func TestOpenAIRequestsUseConfiguredEndpointAndOwnWireFormat(t *testing.T) {
 					t.Fatal(err)
 				}
 				var payload struct {
-					Model         string          `json:"model"`
-					Messages      []openAIMessage `json:"messages"`
-					Tools         []openAITool    `json:"tools"`
-					MaxTokens     int             `json:"max_completion_tokens"`
-					Effort        string          `json:"reasoning_effort"`
-					Stream        bool            `json:"stream"`
+					Model         string                    `json:"model"`
+					Messages      []modelwire.OpenAIMessage `json:"messages"`
+					Tools         []modelwire.OpenAITool    `json:"tools"`
+					MaxTokens     int                       `json:"max_completion_tokens"`
+					Effort        string                    `json:"reasoning_effort"`
+					Stream        bool                      `json:"stream"`
 					StreamOptions struct {
 						IncludeUsage bool `json:"include_usage"`
 					} `json:"stream_options"`
@@ -66,7 +67,7 @@ func TestOpenAIRequestsUseConfiguredEndpointAndOwnWireFormat(t *testing.T) {
 						t.Fatalf("unexpected request field %s", forbidden)
 					}
 				}
-				if payload.Model != "test-model" || payload.Effort != "high" || !payload.Stream || !payload.StreamOptions.IncludeUsage || len(payload.Messages) != 5 || payload.Messages[0].Role != "system" || *payload.Messages[0].Content != System {
+				if payload.Model != "test-model" || payload.Effort != "high" || !payload.Stream || !payload.StreamOptions.IncludeUsage || len(payload.Messages) != 5 || payload.Messages[0].Role != "system" || *payload.Messages[0].Content != modelwire.System {
 					t.Fatalf("incorrect OpenAI payload: %+v", payload)
 				}
 				call, result := payload.Messages[2], payload.Messages[3]
@@ -115,9 +116,9 @@ func TestOpenAIReasoningEffortAppliesToTurnsSummariesAndRequestSizing(t *testing
 				}
 				requestSizes = append(requestSizes, len(raw))
 				var payload struct {
-					Effort    *string      `json:"reasoning_effort"`
-					MaxTokens int          `json:"max_completion_tokens"`
-					Tools     []openAITool `json:"tools"`
+					Effort    *string                `json:"reasoning_effort"`
+					MaxTokens int                    `json:"max_completion_tokens"`
+					Tools     []modelwire.OpenAITool `json:"tools"`
 				}
 				if err := json.Unmarshal(raw, &payload); err != nil {
 					t.Fatal(err)
@@ -176,7 +177,7 @@ func TestOpenAIUnsupportedReasoningEffortDoesNotSilentlyChangeModelRequest(t *te
 	})
 	p.ReasoningEffort = "high"
 	_, err := p.Generate(context.Background(), []agent.Message{agent.Text("user", "Inspect")}, nil, nil)
-	var endpoint *HTTPError
+	var endpoint *modelwire.HTTPError
 	if !errors.As(err, &endpoint) || endpoint.Status != http.StatusBadRequest || calls != 1 {
 		t.Fatalf("unsupported effort was silently retried or accepted: calls=%d err=%v", calls, err)
 	}
@@ -204,7 +205,7 @@ func TestOpenAIStreamedParallelToolCallsRoundTrip(t *testing.T) {
 			return testResponse(req, http.StatusOK, "text/event-stream", stream), nil
 		}
 		var payload struct {
-			Messages []openAIMessage `json:"messages"`
+			Messages []modelwire.OpenAIMessage `json:"messages"`
 		}
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
 			t.Fatal(err)

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"net/http"
 	"net/url"
 	"testing"
@@ -41,14 +42,14 @@ func TestExplicitConnectionModeControlsModelTransport(t *testing.T) {
 			return map[string]string{"ANTHROPIC_AUTH_TOKEN": "fixture", "PWNMESH_CONNECTION_MODE": mode, "PWNMESH_PROXY_URL": "http://localhost:7897"}[key]
 		}
 	}
-	direct, err := FromEnvironment(getenv("direct"), "")
+	direct, err := FromEnvironment(context.Background(), getenv("direct"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if direct.Client.Transport.(*http.Transport).Proxy != nil {
 		t.Fatal("direct connection inherited ambient proxy")
 	}
-	proxy, err := FromEnvironment(getenv("proxy"), "")
+	proxy, err := FromEnvironment(context.Background(), getenv("proxy"), "")
 	if err != nil {
 		t.Fatal(err)
 	}

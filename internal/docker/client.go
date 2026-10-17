@@ -532,7 +532,7 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (prot
 			return protocol.Result{}, errors.New("invalid run ID")
 		}
 	}
-	p, err := configuredModel(w, j)
+	p, err := configuredModel(ctx, w, j)
 	if err != nil {
 		return protocol.Result{}, err
 	}

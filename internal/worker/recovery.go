@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"pwnmesh/internal/agent"
-	"pwnmesh/internal/provider"
+	"pwnmesh/internal/modelwire"
 )
 
 // Only infrastructure failures may continue the same run. A valid declined
@@ -28,7 +28,7 @@ func classifyFailure(err error, phase context.Context) (string, bool) {
 			return string(model.Kind), false
 		}
 	}
-	var httpErr *provider.HTTPError
+	var httpErr *modelwire.HTTPError
 	if errors.As(err, &httpErr) {
 		return "provider_http", httpErr.Status == 408 || httpErr.Status == 429 || httpErr.Status >= 500
 	}

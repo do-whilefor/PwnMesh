@@ -8,15 +8,16 @@ import (
 	"testing"
 	"time"
 
+	"pwnmesh/internal/modelwire"
 	"pwnmesh/internal/provider"
 )
 
 func TestDefaultsMatchProvider(t *testing.T) {
 	settings := Defaults(func(string) string { return "" })
-	if settings.BaseURL != provider.DefaultBaseURL || settings.Model != provider.DefaultModel {
+	if settings.BaseURL != provider.DefaultBaseURL || settings.Model != modelwire.DefaultModel {
 		t.Fatalf("saved settings and provider defaults differ: base_url=%q model=%q", settings.BaseURL, settings.Model)
 	}
-	if settings.RequestTimeout != int(provider.DefaultRequestTimeout/time.Second) || settings.MaxTokens != provider.DefaultMaxTokens || settings.ReasoningEffort != provider.DefaultReasoningEffort {
+	if settings.RequestTimeout != int(provider.DefaultRequestTimeout/time.Second) || settings.MaxTokens != modelwire.DefaultMaxTokens || settings.ReasoningEffort != modelwire.DefaultReasoningEffort {
 		t.Fatalf("saved request defaults differ from provider: timeout=%d max_tokens=%d effort=%q", settings.RequestTimeout, settings.MaxTokens, settings.ReasoningEffort)
 	}
 }
@@ -46,6 +47,33 @@ func TestSettingsPersistAndRetainSecretWithoutExposingIt(t *testing.T) {
 	current, err := reopened.Load()
 	if err != nil || current != settings {
 		t.Fatal("failed save replaced settings")
+	}
+}
+
+func TestPublicSettingsHaveAnExplicitCredentialFreeContract(t *testing.T) {
+	settings := Defaults(func(string) string { return "" })
+	settings.AuthMode, settings.Token = "api_key", "fixture-private-token"
+	settings.CredentialID, settings.CredentialDir = testCredentialID, "/private/auth"
+	settings.ConnectionMode, settings.ProxyURL = "proxy", "http://localhost:7897"
+	raw, err := json.Marshal(settings.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"auth_mode", "protocol", "base_url", "model", "connection_mode", "proxy_url", "max_tokens", "request_timeout", "reasoning_effort", "has_token"}
+	if len(fields) != len(want) {
+		t.Fatalf("unexpected public fields: %s", raw)
+	}
+	for _, key := range want {
+		if _, ok := fields[key]; !ok {
+			t.Errorf("public settings omitted %s", key)
+		}
+	}
+	if settings.Public().ProxyURL != settings.ProxyURL || !settings.Public().HasToken {
+		t.Fatal("public settings changed the configured connection")
 	}
 }
 

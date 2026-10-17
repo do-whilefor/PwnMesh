@@ -1,4 +1,5 @@
-package provider
+// Package modelwire defines credential-free model requests and endpoint failures.
+package modelwire
 
 import (
 	"encoding/json"
@@ -6,6 +7,11 @@ import (
 
 	"pwnmesh/internal/agent"
 )
+
+const System = "Work toward the assigned task using available tools. Distinguish confirmed facts from guesses. Follow the current request's output contract."
+const DefaultModel = "deepseek-flash"
+const DefaultReasoningEffort = "max"
+const DefaultMaxTokens = 32768
 
 // RequestFormat describes serialized model requests without transport or credentials.
 type RequestFormat struct {
@@ -16,16 +22,13 @@ type RequestFormat struct {
 	Adaptive        bool
 }
 
-func (p *Client) RequestFormat() RequestFormat {
-	return RequestFormat{Protocol: p.Protocol, Model: p.Model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Adaptive: p.AdaptiveThinking()}
-}
-
 func (p RequestFormat) InputBytes(messages []agent.Message, tools []agent.Definition) (int, error) {
-	raw, err := p.payload(messages, tools, p.MaxTokens)
+	raw, err := p.Payload(messages, tools, p.MaxTokens)
 	return len(raw), err
 }
 
-func (p RequestFormat) payload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
+// Payload serializes the exact request body sent upstream.
+func (p RequestFormat) Payload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
 	if p.Protocol == "openai" {
 		return p.openAIPayload(messages, tools, limit)
 	}

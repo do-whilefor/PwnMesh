@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,7 +60,7 @@ func TestDispatcherLoadsSavedOpenAISettings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, worker := range loaded.Workers {
-		p, err := provider.FromEnvironment(worker.Getenv, "")
+		p, err := provider.FromEnvironment(context.Background(), worker.Getenv, "")
 		if err != nil || p.Protocol != "openai" || p.BaseURL != "https://model.invalid/v1" || p.Model != "openai-model" || p.Token != "openai-fixture" {
 			t.Fatal("saved OpenAI configuration did not reach the dispatcher provider", err)
 		}
