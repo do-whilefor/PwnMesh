@@ -117,8 +117,6 @@ func TestLoopRejectsBuiltInToolSchemasBeforeSideEffects(t *testing.T) {
 		{"find", `{"pattern":"*","path":null}`},
 		{"ls", `{"path":[]}`},
 		{"write", `{}`},
-		{"write", `null`},
-		{"write", `{"path":`},
 	}
 	calls := make([]agent.Block, len(invalid))
 	for i, item := range invalid {
@@ -158,5 +156,61 @@ func TestLoopRejectsBuiltInToolSchemasBeforeSideEffects(t *testing.T) {
 	assertFidelityFile(t, filepath.Join(s.Dir, "target"), []byte("original"))
 	if _, err := os.Stat(s.RunDir); !os.IsNotExist(err) {
 		t.Fatalf("invalid calls created output artifacts: %v", err)
+	}
+}
+
+func TestLoopRejectsMalformedBuiltInToolArguments(t *testing.T) {
+	for _, input := range []string{`null`, `[]`, `"text"`, `{"path":`} {
+		for _, corrected := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/corrected=%v", input, corrected), func(t *testing.T) {
+				s := fidelitySet(t)
+				putFidelityFile(t, filepath.Join(s.Dir, "target"), []byte("original"))
+				calls := []agent.Block{
+					{Type: "tool_use", ID: "valid-write", Name: "write", Input: json.RawMessage(`{"path":"target","content":"changed"}`)},
+					{Type: "tool_use", ID: "invalid-write", Name: "write", Input: json.RawMessage(input)},
+				}
+				turns, executed := 0, 0
+				all := s.All()
+				for i := range all {
+					execute := all[i].Execute
+					all[i].Execute = func(ctx context.Context, raw json.RawMessage) (string, error) {
+						executed++
+						return execute(ctx, raw)
+					}
+				}
+				loop := agent.Loop{Tools: all, Provider: validationProvider(func(history []agent.Message) (agent.Message, error) {
+					turns++
+					if turns > 2 {
+						t.Fatal("malformed calls exceeded the correction allowance")
+					}
+					if turns == 2 {
+						// The whole response is rejected before dispatch, including
+						// the valid sibling. Invalid JSON must not enter history.
+						if len(history) != 2 || history[1].Role != "user" || len(history[1].Content) != 1 || history[1].Content[0].Type != "text" || !strings.Contains(history[1].Text(), "none of its calls ran") {
+							t.Fatalf("malformed response entered history or lost correction guidance: %+v", history)
+						}
+						if _, err := json.Marshal(history); err != nil {
+							t.Fatalf("correction history is not serializable: %v", err)
+						}
+						if corrected {
+							return agent.Text("assistant", "done"), nil
+						}
+					}
+					return agent.Message{Role: "assistant", Content: calls}, nil
+				})}
+				_, err := loop.Run(context.Background(), "Check malformed calls.")
+				var modelErr *agent.ModelError
+				if corrected && err != nil || !corrected && (!errors.As(err, &modelErr) || modelErr.Kind != agent.ErrorToolArguments) {
+					t.Fatalf("unexpected correction outcome: %v", err)
+				}
+				if turns != 2 || executed != 0 || loop.Checkpoint.ToolArgumentRetries != 1 {
+					t.Fatalf("malformed dispatch: turns=%d executions=%d checkpoint=%+v", turns, executed, loop.Checkpoint)
+				}
+				assertFidelityFile(t, filepath.Join(s.Dir, "target"), []byte("original"))
+				if _, err := os.Stat(s.RunDir); !os.IsNotExist(err) {
+					t.Fatalf("malformed calls created output artifacts: %v", err)
+				}
+			})
+		}
 	}
 }
