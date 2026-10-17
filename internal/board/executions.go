@@ -169,6 +169,24 @@ func (t *Tx) ExecutionStatus(e Execution, status string, result json.RawMessage)
 	if len(result) == 0 {
 		result = current.Result
 	}
+	if current.Status != "result_pending" && len(current.Result) != 0 {
+		// Management and metadata-only recovery can replace a result with a
+		// cancellation diagnostic. Preserve its independent observed usage;
+		// business content and failure classification still come from the update.
+		var update, previous map[string]json.RawMessage
+		if json.Unmarshal(result, &update) == nil && update != nil && json.Unmarshal(current.Result, &previous) == nil {
+			missing := func(raw json.RawMessage) bool {
+				return len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
+			}
+			if missing(update["metrics"]) && !missing(previous["metrics"]) {
+				update["metrics"] = previous["metrics"]
+				result, err = json.Marshal(update)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
 	failure := result
 	if current.Status == status && bytes.Equal(current.Result, result) {
 		return nil

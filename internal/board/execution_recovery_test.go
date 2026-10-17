@@ -40,6 +40,61 @@ func releaseRecoveryLease(tx *Tx, e Execution) error {
 	}
 }
 
+func TestExecutionCancellationRetainsUsageWithoutRetainingBusinessOutput(t *testing.T) {
+	for _, operation := range []string{"terminate", "pause_continue", "null_metrics", "replace_metrics"} {
+		t.Run(operation, func(t *testing.T) {
+			f := newOrchestrationFixture(t)
+			e := f.worker("observed", "")
+			f.do(func(tx *Tx) error {
+				return tx.ExecutionStatus(e, "running", json.RawMessage(`{"status":"success","text":"unaccepted","metrics":{"version":1,"usage":{"cache_creation_input_tokens":37}}}`))
+			})
+			wantStatus, wantFailure, wantTokens := "cancelled", "fixture", 37
+			f.do(func(tx *Tx) error {
+				switch operation {
+				case "terminate":
+					wantFailure = "project_terminated"
+					_, err := tx.TerminateProject("p", nil)
+					return err
+				case "pause_continue":
+					wantStatus, wantFailure = "retry_requested", "project_paused"
+					if _, err := tx.SetProjectStatus("p", "stopped", nil); err != nil {
+						return err
+					}
+					_, err := tx.SetProjectStatus("p", "active", nil)
+					return err
+				case "replace_metrics":
+					wantTokens = 83
+					return tx.ExecutionStatus(e, "cancelled", json.RawMessage(`{"status":"failed","failure_kind":"fixture","metrics":{"version":1,"usage":{"cache_creation_input_tokens":83}}}`))
+				default:
+					return tx.ExecutionStatus(e, "cancelled", json.RawMessage(`{"status":"failed","failure_kind":"fixture","metrics":null}`))
+				}
+			})
+			f.do(func(tx *Tx) error {
+				stored, err := tx.Execution("p", e.ID)
+				if err != nil {
+					return err
+				}
+				var result struct {
+					Text        string `json:"text"`
+					FailureKind string `json:"failure_kind"`
+					Metrics     *struct {
+						Usage struct {
+							CacheWrite int `json:"cache_creation_input_tokens"`
+						} `json:"usage"`
+					} `json:"metrics"`
+				}
+				if err := json.Unmarshal(stored.Result, &result); err != nil {
+					return err
+				}
+				if stored.Status != wantStatus || result.FailureKind != wantFailure || result.Text != "" || result.Metrics == nil || result.Metrics.Usage.CacheWrite != wantTokens {
+					t.Fatalf("cancellation lost usage or retained acceptance: status=%s result=%s", stored.Status, stored.Result)
+				}
+				return nil
+			})
+		})
+	}
+}
+
 func TestResumeExecutionHandledDebitFailureKeepsLeaseAndBudgetAtomic(t *testing.T) {
 	for _, kind := range []string{"reason", "curate", "explore"} {
 		t.Run(kind, func(t *testing.T) {

@@ -97,6 +97,37 @@ func TestRecoveryTerminalRetainsSavedUsage(t *testing.T) {
 	}
 }
 
+func TestInactiveRecoveryRetainsPersistedUsageFromSummary(t *testing.T) {
+	for _, mode := range []string{"stopped", "new_generation"} {
+		t.Run(mode, func(t *testing.T) {
+			s, runner, store, run := resultDeliveryFixture(t)
+			metrics := &protocol.DecisionMetrics{Version: 1, UsageScope: "run", UsageStatus: "partial", Usage: agent.Usage{CacheWriteTokens: 37}}
+			if err := s.status(context.Background(), run, "running", protocol.Result{Metrics: metrics}); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.loadExecutions(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			project, state := run.Job.Graph.Project.ID, "stopped"
+			if mode == "new_generation" {
+				state = "active"
+				s.generations[project]++
+			}
+			if err := s.recoverExecutions(context.Background(), map[string]string{project: state}); err != nil {
+				t.Fatal(err)
+			}
+			execution := curationExecution(t, store, run)
+			var saved protocol.Result
+			if err := json.Unmarshal(execution.Result, &saved); err != nil {
+				t.Fatal(err)
+			}
+			if runner.calls.Load() != 0 || execution.Status != "cancelled" || saved.FailureKind != "hard_cancelled" || saved.Metrics == nil || saved.Metrics.Usage != metrics.Usage {
+				t.Fatalf("inactive recovery restarted work or lost retained usage: status=%s result=%+v", execution.Status, saved)
+			}
+		})
+	}
+}
+
 func TestParentUsageSnapshotRetainsKnownChildrenAcrossRetries(t *testing.T) {
 	s, runner, store, run := resultDeliveryFixture(t)
 	children := &protocol.ChildUsage{Sessions: 1, ModelCalls: 2, UsageCalls: 2, Usage: agent.Usage{CacheWriteTokens: 37}}
