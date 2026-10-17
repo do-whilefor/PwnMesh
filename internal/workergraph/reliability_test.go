@@ -199,6 +199,67 @@ func TestRecoveryCallbackPanicsPreserveCheckpointAndDoNotReplay(t *testing.T) {
 	}
 }
 
+func TestRecoveryCancellationStopsBeforeAcceptingOrInvokingMoreCallbacks(t *testing.T) {
+	for _, phase := range []string{"verification", "reconciliation", "reconciled_verification"} {
+		t.Run(phase, func(t *testing.T) {
+			options := fixtureOptions(t, 1)
+			starts, reconciles, verifies := 0, 0, 0
+			definition := Definition{Version: "cancel-recovery-v1", Nodes: []Node{
+				{ID: "a", Kind: "function", Run: successful, Verify: verified},
+				{ID: "b", Kind: "agent", DependsOn: []Dependency{{ID: "a"}}, Run: func(context.Context, Input) (Output, error) {
+					starts++
+					return Output{}, ErrInterrupted
+				}, Verify: verified},
+			}}
+			if _, err := Run(context.Background(), definition, options); !errors.Is(err, ErrInterrupted) {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			definition.Nodes[0].Verify = func(context.Context, Input, Output) error {
+				if phase == "verification" {
+					cancel()
+				}
+				return nil
+			}
+			definition.Nodes[1].Reconcile = func(context.Context, Input, NodeState) (Output, error) {
+				reconciles++
+				if phase == "reconciliation" {
+					cancel()
+				}
+				return Output{Value: json.RawMessage(`{"receipt":"late"}`)}, nil
+			}
+			definition.Nodes[1].Verify = func(context.Context, Input, Output) error {
+				verifies++
+				if phase == "reconciled_verification" {
+					cancel()
+				}
+				return nil
+			}
+			checkpoint, err := Run(ctx, definition, options)
+			wantReconciles, wantVerifies := 0, 0
+			if phase != "verification" {
+				wantReconciles = 1
+			}
+			if phase == "reconciled_verification" {
+				wantVerifies = 1
+			}
+			if !errors.Is(err, context.Canceled) || stateByID(checkpoint, "b").Status != "running" || stateByID(persistedCheckpoint(t, options), "b").Status != "running" || reconciles != wantReconciles || verifies != wantVerifies {
+				t.Fatalf("cancelled recovery accepted a receipt or continued callbacks: checkpoint=%+v err=%v reconciles=%d verifies=%d", checkpoint, err, reconciles, verifies)
+			}
+			definition.Nodes[0].Verify = verified
+			definition.Nodes[1].Reconcile = func(context.Context, Input, NodeState) (Output, error) {
+				reconciles++
+				return Output{Value: json.RawMessage(`{"receipt":"confirmed"}`)}, nil
+			}
+			checkpoint, err = Run(context.Background(), definition, options)
+			if err != nil || checkpoint.Status != "succeeded" || starts != 1 || reconciles != wantReconciles+1 || verifies != wantVerifies+1 {
+				t.Fatalf("fresh recovery did not reconcile without replay: checkpoint=%+v err=%v starts=%d reconciles=%d verifies=%d", checkpoint, err, starts, reconciles, verifies)
+			}
+		})
+	}
+}
+
 func TestInterruptedSiblingCancelsLiveVerificationWithoutCancellingParent(t *testing.T) {
 	options := fixtureOptions(t, 2)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

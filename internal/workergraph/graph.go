@@ -432,6 +432,9 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 	}
 	if resumed {
 		for _, node := range nodes {
+			if err := ctx.Err(); err != nil {
+				return checkpoint, err
+			}
 			state := states[node.ID]
 			if state == nil {
 				continue // New nodes do not exist durably until recovery succeeds.
@@ -448,6 +451,9 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				started := time.Now()
 				verifyErr := accept(ctx, node, input, state.Output)
 				state.RecoveryVerifyDurationMS += float64(time.Since(started)) / float64(time.Millisecond)
+				if verifyErr == nil {
+					verifyErr = ctx.Err()
+				}
 				if verifyErr != nil {
 					return checkpoint, errors.Join(fmt.Errorf("node %s result verification: %w", node.ID, verifyErr), persist())
 				}
@@ -461,9 +467,15 @@ func Run(ctx context.Context, definition Definition, options Options) (Checkpoin
 				})
 				state.ReconcileDurationMS += float64(time.Since(started)) / float64(time.Millisecond)
 				if reconcileErr == nil {
+					reconcileErr = ctx.Err()
+				}
+				if reconcileErr == nil {
 					started = time.Now()
 					reconcileErr = accept(ctx, node, input, output)
 					state.RecoveryVerifyDurationMS += float64(time.Since(started)) / float64(time.Millisecond)
+					if reconcileErr == nil {
+						reconcileErr = ctx.Err()
+					}
 				}
 				if reconcileErr != nil {
 					state.Error = reconcileErr.Error()
