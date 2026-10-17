@@ -1,38 +1,44 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, useId } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onDeactivated, ref, useId } from 'vue';
 import type { DetailRecord } from './detail';
 import InspectorIcon from './InspectorIcon.vue';
 import Icon from '@/ui/Icon.vue';
+import { useDialogMotion } from '@/ui/useDialogMotion';
 const emit = defineEmits<{ locate: [key: string]; toast: [message: string]; closed: [] }>();
 const dialog = ref<HTMLDialogElement>(), body = ref<HTMLElement>(), record = ref<DetailRecord>();
 const id = useId();
 const longTitle = computed(() => !!record.value && (record.value.title.length > 64 || /[\r\n]/.test(record.value.title)));
-let origin: HTMLElement | null = null, motion: Animation | undefined, navigating = false;
+const motion = useDialogMotion(dialog);
+let origin: HTMLElement | null = null, navigating = false, openVersion = 0;
 const copying = ref(false);
-function animate(closing: boolean, finish?: () => void) {
-  motion?.cancel(); motion = undefined;
-  const element = dialog.value;
-  if (!element || matchMedia('(prefers-reduced-motion: reduce)').matches || !element.animate) { finish?.(); return; }
-  const visible = { opacity: 1, transform: 'translateY(0) scale(1)' };
-  const hidden = { opacity: 0, transform: `translateY(${closing ? 8 : 12}px) scale(.985)` };
-  motion = element.animate(closing ? [visible, hidden] : [hidden, visible], { duration: closing ? 140 : 180, easing: closing ? 'cubic-bezier(.4, 0, 1, 1)' : 'cubic-bezier(.16, 1, .3, 1)', fill: 'both' });
-  motion.onfinish = () => { motion?.cancel(); motion = undefined; finish?.(); };
+function releaseOrigin(restoreFocus = false) {
+  origin?.classList.remove('is-reading'); origin?.setAttribute('aria-expanded', 'false');
+  if (restoreFocus && origin?.isConnected) origin.focus({ preventScroll: true });
+  origin = null;
 }
 async function open(value: DetailRecord) {
-  origin?.classList.remove('is-reading');
-  origin = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const version = ++openVersion, focused = document.activeElement;
+  if (focused instanceof HTMLElement && !dialog.value?.contains(focused) && focused !== origin) {
+    releaseOrigin(); origin = focused;
+  }
   origin?.classList.add('is-reading'); origin?.setAttribute('aria-expanded', 'true');
   record.value = value; navigating = false; await nextTick();
-  dialog.value?.showModal(); if (body.value) body.value.scrollTop = 0; animate(false);
+  if (version !== openVersion) return;
+  motion.show(); if (body.value) body.value.scrollTop = 0;
 }
-function close() { if (dialog.value?.open) animate(true, () => dialog.value?.close()); }
+function dismiss(immediate = false) {
+  openVersion++;
+  if (!dialog.value?.open) releaseOrigin();
+  void motion.close(immediate);
+}
+function close() { dismiss(); }
 function closed() {
-  motion?.cancel(); motion = undefined;
-  origin?.classList.remove('is-reading'); origin?.setAttribute('aria-expanded', 'false');
-  if (!navigating && origin?.isConnected) origin.focus({ preventScroll: true });
+  // A native close event may be queued before a newer open request.
+  if (dialog.value?.open) return;
+  releaseOrigin(!navigating);
   emit('closed');
 }
-function locate() { const key = record.value?.nodeKey; if (!key) return; navigating = true; motion?.cancel(); dialog.value?.close(); emit('locate', key); }
+function locate() { const key = record.value?.nodeKey; if (!key) return; navigating = true; dismiss(true); emit('locate', key); }
 function backdrop(event: MouseEvent) { if (event.target !== dialog.value) return; const box = dialog.value.getBoundingClientRect(); if (event.clientX < box.left || event.clientX > box.right || event.clientY < box.top || event.clientY > box.bottom) close(); }
 async function copy() {
   if (copying.value || !dialog.value) return;
@@ -43,7 +49,8 @@ async function copy() {
   if (!copied) { const input = document.createElement('textarea'); input.value = text; input.className = 'inspector-copy-buffer'; dialog.value.append(input); try { input.select(); copied = document.execCommand('copy'); } finally { input.remove(); } }
   copying.value = false; emit('toast', copied ? '完整内容已复制' : '复制未完成，请在放大阅读中选择文本。');
 }
-onBeforeUnmount(() => { motion?.cancel(); if (dialog.value?.open) dialog.value.close(); origin?.classList.remove('is-reading'); });
+function dispose() { navigating = true; dismiss(true); releaseOrigin(); }
+onBeforeUnmount(dispose); onDeactivated(dispose);
 defineExpose({ open, close });
 </script>
 <template>

@@ -789,10 +789,6 @@ dialog{padding:25px;border-color:#e2e9ed;border-radius:14px;box-shadow:0 20px 65
 dialog.inspector-reader{width:min(760px,calc(100vw - 48px));max-width:none;height:min(780px,78dvh);block-size:min(780px,78dvh);min-height:0;max-height:78dvh;max-block-size:78dvh;padding:0;border:1px solid #d9e1e6;border-radius:16px;overflow:hidden;box-shadow:0 20px 64px #243a4b24;background:#fff}
 dialog.inspector-reader[open]{display:flex;flex-direction:column}
 dialog.inspector-reader::backdrop{background:#26374330;backdrop-filter:blur(2px)}
-dialog.inspector-reader[open]::backdrop{animation:inspector-backdrop-in 180ms ease-out both}
-dialog.inspector-reader.is-closing::backdrop{animation:inspector-backdrop-out 140ms ease-in both}
-@keyframes inspector-backdrop-in{from{opacity:0}to{opacity:1}}
-@keyframes inspector-backdrop-out{from{opacity:1}to{opacity:0}}
 .inspector-reader-header{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:25px 28px 20px;background:#fff;flex:none;min-width:0}
 .inspector-reader-header>div{min-width:0}
 .inspector-reader-header span{font-size:13px;line-height:1.5;letter-spacing:0;color:#5c6f7c}
@@ -826,7 +822,6 @@ dialog.inspector-reader.is-closing::backdrop{animation:inspector-backdrop-out 14
 .inspector-reader-footer .button:hover{background:#f6f8f9;border-color:#d9e1e6;color:#273743}
 .inspector-reader button:focus-visible{outline:2px solid #f0af97;outline-offset:3px}
 @media(max-width:540px){dialog.inspector-reader{width:calc(100vw - 24px);height:calc(100dvh - 32px);block-size:calc(100dvh - 32px);max-height:calc(100dvh - 32px);max-block-size:calc(100dvh - 32px)}.inspector-reader-header{padding:20px 20px 18px;gap:16px}.inspector-reader-header h2{font-size:20px}.inspector-reader-content{padding:0 20px 20px}.inspector-reader-footer{padding:13px 20px;gap:8px}.inspector-reader-footer .button,.inspector-reader-locate{padding:0 9px;font-size:11px}.inspector-reader-top{font-size:11px}}
-@media(prefers-reduced-motion:reduce){dialog.inspector-reader[open]::backdrop,dialog.inspector-reader.is-closing::backdrop{animation:none}}
 .inspector-record-mount{position:fixed;inset:0 auto auto 0;width:0;height:0;z-index:0}
 .inspector-copy-buffer{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
 </style>

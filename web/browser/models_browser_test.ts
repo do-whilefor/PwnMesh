@@ -131,11 +131,11 @@ test('real model settings persist, probe Anthropic tools, and report failures; m
       await page.locator('#hint-files').setInputFiles({name:'evidence.txt',mimeType:'text/plain',buffer:payload});
       const uploaded = responseFor(projectPath + '/inputs/batch','POST'); await page.locator('#hint-form button[type="submit"]').click(); assert.ok((await uploaded).ok());
       await page.locator('#hint-dialog').waitFor({state:'hidden'}); await page.reload({waitUntil:'networkidle'});
-      await page.locator('#view-tab-materials').click(); await page.getByText('evidence.txt',{exact:true}).first().waitFor();
+      await page.locator('#view-tab-materials').click(); await page.locator('#project-view[aria-labelledby="view-tab-materials"]:not([inert])').waitFor(); await page.getByText('evidence.txt',{exact:true}).first().waitFor();
       const inputs = await api<InputDTO[]>(projectPath + '/inputs'); assert.equal(inputs.length,1);
       const downloaded = await fetch(new URL(projectPath + '/inputs/' + encodeURIComponent(inputs[0].id),base));
       assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()),payload);
-      await page.locator('#view-tab-result').click(); assert.ok(!/已完成|已验证漏洞/.test(await page.locator('#project-view').innerText()));
+      await page.locator('#view-tab-result').click(); await page.locator('#project-view[aria-labelledby="view-tab-result"]:not([inert])').waitFor(); assert.ok(!/已完成|已验证漏洞/.test(await page.locator('#project-view').innerText()));
     });
     assert.deepEqual(errors,[]);
   } finally {

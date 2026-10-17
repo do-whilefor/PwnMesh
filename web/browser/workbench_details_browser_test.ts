@@ -44,6 +44,7 @@ test('generic projects keep their scenario and show a consistent generic label',
       await page.locator('#project-manage').click();
       assert.equal(await page.locator('.project-info-meta dd').first().textContent(),'通用');
       await page.locator('[data-close="project-dialog"]').click();
+      await page.locator('#project-dialog').waitFor({state:'hidden'});
       await page.locator('#project-search').fill('通用');
       assert.equal(await page.locator('.project-item').count(),1);
       await page.locator('#project-search').fill('渗透测试');
@@ -79,6 +80,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
     const system=()=>page.locator('.timeline-entry[data-record="execution:long-system-run"]');
     const view=()=>page.evaluate(()=>({camera:document.querySelector<HTMLElement>('#graph-host .graph-world')!.style.transform,positions:[...document.querySelectorAll<HTMLElement>('#graph-host .graph-node')].map(node=>[node.dataset.nodeKey,node.style.left,node.style.top])}));
     const closeReader=async()=>{await page.locator('.inspector-reader[open] [data-inspector-action="close"]').click();await page.locator('.inspector-reader[open]').waitFor({state:'hidden'});};
+    const selectView=async(view: string)=>{await page.locator('#view-tab-'+view).click();await page.locator('#project-view[aria-labelledby="view-tab-'+view+'"]:not([inert])').waitFor();};
 
     await t.test('desktop navigation, canvas and journal retain their layout across the wide-screen breakpoint',async()=>{
       for(const width of [1440,1699,1700,1920]){
@@ -109,7 +111,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
         assert.ok(enlarged.scale>before.scale);assert.equal(enlarged.label,Math.round(enlarged.scale*100)+'%');
         await page.locator('#zoom-out').click();await paint(page);const restored=await zoom();
         assert.ok(Math.abs(restored.scale-before.scale)<0.00001);assert.equal(restored.label,Math.round(restored.scale*100)+'%');
-        if(visit===0){await page.locator('#view-tab-materials').click();await page.locator('#view-tab-graph').click();await paint(page);}
+        if(visit===0){await selectView('materials');await selectView('graph');await paint(page);}
       }
     });
 
@@ -117,7 +119,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       const node=page.locator('[data-node-key="step:running"]');
       await node.focus();await page.keyboard.press('ArrowRight');await page.keyboard.press('ArrowDown');
       await page.locator('#zoom-in').click();await paint(page);const arranged=await view();
-      await page.locator('#view-tab-materials').click();await page.locator('#view-tab-graph').click();await paint(page);
+      await selectView('materials');await selectView('graph');await paint(page);
       assert.deepEqual(await view(),arranged);
     });
 
@@ -130,7 +132,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       state.revision++;state.graph.hints.push({id:'poll-marker',content:'轮询新增记录',created_at:'2026-09-24T02:01:00Z',creator:'user'});
       await page.locator('.timeline-entry[data-record="hint:poll-marker"]').waitFor();
       assert.ok(await board().locator('details').evaluate(node=>(node as HTMLDetailsElement).open));assert.ok(await system().locator('details').evaluate(node=>(node as HTMLDetailsElement).open));
-      await page.locator('#view-tab-result').click();await page.locator('#view-tab-graph').click();
+      await selectView('result');await selectView('graph');
       assert.ok(await board().locator('details').evaluate(node=>(node as HTMLDetailsElement).open));assert.ok(await system().locator('details').evaluate(node=>(node as HTMLDetailsElement).open));
       await page.locator('#activity-collapse-all').click();assert.equal(await page.locator('#activity-content details[open]').count(),0);
       await page.locator('#activity-search').fill(boardTail);await page.waitForFunction(()=>document.querySelectorAll<HTMLElement>('.timeline-entry').length===1);
@@ -182,7 +184,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
     });
 
     await t.test('materials open escaped previews and original downloads without fetching binary content',async()=>{
-      await page.locator('#view-tab-materials').click();assert.equal(await page.locator('.material-row').count(),2);
+      await selectView('materials');assert.equal(await page.locator('.material-row').count(),2);
       await page.locator('.material-row').filter({hasText:'request.http'}).click();
       assert.match((await page.locator('.inspector-reader[open] .inspector-reader-content').textContent())!,/GET \/orders HTTP\/1.1/);
       assert.equal(await page.evaluate(()=>window.previewExecuted),undefined);assert.equal(await page.locator('.inspector-reader[open] script').count(),0);
@@ -194,11 +196,11 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
     });
 
     await t.test('new findings appear after polling, expose evidence and locate their canvas card',async()=>{
-      await page.locator('#view-tab-result').click();assert.match(await page.locator('#project-view').innerText(),/暂无结果/);
+      await selectView('result');assert.match(await page.locator('#project-view').innerText(),/暂无结果/);
       state.findings.push({id:'finding-one',claim:'受控的结果记录',scope:'/orders',status:'verified',sources:['long'],created_at:created});state.revision++;
       await page.locator('.result-card').waitFor();assert.match(await page.locator('.result-card').innerText(),/受控的结果记录/);
       await page.locator('[data-content-read="result:finding-one"]').click();assert.ok((await page.locator('.inspector-reader[open] .inspector-reader-content').textContent())!.includes(boardTail));await closeReader();
-      await page.locator('[data-focus="finding:finding-one"]').click();assert.equal(await page.locator('[data-node-key="finding:finding-one"]').getAttribute('aria-pressed'),'true');await page.locator('#clear-selection').click();
+      await page.locator('[data-focus="finding:finding-one"]').click();await page.waitForFunction(()=>document.querySelector('[data-node-key="finding:finding-one"]')?.getAttribute('aria-pressed')==='true');await page.locator('#clear-selection').click();
       await page.locator('#project-manage').click();assert.match(await page.locator('#project-dialog').innerText(),/受控的浏览器测试输入/);assert.equal(await page.locator('#project-dialog [data-action="pause"]').isEnabled(),true);await page.locator('[data-close="project-dialog"]').click();
     });
 
@@ -224,7 +226,7 @@ test('v5 workbench reads real-shaped logs, materials and results and preserves l
       assert.equal(await page.locator('#hint-form [type="submit"]').isDisabled(),true);await page.locator('#hint-dialog [data-close="hint-dialog"]').first().click();
       assert.match(await page.locator('.project-heading .badge').innerText(),/历史项目.*只读/);assert.equal(await page.locator('.project-more').isDisabled(),true);
       await page.locator('#project-manage').click();assert.match(await page.locator('#project-dialog').innerText(),/历史项目只读/);assert.equal(await page.locator('#project-dialog [data-action]').count(),0);await page.locator('[data-close="project-dialog"]').click();
-      await page.locator('#view-tab-materials').click();assert.equal(await page.locator('#add-materials').count(),0);assert.equal(await page.locator('.material-row').count(),0);
+      await selectView('materials');assert.equal(await page.locator('#add-materials').count(),0);assert.equal(await page.locator('.material-row').count(),0);
       await page.reload({waitUntil:'networkidle'});await page.locator('.project-heading .badge').filter({hasText:'只读'}).waitFor();assert.equal(await page.locator('#add-hint').isDisabled(),true);assert.equal(await page.locator('.project-more').isDisabled(),true);
     });
 

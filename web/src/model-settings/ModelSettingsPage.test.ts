@@ -24,6 +24,18 @@ function fixture(initial = settings()) {
   return {client, calls};
 }
 describe('model settings page', () => {
+  it('omits the regular key hint without leaving an empty row and retains plan-specific guidance', async () => {
+    const {client} = fixture(), wrapper = mount(ModelSettingsPage, {props: {client}});
+    await flushPromises();
+    expect(wrapper.find('.llm-key-wrap + .llm-field-hint').exists()).toBe(false);
+    await wrapper.get('[data-llm-provider="glm"]').trigger('click');
+    expect(wrapper.find('.llm-key-wrap + .llm-field-hint').exists()).toBe(false);
+    await wrapper.get('#llm-auth-mode').setValue('glm_coding_plan');
+    expect(wrapper.get('.llm-key-wrap + .llm-field-hint').text()).toContain('Coding Plan');
+    await wrapper.get('#llm-auth-mode').setValue('api_key');
+    expect(wrapper.find('.llm-key-wrap + .llm-field-hint').exists()).toBe(false);
+    wrapper.unmount();
+  });
   it('requires a successful test for the exact draft and clears the key after save', async () => {
     const {client, calls} = fixture(), wrapper = mount(ModelSettingsPage, {props: {client}});
     await flushPromises();

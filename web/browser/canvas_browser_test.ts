@@ -140,7 +140,11 @@ test('embedded canvas handles live graph changes and unrestricted pointer moveme
   worldCenter(center).forEach((coordinate,index)=>assert.ok(Math.abs(coordinate-worldCenter(resized)[index])<.01,'resize keeps world center'));
   await page.setViewportSize({width:1440,height:960}); await paint(page);
   const saved=await snapshot();
-  await page.locator('[data-view="materials"]').click(); await page.locator('[data-view="graph"]').click(); await paint(page);
+  for (const view of ['materials','graph']) {
+    await page.locator('[data-view="'+view+'"]').click();
+    await page.locator('#project-view[aria-labelledby="view-tab-'+view+'"]:not([inert])').waitFor();
+  }
+  await paint(page);
   const restored=await snapshot(); assert.deepEqual(new Map(restored.positions),new Map(saved.positions)); assert.deepEqual(restored.camera,saved.camera);
   await page.locator('[data-filter="done"]').click(); await node.dispatchEvent('click'); await paint(page);
   const beforeSettings=await snapshot();

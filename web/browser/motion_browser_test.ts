@@ -1,11 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type {Page} from 'playwright';
-import {launch, paint, staticServer} from './visual_fixture.js';
+import {interceptProject, launch, paint, stateFor, staticServer} from './visual_fixture.js';
+import type {ProjectFixture} from './visual_fixture.js';
 
 const options = {timeout:30000,skip:process.env.PLAYWRIGHT_MODULE ? false : 'Set PLAYWRIGHT_MODULE for browser motion regression'};
 const settings = {protocol:'anthropic',auth_mode:'api_key',base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',has_token:false,connection_mode:'direct',proxy_url:'',reasoning_effort:'max'};
 type Change = {selector: string; value?: string};
+
+function workspaceFixture(): ProjectFixture {
+  const project = {id:'motion-fixture',title:'Workspace motion regression',scenario:'pentest',status:'active',orchestration_version:1,generation:0,created_at:'2026-10-17T00:00:00Z'};
+  const state = stateFor(project);
+  const fact = {id:'evidence',description:'Controlled evidence for the reader and canvas.',status:'valid',created_at:project.created_at};
+  state.graph.facts.push(fact); state.fact_records.push(fact);
+  state.steps.push({id:'verify',goal_id:'goal',description:'Verify controlled evidence',status:'completed',from:['origin'],result:fact.id,created_at:project.created_at});
+  state.findings.push({id:'verified',claim:'Controlled verified finding',scope:'/fixture',status:'verified',sources:[fact.id],created_at:project.created_at});
+  return {state,inputs:[{id:'attachment',name:'capture.bin',size:12,path:'/workspace/inputs/capture.bin',created_at:project.created_at}]};
+}
+
+type MotionFrame = {opacity: number; offset: number};
+function eases(frames: MotionFrame[], label: string) {
+  assert.ok(frames.some(frame => frame.opacity > .01 && frame.opacity < .99),`${label} includes partial opacity`);
+  assert.ok(frames.some(frame => Math.abs(frame.offset) > .05),`${label} includes a small vertical offset`);
+}
 
 async function mockSettings(page: Page) {
   await page.route('**/model-settings',route => route.fulfill({contentType:'application/json',body:JSON.stringify(settings)}));
@@ -72,11 +89,21 @@ test('provider, subscription, and proxy changes interpolate layout and rapid cha
     await page.goto(server.url+'/#/llm',{waitUntil:'networkidle'});
     await paint(page);
     interpolates(await heights(page,{selector:'[data-llm-provider="glm"]'},true),'DeepSeek to GLM');
+    interpolates(await heights(page,{selector:'#llm-auth-mode',value:'glm_coding_plan'}),'GLM Coding Plan guidance');
+    assert.equal(await page.locator('#llm-key').locator('xpath=../..').locator('.llm-field-hint').count(),1,'Coding Plan keeps its dedicated key guidance');
+    const compact = await heights(page,{selector:'#llm-auth-mode',value:'api_key'});
+    interpolates(compact,'API Key form compaction');
+    const shrink = compact[0]! - compact.at(-1)!;
+    assert.ok(shrink > 15 && shrink < 40,`removing the one-line key guidance naturally shrinks the form (${shrink.toFixed(1)}px)`);
+    assert.equal(await page.locator('#llm-key').locator('xpath=../..').locator('.llm-field-hint').count(),0,'regular API Key has no hint or reserved hint row');
     interpolates(await heights(page,{selector:'#llm-connection-mode',value:'proxy'}),'proxy expansion');
     interpolates(await heights(page,{selector:'#llm-connection-mode',value:'direct'}),'proxy collapse');
     await page.locator('[data-llm-provider="kimi"]').click();
     await paint(page);
-    interpolates(await heights(page,{selector:'#llm-auth-mode',value:'kimi_oauth'}),'Kimi subscription');
+    await heights(page,{selector:'#llm-auth-mode',value:'kimi_oauth'});
+    assert.equal(await page.locator('.llm-login-start').isVisible(),true);
+    assert.equal(await page.locator('#llm-key').count(),0);
+    await unclipped(page);
 
     await page.evaluate(async () => {
       const choose = (selector: string,value?: string) => {
@@ -111,7 +138,7 @@ test('provider, subscription, and proxy changes interpolate layout and rapid cha
   } finally {await browser.close();await server.close();}
 });
 
-test('reduced motion settles model layout and dismisses dialogs without an animation delay',options,async () => {
+test('reduced motion settles model and workspace layout and dismisses dialogs without an animation delay',options,async () => {
   const server = await staticServer(), browser = await launch();
   try {
     const page = await browser.newPage({viewport:{width:1440,height:1100},reducedMotion:'reduce'});
@@ -134,6 +161,19 @@ test('reduced motion settles model layout and dismisses dialogs without an anima
       return !document.querySelector<HTMLDialogElement>('#create-dialog')!.open;
     });
     assert.equal(closed,true,'reduced motion closes immediately');
+    const fixture = workspaceFixture();
+    await interceptProject(page,fixture);
+    await page.goto(server.url+'/#project/'+fixture.state.graph.project.id,{waitUntil:'networkidle'});
+    await page.locator('[data-node-key="fact:evidence"]').waitFor();
+    for (const view of ['materials','result','graph']) {
+      const panel = await page.evaluate(async view => {
+        document.querySelector<HTMLButtonElement>('#view-tab-'+view)!.click();
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const element = document.querySelector<HTMLElement>('#project-view')!, style = getComputedStyle(element);
+        return {label:element.getAttribute('aria-labelledby'),inert:element.inert,motion:element.dataset.viewMotion || '',opacity:Number(style.opacity),offset:new DOMMatrixReadOnly(style.transform).m42,running:element.getAnimations().filter(animation => animation.playState === 'running').length};
+      },view);
+      assert.deepEqual(panel,{label:'view-tab-'+view,inert:false,motion:'',opacity:1,offset:0,running:0},'reduced motion switches workspace content by the next paint');
+    }
   } finally {await browser.close();await server.close();}
 });
 
@@ -188,4 +228,126 @@ test('dialogs ease in and out, restore focus on Escape, and stay open while subm
     await page.locator('#create-dialog').waitFor({state:'hidden'});
     assert.equal(await opener.evaluate(element => document.activeElement === element),true);
   } finally {release();await browser.close();await server.close();}
+});
+
+test('workspace views ease between canvas, materials and results and rapid changes preserve canvas interaction',options,async () => {
+  const server = await staticServer(), browser = await launch();
+  try {
+    const page = await browser.newPage({viewport:{width:1440,height:1000}}), errors: string[] = [];
+    page.setDefaultTimeout(5000); page.on('pageerror',error => errors.push(error.message));
+    const fixture = workspaceFixture(), requests = await interceptProject(page,fixture);
+    await page.goto(server.url+'/#project/'+fixture.state.graph.project.id,{waitUntil:'networkidle'});
+    await page.locator('[data-node-key="fact:evidence"]').waitFor(); await paint(page);
+    await page.locator('[data-node-key="fact:evidence"]').focus();
+    await page.keyboard.press('ArrowRight'); await page.keyboard.press('ArrowDown');
+    await page.locator('#zoom-in').click(); await paint(page);
+    const canvas = () => page.evaluate(() => ({
+      camera:document.querySelector<HTMLElement>('.graph-world')!.style.transform,
+      positions:[...document.querySelectorAll<HTMLElement>('.graph-node')].map(node => [node.dataset.nodeKey,node.style.left,node.style.top]),
+    }));
+    const arranged = await canvas();
+    for (const view of ['materials','result','graph']) {
+      const frames = await page.evaluate(async view => {
+        document.querySelector<HTMLButtonElement>('#view-tab-'+view)!.click();
+        const samples: MotionFrame[] = [], start = performance.now();
+        do {
+          await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+          const panel = document.querySelector<HTMLElement>('#project-view')!;
+          const style = getComputedStyle(panel);
+          samples.push({opacity:Number(style.opacity),offset:new DOMMatrixReadOnly(style.transform).m42});
+        } while (performance.now() - start < 500);
+        return samples;
+      },view);
+      eases(frames,view+' view');
+      assert.equal(frames.at(-1)!.opacity,1); assert.equal(frames.at(-1)!.offset,0);
+      assert.equal(await page.locator('#view-tab-'+view).getAttribute('aria-selected'),'true');
+    }
+    assert.deepEqual(await canvas(),arranged,'tab transitions preserve the manually arranged canvas and camera');
+    await page.evaluate(async () => {
+      for (const view of ['materials','result','graph','materials','graph','result','graph']) {
+        document.querySelector<HTMLButtonElement>('#view-tab-'+view)!.click();
+        await new Promise(resolve => setTimeout(resolve,20));
+      }
+      await new Promise(resolve => setTimeout(resolve,500));
+    });
+    assert.equal(await page.locator('#project-view').count(),1,'only one settled panel remains after rapid changes');
+    assert.equal(await page.locator('#view-tab-graph').getAttribute('aria-selected'),'true');
+    assert.deepEqual(await canvas(),arranged);
+    await page.locator('#zoom-out').click(); await paint(page);
+    assert.notEqual((await canvas()).camera,arranged.camera,'the restored graph still responds to zoom controls');
+    await page.locator('#view-tab-result').click();
+    await page.locator('[data-focus="finding:verified"]').click();
+    await page.waitForFunction(() => document.querySelector('[data-node-key="finding:verified"]')?.getAttribute('aria-pressed') === 'true');
+    assert.equal(await page.locator('#view-tab-graph').getAttribute('aria-selected'),'true');
+    await page.locator('#view-tab-result').click();
+    await page.locator('[data-focus="finding:verified"]').waitFor();
+    await page.evaluate(async () => {
+      document.querySelector<HTMLButtonElement>('[data-focus="finding:verified"]')!.click();
+      await new Promise(resolve => setTimeout(resolve,20));
+      document.querySelector<HTMLButtonElement>('#view-tab-materials')!.click();
+      await new Promise(resolve => setTimeout(resolve,500));
+    });
+    assert.equal(await page.locator('#view-tab-materials').getAttribute('aria-selected'),'true','a newer tab click supersedes pending result location');
+    assert.equal(await page.locator('#project-view').getAttribute('aria-labelledby'),'view-tab-materials');
+    assert.equal(await page.locator('#view-tab-materials').evaluate(element => document.activeElement === element),true,'superseded location cannot steal keyboard focus');
+    assert.equal(await page.locator('#clear-selection').count(),0);
+    assert.equal(await page.locator('.material-row').count(),1);
+    assert.deepEqual(requests.writes,[]); assert.deepEqual(requests.unexpected,[]); assert.deepEqual(errors,[]);
+  } finally {await browser.close();await server.close();}
+});
+
+test('log, material and result readers ease with their backdrop and rapid reopen never strands the modal',options,async () => {
+  const server = await staticServer(), browser = await launch();
+  try {
+    const page = await browser.newPage({viewport:{width:1440,height:1000}}), errors: string[] = [];
+    page.setDefaultTimeout(5000); page.on('pageerror',error => errors.push(error.message));
+    const fixture = workspaceFixture(), requests = await interceptProject(page,fixture);
+    await page.goto(server.url+'/#project/'+fixture.state.graph.project.id,{waitUntil:'networkidle'});
+    await page.locator('[data-node-key="fact:evidence"]').waitFor(); await paint(page);
+    const log = '.timeline-entry[data-record="state:fact:evidence"] .log-title';
+    const sample = (selector: string) => page.evaluate(async selector => {
+      const opener = document.querySelector<HTMLElement>(selector)!;
+      opener.focus(); opener.click();
+      const samples: (MotionFrame & {open: boolean; backdrop: number})[] = [], start = performance.now();
+      do {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const dialog = document.querySelector<HTMLDialogElement>('.inspector-reader')!;
+        const style = getComputedStyle(dialog);
+        samples.push({open:dialog.open,opacity:Number(style.opacity),offset:new DOMMatrixReadOnly(style.transform).m42,backdrop:Number(getComputedStyle(dialog,'::backdrop').opacity)});
+      } while (performance.now() - start < 400);
+      return samples;
+    },selector);
+    for (const [view,opener] of [['graph',log],['materials','[data-material="0"]'],['result','[data-content-read="result:verified"]']] as const) {
+      await page.locator('#view-tab-'+view).click();
+      await page.locator(opener).waitFor();
+      const entering = await sample(opener);
+      eases(entering,view+' reader opening');
+      assert.equal(entering.at(-1)!.open,true); assert.equal(entering.at(-1)!.opacity,1);
+      const backdrop = entering.at(-1)!.backdrop;
+      assert.ok(entering.some(frame => frame.backdrop > .01 && frame.backdrop < backdrop - .01),'reader backdrop fades in with the panel');
+      const leaving = await sample('.inspector-reader[open] [data-inspector-action="close"]');
+      eases(leaving.filter(frame => frame.open),view+' reader closing');
+      assert.ok(leaving.some(frame => frame.open && frame.backdrop < backdrop - .01),'reader backdrop fades out before closing');
+      assert.equal(leaving.at(-1)!.open,false);
+      assert.equal(await page.locator(opener).evaluate(element => document.activeElement === element),true,'reader closure restores opener focus');
+    }
+    await page.locator('#view-tab-graph').click();
+    await page.locator(log).click();
+    await page.evaluate(async selector => {
+      for (let index = 0; index < 4; index++) {
+        document.querySelector<HTMLButtonElement>('.inspector-reader[open] [data-inspector-action="close"]')!.click();
+        await new Promise(resolve => setTimeout(resolve,25));
+        document.querySelector<HTMLElement>(selector)!.click();
+        await new Promise(resolve => setTimeout(resolve,25));
+      }
+      await new Promise(resolve => setTimeout(resolve,400));
+    },log);
+    assert.equal(await page.locator('.inspector-reader[open]').count(),1);
+    assert.deepEqual(await page.locator('.inspector-reader[open]').evaluate((dialog: HTMLDialogElement) => ({inert:dialog.inert,running:dialog.getAnimations().filter(animation => animation.playState === 'running').length})),{inert:false,running:0});
+    await page.keyboard.press('Escape');
+    await page.locator('.inspector-reader[open]').waitFor({state:'hidden'});
+    assert.equal(await page.locator('dialog[open]').count(),0,'rapid reopening leaves no modal backdrop behind');
+    await page.locator('#zoom-in').click();
+    assert.deepEqual(requests.writes,[]); assert.deepEqual(requests.unexpected,[]); assert.deepEqual(errors,[]);
+  } finally {await browser.close();await server.close();}
 });

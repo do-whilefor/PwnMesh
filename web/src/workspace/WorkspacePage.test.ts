@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { flushPromises, mount } from '@vue/test-utils';
 import { defineComponent, h } from 'vue';
 import WorkspacePage from './WorkspacePage.vue';
@@ -11,8 +11,17 @@ import { projectView, snapshotView } from './project-resource';
 import type { ProjectView } from './model/types';
 import * as preview from './model/input-preview';
 
+// Assert navigation semantics without animation delays; browser tests sample real frames.
+beforeEach(() => {
+  const preference = window.matchMedia('(prefers-reduced-motion: reduce)');
+  Object.defineProperty(preference, 'matches', {value: true});
+  vi.spyOn(window, 'matchMedia').mockReturnValue(preference);
+});
+afterEach(() => vi.restoreAllMocks());
+
 const graphStub = defineComponent({name: 'GraphCanvas', setup(_, {expose}) { expose({clearSelection() {}, setStatusFilter() {}}); return () => h('div', {class: 'graph-stub'}); }});
 const readerStub = defineComponent({name: 'RecordReader', setup(_, {expose}) { expose({close() {}, open() {}}); return () => h('div'); }});
+const materialsStub = defineComponent({name: 'MaterialsView', setup(_, {expose}) { expose({cancel() {}}); return () => h('div'); }});
 function project(id = 'project', generation = 1): ProjectView {
   const view = snapshotView({graph: {project: {id, title: 'Current', status: 'active', generation, orchestration_version: 1}}, revision: 1, goals: [], steps: [], fact_records: [], findings: []});
   view.history = [{...snapshotView({graph: {project: {id, title: 'Historical round', status: 'completed', generation: 0, orchestration_version: 1}}, revision: 2, goals: [], steps: [], fact_records: [], findings: []}), archived: true, archivedAt: '2026-10-10T00:00:00Z'}];
@@ -27,7 +36,7 @@ test('server review data keeps three workspace views and keyboard navigation cyc
     curation: {generation: current.generation, through_revision: 1, request: {sources: ['fact'], reason: 'Review retained evidence', revision: 1}},
     findings: [{id: 'finding', claim: 'Retained finding', candidate_ids: ['note'], dispute_id: 'review', curated_revision: 1}],
   });
-  const wrapper = mount(WorkspacePage, {attachTo: document.body, props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {attachTo: document.body, props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     expect(wrapper.findAll('[role="tab"]').map(tab => tab.attributes('data-view'))).toEqual(['graph', 'materials', 'result']);
     for (const [id, component] of [['materials', MaterialsView], ['result', ResultsView], ['graph', GraphCanvas]] as const) {
@@ -51,7 +60,7 @@ test('canvas Fact details retain derivation and discovery provenance without man
   state.fact_records = [fact];
   state.assets = [{id: 'asset', kind: 'endpoint', value: 'https://example.test/a', method: 'GET'}];
   state.asset_anchors = [{asset_id: 'asset', node_kind: 'fact', node_id: 'derived', discovery_step_id: 'work'}];
-  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     wrapper.findComponent(GraphCanvas).vm.$emit('select-node', {id: fact.id, key: 'fact:derived', type: 'fact', label: fact.description, status: fact.status, raw: fact});
     await flushPromises();
@@ -64,7 +73,7 @@ test('canvas Fact details retain derivation and discovery provenance without man
 
 test('same project and generation refresh preserves the selected tab and historical round', async () => {
   const current = project(), loadRound = vi.fn(async () => current.history[0]);
-  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   await wrapper.get('#view-tab-materials').trigger('click');
   await wrapper.get('#run-select').setValue('0'); await flushPromises();
   expect(wrapper.get('#view-tab-materials').attributes('aria-selected')).toBe('true');
@@ -77,8 +86,30 @@ test('same project and generation refresh preserves the selected tab and histori
   wrapper.unmount();
 });
 
+test.each(['round', 'reset'])('a %s change cancels node location pending behind a view transition', async change => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  vi.spyOn(window, 'matchMedia').mockReturnValue({matches: false, addEventListener() {}, removeEventListener() {}} as unknown as MediaQueryList);
+  const selectNode = vi.fn(), focusNode = vi.fn();
+  const graph = defineComponent({setup(_, {expose}) {expose({selectNode, focusNode, clearSelection() {}, setStatusFilter() {}}); return () => h('div');}});
+  const current = project(), wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => current.history[0]}, global: {stubs: {GraphCanvas: graph, RecordReader: readerStub, ActivityPanel: true, ResultsView: true}}});
+  try {
+    await wrapper.get('#view-tab-result').trigger('click');
+    await vi.advanceTimersByTimeAsync(600); await flushPromises();
+    wrapper.findComponent(ResultsView).vm.$emit('locate', 'finding:obsolete');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get<HTMLButtonElement>('[data-filter="done"]').element.disabled).toBe(true);
+    if (change === 'round') await wrapper.get('#run-select').setValue('0');
+    else wrapper.vm.reset();
+    await vi.advanceTimersByTimeAsync(600); await flushPromises();
+    expect(wrapper.get('#view-tab-graph').attributes('aria-selected')).toBe('true');
+    expect(selectNode).not.toHaveBeenCalled(); expect(focusNode).not.toHaveBeenCalled();
+    expect(wrapper.get<HTMLElement>('#project-view').element.inert).toBe(false);
+    expect(wrapper.get<HTMLButtonElement>('[data-filter="done"]').element.disabled).toBe(false);
+  } finally {wrapper.unmount(); vi.useRealTimers();}
+});
+
 test('changing generation or project resets local workspace navigation', async () => {
-  const wrapper = mount(WorkspacePage, {props: {project: project(), disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: project(), disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   for (const next of [project('project', 2), project('other', 2)]) {
     await wrapper.get('#view-tab-result').trigger('click'); await wrapper.get('#run-select').setValue('0'); await flushPromises();
     await wrapper.setProps({project: next});
@@ -90,7 +121,7 @@ test('changing generation or project resets local workspace navigation', async (
 test('round selection keeps the displayed round while loading and after rejection', async () => {
   let reject: (error: Error) => void = () => {};
   const loadRound = () => new Promise<unknown>((_resolve, fail) => { reject = fail; });
-  const wrapper = mount(WorkspacePage, {props: {project: project(), disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: project(), disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     await wrapper.get('#run-select').setValue('0');
     expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('current');
@@ -107,7 +138,7 @@ test('superseded archive loads cannot replace the latest accepted round', async 
   current.history.push({...current.history[0]!, generation: 1, name: 'Latest archive'});
   const pending = new Map<number, () => void>();
   const loadRound = (_project: ProjectView, generation: number) => new Promise<void>(resolve => pending.set(generation, resolve));
-  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     await wrapper.get('#run-select').setValue('0');
     await wrapper.get('#run-select').setValue('1');
@@ -124,7 +155,7 @@ test('superseded archive loads cannot replace the latest accepted round', async 
 });
 
 test('round changes keep status buttons and the canvas filter in agreement', async () => {
-  const current = project(), wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => current.history[0]}, global: {stubs: {RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const current = project(), wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => current.history[0]}, global: {stubs: {RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     for (const next of ['0', 'current']) {
       await wrapper.get('[data-filter="done"]').trigger('click');
@@ -138,7 +169,7 @@ test('round changes keep status buttons and the canvas filter in agreement', asy
 
 test('summary-only historical projects explain unavailable details in every tab', async () => {
   const current = projectView({id: 'historical', title: 'Historical project', status: 'completed', orchestration_version: 0});
-  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     for (const tab of ['graph', 'materials', 'result']) {
       await wrapper.get('#view-tab-' + tab).trigger('click');
@@ -155,7 +186,7 @@ test('summary-only historical projects explain unavailable details in every tab'
 test('a summary-only refresh clears stale selection and closes its record reader', async () => {
   const current = project(), close = vi.fn(), open = vi.fn();
   const reader = defineComponent({setup(_, {expose}) { expose({close, open}); return () => h('div'); }});
-  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: reader, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: reader, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     await wrapper.get('#run-select').setValue('0'); await flushPromises();
     wrapper.findComponent(GraphCanvas).vm.$emit('select-node', {key: 'fact:record', type: 'fact', label: 'Saved detail', status: 'valid', raw: {}});
@@ -174,7 +205,7 @@ test('a summary-only refresh clears stale selection and closes its record reader
 
 test('removing a project prunes all its round layouts while retaining other cameras', async () => {
   const graph = defineComponent({props: ['projectLayouts'], setup(_, {expose}) { expose({clearSelection() {}}); return () => h('div'); }});
-  const wrapper = mount(WorkspacePage, {props: {project: project('b'), projectIds: ['a', 'b'], disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graph, RecordReader: readerStub, ActivityPanel: true, MaterialsView: true, ResultsView: true}}});
+  const wrapper = mount(WorkspacePage, {props: {project: project('b'), projectIds: ['a', 'b'], disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graph, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
   try {
     const layouts = wrapper.findComponent(graph).props('projectLayouts');
     const retained = {projectId: 'b', generation: 0, positions: new Map(), camera: {scale: 1.5, tx: 120, ty: -40, width: 800, height: 600}};
