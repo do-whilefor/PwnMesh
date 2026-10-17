@@ -6,6 +6,9 @@ import (
 )
 
 func TestCandidateViewGroupsUseExactIdentityAndCurrentProducerSupport(t *testing.T) {
+	if got := FindingIdentity("The fixture requires authentication", "GET /private"); got != "finding_c2005a6a88cab90ba74c6828" {
+		t.Fatalf("persisted finding identity changed: %s", got)
+	}
 	state := State{}
 	state.Graph.Project.Generation = 0
 	state.FactRecords = []FactRecord{{ID: "current", Status: "valid"}, {ID: "stale", Status: "valid", SupportInvalid: true}, {ID: "refuted", Status: "refuted"}, {ID: "origin", Status: "input"}}

@@ -58,10 +58,11 @@ same limit; zero execution timeout still disables that deadline.
 ## State and transactions
 
 `Store.Do` keeps lease/generation checks, idempotency, mutations, revisions and
-receipts in one immediate write transaction. Selected Board mutations use local
-savepoints to roll back handled operation failures. Server calls Board
-operations and execution use cases without running SQL. Use cases accept the
-caller's `board.Tx`; its public API exposes domain operations only. Store owns
+receipts in one immediate write transaction. Ordinary composed Board writes share
+one private savepoint helper; handled errors and failed releases roll back writes
+and clear results. Decision previews always roll back. Server calls Board and
+execution use cases without running SQL. Use cases accept the caller's `board.Tx`;
+its public API exposes domain operations only. Store owns
 commit and rollback. Composed use-case failures and savepoint cleanup errors must
 propagate to Store for transaction rollback.
 Registration rolls back retry-grant consumption, successor insertion and review

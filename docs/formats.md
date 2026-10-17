@@ -17,6 +17,11 @@ formats are rejected without migration or replay; see [protocol](protocol.md).
 | Worker graph | Schema `1`, matching graph and per-node definition digests; missing bindings cannot be reconstructed |
 | Evidence | Validated `.pwnmesh/runs/.../evidence/` references; no `.xloom` fallback |
 
+Execution registration, state actions and evidence conclusion reject retired
+project protocols; historical reads remain available to domain consumers.
+Findings and corrections are published through Curate, never retired direct
+finding or relation actions.
+
 New runs use immutable snapshots; current inline Jobs remain recoverable when
 their environment identity matches. Earlier environment digests cannot authorize
 unfinished runs because they omitted tool settings. Saved results and committed
