@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {computed, nextTick, onBeforeUnmount, reactive, ref} from 'vue';
 import Icon from '@/ui/Icon.vue';
+import {useDialogMotion} from '@/ui/useDialogMotion';
 import {PROJECT_TYPES, fileSize, isProjectClosed, validateFiles, validateHint, validateProject} from '../model/project-model';
 import type {CreateDraft, HintDraft, ProjectView} from '../model/types';
 import MaterialPicker from './MaterialPicker.vue';
@@ -15,6 +16,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{toast: [message: string]}>();
 const createDialog = ref<HTMLDialogElement>(), hintDialog = ref<HTMLDialogElement>();
+const createMotion = useDialogMotion(createDialog), hintMotion = useDialogMotion(hintDialog);
 const createForm = ref<HTMLFormElement>(), hintForm = ref<HTMLFormElement>();
 const imported = ref<HTMLDetailsElement>();
 const emptyCreate = (): CreateDraft => ({name: '', target: '', goal: '', type: 'pentest', files: []});
@@ -40,23 +42,23 @@ function clearError(kind: 'create' | 'hint') {
   else {hintError.value = ''; hintInvalid.value = '';}
 }
 function captureHint() {if (hintProjectId.value) hintDrafts.set(hintProjectId.value, {text: hintDraft.text, files: hintDraft.files.slice()});}
-function closeCreate() {if (!createBusy.value) createDialog.value?.close();}
-function closeHint() {if (!hintBusy.value) {captureHint(); hintDialog.value?.close();}}
+function closeCreate(immediate = false) {if (!createBusy.value) void createMotion.close(immediate);}
+function closeHint(immediate = false) {if (!hintBusy.value) {captureHint(); void hintMotion.close(immediate);}}
 async function openCreate() {
   if (createBusy.value || hintBusy.value || props.disabled) {emit('toast', '正在提交，请稍候。'); return false;}
-  closeHint();
-  if (!createDialog.value?.open) createDialog.value?.showModal();
+  closeHint(true);
+  createMotion.show();
   await nextTick(); createForm.value?.querySelector<HTMLInputElement>('#project-name')?.focus(); return true;
 }
 async function openHint(id: string) {
   if (createBusy.value || hintBusy.value || props.disabled) {emit('toast', '正在提交，请稍候。'); return false;}
   const project = props.getProject(id);
   if (!project || unavailable(project)) {emit('toast', project ? unavailable(project) : '项目不存在或已移除。'); return false;}
-  closeCreate(); captureHint(); hintProjectId.value = id;
+  closeCreate(true); captureHint(); hintProjectId.value = id;
   const draft = hintDrafts.get(id) || {text: '', files: []};
   Object.assign(hintDraft, {text: draft.text, files: draft.files.slice()}); clearError('hint');
   if (imported.value) imported.value.open = false;
-  if (!hintDialog.value?.open) hintDialog.value?.showModal();
+  hintMotion.show();
   await nextTick(); hintForm.value?.querySelector<HTMLTextAreaElement>('#hint-text')?.focus(); return true;
 }
 function addFiles(kind: 'create' | 'hint', incoming: File[]) {
@@ -83,7 +85,7 @@ async function submitCreate() {
     await nextTick(); createForm.value?.querySelector<HTMLElement>(`#project-${createInvalid.value}`)?.focus(); return;
   }
   createBusy.value = true; const started = Date.now();
-  try {await props.create(values); await settle(started); if (disposed) return; resetCreate(); createDialog.value?.close();}
+  try {await props.create(values); await settle(started); if (disposed) return; await createMotion.close(); if (!disposed) resetCreate();}
   catch (error) {await settle(started); if (disposed) return; createLocked.value = errorFlag(error, 'pendingCreate'); createUncertain.value = errorFlag(error, 'uncertainCreate'); createError.value = errorMessage(error, '创建失败，请重试。');}
   finally {if (!disposed) createBusy.value = false;}
 }
@@ -94,7 +96,7 @@ async function submitHint() {
   clearError('hint'); hintError.value = unavailable(project) || validateHint(values, validationProject);
   if (hintError.value) {if (!values.text && !values.files.length) {hintInvalid.value = 'text'; await nextTick(); hintForm.value?.querySelector<HTMLElement>('#hint-text')?.focus();} return;}
   hintBusy.value = true; const started = Date.now();
-  try {await props.hint(id, values); await settle(started); if (disposed) return; hintDrafts.delete(id); Object.assign(hintDraft, {text: '', files: []}); clearError('hint'); hintProjectId.value = null; hintDialog.value?.close();}
+  try {await props.hint(id, values); await settle(started); if (disposed) return; await hintMotion.close(); if (disposed) return; hintDrafts.delete(id); Object.assign(hintDraft, {text: '', files: []}); clearError('hint'); hintProjectId.value = null;}
   catch (error) {await settle(started); if (!disposed) hintError.value = errorMessage(error, '添加失败，请重试。');}
   finally {if (!disposed) hintBusy.value = false;}
 }
@@ -109,24 +111,24 @@ defineExpose({openCreate, openHint, resetCreate, close});
 </script>
 
 <template>
-  <dialog ref="createDialog" id="create-dialog" class="forms-dialog" aria-labelledby="create-title" @cancel="createBusy && $event.preventDefault()">
+  <dialog ref="createDialog" id="create-dialog" class="forms-dialog" aria-labelledby="create-title" @cancel.prevent="closeCreate()">
     <form ref="createForm" id="create-form" novalidate :aria-busy="createBusy" @submit.prevent="submitCreate" @input="clearError('create')" @keydown="shortcut($event, 'create')">
-      <header class="dialog-header"><div class="forms-branded-heading"><span class="forms-brand"><img src="/static/brand.png" alt="PwnMesh"></span><h2 id="create-title">新建项目</h2></div><button type="button" class="icon-button" data-close="create-dialog" aria-label="关闭创建项目" :disabled="createBusy" @click="closeCreate"><Icon name="x" /></button></header>
+      <header class="dialog-header"><div class="forms-branded-heading"><span class="forms-brand"><img src="/static/brand.png" alt="PwnMesh"></span><h2 id="create-title">新建项目</h2></div><button type="button" class="icon-button" data-close="create-dialog" aria-label="关闭创建项目" :disabled="createBusy" @click="closeCreate()"><Icon name="x" /></button></header>
       <div class="type-choices forms-type-choices" role="radiogroup" aria-label="项目类型"><label v-for="type in PROJECT_TYPES" :key="type.value"><input v-model="createDraft.type" type="radio" name="type" :value="type.value" :disabled="createDisabled"><span><Icon :name="type.icon" />{{ type.label }}</span></label></div>
       <label class="field-label" for="project-name">项目名称</label><input id="project-name" v-model="createDraft.name" name="name" maxlength="200" required autocomplete="off" :placeholder="scenario.name" :disabled="createDisabled" :aria-invalid="createInvalid === 'name' || undefined">
       <label class="field-label" for="project-target">起点 / 已知信息</label><textarea id="project-target" v-model="createDraft.target" name="target" rows="2" maxlength="32768" required :placeholder="scenario.target" :disabled="createDisabled" :aria-invalid="createInvalid === 'target' || undefined"></textarea>
       <label class="field-label" for="project-goal">终点 / 项目目标</label><textarea id="project-goal" v-model="createDraft.goal" name="goal" rows="2" maxlength="32768" required :placeholder="scenario.goal" :disabled="createDisabled" :aria-invalid="createInvalid === 'goal' || undefined"></textarea>
       <MaterialPicker kind="create" :files="createDraft.files" :disabled="createDisabled" :remove-disabled="createUncertain" :invalid="createInvalid === 'files'" @add="addFiles('create', $event)" @remove="removeFile('create', $event)" />
-      <p id="create-error" class="form-error" role="alert">{{ createError }}</p><footer class="dialog-footer"><button type="button" class="button secondary" data-close="create-dialog" :disabled="createBusy" @click="closeCreate">取消</button><button type="submit" class="button primary" :disabled="createBusy || createUncertain || disabled">{{ createBusy ? '创建中…' : '创建并开始' }}</button></footer>
+      <p id="create-error" class="form-error" role="alert">{{ createError }}</p><footer class="dialog-footer"><button type="button" class="button secondary" data-close="create-dialog" :disabled="createBusy" @click="closeCreate()">取消</button><button type="submit" class="button primary" :disabled="createBusy || createUncertain || disabled">{{ createBusy ? '创建中…' : '创建并开始' }}</button></footer>
     </form>
   </dialog>
-  <dialog ref="hintDialog" id="hint-dialog" class="forms-dialog" aria-labelledby="hint-title" @cancel="hintBusy && $event.preventDefault()" @close="captureHint">
+  <dialog ref="hintDialog" id="hint-dialog" class="forms-dialog" aria-labelledby="hint-title" @cancel.prevent="closeHint()" @close="captureHint">
     <form ref="hintForm" id="hint-form" novalidate :aria-busy="hintBusy" @submit.prevent="submitHint" @input="clearError('hint')" @keydown="shortcut($event, 'hint')">
-      <header class="dialog-header"><div><h2 id="hint-title">补充信息</h2><p id="hint-project-name" class="forms-project-name">{{ hintProject?.name }}</p></div><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充信息" :disabled="hintBusy" @click="closeHint"><Icon name="x" /></button></header>
+      <header class="dialog-header"><div><h2 id="hint-title">补充信息</h2><p id="hint-project-name" class="forms-project-name">{{ hintProject?.name }}</p></div><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充信息" :disabled="hintBusy" @click="closeHint()"><Icon name="x" /></button></header>
       <p id="hint-status" class="forms-status" role="status" :hidden="!hintStatus">{{ hintStatus }}</p><label class="field-label" for="hint-text">补充内容</label><textarea id="hint-text" v-model="hintDraft.text" name="text" rows="4" maxlength="32768" placeholder="补充线索、测试范围或需要关注的问题…" :disabled="hintBusy || disabled" :aria-invalid="hintInvalid === 'text' || undefined"></textarea>
       <details ref="imported" id="hint-imported" class="forms-imported" :hidden="!hintProject?.files.length"><summary><span>已导入材料</span><span id="hint-imported-count">{{ hintProject?.files.length || 0 }}</span><Icon name="chevron-down" /></summary><ul id="hint-imported-files" class="file-list forms-files"><li v-for="file in hintProject?.files || []" :key="file.id"><Icon name="file" /><span :title="file.name">{{ file.name }}</span><small>{{ fileSize(file.size) }}</small></li></ul></details>
       <MaterialPicker kind="hint" :files="hintDraft.files" :imported-count="hintProject?.files.length || 0" :disabled="hintBusy || disabled" :invalid="hintInvalid === 'files'" @add="addFiles('hint', $event)" @remove="removeFile('hint', $event)" />
-      <p class="form-error" id="hint-error" role="alert">{{ hintError }}</p><footer class="dialog-footer"><span class="forms-shortcut">Ctrl / ⌘ + Enter</span><button type="button" class="button secondary" data-close="hint-dialog" :disabled="hintBusy" @click="closeHint">取消</button><button type="submit" class="button primary" :disabled="hintBusy || disabled || !!unavailable(hintProject)">{{ hintBusy ? '添加中…' : '添加' }}</button></footer>
+      <p class="form-error" id="hint-error" role="alert">{{ hintError }}</p><footer class="dialog-footer"><span class="forms-shortcut">Ctrl / ⌘ + Enter</span><button type="button" class="button secondary" data-close="hint-dialog" :disabled="hintBusy" @click="closeHint()">取消</button><button type="submit" class="button primary" :disabled="hintBusy || disabled || !!unavailable(hintProject)">{{ hintBusy ? '添加中…' : '添加' }}</button></footer>
     </form>
   </dialog>
 </template>

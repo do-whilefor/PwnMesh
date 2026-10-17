@@ -14,7 +14,7 @@ beforeEach(() => {
   vi.spyOn(HTMLDialogElement.prototype, 'close').mockImplementation(function (this: HTMLDialogElement) {this.open = false; this.dispatchEvent(new Event('close'));});
 });
 afterEach(() => {vi.useRealTimers(); document.body.replaceChildren();});
-const finish = async () => {await flushPromises(); await vi.advanceTimersByTimeAsync(301); await flushPromises();};
+const finish = async () => {await flushPromises(); await vi.advanceTimersByTimeAsync(601); await flushPromises();};
 
 describe('project forms', () => {
   it('retains per-project drafts, validates keyboard submission and preserves file identities', async () => {
@@ -100,8 +100,9 @@ it('lets a disconnected action dialog close after its pending submission settles
     expect(wrapper.get<HTMLButtonElement>('#confirm-action').element.disabled).toBe(true);
     expect(wrapper.get<HTMLButtonElement>('[data-close]').element.disabled).toBe(false);
     const cancel = new Event('cancel', {cancelable: true});
-    wrapper.get('dialog').element.dispatchEvent(cancel); expect(cancel.defaultPrevented).toBe(false);
+    wrapper.get('dialog').element.dispatchEvent(cancel); expect(cancel.defaultPrevented).toBe(true);
     await wrapper.get('[data-close]').trigger('click');
+    await vi.advanceTimersByTimeAsync(241);
     expect(wrapper.get<HTMLDialogElement>('dialog').element.open).toBe(false);
   } finally { wrapper.unmount(); }
 });
@@ -113,8 +114,59 @@ it('keeps management dismissal available while disconnected', async () => {
     expect(wrapper.get<HTMLButtonElement>('[data-action]').element.disabled).toBe(true);
     expect(wrapper.get<HTMLButtonElement>('[data-close]').element.disabled).toBe(false);
     const cancel = new Event('cancel', {cancelable: true});
-    wrapper.get('dialog').element.dispatchEvent(cancel); expect(cancel.defaultPrevented).toBe(false);
+    wrapper.get('dialog').element.dispatchEvent(cancel); expect(cancel.defaultPrevented).toBe(true);
     await wrapper.get('[data-close]').trigger('click');
+    await vi.advanceTimersByTimeAsync(241);
     expect(wrapper.get<HTMLDialogElement>('dialog').element.open).toBe(false);
   } finally { wrapper.unmount(); }
+});
+
+it('keeps dialog content and native modality until the exit finishes', async () => {
+  const wrapper = mount(ActionDialog, {props: {perform: async () => undefined}});
+  try {
+    wrapper.vm.open(project(), 'restart'); await flushPromises();
+    const dialog = wrapper.get<HTMLDialogElement>('dialog').element;
+    expect(dialog.dataset.motion).toBe('enter');
+    await vi.advanceTimersByTimeAsync(301);
+    await wrapper.get('[data-close]').trigger('click');
+    expect(dialog.open).toBe(true); expect(dialog.inert).toBe(true);
+    expect(dialog.dataset.motion).toBe('leave');
+    expect(wrapper.get('#action-title').text()).toBe('重启项目');
+    expect(wrapper.emitted('closed')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(241);
+    expect(dialog.open).toBe(false); expect(dialog.inert).toBe(false);
+    expect(wrapper.emitted('closed')).toHaveLength(1);
+    expect(wrapper.get('#action-title').text()).toBe('');
+  } finally {wrapper.unmount();}
+});
+
+it('cancels a pending exit when a dialog reopens and closes handoffs immediately', async () => {
+  const wrapper = mount(ProjectManagement, {props: {project: project()}});
+  try {
+    await wrapper.vm.open();
+    const dialog = wrapper.get<HTMLDialogElement>('dialog').element;
+    void wrapper.vm.close(); expect(dialog.dataset.motion).toBe('leave');
+    await wrapper.vm.open(); expect(dialog.inert).toBe(false);
+    await vi.advanceTimersByTimeAsync(301);
+    expect(dialog.open).toBe(true); expect(wrapper.emitted('closed')).toBeUndefined();
+    await wrapper.get('[data-action="terminate"]').trigger('click');
+    expect(dialog.open).toBe(false);
+    expect(wrapper.emitted('action')?.[0]?.[0]).toMatchObject({action: 'terminate'});
+  } finally {wrapper.unmount();}
+});
+
+it('respects reduced motion for opening, Escape, and close buttons', async () => {
+  vi.spyOn(window, 'matchMedia').mockReturnValue({matches: true} as MediaQueryList);
+  const wrapper = mount(ProjectForms, {props: {getProject: () => project(), create: async () => undefined, hint: async () => undefined}});
+  try {
+    await wrapper.vm.openCreate();
+    const createDialog = wrapper.get<HTMLDialogElement>('#create-dialog').element;
+    expect(createDialog.dataset.motion).toBeUndefined();
+    createDialog.dispatchEvent(new Event('cancel', {cancelable: true}));
+    expect(createDialog.open).toBe(false);
+    await wrapper.vm.openHint('project');
+    const hintDialog = wrapper.get<HTMLDialogElement>('#hint-dialog').element;
+    await wrapper.get('#hint-dialog [data-close]').trigger('click');
+    expect(hintDialog.open).toBe(false); expect(hintDialog.dataset.motion).toBeUndefined();
+  } finally {wrapper.unmount();}
 });

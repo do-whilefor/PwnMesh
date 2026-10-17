@@ -2,6 +2,7 @@
 import {computed, onBeforeUnmount, onMounted, reactive, ref} from 'vue';
 import {Client} from '@/api/client';
 import Icon from '@/ui/Icon.vue';
+import {useLayoutMotion} from '@/ui/useLayoutMotion';
 import {apiProtocols, canReuseToken, connectionSettings, defaultReasoningEffort, efforts, originOf, parseProxy, providerFor, providers, proxyProtocols, validate} from './rules';
 import type {APIProtocol, AuthMode, Provider, PublicSettings, ReasoningEffort} from './rules';
 import {kimiLogin} from './kimi-login';
@@ -14,6 +15,8 @@ const values = reactive({apiProtocol: 'anthropic' as APIProtocol, authMode: 'api
 const token = ref(''), revealKey = ref(false), verified = ref(false), busy = ref(true), loaded = ref(false);
 const connected = ref(false);
 const keyInput = ref<HTMLInputElement>();
+const form = ref<HTMLElement>();
+useLayoutMotion(form, '.llm-section-title, .llm-providers, .llm-connection > .llm-field:not(.llm-network), .llm-network-row, .llm-proxy-fields, .llm-status, .llm-actions');
 const serverSettings = ref<PublicSettings | null>(null);
 const summaryStatus = ref('待配置'), statusKind = ref(''), statusMessage = ref('');
 type ProviderDraft = {apiProtocol: APIProtocol; authMode: AuthMode; url: string; model: string};
@@ -131,7 +134,7 @@ onBeforeUnmount(dispose);
 <template>
   <section class="llm-page" aria-labelledby="llm-title">
     <header class="llm-heading"><h1 id="llm-title">模型接入</h1><button type="button" class="llm-back" data-llm-return :title="projectName ? `${returnLabel} · ${projectName}` : returnLabel" @click="returnToProject"><Icon name="arrow-left" />{{ returnLabel }}</button></header>
-    <div class="llm-layout"><form class="llm-form" novalidate autocomplete="off" @submit.prevent="save" @input="edit" @change="edit">
+    <div class="llm-layout"><form ref="form" class="llm-form" novalidate autocomplete="off" @submit.prevent="save" @input="edit" @change="edit">
       <section class="llm-section"><div class="llm-section-title"><h2>提供商</h2></div><div class="llm-providers">
         <button v-for="id in providerIDs" :key="id" class="llm-provider" :class="{'is-selected': provider === id}" type="button" :data-llm-provider="id" :aria-pressed="provider === id" :disabled="disabled" @click="selectProvider(id)">
           <img v-if="providers[id].icon" class="llm-provider-logo" :src="providers[id].icon" alt="" aria-hidden="true"><Icon v-else class="llm-provider-logo" name="settings-2" /><strong>{{ providers[id].name }}</strong><span class="llm-provider-check" aria-hidden="true"><Icon name="check" /></span>

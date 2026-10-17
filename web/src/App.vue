@@ -47,7 +47,7 @@ async function perform(operation: ProjectOperation) {
 }
 async function action(operation: ProjectOperation) {
   if (operation.action === 'pause' || operation.action === 'resume') { try { await perform(operation); management.value?.focusAction(); } catch (error) { toast(errorMessage(error)); } }
-  else { management.value?.close(); const project = projects.value.find(value => value.id === operation.id); if (project) confirmation.value?.open(project, operation.action); }
+  else { management.value?.close(true); const project = projects.value.find(value => value.id === operation.id); if (project) confirmation.value?.open(project, operation.action); }
 }
 function manage(project: ProjectView) { managementProject.value = project; management.value?.open(); }
 function keyboard(event: KeyboardEvent) {
@@ -62,7 +62,7 @@ onBeforeUnmount(() => { clearTimeout(toastTimer); document.removeEventListener('
 <template>
   <svg class="icon-library" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><defs><symbol id="i-flag" viewBox="0 0 24 24"><path d="M4 22V3m0 0c4-3 8 3 12 0v10c-4 3-8-3-12 0"/></symbol><symbol id="i-node" viewBox="0 0 24 24"><rect x="3" y="3" width="6" height="6" rx="1.5"/><rect x="15" y="15" width="6" height="6" rx="1.5"/><path d="M6 9v6a3 3 0 0 0 3 3h6"/></symbol><symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/></symbol><symbol id="i-check" viewBox="0 0 24 24"><path d="m5 12 4 4L19 6"/></symbol><symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/></symbol><symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6ZM12 8v5m0 3h.01"/></symbol></defs></svg>
   <ProjectSidebar ref="sidebar" :projects="projects" :selected="route.name === 'project' ? current?.id : undefined" :disabled="disabled" @create="forms?.openCreate()" @action="action"/>
-  <div class="workbench"><main id="main"><RouterView v-slot="{ Component }"><KeepAlive include="WorkspacePage"><component :is="Component" v-bind="pageProps" @create="forms?.openCreate()" @hint="forms?.openHint($event)" @manage="manage" @toast="toast" @return="router.push(current ? '/project/' + current.id : '/projects')" @saved="modelSummary = $event"/></KeepAlive></RouterView></main></div>
+  <div class="workbench"><main id="main"><RouterView v-slot="{ Component }"><Transition name="page" mode="out-in"><KeepAlive include="WorkspacePage"><component :is="Component" v-bind="pageProps" @create="forms?.openCreate()" @hint="forms?.openHint($event)" @manage="manage" @toast="toast" @return="router.push(current ? '/project/' + current.id : '/projects')" @saved="modelSummary = $event"/></KeepAlive></Transition></RouterView></main></div>
   <ProjectForms ref="forms" :get-project="id => projects.find(project => project.id === id)" :create="create" :hint="hint" :is-hint-retry="(id, values) => commands.isHintRetry(id, values)" :disabled="disabled" @toast="toast"/>
   <ProjectManagement ref="management" :project="latestManagement" :disabled="disabled" @action="action"/>
   <ActionDialog ref="confirmation" :perform="perform" :disabled="disabled"/>
@@ -144,14 +144,14 @@ dialog::backdrop{background:#233b4938;backdrop-filter:blur(2px)}.dialog-footer>s
 .llm-section-title{display:flex;align-items:center;margin-bottom:11px}
 .llm-section-title h2{font-size:13px;font-weight:700;line-height:1.5;margin:0;color:#273743}
 .llm-providers{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;background:#f3f6f8;padding:4px;border-radius:9px}
-.llm-provider{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;height:40px;padding:0 20px 0 10px;background:transparent;border:0;border-radius:5px;color:#3e5361;cursor:pointer;font-family:inherit;transition:background .15s,color .15s}
+.llm-provider{position:relative;display:flex;align-items:center;justify-content:center;min-width:0;height:40px;padding:0 20px 0 10px;background:transparent;border:0;border-radius:5px;color:#3e5361;cursor:pointer;font-family:inherit;transition:background .22s ease,color .22s ease,box-shadow .22s ease}
 .llm-provider:hover{background:#eaf0f2;color:#273743}
 .llm-provider.is-selected{background:#fff;color:#9a4e32;box-shadow:0 1px 3px #243f4810}
 .llm-provider strong{font-size:12px;font-weight:700;white-space:nowrap}
 .llm-provider-logo{display:block;width:16px;height:16px;object-fit:contain;flex:none;margin-right:8px;opacity:1}
 
-.llm-provider-check{position:absolute;right:5px;top:12px;display:none;color:#9a4e32}
-.llm-provider.is-selected .llm-provider-check{display:flex}
+.llm-provider-check{position:absolute;right:5px;top:12px;display:flex;color:#9a4e32;opacity:0;transform:scale(.85);transition:opacity .2s ease,transform .24s cubic-bezier(.22,1,.36,1)}
+.llm-provider.is-selected .llm-provider-check{opacity:1;transform:scale(1)}
 .llm-connection{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.85fr);column-gap:14px;margin-top:22px}
 .llm-connection>.llm-section-title,.llm-connection>.llm-field{grid-column:1 / -1}
 .llm-connection>.llm-protocol{grid-column:1}
@@ -187,6 +187,9 @@ dialog::backdrop{background:#233b4938;backdrop-filter:blur(2px)}.dialog-footer>s
   .llm-select-wrap option:hover,.llm-select-wrap option:focus{background:#f3f6f8;outline:none}
   .llm-select-wrap option:checked{background:#fff2eb;color:#9a4e32}
   .llm-select-wrap option::checkmark{order:1;margin-left:auto;color:#b95535;font-size:12px}
+  .llm-select-wrap select::picker(select){opacity:0;transform:translateY(-4px);transition:opacity 160ms ease,transform 220ms cubic-bezier(.22,1,.36,1),display 220ms allow-discrete,overlay 220ms allow-discrete}
+  .llm-select-wrap select:open::picker(select){opacity:1;transform:translateY(0)}
+  @starting-style{.llm-select-wrap select:open::picker(select){opacity:0;transform:translateY(-4px)}}
 }
 .llm-key-wrap input{padding-right:43px}
 .llm-key-toggle{display:flex;align-items:center;justify-content:center;position:absolute;right:4px;top:4px;width:32px;height:32px;color:#5c6f7c;border:0;background:transparent;cursor:pointer;border-radius:4px}
@@ -826,4 +829,25 @@ dialog.inspector-reader.is-closing::backdrop{animation:inspector-backdrop-out 14
 @media(prefers-reduced-motion:reduce){dialog.inspector-reader[open]::backdrop,dialog.inspector-reader.is-closing::backdrop{animation:none}}
 .inspector-record-mount{position:fixed;inset:0 auto auto 0;width:0;height:0;z-index:0}
 .inspector-copy-buffer{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
+</style>
+
+<style>
+/* Keep navigation and overlays brief, with no motion for reduced-motion users. */
+#main{scrollbar-gutter:stable}
+.page-enter-active{transition:opacity 200ms ease,transform 240ms cubic-bezier(.22,1,.36,1)}
+.page-leave-active{transition:opacity 140ms ease,transform 140ms ease;pointer-events:none}
+.page-enter-from{opacity:0;transform:translateY(6px)}
+.page-leave-to{opacity:0;transform:translateY(-3px)}
+dialog[data-motion="enter"]::backdrop{animation:overlay-in 220ms ease both}
+dialog[data-motion="leave"]::backdrop{animation:overlay-out 160ms ease both}
+.project-menu-popover:not([hidden]){animation:menu-in 180ms cubic-bezier(.22,1,.36,1)}
+@keyframes overlay-in{from{opacity:0}to{opacity:1}}
+@keyframes overlay-out{from{opacity:1}to{opacity:0}}
+@keyframes menu-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+@media(prefers-reduced-motion:reduce){
+  .page-enter-active,.page-leave-active{transition:none}
+  .page-enter-from,.page-leave-to{transform:none}
+  dialog[data-motion]::backdrop,.project-menu-popover:not([hidden]){animation:none}
+  .llm-select-wrap select::picker(select){transition:none}
+}
 </style>

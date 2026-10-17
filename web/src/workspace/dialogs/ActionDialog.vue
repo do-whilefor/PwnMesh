@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {computed, onBeforeUnmount, ref, shallowRef} from 'vue';
 import Icon from '@/ui/Icon.vue';
+import {useDialogMotion} from '@/ui/useDialogMotion';
 import {actions} from '../model/lifecycle';
 import type {ProjectAction, ProjectView} from '../model/types';
 import {actionNames, errorMessage} from './types';
@@ -8,6 +9,7 @@ import type {ProjectOperation} from './types';
 const props = defineProps<{perform: (operation: ProjectOperation) => Promise<unknown>; disabled?: boolean}>();
 const emit = defineEmits<{closed: []}>();
 const dialog = ref<HTMLDialogElement>(), operation = shallowRef<ProjectOperation | null>(null);
+const motion = useDialogMotion(dialog);
 const name = ref(''), error = ref(''), busy = ref(false), invalid = ref(false);
 let disposed = false;
 const label = computed(() => operation.value ? actionNames[operation.value.action] + '项目' : '');
@@ -20,14 +22,14 @@ function open(project: ProjectView, action: ProjectAction) {
   if (busy.value || props.disabled || !['restart', 'terminate', 'delete'].includes(action) || !actions(project).includes(action)) return false;
   operation.value = {id: project.id, action, generation: project.generation, status: project.status};
   name.value = project.name; error.value = ''; invalid.value = false;
-  if (!dialog.value?.open) dialog.value?.showModal(); return true;
+  motion.show(); return true;
 }
-function close() {if (!busy.value) dialog.value?.close();}
+function close() {if (!busy.value) void motion.close();}
 function onClose() {operation.value = null; emit('closed');}
 async function submit() {
   if (!operation.value || busy.value || props.disabled || invalid.value) return;
   const captured = {...operation.value}; busy.value = true; error.value = '';
-  try {await props.perform(captured); if (!disposed) dialog.value?.close();}
+  try {await props.perform(captured); if (!disposed) await motion.close();}
   catch (failure) {
     if (disposed) return;
     const status = typeof failure === 'object' && failure !== null && 'status' in failure ? failure.status : undefined;
@@ -39,7 +41,7 @@ onBeforeUnmount(() => {disposed = true;});
 defineExpose({open, close});
 </script>
 <template>
-  <dialog ref="dialog" id="action-dialog" aria-labelledby="action-title" aria-describedby="action-description" @cancel="busy && $event.preventDefault()" @close="onClose">
+  <dialog ref="dialog" id="action-dialog" aria-labelledby="action-title" aria-describedby="action-description" @cancel.prevent="close" @close="onClose">
     <form id="action-form" @submit.prevent="submit">
       <header class="dialog-header"><h2 id="action-title">{{ label }}</h2><button type="button" class="icon-button" data-close="action-dialog" aria-label="关闭项目操作" :disabled="busy" @click="close"><Icon name="x" /></button></header>
       <p id="action-project">{{ name }}</p><p id="action-description">{{ operation ? descriptions[operation.action] : '' }}</p><p id="action-error" class="form-error" role="alert">{{ error }}</p>
