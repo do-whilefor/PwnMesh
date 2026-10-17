@@ -17,10 +17,12 @@ Dispatcher ---+  prepare, register, heartbeat, settle
 ```
 
 The model bridge keeps upstream credentials in Dispatcher. Worker requests
-cannot choose the provider endpoint or credentials. One Docker client shares a
-16-request model limit across launches; waiting is cancellable and consumes the
-request timeout. Model capacity is released before response delivery. Jobs use
-immutable snapshots or bound state views. A model response alone cannot establish
+cannot choose the provider endpoint or credentials. Worker sizing and upstream
+serialization share a credential-free request format, including reasoning mode.
+One Docker client shares a 16-request model limit across launches; waiting is
+cancellable and consumes the request timeout. Model capacity is released before
+response delivery. Jobs use immutable snapshots or bound state views. A model
+response alone cannot establish
 success: Execute evidence must pass acceptance; Decide and Curate require server receipts.
 
 Graph RPC separates its 20-second operation deadline from a 5-second response
@@ -241,6 +243,16 @@ replace server generation fences. Results, details and exports share evidence
 projections. The graph feature owns its DOM and scopes view state to project and
 generation. Model settings have an independent lifecycle; secret drafts clear
 when their page is disposed.
+
+Server settings coordination owns persistence and saved subscription credentials;
+Kimi device authorization owns only pending login sessions. Ordinary API-key
+saves do not acquire the login-session lock. Authorized drafts remain in memory
+until save, and retries preserve credentials already rotated by Dispatcher.
+
+View transitions expose their leaving state; feature containers own interaction
+blocking so navigation can interrupt a fade. Cached inactive views settle without
+starting animations. View and disclosure transitions share bounded playback and
+cancellation while retaining separate state machines.
 
 Files and colocated tests follow feature ownership. Components use local state
 and props/events; server state has one resource owner. See [protocol](protocol.md)

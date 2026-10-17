@@ -1,25 +1,16 @@
 import {nextTick, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch, type Ref} from 'vue';
+import {animationPlayer} from './animation-player';
 
 /** Keep the current text until it fades, then ease to the disclosure's natural height. */
 export function useDisclosureMotion(expanded: Readonly<Ref<boolean>>, panel: Ref<HTMLElement | undefined>) {
   const displayed = ref(expanded.value);
-  let version = 0, stop: (() => void) | undefined, preference: MediaQueryList | undefined;
+  const {play,stop} = animationPlayer();
+  let version = 0, preference: MediaQueryList | undefined;
   let restore: (() => void) | undefined;
   let active = true;
 
-  function clear() {stop?.();stop = undefined;restore?.();restore = undefined;}
+  function clear() {stop();restore?.();restore = undefined;}
   function reset() {version++;clear();displayed.value = expanded.value;}
-  function play(element: HTMLElement, frames: Keyframe[], duration: number) {
-    stop?.();
-    const animation = element.animate(frames,{duration,easing:'cubic-bezier(.22,1,.36,1)',fill:'both'});
-    return new Promise<void>(resolve => {
-      let done = false;
-      const finish = () => {if (!done) {done = true;clearTimeout(timer);resolve();}};
-      const timer = setTimeout(finish,duration + 80);
-      stop = () => {animation.cancel();finish();};
-      void animation.finished.then(finish,finish);
-    });
-  }
   async function change(value: boolean) {
     const ticket = ++version,element = panel.value;
     if (!active || !element || preference?.matches || typeof element.animate !== 'function') {clear();displayed.value = value;return;}
@@ -37,7 +28,7 @@ export function useDisclosureMotion(expanded: Readonly<Ref<boolean>>, panel: Ref
       if (ticket !== version) return;
       from = {opacity:0,transform:'translateY(3px)'};
     }
-    stop?.();stop = undefined;
+    stop();
     element.style.height = savedHeight;
     const target = element.getBoundingClientRect().height;
     element.style.height = height + 'px';

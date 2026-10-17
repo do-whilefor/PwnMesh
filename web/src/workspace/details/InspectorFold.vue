@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {ref, watch} from 'vue';
-import {useDisclosureMotion} from './useDisclosureMotion';
+import {useDisclosureMotion} from '@/ui/useDisclosureMotion';
 
 const props = defineProps<{resetKey?: unknown}>();
 const emit = defineEmits<{collapse: [element: HTMLElement]}>();

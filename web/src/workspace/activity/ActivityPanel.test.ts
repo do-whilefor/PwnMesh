@@ -56,6 +56,18 @@ test('returning to changed logs keeps search and expansion but resets the saved 
 const selection = (key: string, body = 'Selected content'): DetailRecord => ({nodeKey: key, title: key, kind: 'Node', body, meta: []});
 const settleMotion = async () => {await vi.advanceTimersByTimeAsync(600); await flushPromises();};
 
+test('parent navigation keeps activity blocked after its own selection animation settles', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  const wrapper = mount(ActivityPanel, {props: {project: project(), blocked: true}, global: {stubs: {LogEntry: true}}});
+  try {
+    const pane = wrapper.get<HTMLElement>('.activity-pane').element;
+    expect(pane.inert).toBe(true);
+    await wrapper.setProps({selection: selection('fact:next')});await settleMotion();
+    expect(pane.inert).toBe(true);
+    await wrapper.setProps({blocked: false});expect(pane.inert).toBe(false);
+  } finally {wrapper.unmount();vi.useRealTimers();}
+});
+
 test('activity retains outgoing content until the fade boundary and restores the log position', async () => {
   vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
   const wrapper = mount(ActivityPanel, {props: {project: project()}, global: {stubs: {LogEntry: true}}});

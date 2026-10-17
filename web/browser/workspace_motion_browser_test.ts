@@ -24,6 +24,24 @@ function fades(samples: Awaited<ReturnType<typeof sample>>, outgoing: string, in
   assert.deepEqual(samples.at(-1),{title:incoming,opacity:1,offset:0});
 }
 
+async function blockedOutgoingAction(page: Page, selector: string) {
+  const result = await page.evaluate(async selector => {
+    const round = document.querySelector<HTMLSelectElement>('#run-select')!,panel = document.querySelector<HTMLElement>('.project-content')!;
+    round.value = '0';round.dispatchEvent(new Event('change',{bubbles:true}));
+    const start = performance.now();
+    while (panel.dataset.viewMotion !== 'leave' && performance.now() - start < 1000) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const action = document.querySelector<HTMLElement>(selector)!;
+    const box = action.getBoundingClientRect(),x = box.left + box.width / 2,y = box.top + box.height / 2;
+    action.focus();
+    const focused = document.activeElement === action,hit = document.elementFromPoint(x,y);
+    round.focus();
+    return {leaving:panel.dataset.viewMotion === 'leave',onScreen:x > 0 && x < innerWidth && y > 0 && y < innerHeight,
+      focused,hit:!!hit && (hit === action || action.contains(hit)),blocked:!!action.closest('[inert]'),roundInteractive:document.activeElement === round && !round.closest('[inert]')};
+  },selector);
+  assert.deepEqual(result,{leaving:true,onScreen:true,focused:false,hit:false,blocked:true,roundInteractive:true},selector + ' is excluded from native focus and pointer targeting during navigation');
+  await page.waitForFunction(() => !document.querySelector<HTMLElement>('.project-content')?.dataset.viewMotion);
+}
+
 test('project and round navigation retains outgoing content, reverses quickly, and preserves cached canvas state',options,async () => {
   const server = await staticServer(), browser = await launch();
   try {
@@ -31,6 +49,7 @@ test('project and round navigation retains outgoing content, reverses quickly, a
     page.setDefaultTimeout(5000); page.on('pageerror',error => errors.push(error.message));
     const projects = ['first','second','third'].map(id => ({id,title:id + ' project',status:'active',orchestration_version:1,generation:1}));
     const states = new Map(projects.map(project => [project.id,stateFor(project)]));
+    states.get('first')!.findings.push({id:'result',claim:'Recorded finding',status:'verified',sources:[]});
     const archives = new Map(projects.map(project => [project.id,Buffer.from(JSON.stringify(stateFor({...project,title:project.id + ' archive',generation:0})))]));
     await page.route('**/model-settings',route => route.fulfill({contentType:'application/json',body:JSON.stringify({protocol:'anthropic',auth_mode:'api_key',base_url:'https://api.deepseek.com/anthropic',model:'deepseek-flash',has_token:false,connection_mode:'direct',proxy_url:'',reasoning_effort:'max'})}));
     await page.route('**/projects**',route => {
@@ -73,6 +92,13 @@ test('project and round navigation retains outgoing content, reverses quickly, a
       return {title:document.querySelector('.project-content h1')?.textContent,round:document.querySelector<HTMLSelectElement>('#run-select')?.value};
     });
     assert.deepEqual(finalRound,{title:'first project',round:'current'});
+    await blockedOutgoingAction(page,'#zoom-in');
+    await sample(page,{round:'current'});
+    await page.locator('#view-tab-result').click();
+    await page.locator('#export-results').waitFor();
+    await page.waitForFunction(() => !document.querySelector<HTMLElement>('#project-view')?.dataset.viewMotion);
+    await blockedOutgoingAction(page,'#export-results');
+    await sample(page,{round:'current'});
     projects[0]!.title = 'First refreshed'; states.get('first')!.revision++;
     await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
     await page.waitForFunction(() => document.querySelector('.project-content h1')?.textContent === 'First refreshed');

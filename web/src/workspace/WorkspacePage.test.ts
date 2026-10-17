@@ -117,6 +117,9 @@ test('project transitions retain outgoing state, block stale actions, and accept
     const pane = wrapper.get<HTMLElement>('.project-content').element, graph = wrapper.getComponent(GraphCanvas).element;
     await wrapper.setProps({project: second});
     expect(pane.dataset.viewMotion).toBe('leave'); expect(pane.inert).toBe(false);
+    expect(wrapper.get<HTMLElement>('#project-view').element.inert).toBe(true);
+    expect(wrapper.get<HTMLElement>('.canvas-footer').element.inert).toBe(true);
+    expect(wrapper.getComponent(ActivityPanel).props('blocked')).toBe(true);
     expect(wrapper.get<HTMLButtonElement>('#project-manage').element.disabled).toBe(true);
     expect(wrapper.get('h1').text()).toBe('First project');
     expect(wrapper.getComponent(GraphCanvas).props('state')).toEqual(first.state);
@@ -127,6 +130,8 @@ test('project transitions retain outgoing state, block stale actions, and accept
     await vi.advanceTimersByTimeAsync(600); await flushPromises();
     expect(wrapper.get('h1').text()).toBe('Latest project'); expect(wrapper.getComponent(GraphCanvas).element).toBe(graph);
     expect(pane.inert).toBe(false); expect(pane.dataset.viewMotion).toBeUndefined();
+    expect(wrapper.get<HTMLElement>('#project-view').element.inert).toBe(false);
+    expect(wrapper.getComponent(ActivityPanel).props('blocked')).toBe(false);
     await wrapper.get('#add-hint').trigger('click'); expect(wrapper.emitted('hint')).toEqual([['latest']]);
     await wrapper.setProps({project: {...latest, name: 'Latest refreshed'}});
     expect(wrapper.get('h1').text()).toBe('Latest refreshed'); expect(pane.dataset.viewMotion).toBeUndefined();
@@ -142,6 +147,8 @@ test('round transitions retain outgoing graph while the selector follows accepte
     await wrapper.get('#run-select').setValue('0'); await flushPromises();
     expect(wrapper.get('h1').text()).toBe('Current'); expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('0');
     expect(pane.dataset.viewMotion).toBe('leave');
+    expect(wrapper.get<HTMLElement>('#project-view').element.inert).toBe(true);
+    expect(wrapper.get('#run-select').element.closest('[inert]')).toBeNull();
     await vi.advanceTimersByTimeAsync(30); await wrapper.get('#run-select').setValue('current'); await flushPromises();
     await vi.advanceTimersByTimeAsync(600); await flushPromises();
     expect(wrapper.get('h1').text()).toBe('Current'); expect(pane.inert).toBe(false);

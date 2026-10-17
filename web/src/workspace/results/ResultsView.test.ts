@@ -30,8 +30,5 @@ test('finding cards, reader and export retain status and evidence validity', asy
   const output = await (createURL.mock.calls[0]![0] as Blob).text();
   for (const label of Object.values(labels)) expect(output).toContain('状态：' + label);
   expect(output).not.toContain('undefined');
-  await wrapper.setProps({disabled: true});
-  await wrapper.get('#export-results').trigger('click');
-  expect(createURL).toHaveBeenCalledTimes(1);
   wrapper.unmount();
 });

@@ -244,7 +244,6 @@ dialog::backdrop{background:#233b4938;backdrop-filter:blur(2px)}.dialog-footer>s
 @keyframes llm-spin{to{transform:rotate(360deg)}}
 @media(max-width:1320px){.llm-page{padding:22px}.llm-layout{grid-template-columns:minmax(0,1fr) 184px;gap:22px}.llm-form{padding:21px}.llm-provider{padding-left:5px;padding-right:17px}.llm-provider-logo{margin-right:5px}.llm-effort,.llm-network-row{grid-template-columns:minmax(0,1fr) 175px;gap:14px}}
 @media(max-width:1000px){.llm-layout{grid-template-columns:minmax(0,1fr)}.llm-aside{padding:0}.llm-overview{display:grid;grid-template-columns:190px minmax(0,1fr);gap:24px}.llm-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));column-gap:24px}.llm-page{padding:20px}.llm-connection>.llm-protocol,.llm-connection>.llm-endpoint{grid-column:1 / -1}}
-@media(prefers-reduced-motion:reduce){.llm-page *{animation:none!important;transition:none!important}}
 </style>
 
 <style>
@@ -663,7 +662,6 @@ dialog{padding:25px;border-color:#e2e9ed;border-radius:14px;box-shadow:0 20px 65
 .activity-pane #activity-to-latest{bottom:15px;padding:7px 12px;border-color:#d7e3ee;background:#f7faff;color:#4f7192;box-shadow:0 4px 15px #344e5d0d;font-size:11px}
 .activity-pane .activity-content mark{padding:0;border-radius:2px;background:#fff0d8;color:var(--accent)}
 .activity-pane .node-inspector{padding:0 3px 14px}
-@media(prefers-reduced-motion:reduce){.activity-pane .log-title,.activity-pane .log-expand>.lucide{transition:none}.activity-pane .log-long-content[open]>.log-body{animation:none}}
 </style>
 
 <style>
@@ -840,7 +838,6 @@ dialog[data-motion="leave"]::backdrop{animation:overlay-out 160ms ease both}
 @keyframes overlay-in{from{opacity:var(--dialog-backdrop-from,0)}to{opacity:1}}
 @keyframes overlay-out{from{opacity:var(--dialog-backdrop-from,1)}to{opacity:0}}
 @media(prefers-reduced-motion:reduce){
-  .page-enter-active,.page-leave-active,.menu-enter-active,.menu-leave-active,.toast-enter-active,.toast-leave-active{transition:none}
   .page-enter-from,.page-leave-to{transform:none}
   dialog[data-motion]::backdrop{animation:none}
   .llm-select-wrap select::picker(select){transition:none}

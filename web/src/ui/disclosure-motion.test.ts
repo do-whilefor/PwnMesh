@@ -2,7 +2,7 @@
 import {flushPromises, mount} from '@vue/test-utils';
 import {defineComponent, h, KeepAlive} from 'vue';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
-import MotionDetails from './MotionDetails.vue';
+import InspectorFold from '../workspace/details/InspectorFold.vue';
 import SelectionInspector from '../workspace/details/SelectionInspector.vue';
 import LogEntry from '../workspace/activity/LogEntry.vue';
 import ProjectForms from '../workspace/dialogs/ProjectForms.vue';
@@ -24,7 +24,7 @@ afterEach(() => {vi.useRealTimers();vi.restoreAllMocks();vi.unstubAllGlobals();d
 const settle = async () => {await vi.advanceTimersByTimeAsync(500);await flushPromises();};
 
 it('retains outgoing details until the fade boundary and latest rapid toggle wins',async () => {
-  const wrapper = mount(MotionDetails,{slots:{summary:'Summary',default:'Full text'}});
+  const wrapper = mount(InspectorFold,{slots:{summary:'Summary',default:'Full text'}});
   try {
     const details = wrapper.get<HTMLDetailsElement>('details').element;
     await wrapper.get('summary').trigger('click');
@@ -40,7 +40,7 @@ it('retains outgoing details until the fade boundary and latest rapid toggle win
 });
 
 it('clears pending height and fade on reduced motion, cache deactivation, and unmount',async () => {
-  const host = defineComponent({props:{active:Boolean},setup:props => () => h(KeepAlive,{},() => props.active ? h(MotionDetails,{}, {summary:() => 'Summary',default:() => 'Body'}) : null)});
+  const host = defineComponent({props:{active:Boolean},setup:props => () => h(KeepAlive,{},() => props.active ? h(InspectorFold,{}, {summary:() => 'Summary',default:() => 'Body'}) : null)});
   const wrapper = mount(host,{props:{active:true}});
   const details = wrapper.get<HTMLDetailsElement>('details').element;
   await wrapper.get('summary').trigger('click');

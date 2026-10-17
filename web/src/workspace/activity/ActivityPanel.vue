@@ -9,11 +9,11 @@ import type { Entry } from './LogEntry.vue';
 import Icon from '@/ui/Icon.vue';
 import { dateTime } from '@/ui/format';
 import { useViewMotion } from '@/ui/useViewMotion';
-const props = defineProps<{ project?: ProjectView; projectIds?: readonly string[]; selection?: DetailRecord | null; selectionKey?: string }>();
+const props = defineProps<{ project?: ProjectView; projectIds?: readonly string[]; selection?: DetailRecord | null; selectionKey?: string; blocked?: boolean }>();
 const emit = defineEmits<{ back: []; read: [record: DetailRecord] }>();
 const pane = ref<HTMLElement>(), host = ref<HTMLElement>(), search = ref<HTMLInputElement>();
 const selectionId = computed(() => props.selection ? props.selectionKey || props.selection.nodeKey || `${props.selection.kind}:${props.selection.title}` : '');
-const {displayed, ready, reset} = useViewMotion(selectionId, pane);
+const {displayed, leaving, ready, reset} = useViewMotion(selectionId, pane);
 const visibleSelection = shallowRef(props.selection);
 // Keep the outgoing record through the fade, but refresh the same record in place.
 watch([displayed, () => props.selection], ([shown, record]) => {if (shown === selectionId.value) visibleSelection.value = record;}, {flush: 'sync'});
@@ -42,7 +42,7 @@ function clear() { filter(''); search.value?.focus(); }
 defineExpose({ready, reset});
 </script>
 <template>
-  <aside ref="pane" class="activity-pane" aria-labelledby="activity-title">
+  <aside ref="pane" class="activity-pane" aria-labelledby="activity-title" :inert="blocked || leaving">
     <header class="activity-heading"><h2><Icon name="notebook-text"/><span id="activity-title">{{ visibleSelection ? visibleSelection.kind === '关系' ? '关系详情' : '节点详情' : '黑板日志' }}</span></h2><span id="activity-match-count" role="status" aria-live="polite" :hidden="!!visibleSelection">{{ filtered.length }} 条{{ query.trim() ? '匹配' : '记录' }}</span><button id="activity-collapse-all" class="icon-button" title="收起全部展开的日志" aria-label="收起全部展开的日志" :hidden="!!visibleSelection || !expanded.size" @click="expanded = new Set(); host?.scrollTo(0, 0); search?.focus()"><Icon name="list-collapse"/></button></header>
     <div id="activity-toolbar" :hidden="!!visibleSelection"><div class="activity-search"><label for="activity-search" class="visually-hidden">搜索黑板日志全文</label><Icon name="search"/><input id="activity-search" ref="search" type="search" placeholder="搜索日志全文" :value="query" :disabled="!project" autocomplete="off" @input="input" @compositionend="filter(($event.target as HTMLInputElement).value)" @keydown.esc.prevent="clear"><button id="activity-clear-search" class="icon-button" aria-label="清除日志搜索" :hidden="!query" @click="clear"><Icon name="x"/></button></div></div>
     <div id="activity-content" ref="host" class="activity-content" role="region" aria-labelledby="activity-title" tabindex="0" @scroll.passive="scroll"><SelectionInspector v-if="visibleSelection" :record="visibleSelection" :record-key="displayed" @back="emit('back')" @read="emit('read', $event)"/><div v-else-if="filtered.length" class="log-stream"><LogEntry v-for="entry in filtered" :key="entry.id" :entry="entry" :query="query.trim()" :expanded="expanded.has(entry.id)" @expand="expand" @read="read"/></div><div v-else-if="project" class="empty-state log-empty"><Icon name="search"/>没有匹配的记录<button id="activity-reset" class="text-button" @click="clear">清除筛选</button></div></div>
