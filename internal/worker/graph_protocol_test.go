@@ -156,15 +156,40 @@ func TestMergedFindingReceiptAndSupportRemainReadable(t *testing.T) {
 		}
 	}
 	tx(func(b *board.Tx) error {
-		return b.Save(board.Graph{Project: board.Project{ID: "proj_001", Title: "Paging", Status: "active", CreatedAt: b.Now}, Facts: []board.Fact{{ID: "origin", Description: "input"}, {ID: "goal", Description: "goal"}}, Intents: []board.Intent{{ID: "i001", From: []string{"origin"}, Description: "collect evidence", Creator: "planner", Worker: board.Ptr(fence.Run), Heartbeat: board.Ptr(b.Now), CreatedAt: b.Now}}})
+		return b.Save(board.Graph{Project: board.Project{ID: "proj_001", Title: "Paging", Status: "active", CreatedAt: b.Now, OrchestrationVersion: 1}, Facts: []board.Fact{{ID: "origin", Description: "input"}, {ID: "goal", Description: "goal"}}, Intents: []board.Intent{{ID: "i001", From: []string{"origin"}, Description: "collect evidence", Creator: "planner", Worker: board.Ptr(fence.Run), Heartbeat: board.Ptr(b.Now), CreatedAt: b.Now}}})
 	})
-	action := func(op, key string, payload any) board.StateActionResult {
+	register := func(e board.Execution) board.State {
+		t.Helper()
+		var state board.State
+		tx(func(b *board.Tx) (err error) {
+			if e.Kind == "curate" {
+				if _, err = b.ClaimCurator(e.ProjectID, e.Lease, "observations"); err != nil {
+					return err
+				}
+			}
+			state, err = b.State(e.ProjectID)
+			if err != nil {
+				return err
+			}
+			if e.Kind == "curate" {
+				e.RetryKey = board.CurationRetryKey(state)
+			}
+			e.Job, err = json.Marshal(Job{Kind: e.Kind, RunID: e.ID, Graph: state.Graph, State: &state, GraphRPC: true, ResultContractVersion: 2})
+			if err != nil {
+				return err
+			}
+			return b.RegisterExecution(e)
+		})
+		return state
+	}
+	register(board.Execution{ProjectID: "proj_001", ID: "run", Namespace: "test", Backend: "executor", Kind: "explore", Intent: fence.Intent, Lease: fence.Run, RetryKey: "explore:" + fence.Intent})
+	action := func(fence board.ExecutionFence, op, key string, payload any, version string) board.StateActionResult {
 		t.Helper()
 		raw, err := json.Marshal(payload)
 		if err != nil {
 			t.Fatal(err)
 		}
-		request := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: op, IdempotencyKey: key, Payload: raw}}
+		request := GraphRequest{RequestID: strings.Repeat("a", 32), Op: "graph_action", Action: board.StateAction{Op: op, IdempotencyKey: key, Payload: raw, ExpectedVersion: version}}
 		wire, _ := json.Marshal(GraphRequestEvent{Type: "graph_request", Request: request})
 		if len(wire) > MaxGraphRPCBytes {
 			t.Fatal("fixture must use individually valid graph requests")
@@ -176,7 +201,7 @@ func TestMergedFindingReceiptAndSupportRemainReadable(t *testing.T) {
 		})
 		return result
 	}
-	fact := action("fact", "source", map[string]any{"description": "observed", "scope": "fixture", "observed_at": "2026-09-23T01:00:00Z", "evidence": []board.EvidenceRef{{RunID: "run", Path: "source.raw", Excerpt: "observed"}}})
+	fact := action(fence, "fact", "source", map[string]any{"description": "observed", "scope": "fixture", "observed_at": "2026-09-23T01:00:00Z", "evidence": []board.EvidenceRef{{RunID: "run", Path: "source.raw", Excerpt: "observed"}}}, "")
 	var result board.StateActionResult
 	var expected []board.EvidenceRef
 	for batch := 0; batch < 2; batch++ {
@@ -185,7 +210,11 @@ func TestMergedFindingReceiptAndSupportRemainReadable(t *testing.T) {
 			refs = append(refs, board.EvidenceRef{RunID: "run", Path: fmt.Sprintf("retained/%d.raw", batch*8+i), Excerpt: strings.Repeat("x", 8192)})
 		}
 		expected = append(expected, refs...)
-		result = action("finding", fmt.Sprintf("merge%d", batch), map[string]any{"claim": "fixture claim", "scope": "fixture", "status": "verified", "sources": []string{fact.ID}, "evidence": refs})
+		candidate := action(fence, "candidate", fmt.Sprintf("candidate%d", batch), map[string]any{"claim": "fixture claim", "scope": "fixture", "status": "verified", "sources": []string{fact.ID}, "evidence": refs, "reason": "Retain original support"}, "")
+		run := fmt.Sprintf("merge%d", batch)
+		curator := board.Execution{ProjectID: "proj_001", ID: run, Namespace: "test", Backend: "curator", Kind: "curate", Lease: "curator@" + run}
+		input := register(curator)
+		result = action(curator.Fence(), "curate", run, board.CuratePayload{ThroughRevision: input.Revision, Groups: []board.CurateGroup{{CandidateIDs: []string{candidate.ID}, Status: "verified", Reason: "Merge supported observations"}}}, board.DecisionStateVersion(input))
 	}
 	raw, _ := json.Marshal(result)
 	if len(raw) <= MaxGraphRPCBytes {
@@ -202,12 +231,16 @@ func TestMergedFindingReceiptAndSupportRemainReadable(t *testing.T) {
 	if err = json.Unmarshal(compact, &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if !receipt.ResultOmitted || receipt.ID != result.ID || receipt.Op != result.Op || receipt.Revision != result.Revision || receipt.StateVersion != result.StateVersion || len(receipt.Result) != 0 {
+	if !receipt.ResultOmitted || !receipt.Committed || receipt.ID != result.ID || receipt.Op != result.Op || receipt.Revision != result.Revision || receipt.StateVersion != result.StateVersion || len(receipt.Result) != 0 {
 		t.Fatal("compact receipt lost the authoritative write acknowledgement")
 	}
 	var state board.State
 	tx(func(b *board.Tx) (err error) { state, err = b.State("proj_001"); return err })
-	page := checkedGraphPage(t, state, GraphRequest{Section: "findings", IDs: []string{result.ID}, Limit: 1})
+	if len(state.Findings) != 1 || len(state.Findings[0].CandidateIDs) != 2 {
+		t.Fatal("curation did not preserve merged finding provenance")
+	}
+	findingID := state.Findings[0].ID
+	page := checkedGraphPage(t, state, GraphRequest{Section: "findings", IDs: []string{findingID}, Limit: 1})
 	var record map[string]json.RawMessage
 	if err = json.Unmarshal(page.Items[0], &record); err != nil {
 		t.Fatal(err)
@@ -215,10 +248,10 @@ func TestMergedFindingReceiptAndSupportRemainReadable(t *testing.T) {
 	if string(record["evidence_omitted"]) != "true" || string(record["evidence_count"]) != "16" || record["evidence"] != nil || len(record["read_more"]) == 0 {
 		t.Fatal("oversized support was not explicitly exposed for detail reads")
 	}
-	if got := collectGraphDetails[board.EvidenceRef](t, state, "evidence", result.ID); !reflect.DeepEqual(got, expected) {
+	if got := collectGraphDetails[board.EvidenceRef](t, state, "evidence", findingID); !reflect.DeepEqual(got, expected) {
 		t.Fatal("merged evidence was lost or changed across pages")
 	}
-	if got := collectGraphDetails[string](t, state, "sources", result.ID); !reflect.DeepEqual(got, []string{fact.ID}) {
+	if got := collectGraphDetails[string](t, state, "sources", findingID); !reflect.DeepEqual(got, []string{fact.ID}) {
 		t.Fatal("finding sources were lost")
 	}
 }
