@@ -4,6 +4,8 @@ import type {SettingsPayload} from './rules';
 
 interface DeviceLogin {login_id: string; user_code: string; verification_uri: string; expires_in: number; interval?: number}
 interface LoginStatus {status: 'pending' | 'slow_down' | 'authorized' | 'expired' | 'denied'; interval?: number}
+// Allow the server's 30-second upstream request budget plus transport overhead.
+const loginTimeout = 45000;
 
 export function kimiLogin(client: Pick<Client, 'request'>, changed: () => void) {
   const state = reactive({id: '', code: '', url: '', phase: 'idle', message: ''});
@@ -19,7 +21,7 @@ export function kimiLogin(client: Pick<Client, 'request'>, changed: () => void) 
     cancel(); changed(); state.phase = 'starting'; state.message = '正在获取 Kimi 登录验证码…';
     const current = generation; request = new AbortController();
     try {
-      const login = await client.request<DeviceLogin>('/model-settings/kimi/login', {method: 'POST', body: connection, signal: request.signal});
+      const login = await client.request<DeviceLogin>('/model-settings/kimi/login', {method: 'POST', body: connection, signal: request.signal, timeout: loginTimeout});
       if (current !== generation) {if (login.login_id) remove(login.login_id); return;}
       state.id = login.login_id;
       const url = new URL(login.verification_uri);
@@ -33,7 +35,7 @@ export function kimiLogin(client: Pick<Client, 'request'>, changed: () => void) 
         if (Date.now() >= expires) {fail('登录已过期，请重新登录。'); return;}
         request = new AbortController();
         try {
-          const result = await client.request<LoginStatus>('/model-settings/kimi/login/' + encodeURIComponent(login.login_id), {method: 'POST', signal: request.signal});
+          const result = await client.request<LoginStatus>('/model-settings/kimi/login/' + encodeURIComponent(login.login_id), {method: 'POST', signal: request.signal, timeout: loginTimeout});
           if (current !== generation) return;
           if (result.status === 'authorized') {state.phase = 'authorized'; state.code = ''; state.url = ''; state.message = '登录成功，请完成连接测试并保存配置。'; changed(); return;}
           if (result.status === 'expired' || result.status === 'denied') {fail(result.status === 'expired' ? '登录已过期，请重新登录。' : '登录授权被拒绝，请重试。'); return;}

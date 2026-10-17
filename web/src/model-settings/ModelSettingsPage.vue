@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {computed, onBeforeUnmount, onMounted, reactive, ref} from 'vue';
-import {Client} from '@/api/client';
+import {Client, RequestScope} from '@/api/client';
 import Icon from '@/ui/Icon.vue';
 import {useLayoutMotion} from '@/ui/useLayoutMotion';
 import {apiProtocols, canReuseToken, connectionSettings, defaultReasoningEffort, efforts, originOf, parseProxy, providerFor, providers, proxyProtocols, validate} from './rules';
@@ -21,7 +21,8 @@ const serverSettings = ref<PublicSettings | null>(null);
 const summaryStatus = ref('待配置'), statusKind = ref(''), statusMessage = ref('');
 type ProviderDraft = {apiProtocol: APIProtocol; authMode: AuthMode; url: string; model: string};
 const providerDrafts = Object.fromEntries(Object.entries(providers).map(([id, preset]) => [id, {apiProtocol: 'anthropic', authMode: 'api_key', url: preset.base_url, model: preset.model}])) as Record<Provider, ProviderDraft>;
-let version = 0, disposed = false, request: AbortController | null = null, keyOrigin = '';
+const requests = new RequestScope();
+let disposed = false, keyOrigin = '';
 const disabled = computed(() => busy.value || !loaded.value);
 const retained = computed(() => canReuseToken(serverSettings.value, values.url.trim(), values.authMode));
 const subscription = computed(() => values.authMode !== 'api_key');
@@ -38,7 +39,7 @@ const proxyIDs = Object.keys(proxyProtocols) as (keyof typeof proxyProtocols)[];
 const message = (error: unknown) => error instanceof Error ? error.message : '请求失败';
 function status(kind: string, text: string) {statusKind.value = kind; statusMessage.value = text;}
 function resetKey() {token.value = ''; if (keyInput.value) keyInput.value.value = ''; revealKey.value = false; keyOrigin = '';}
-function invalidate() {version++; request?.abort(); request = null; verified.value = false; connected.value = false; summaryStatus.value = '未保存'; status('', '');}
+function invalidate() {requests.cancel(); verified.value = false; connected.value = false; summaryStatus.value = '未保存'; status('', '');}
 function rememberDraft() {providerDrafts[provider.value] = {apiProtocol: values.apiProtocol, authMode: values.authMode, url: values.url, model: values.model};}
 function edit(event: Event) {
   const field = event.target;
@@ -63,19 +64,19 @@ function selectAuth() {
 }
 function network() {return connectionSettings({connection_mode: values.connectionMode, proxy_protocol: values.protocol, proxy_host: values.host, proxy_port: values.port});}
 async function startLogin() {
-  if (disabled.value || !oauth.value) return;
+  if (disposed || disabled.value || !oauth.value) return;
   try {await login.start(network());} catch (error) {status('error', message(error));}
 }
 function cancelLogin() {login.cancel(); invalidate();}
 async function logout() {
-  if (disabled.value) return;
-  cancelLogin(); const currentVersion = version; request = new AbortController(); busy.value = true;
+  if (disposed || disabled.value) return;
+  cancelLogin(); const request = requests.begin(); busy.value = true;
   try {
     const result = await client.request<PublicSettings>('/model-settings/kimi/logout', {method: 'POST', signal: request.signal});
-    if (disposed || currentVersion !== version) return;
+    if (!requests.current(request.version)) return;
     fill(result); summaryStatus.value = '待配置'; status('success', 'Kimi 订阅已断开，可重新登录。');
-  } catch (error) {if (!disposed && currentVersion === version) status('error', message(error));}
-  finally {if (!disposed && currentVersion === version) {busy.value = false; request = null;}}
+  } catch (error) {if (requests.current(request.version)) status('error', message(error));}
+  finally {if (requests.current(request.version)) busy.value = false;}
 }
 function payload() {
   if (!oauth.value && !token.value.trim() && serverSettings.value?.has_token && !retained.value) throw new Error('服务地址或接入方式已变更，请输入该服务新的 API Key。');
@@ -89,44 +90,44 @@ function fill(settings: PublicSettings, entering = false) {
   emit('saved', settings.has_token ? `${providers[provider.value].name} · ${settings.model}` : '尚未配置模型');
 }
 async function testConnection() {
-  if (disabled.value) return;
+  if (disposed || disabled.value) return;
   invalidate();
   let body;
   try {body = payload();} catch (error) {status('error', message(error)); return;}
-  const currentVersion = version; request = new AbortController(); busy.value = true;
+  const request = requests.begin(); busy.value = true;
   summaryStatus.value = '连接测试中'; status('pending', `正在验证 ${apiProtocols[values.apiProtocol]} 与工具调用…`);
   try {
     const result = await client.request<{ok: boolean; latency_ms?: number; message?: string}>('/model-settings/test', {method: 'POST', body, signal: request.signal, timeout: 60000});
-    if (disposed || currentVersion !== version) return;
+    if (!requests.current(request.version)) return;
     verified.value = result.ok === true; connected.value = verified.value; summaryStatus.value = verified.value ? '连接测试通过' : '连接测试失败';
     status(verified.value ? 'success' : 'error', `${summaryStatus.value}${result.latency_ms != null ? ' · ' + result.latency_ms + ' ms' : ''}${result.message ? ' · ' + result.message : ''}`);
-  } catch (error) {if (!disposed && currentVersion === version) {summaryStatus.value = '连接测试失败'; status('error', '测试失败：' + message(error));}}
-  finally {if (!disposed && currentVersion === version) {busy.value = false; request = null;}}
+  } catch (error) {if (requests.current(request.version)) {summaryStatus.value = '连接测试失败'; status('error', '测试失败：' + message(error));}}
+  finally {if (requests.current(request.version)) busy.value = false;}
 }
 async function save() {
-  if (disabled.value) return;
+  if (disposed || disabled.value) return;
   if (!verified.value) {status('error', '请先完成连接测试，再保存配置。'); return;}
   let body;
   try {body = payload();} catch (error) {status('error', message(error)); return;}
-  const currentVersion = version; request = new AbortController(); busy.value = true; status('pending', '正在保存配置…');
+  const request = requests.begin(); busy.value = true; status('pending', '正在保存配置…');
   try {
     const result = await client.request<PublicSettings>('/model-settings', {method: 'PUT', body, signal: request.signal});
-    if (disposed || currentVersion !== version) return;
+    if (!requests.current(request.version)) return;
     login.cancel(false); fill(result); verified.value = false; summaryStatus.value = '已保存'; status('success', '配置已保存，新启动的任务将使用此配置；运行中的任务保持原配置。');
-  } catch (error) {if (!disposed && currentVersion === version) status('error', '保存失败：' + message(error));}
-  finally {if (!disposed && currentVersion === version) {busy.value = false; request = null;}}
+  } catch (error) {if (requests.current(request.version)) status('error', '保存失败：' + message(error));}
+  finally {if (requests.current(request.version)) busy.value = false;}
 }
-function dispose() {if (disposed) return; disposed = true; version++; request?.abort(); request = null; login.cancel(); resetKey();}
+function dispose() {if (disposed) return; disposed = true; requests.cancel(); login.cancel(); resetKey();}
 function returnToProject() {dispose(); emit('return');}
 onMounted(async () => {
-  request = new AbortController();
+  const request = requests.begin();
   try {
     const settings = await client.request<PublicSettings>('/model-settings', {signal: request.signal});
-    if (disposed) return;
+    if (!requests.current(request.version)) return;
     fill(settings, true); loaded.value = true; busy.value = false;
     const dirty = settings.has_token && ((settings.reasoning_effort || defaultReasoningEffort) !== defaultReasoningEffort || settings.connection_mode !== 'direct');
     summaryStatus.value = dirty ? '未保存' : settings.has_token ? '已保存' : '待配置';
-  } catch (error) {if (!disposed) {busy.value = false; status('error', '配置读取失败：' + message(error) + '。返回项目后可重新打开重试。');}}
+  } catch (error) {if (requests.current(request.version)) {busy.value = false; status('error', '配置读取失败：' + message(error) + '。返回项目后可重新打开重试。');}}
 });
 onBeforeUnmount(dispose);
 </script>

@@ -57,8 +57,10 @@ export function canReuseToken(settings: PublicSettings | null, base: string, aut
   return Boolean(settings?.has_token && (settings.auth_mode || 'api_key') === authMode && origin && origin === originOf(settings.base_url));
 }
 export function providerFor(value: string): Provider {
-  return (Object.keys(providers) as Provider[]).find(key => providers[key].base_url === value) || 'custom';
+  const endpoint = normalizeEndpoint(value);
+  return (Object.keys(providers) as Provider[]).find(key => providers[key].base_url === endpoint) || 'custom';
 }
+function normalizeEndpoint(value: string): string {return value.trim().replace(/\/+$/, '');}
 export function parseProxy(value?: string): ProxyDraft {
   try {
     const url = new URL(value || ''), protocol = url.protocol.replace(':', '');
@@ -84,7 +86,7 @@ export function validate(values: SettingsValues, hasToken: boolean): SettingsPay
   const protocol = values.protocol || 'anthropic', authMode = values.auth_mode || 'api_key';
   if (!Object.hasOwn(apiProtocols, protocol)) throw new Error('Please select a supported API protocol.');
   if (!['api_key', 'kimi_oauth', 'glm_coding_plan'].includes(authMode)) throw new Error('Please select a supported authentication method.');
-  const base = values.base_url.trim().replace(/\/+$/, ''), model = values.model.trim();
+  const base = normalizeEndpoint(values.base_url), model = values.model.trim();
   let url: URL;
   try {url = new URL(base);} catch {throw new Error('请输入完整的 Base URL。');}
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || /[?#]/.test(base) || url.port === '0') throw new Error('Base URL 需为 HTTP(S) 地址和有效端口，不能包含密码、查询或片段。');

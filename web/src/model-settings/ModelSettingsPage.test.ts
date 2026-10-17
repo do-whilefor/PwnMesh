@@ -24,6 +24,17 @@ function fixture(initial = settings()) {
   return {client, calls};
 }
 describe('model settings page', () => {
+  it.each([['kimi', 'kimi_oauth'], ['glm', 'glm_coding_plan']] as const)('reloads a saved %s subscription with a trailing slash into its provider controls', async (provider, authMode) => {
+    const preset = providers[provider], {client, calls} = fixture({...settings(), protocol: 'anthropic', auth_mode: authMode, base_url: preset.base_url + '///', model: preset.model});
+    const wrapper = mount(ModelSettingsPage, {props: {client}});
+    try {
+      await flushPromises();
+      expect(wrapper.get('[data-llm-provider="' + provider + '"]').attributes('aria-pressed')).toBe('true');
+      expect(wrapper.get<HTMLSelectElement>('#llm-auth-mode').element.value).toBe(authMode);
+      await wrapper.get('.llm-test').trigger('click'); await flushPromises();
+      expect(calls.at(-1)?.body).toMatchObject({auth_mode: authMode, base_url: preset.base_url, token: ''});
+    } finally {wrapper.unmount();}
+  });
   it('omits the regular key hint without leaving an empty row and retains plan-specific guidance', async () => {
     const {client} = fixture(), wrapper = mount(ModelSettingsPage, {props: {client}});
     await flushPromises();
@@ -160,6 +171,30 @@ describe('model settings page', () => {
     expect(wrapper.get('.llm-status').text()).toContain('配置读取失败');
     expect(wrapper.get<HTMLButtonElement>('.llm-test').element.disabled).toBe(true);
     wrapper.unmount();
+  });
+  it.each(['load', 'test', 'save', 'logout'] as const)('ignores a late %s response after return without publishing new settings', async operation => {
+    let finish: ((result: Response) => void) | undefined, signal: AbortSignal | null | undefined;
+    const initial = operation === 'logout' ? {...settings(), auth_mode: 'kimi_oauth' as const, base_url: providers.kimi.base_url, model: providers.kimi.model} : settings();
+    const client = new Client(async (input, options) => {
+      const path = String(input), pending = operation === 'load' && options?.method === 'GET'
+        || operation === 'test' && path.endsWith('/test')
+        || operation === 'save' && options?.method === 'PUT'
+        || operation === 'logout' && path.endsWith('/logout');
+      if (pending) {signal = options?.signal; return new Promise<Response>(resolve => {finish = resolve;});}
+      return response(path.endsWith('/test') ? {ok: true} : initial);
+    });
+    const wrapper = mount(ModelSettingsPage, {props: {client}});
+    try {
+      await flushPromises();
+      if (operation === 'test' || operation === 'save') {await wrapper.get('.llm-test').trigger('click'); await flushPromises();}
+      if (operation === 'save') await wrapper.get('.llm-form').trigger('submit');
+      if (operation === 'logout') await wrapper.get('.llm-logout').trigger('click');
+      await wrapper.get('.llm-back').trigger('click');
+      expect(signal?.aborted).toBe(true); expect(wrapper.emitted('return')).toHaveLength(1);
+      finish?.(response(operation === 'test' ? {ok: true} : {...initial, model: 'Stale result'})); await flushPromises();
+      expect(wrapper.emitted('saved') || []).toHaveLength(operation === 'load' ? 0 : 1);
+      expect(wrapper.get<HTMLButtonElement>('.llm-save').element.disabled).toBe(true);
+    } finally {wrapper.unmount();}
   });
 });
 describe('subscription authentication', () => {
@@ -329,6 +364,32 @@ it('revokes a late device grant after cancellation without displaying its code o
   await start; await flushPromises(); await vi.advanceTimersByTimeAsync(10000);
   expect(login.state.phase).toBe('idle'); expect(login.state.code).toBe('');
   expect(calls).toEqual(['POST /model-settings/kimi/login', 'DELETE /model-settings/kimi/login/late-grant']);
+});
+
+it('allows login start and polls to complete within the server budget while cancellation stays immediate', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout', 'Date']});
+  const signals: AbortSignal[] = [];
+  const client = new Client(async (input, options) => {
+    if (options?.method === 'DELETE') return new Response(null, {status: 204});
+    const signal = options?.signal as AbortSignal; signals.push(signal);
+    return new Promise<Response>((resolve, reject) => {
+      const timer = setTimeout(() => resolve(response(String(input).endsWith('/login')
+        ? {login_id: 'slow-grant', user_code: '1234', verification_uri: 'https://kimi.com/code', expires_in: 60, interval: 1}
+        : {status: 'authorized'})), 20000);
+      signal.addEventListener('abort', () => {clearTimeout(timer); reject(signal.reason);}, {once: true});
+    });
+  });
+  const login = kimiLogin(client, vi.fn());
+  try {
+    const start = login.start({connection_mode: 'direct', proxy_url: ''});
+    await vi.advanceTimersByTimeAsync(20000); await start;
+    expect(login.state.phase).toBe('pending'); expect(signals[0]?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(21000);
+    expect(login.state.phase).toBe('authorized'); expect(signals[1]?.aborted).toBe(false);
+    const restarted = login.start({connection_mode: 'direct', proxy_url: ''});
+    login.cancel(); expect(signals.at(-1)?.aborted).toBe(true);
+    await restarted; expect(login.state.phase).toBe('idle');
+  } finally {login.cancel();}
 });
 it('validates proxy and credential reuse boundaries independently of rendering', () => {
   expect(canReuseToken(settings(), 'https://api.deepseek.com/new')).toBe(true);
