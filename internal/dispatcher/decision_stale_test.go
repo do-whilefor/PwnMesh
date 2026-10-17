@@ -197,7 +197,7 @@ func TestDecisionTerminalFailureSurvivesConcurrentStaleCancellation(t *testing.T
 	if err := scheduler.register(ctx, run); err != nil {
 		t.Fatal(err)
 	}
-	lateConflict := &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: late heartbeat signal"}`}
+	lateConflict := &ProtocolError{Status: http.StatusConflict, Code: board.CodeStateChanged, Detail: `{"detail":"state_changed: late heartbeat signal"}`}
 	var failures []protocol.Result
 	scheduler.Client.HTTP = &http.Client{Transport: executionQueryTransport(func(request *http.Request) (*http.Response, error) {
 		var update struct {
@@ -248,7 +248,7 @@ func TestDecisionCommittedReceiptWinsStaleCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	defer cancel(nil)
 	runner.afterCommit = func() {
-		cancel(&ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: decision input is no longer current"}`})
+		cancel(&ProtocolError{Status: http.StatusConflict, Code: board.CodeStateChanged, Detail: `{"detail":"state_changed: decision input is no longer current"}`})
 	}
 	backend := scheduler.Config.Workers[0]
 	run := &task{Job: protocol.Job{RunID: "commit-cancel-race", Kind: "reason", Graph: graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", EnvironmentID: scheduler.environmentID(backend), Budget: scheduler.Config.Task("reason")}, Worker: backend, Lease: Lease{Run: backend.Name + "@commit-cancel-race", Kind: "reason"}}
@@ -311,29 +311,20 @@ func TestDecisionPreflightRejectsChangedInputAfterHealthBeforeRunnerStarts(t *te
 	}
 }
 
-func TestDecisionLeaseVersionCheckPreservesLegacyHeartbeat(t *testing.T) {
+func TestPreparedDecisionHeartbeatAllowsRefreshAndFencesStaleStartup(t *testing.T) {
 	scheduler, _, _, graph := automaticRetryFixture(t, 0, "")
 	ctx := context.Background()
-	run := &task{Job: protocol.Job{Kind: "reason", Graph: graph}, Lease: Lease{Run: "legacy@heartbeat", Kind: "reason"}}
+	run := &task{Job: protocol.Job{RunID: "heartbeat", Kind: "reason", Graph: graph, Workspace: "/workspace", GraphRPC: true, ResultContractVersion: 2}, Worker: scheduler.Config.Workers[0], Lease: Lease{Run: scheduler.Config.Workers[0].Name + "@heartbeat", Kind: "reason"}}
 	base := projectPath(graph.Project.ID)
 	if err := scheduler.Client.Do(ctx, "POST", base+"/reason/claim", map[string]string{"worker": run.Lease.Run, "trigger": "initial"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	var state board.State
-	if err := scheduler.Client.Do(ctx, "GET", base+"/state", nil, &state, nil); err != nil {
+	if err := scheduler.register(ctx, run); err != nil {
 		t.Fatal(err)
 	}
-	version := board.DecisionStateVersion(state)
-	if err := scheduler.Client.Do(ctx, "POST", base+"/hints", map[string]string{"content": "Legacy planners can publish incrementally", "creator": "fixture"}, nil, nil); err != nil {
+	if err := scheduler.Client.Do(ctx, "POST", base+"/hints", map[string]string{"content": "Reconsider the newly supplied requirement", "creator": "user"}, nil, nil); err != nil {
 		t.Fatal(err)
 	}
-	for _, decision := range []*board.DecisionContext{nil, {Version: 1, StateVersion: version}} {
-		run.Job.Decision = decision
-		if err := scheduler.renewLease(ctx, run); err != nil {
-			t.Fatalf("legacy heartbeat unexpectedly checked the initial input version: decision=%+v err=%v", decision, err)
-		}
-	}
-	run.Job.Decision = &board.DecisionContext{Version: 2, StateVersion: version}
 	if err := scheduler.renewLease(ctx, run); err != nil {
 		t.Fatalf("refreshable version 2 heartbeat rejected new shared input: %v", err)
 	}
@@ -343,7 +334,7 @@ func TestDecisionLeaseVersionCheckPreservesLegacyHeartbeat(t *testing.T) {
 }
 
 func TestDecisionStateChangedRequiresStructuredConflict(t *testing.T) {
-	conflict := &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: decision input is no longer current"}`}
+	conflict := &ProtocolError{Status: http.StatusConflict, Code: board.CodeStateChanged, Detail: `{"detail":"state_changed: decision input is no longer current"}`}
 	for _, tc := range []struct {
 		name string
 		err  error
@@ -353,7 +344,8 @@ func TestDecisionStateChangedRequiresStructuredConflict(t *testing.T) {
 		{"wrapped", fmt.Errorf("heartbeat: %w", conflict), true},
 		{"nil", nil, false},
 		{"ordinary_text", errors.New("state_changed: model output"), false},
-		{"wrong_status", &ProtocolError{Status: http.StatusForbidden, Detail: conflict.Detail}, false},
+		{"wrong_status", &ProtocolError{Status: http.StatusForbidden, Code: conflict.Code, Detail: conflict.Detail}, false},
+		{"missing_code", &ProtocolError{Status: http.StatusConflict, Detail: conflict.Detail}, false},
 		{"unstructured", &ProtocolError{Status: http.StatusConflict, Detail: "state_changed: unstructured response"}, false},
 		{"quoted_in_detail", &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"tool output contains state_changed: but lease was revoked"}`}, false},
 		{"other_conflict", &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"lease is no longer current"}`}, false},

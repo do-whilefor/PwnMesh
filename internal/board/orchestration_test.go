@@ -12,6 +12,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"pwnmesh/internal/contract"
+	"pwnmesh/internal/protocol"
 )
 
 type orchestrationFixture struct {
@@ -56,10 +59,18 @@ func (f *orchestrationFixture) complete(tx *Tx, from []string, description strin
 		return err
 	}
 	version := DecisionStateVersion(state)
+	ref, err := tx.FreezeInput(state)
+	if err != nil {
+		return err
+	}
+	decision, err := BuildDecisionContextFromCursor(state, nil, nil, DefaultContextViewBytes)
+	if err != nil {
+		return err
+	}
 	job, err := json.Marshal(map[string]any{
-		"kind": "reason", "run_id": "plan", "graph": state.Graph, "state": state,
+		"kind": "reason", "run_id": "plan", "graph": Graph{Project: state.Graph.Project}, "input_snapshot": ref, "workspace": "/workspace",
 		"graph_rpc": true, "result_contract_version": 2,
-		"decision": map[string]any{"version": 2, "state_version": version}, "budget": map[string]int{"max_intents": 1},
+		"decision": decision, "budget": map[string]int{"max_intents": 1},
 	})
 	if err != nil {
 		return err
@@ -92,9 +103,10 @@ func (f *orchestrationFixture) step(label, dispute string) string {
 }
 func (f *orchestrationFixture) worker(label, step string) Execution {
 	f.t.Helper()
-	return f.workerInput(label, step, false)
+	return f.workerInput(label, step, true)
 }
 
+// Inline input is retained only for explicit persisted-job recovery coverage.
 func (f *orchestrationFixture) workerInput(label, step string, snapshot bool) Execution {
 	f.t.Helper()
 	if step == "" {
@@ -102,33 +114,33 @@ func (f *orchestrationFixture) workerInput(label, step string, snapshot bool) Ex
 	}
 	e := Execution{ProjectID: "p", ID: label, Namespace: "test", Backend: "worker", Kind: "explore", Intent: step, Lease: "worker@" + label, RetryKey: "explore:" + step}
 	f.do(func(tx *Tx) error {
-		g, err := tx.Load("p")
+		intent, err := tx.IntentLease("p", step, LeaseOperation{Op: "heartbeat", Worker: e.Lease})
 		if err != nil {
-			return err
-		}
-		for n := range g.Intents {
-			if g.Intents[n].ID == step {
-				g.Intents[n].Worker = Ptr(e.Lease)
-				g.Intents[n].Heartbeat = Ptr(tx.Now)
-			}
-		}
-		if err = tx.Save(g); err != nil {
 			return err
 		}
 		s, err := tx.State("p")
 		if err != nil {
 			return err
 		}
-		job := map[string]any{"kind": e.Kind, "run_id": e.ID, "graph": s.Graph, "state": s, "graph_rpc": true, "result_contract_version": 2}
+		job := map[string]any{"kind": e.Kind, "run_id": e.ID, "graph": s.Graph, "state": s, "intent": intent, "workspace": "/workspace", "graph_rpc": true, "result_contract_version": 2}
 		if snapshot {
 			ref, err := tx.FreezeInput(s)
 			if err != nil {
 				return err
 			}
+			view, err := ContextView(s, step, DefaultContextViewBytes)
+			if err != nil {
+				return err
+			}
 			delete(job, "state")
+			job["graph"] = Graph{Project: s.Graph.Project}
 			job["input_snapshot"] = ref
+			job["input_view"] = view
 		}
-		e.Job, _ = json.Marshal(job)
+		e.Job, err = json.Marshal(job)
+		if err != nil {
+			return err
+		}
 		return tx.RegisterExecution(e)
 	})
 	return e
@@ -156,7 +168,22 @@ func (f *orchestrationFixture) finish(e Execution, fact string) {
 				return err
 			}
 		}
-		result := json.RawMessage(`{"status":"success","text":"completed"}`)
+		if fact == "" {
+			graph, err := tx.Load(e.ProjectID)
+			if err != nil {
+				return err
+			}
+			for _, intent := range graph.Intents {
+				if intent.ID == e.Intent && intent.To != nil {
+					fact = *intent.To
+				}
+			}
+		}
+		if fact == "" {
+			return fmt.Errorf("successful fixture execution %s requires accepted evidence", e.ID)
+		}
+		text, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]string{"fact_id": fact}})
+		result, _ := json.Marshal(map[string]string{"status": "success", "text": string(text)})
 		if err := tx.ExecutionStatus(e, "result_pending", result); err != nil {
 			return err
 		}
@@ -171,7 +198,7 @@ func (f *orchestrationFixture) curator(label string) (Execution, State) {
 	e := Execution{ProjectID: "p", ID: label, Namespace: "test", Backend: "curator", Kind: "curate", Lease: "curator@" + label}
 	var s State
 	f.do(func(tx *Tx) error {
-		if _, err := tx.ClaimCurator("p", e.Lease, "observations"); err != nil {
+		if _, err := tx.CuratorLease("p", LeaseOperation{Op: "claim", Worker: e.Lease, Trigger: "observations"}); err != nil {
 			return err
 		}
 		var err error
@@ -179,7 +206,18 @@ func (f *orchestrationFixture) curator(label string) (Execution, State) {
 		if err != nil {
 			return err
 		}
-		e.Job, _ = json.Marshal(map[string]any{"kind": "curate", "run_id": e.ID, "graph": s.Graph, "state": s, "graph_rpc": true, "result_contract_version": 2})
+		ref, err := tx.FreezeInput(s)
+		if err != nil {
+			return err
+		}
+		view, err := CurationContextView(s, DefaultContextViewBytes)
+		if err != nil {
+			return err
+		}
+		e.Job, err = json.Marshal(map[string]any{"kind": "curate", "run_id": e.ID, "graph": Graph{Project: s.Graph.Project}, "input_snapshot": ref, "input_view": view, "workspace": "/workspace", "graph_rpc": true, "result_contract_version": 2})
+		if err != nil {
+			return err
+		}
 		e.RetryKey = CurationRetryKey(s)
 		return tx.RegisterExecution(e)
 	})
@@ -198,6 +236,49 @@ func requireAPIStatus(t *testing.T, err error, want int) {
 	if !errors.As(err, &api) || api.Status != want {
 		t.Fatalf("want HTTP %d, got %v", want, err)
 	}
+}
+
+func TestOrchestrationFixturesUseRuntimeInputAndResultContracts(t *testing.T) {
+	f := newOrchestrationFixture(t)
+	worker := f.worker("observe", "")
+	fact := f.fact(worker, "response")
+	f.finish(worker, fact)
+	curator, input := f.curator("curate")
+	f.curate(curator, input)
+	f.do(func(tx *Tx) error { return f.complete(tx, []string{fact}, "Observed the controlled fixture") })
+	f.do(func(tx *Tx) error {
+		for _, id := range []string{worker.ID, curator.ID, "plan"} {
+			e, err := tx.Execution("p", id)
+			if err != nil {
+				return err
+			}
+			var job protocol.Job
+			if err := json.Unmarshal(e.Job, &job); err != nil {
+				return err
+			}
+			if err := protocol.ValidateSnapshotInput(job); err != nil {
+				t.Fatalf("%s fixture is not a current runtime input: %v", e.Kind, err)
+			}
+			state, err := tx.ReadInputSnapshot("p", job.InputSnapshot.ID)
+			if err != nil {
+				return err
+			}
+			if DecisionStateVersion(state) != job.InputSnapshot.StateVersion {
+				t.Fatalf("%s fixture lost its immutable input", e.Kind)
+			}
+			if e.Kind == "explore" {
+				var result protocol.Result
+				if err := json.Unmarshal(e.Result, &result); err != nil {
+					return err
+				}
+				parsed, err := contract.ParseWithPolicy(result.Text, e.Kind, result.Conclude, contract.Policy{Version: 2, GraphRPC: true})
+				if err != nil || parsed.FactID != fact || parsed.Outcome != "completed" {
+					t.Fatalf("fixture result bypassed evidence settlement: %+v, %v", parsed, err)
+				}
+			}
+		}
+		return nil
+	})
 }
 
 func TestOrchestrationConflictOrderAndIndependentReview(t *testing.T) {
@@ -801,6 +882,10 @@ func TestDisputeReviewBudgetRenewsOnlyForNewRetainedEvidence(t *testing.T) {
 					t.Fatalf("stale review input escaped its renewed evidence boundary: %v", err)
 				}
 			}
+			f.do(func(tx *Tx) error {
+				_, err := tx.IntentLease("p", step, LeaseOperation{Op: "release", Worker: stale.Lease})
+				return err
+			})
 			first := f.workerInput("renewed-review-first", step, true)
 			f.do(func(tx *Tx) error { return tx.ExecutionStatus(first, "failed", json.RawMessage(`{"status":"failed"}`)) })
 			grantMainRetry(f, "renewed-review-retry", first)
@@ -893,6 +978,10 @@ func TestDisputeReopeningWithoutNewEvidenceAdvancesReviewBoundary(t *testing.T) 
 	if !strings.Contains(err.Error(), "predates") || !reflect.DeepEqual(bound, f.state()) {
 		t.Fatalf("stale input changed the remaining allowance: %v", err)
 	}
+	f.do(func(tx *Tx) error {
+		_, err := tx.IntentLease("p", freshStep, LeaseOperation{Op: "release", Worker: stale.Lease})
+		return err
+	})
 	fresh := f.worker("fresh-remaining-review", freshStep)
 	f.do(func(tx *Tx) error { return tx.ExecutionStatus(fresh, "failed", json.RawMessage(`{"status":"failed"}`)) })
 	err = f.store.Do(context.Background(), func(tx *Tx) error {

@@ -25,10 +25,11 @@ func TestCompletionPreviewReturnsAuthoritativeReviewWithoutAcceptanceOrWrites(t 
 	f.pending(string(conclusion))
 	f.apply(http.StatusOK)
 	f.run, f.lease, f.intent = "completion-review", "planner@completion-review", ""
-	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.register("reason")
 	payload, _ := json.Marshal(map[string]any{"from": []string{fact.ID}, "description": "No response means that /c has been accounted for"})
 	before := f.state()
 	batch := f.batch(board.DecisionAction{Op: "complete", Payload: payload})
+	batch.Assessment = &board.RootAssessment{Status: "satisfied", From: []string{fact.ID}, Description: "The scripted planner proposes that this observation satisfies the user requirement"}
 	preview := f.decision("preview", batch, http.StatusOK)
 	review := preview.CompletionReview
 	if preview.Committed || preview.Completed || preview.ValidationScope != "protocol_only" || review == nil || review.Acceptance != "not_checked" || review.StateVersion != batch.ExpectedVersion {

@@ -73,8 +73,8 @@ func (s *Server) executionCheck(t *b.Tx, _ *request, r *http.Request) (int, any,
 	}
 	values := r.URL.Query()
 	kind, intent, key := values.Get("kind"), values.Get("intent"), values.Get("retry_key")
-	if kind != "reason" && kind != "curate" && kind != "bootstrap" && kind != "explore" {
-		return 0, nil, b.Err(422, "kind must be reason, curate, bootstrap or explore")
+	if kind != "reason" && kind != "curate" && kind != "explore" {
+		return 0, nil, b.Err(422, "kind must be reason, curate or explore")
 	}
 	control := kind == "reason" || kind == "curate"
 	if (control && intent != "") || (!control && intent == "") || len(intent) > 128 || len(key) > 1024 || len(values.Get("state_version")) > 64 {

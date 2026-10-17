@@ -196,7 +196,7 @@ func TestCuratorCommitWinsStaleCancellationWithoutSeparateResultDelivery(t *test
 			run := prepareCurationTestTask(t, s, graph, "curate", "commit-race", nil)
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
-			stale := &ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: late in-flight heartbeat"}`}
+			stale := &ProtocolError{Status: http.StatusConflict, Code: board.CodeStateChanged, Detail: `{"detail":"state_changed: late in-flight heartbeat"}`}
 			runner.run = func(ctx context.Context, job protocol.Job) (protocol.Result, error) {
 				_, err := runner.curate(ctx, job)
 				cancel(stale)
@@ -433,7 +433,7 @@ func TestCommittedCuratorHistorySurvivesLaterHumanStopOrRestart(t *testing.T) {
 				if err != nil {
 					return result, err
 				}
-				cancel(&ProtocolError{Status: http.StatusConflict, Detail: `{"detail":"state_changed: late heartbeat"}`})
+				cancel(&ProtocolError{Status: http.StatusConflict, Code: board.CodeStateChanged, Detail: `{"detail":"state_changed: late heartbeat"}`})
 				if action == "stop" {
 					err = s.Client.Do(context.Background(), "PUT", projectPath(graph.Project.ID)+"/status", map[string]string{"status": "stopped"}, nil, nil)
 				} else {

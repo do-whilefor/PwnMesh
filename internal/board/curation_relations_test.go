@@ -68,14 +68,14 @@ func TestPartialCurationWithRelationRetainsCoveredGroupProgress(t *testing.T) {
 				{GroupKey: model.FindingIdentity("Capacity claim 0", "fixture"), Status: "candidate", Reason: "Retain the first complete group"},
 				{GroupKey: model.FindingIdentity("Capacity claim 1", "fixture"), Status: "candidate", Reason: "Retain the second complete group"},
 			}
-			curator, input := capacityCurator(f, "initial-findings")
+			curator, input := f.curator("initial-findings")
 			f.curate(curator, input, groups...)
 			for _, claim := range []string{"Capacity claim 0", "Capacity claim 1"} {
 				f.action(producer.Fence(), "candidate", "fresh:"+claim, map[string]any{
 					"claim": claim, "scope": "fixture", "status": "candidate", "reason": "A fresh producer note needs reconciliation",
 				}, "")
 			}
-			curator, input = capacityCurator(f, "partial-with-fresh-notes")
+			curator, input = f.curator("partial-with-fresh-notes")
 			if len(input.Findings) != 2 || len(input.PendingCurationCandidateIDs()) != 6 {
 				t.Fatal("fixture did not establish two existing findings with pending notes")
 			}
@@ -106,7 +106,7 @@ func TestPartialCurationWithRelationRetainsCoveredGroupProgress(t *testing.T) {
 			if replay := f.action(curator.Fence(), "curate", "partial", payload, DecisionStateVersion(input)); !reflect.DeepEqual(replay, receipt) {
 				t.Fatal("partial curation receipt changed on retry")
 			}
-			curator, input = capacityCurator(f, "remaining-fresh-notes")
+			curator, input = f.curator("remaining-fresh-notes")
 			f.curate(curator, input, groups[1])
 			if final := f.state(); len(final.PendingCurationCandidateIDs()) != 0 || final.Curation.ThroughRevision != input.Revision {
 				t.Fatal("the final group did not drain the retained curation backlog")

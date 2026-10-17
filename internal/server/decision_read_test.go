@@ -33,6 +33,7 @@ func TestDecisionReadsSurviveConcurrentFactsAndKeepWritesCurrent(t *testing.T) {
 	executor := *f
 	executor.run, executor.lease = "evidence-run", "planner@evidence-run"
 	prepareSnapshot(t, &executor, snapshotTemplate(&executor, "explore"))
+	f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "Review the graph while independent observations arrive"}, false, http.StatusCreated, nil)
 	_, job := prepareSnapshot(t, f, snapshotTemplate(f, "reason"))
 	initial := decisionRead(t, f, "facts", job.InputSnapshot.StateVersion)
 	view := initial

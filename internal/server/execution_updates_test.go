@@ -56,23 +56,26 @@ func prepareUpdateFixture(t *testing.T, input string) (*stepInvalidationFixture,
 	t.Helper()
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
-	e := f.registration()
-	var job protocol.Job
-	if err := json.Unmarshal(e.Job, &job); err != nil {
-		t.Fatal(err)
-	}
-	switch input {
-	case "snapshot":
-		job.State = nil
-		job.Graph = board.Graph{Project: job.Graph.Project}
-		e.Job, _ = json.Marshal(job)
-		_, job = prepareSnapshot(t, f.executionProtocolFixture, e)
-	case "legacy":
-		job.State = nil
-		e.Job, _ = json.Marshal(job)
-		f.registerInline(e, http.StatusCreated)
-	default:
-		f.registerInline(e, http.StatusCreated)
+	state := f.state()
+	_, job := prepareSnapshot(t, f.executionProtocolFixture, f.registration())
+	if input != "snapshot" {
+		// Import a retained pre-snapshot job solely to exercise historical
+		// update reads; no live registration route accepts inline input.
+		job.InputSnapshot, job.PreparationKey = nil, ""
+		job.Graph = state.Graph
+		if input == "inline" {
+			job.State = &state
+		}
+		raw, err := json.Marshal(job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := fixtureSQL(f.store).Do(context.Background(), func(tx *fixtureSQLTx) error {
+			_, err := tx.Exec("UPDATE pwnmesh_executions SET job=? WHERE project_id=? AND id=?", raw, f.project, f.run)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
 	return f, job

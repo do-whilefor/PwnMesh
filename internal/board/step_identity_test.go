@@ -320,20 +320,39 @@ func TestRepeatedGoalDoesNotDuplicateItsSteps(t *testing.T) {
 }
 
 // Domain tests may exercise unregistered planner actions. Persisted executions
-// always use the same role and result protocols as current production jobs.
+// use the frozen snapshot boundary of current production jobs.
 func fixtureExecutionJob(tb testing.TB, tx *Tx, project, kind, previous string) json.RawMessage {
 	tb.Helper()
 	state, err := tx.State(project)
 	if err != nil {
 		tb.Fatal(err)
 	}
-	job := map[string]any{"kind": kind, "graph": state.Graph, "state": state, "graph_rpc": true, "result_contract_version": 2}
+	ref, err := tx.FreezeInput(state)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	job := map[string]any{"kind": kind, "graph": Graph{Project: state.Graph.Project}, "input_snapshot": ref, "graph_rpc": true, "result_contract_version": 2}
 	if previous != "" {
 		job["previous_run_id"] = previous
 	}
 	if kind == "reason" {
-		job["decision"] = map[string]any{"version": 2, "state_version": DecisionStateVersion(state)}
+		decision, err := BuildDecisionContextFromCursor(state, nil, nil, DefaultContextViewBytes)
+		if err != nil {
+			tb.Fatal(err)
+		}
+		job["decision"] = decision
 		job["budget"] = map[string]int{"max_intents": 64}
+	} else {
+		var view json.RawMessage
+		if kind == "curate" {
+			view, err = CurationContextView(state, DefaultContextViewBytes)
+		} else {
+			view, err = ContextView(state, "", DefaultContextViewBytes)
+		}
+		if err != nil {
+			tb.Fatal(err)
+		}
+		job["input_view"] = view
 	}
 	raw, err := json.Marshal(job)
 	if err != nil {

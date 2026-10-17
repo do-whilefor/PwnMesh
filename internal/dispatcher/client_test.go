@@ -20,7 +20,9 @@ func TestClientPreservesAuthoritativeErrorCodes(t *testing.T) {
 	}{
 		{"coded", `{"code":"state_changed","detail":"view expired"}`, model.CodeStateChanged, 409, true},
 		{"uncoded_text", `{"code":"request_failed","detail":"state_changed: user text"}`, protocol.CodeRequestFailed, 409, false},
-		{"legacy", `{"detail":"state_changed: old server"}`, model.CodeStateChanged, 409, true},
+		{"missing_code", `{"detail":"state_changed: old server"}`, protocol.CodeRequestFailed, 409, false},
+		{"empty_code", `{"code":"","detail":"state_changed: user text"}`, protocol.CodeRequestFailed, 409, false},
+		{"null_code", `{"code":null,"detail":"state_changed: user text"}`, protocol.CodeRequestFailed, 409, false},
 		{"validation", `{"code":"state_changed","detail":"stale snapshot"}`, model.CodeStateChanged, 422, false},
 		{"invalid_code", `{"code":3,"detail":"state_changed: invalid code"}`, protocol.CodeRequestFailed, 409, false},
 		{"invalid_json", `{"code":"state_changed",`, protocol.CodeRequestFailed, 409, false},

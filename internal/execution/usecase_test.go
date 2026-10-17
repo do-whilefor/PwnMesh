@@ -19,63 +19,111 @@ import (
 
 func TestExecutionRejectsOverflowingBudgetsBeforeMutation(t *testing.T) {
 	const overflow = int((1<<63-1)/time.Second) + 1
-	for _, operation := range []string{"prepare", "register"} {
-		for _, field := range []string{"timeout", "conclude_timeout"} {
-			t.Run(operation+"/"+field, func(t *testing.T) {
-				store, template := useCaseFixture(t)
-				var job protocol.Job
-				if err := json.Unmarshal(template.Job, &job); err != nil {
-					t.Fatal(err)
+	for _, field := range []string{"timeout", "conclude_timeout"} {
+		t.Run(field, func(t *testing.T) {
+			store, template := useCaseFixture(t)
+			var job protocol.Job
+			if err := json.Unmarshal(template.Job, &job); err != nil {
+				t.Fatal(err)
+			}
+			if field == "timeout" {
+				job.Budget.Timeout = overflow
+			} else {
+				job.Budget.ConcludeTimeout = overflow
+			}
+			template.Job, _ = json.Marshal(job)
+			template.RetryKey = "reason:test"
+			ctx := context.Background()
+			var snapshotID string
+			if err := store.Do(ctx, func(tx *b.Tx) error {
+				state, err := tx.State(template.ProjectID)
+				if err != nil {
+					return err
 				}
-				if field == "timeout" {
-					job.Budget.Timeout = overflow
-				} else {
-					job.Budget.ConcludeTimeout = overflow
+				raw, err := json.Marshal(state)
+				if err != nil {
+					return err
 				}
-				if operation == "register" {
-					job.State = &model.State{Graph: job.Graph}
-					job.Decision = &model.DecisionContext{Version: 2, StateVersion: model.DecisionStateVersion(*job.State)}
+				sum := sha256.Sum256(raw)
+				snapshotID = hex.EncodeToString(sum[:])
+				_, err = PrepareRun(tx, template, template.Fence())
+				if !hasStatus(err, 422) || !strings.Contains(err.Error(), "timeout") {
+					t.Errorf("overflowing budget was not rejected: %v", err)
 				}
-				template.Job, _ = json.Marshal(job)
-				template.RetryKey = "reason:test"
-				ctx := context.Background()
-				var snapshotID string
-				if err := store.Do(ctx, func(tx *b.Tx) error {
-					state, err := tx.State(template.ProjectID)
-					if err != nil {
-						return err
-					}
-					raw, err := json.Marshal(state)
-					if err != nil {
-						return err
-					}
-					sum := sha256.Sum256(raw)
-					snapshotID = hex.EncodeToString(sum[:])
-					if operation == "prepare" {
-						_, err = PrepareRun(tx, template, template.Fence())
-					} else {
-						_, err = Register(tx, template, template.Fence())
-					}
-					if !hasStatus(err, 422) || !strings.Contains(err.Error(), "timeout") {
-						t.Errorf("overflowing budget was not rejected: %v", err)
-					}
-					return nil // A handled validation error must leave no registered run.
-				}); err != nil {
-					t.Fatal(err)
+				return nil // A handled validation error must leave no registered run.
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.View(ctx, func(tx *b.Tx) error {
+				if _, err := tx.Execution(template.ProjectID, template.ID); !hasStatus(err, 404) {
+					t.Errorf("invalid budget retained an execution: %v", err)
 				}
-				if err := store.View(ctx, func(tx *b.Tx) error {
-					if _, err := tx.Execution(template.ProjectID, template.ID); !hasStatus(err, 404) {
-						t.Errorf("invalid budget retained an execution: %v", err)
-					}
-					if _, err := tx.InputSnapshotMetadata(template.ProjectID, snapshotID); !hasStatus(err, 404) {
-						t.Errorf("invalid budget froze an input snapshot: %v", err)
-					}
-					return nil
-				}); err != nil {
-					t.Fatal(err)
+				if _, err := tx.InputSnapshotMetadata(template.ProjectID, snapshotID); !hasStatus(err, 404) {
+					t.Errorf("invalid budget froze an input snapshot: %v", err)
 				}
-			})
-		}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPreparationRejectsInvalidIdentityBeforeFreezingInput(t *testing.T) {
+	for _, change := range []struct {
+		name string
+		edit func(*b.Execution, *protocol.Job)
+	}{
+		{"run", func(e *b.Execution, job *protocol.Job) { job.RunID = "different" }},
+		{"kind", func(e *b.Execution, job *protocol.Job) { job.Kind = "explore" }},
+		{"missing_namespace", func(e *b.Execution, job *protocol.Job) { e.Namespace = "" }},
+		{"namespace", func(e *b.Execution, job *protocol.Job) { e.Namespace = strings.Repeat("n", 129) }},
+		{"missing_backend", func(e *b.Execution, job *protocol.Job) { e.Backend = "" }},
+		{"backend", func(e *b.Execution, job *protocol.Job) { e.Backend = strings.Repeat("b", 257) }},
+		{"lease", func(e *b.Execution, job *protocol.Job) { e.Lease = "other@plan" }},
+		{"invalid_run_id", func(e *b.Execution, job *protocol.Job) {
+			e.ID, job.RunID, e.Lease = "../plan", "../plan", "agent@../plan"
+		}},
+		{"workspace", func(e *b.Execution, job *protocol.Job) { job.Workspace = "" }},
+		{"control_step", func(e *b.Execution, job *protocol.Job) { e.Intent = "unrelated" }},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			store, template := useCaseFixture(t)
+			var job protocol.Job
+			if err := json.Unmarshal(template.Job, &job); err != nil {
+				t.Fatal(err)
+			}
+			change.edit(&template, &job)
+			template.Job, _ = json.Marshal(job)
+			var snapshotID string
+			if err := store.Do(context.Background(), func(tx *b.Tx) error {
+				state, err := tx.State(template.ProjectID)
+				if err != nil {
+					return err
+				}
+				raw, _ := json.Marshal(state)
+				sum := sha256.Sum256(raw)
+				snapshotID = hex.EncodeToString(sum[:])
+				prepared, err := PrepareRun(tx, template, template.Fence())
+				if !hasStatus(err, 422) || prepared.Created || prepared.Execution.ID != "" {
+					t.Errorf("invalid template was not rejected without a result: %+v, %v", prepared, err)
+				}
+				return nil // The caller may handle validation and commit other work.
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.View(context.Background(), func(tx *b.Tx) error {
+				if _, err := tx.Execution(template.ProjectID, template.ID); !hasStatus(err, 404) {
+					t.Errorf("invalid template retained an execution: %v", err)
+				}
+				if _, err := tx.InputSnapshotMetadata(template.ProjectID, snapshotID); !hasStatus(err, 404) {
+					t.Errorf("invalid template retained an input snapshot: %v", err)
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

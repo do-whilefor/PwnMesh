@@ -111,11 +111,7 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registered
 		if !registeredDecision {
 			return nil
 		}
-		job, err := json.Marshal(map[string]any{"kind": "reason", "run_id": "benchmark", "graph": state.Graph, "state": state, "graph_rpc": true, "result_contract_version": 2,
-			"decision": map[string]any{"version": 2, "state_version": f.version}, "budget": map[string]int{"max_intents": 64}})
-		if err != nil {
-			return err
-		}
+		job := fixtureExecutionJob(tb, tx, stateBenchmarkProject, "reason", "")
 		return tx.RegisterExecution(Execution{ProjectID: stateBenchmarkProject, ID: "benchmark", Namespace: "benchmark", Backend: "planner",
 			Kind: "reason", Lease: stateBenchmarkPlanner.Run, Job: job, RetryKey: "reason:benchmark"})
 	})

@@ -9,10 +9,12 @@ import (
 )
 
 func TestDecisionBatchMakesProgressAfterFiniteConcurrentObservations(t *testing.T) {
-	f := newDecisionBatchFixture(t)
+	f := newExecutionProtocolFixture(t)
 	execute := *f
 	execute.run, execute.lease = "observer-run", "planner@observer-run"
 	execute.register("explore")
+	f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "Plan the follow-up while the observation is running"}, false, http.StatusCreated, nil)
+	f.register("reason")
 	var latest string
 	conflicts := 0
 	for n := 0; n < 3; n++ {

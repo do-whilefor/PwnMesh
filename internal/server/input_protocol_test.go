@@ -14,6 +14,24 @@ func TestPrepareRejectsMalformedProtocolsBeforeFreezingInput(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			f, store := newSnapshotHTTPFixture(t)
 			template := snapshotTemplate(f, kind)
+			counts := func() map[string]int {
+				t.Helper()
+				counts := map[string]int{}
+				if err := fixtureSQL(store).View(context.Background(), func(tx *fixtureSQLTx) error {
+					for _, table := range []string{"pwnmesh_executions", "pwnmesh_input_snapshots"} {
+						var count int
+						if err := tx.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE project_id=?", f.project).Scan(&count); err != nil {
+							return err
+						}
+						counts[table] = count
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				return counts
+			}
+			before := counts()
 			for _, tc := range invalidExecutionProtocols {
 				t.Run(tc.name, func(t *testing.T) {
 					var fields map[string]any
@@ -24,19 +42,20 @@ func TestPrepareRejectsMalformedProtocolsBeforeFreezingInput(t *testing.T) {
 					f.request("POST", f.base()+"/executions/prepare", invalid, true, http.StatusUnprocessableEntity, nil)
 				})
 			}
-			if err := fixtureSQL(store).Do(context.Background(), func(tx *fixtureSQLTx) error {
-				for _, table := range []string{"pwnmesh_executions", "pwnmesh_input_snapshots"} {
-					var count int
-					if err := tx.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE project_id=?", f.project).Scan(&count); err != nil {
-						return err
-					}
-					if count != 0 {
-						t.Fatalf("rejected protocol persisted %d rows in %s", count, table)
-					}
+			for _, field := range []string{"graph_rpc", "result_contract_version"} {
+				t.Run("missing_"+field, func(t *testing.T) {
+					var fields map[string]any
+					_ = json.Unmarshal(template.Job, &fields)
+					delete(fields, field)
+					invalid := template
+					invalid.Job, _ = json.Marshal(fields)
+					f.request("POST", f.base()+"/executions/prepare", invalid, true, http.StatusUnprocessableEntity, nil)
+				})
+			}
+			for table, count := range counts() {
+				if count != before[table] {
+					t.Fatalf("rejected protocol changed %s row count from %d to %d", table, before[table], count)
 				}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
 			}
 			_, job := prepareSnapshot(t, f, template)
 			if !job.GraphRPC || job.ResultContractVersion != 2 || (kind == "reason" && job.Decision.Version != 2) {

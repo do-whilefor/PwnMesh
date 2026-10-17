@@ -21,9 +21,9 @@ func TestControlOutcomeDiagnosticsDistinguishStaleFromCommittedRecovery(t *testi
 		err                 error
 		confirmed, stale    bool
 	}{
-		{"cas-rejection", "reason", "failed", &ProtocolError{Status: 409, Detail: `{"detail":"state_changed: private-input-secret"}`}, false, true},
+		{"cas-rejection", "reason", "failed", &ProtocolError{Status: 409, Code: board.CodeStateChanged, Detail: `{"detail":"state_changed: private-input-secret"}`}, false, true},
 		{"heartbeat-confirmed", "curate", "failed", errors.New("private-input-secret"), true, true},
-		{"receipt-won", "reason", "success", &ProtocolError{Status: 409, Detail: `{"detail":"state_changed: private-input-secret"}`}, false, false},
+		{"receipt-won", "reason", "success", &ProtocolError{Status: 409, Code: board.CodeStateChanged, Detail: `{"detail":"state_changed: private-input-secret"}`}, false, false},
 		{"shutdown", "curate", "interrupted", context.Canceled, false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

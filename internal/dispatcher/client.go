@@ -27,11 +27,13 @@ type ProtocolError struct {
 func (e *ProtocolError) Error() string { return fmt.Sprintf("board HTTP %d: %s", e.Status, e.Detail) }
 
 func (e *ProtocolError) Unwrap() error {
-	if e.Code == "" {
-		// Compatibility for responses from a server predating error codes.
-		return protocol.LegacyGraphFailure(e.Error())
+	// Live server responses use explicit codes; display text is never authority
+	// for retry, stale-input cancellation, or dependency invalidation.
+	code := e.Code
+	if code == "" {
+		code = protocol.CodeRequestFailed
 	}
-	return &protocol.RPCError{Code: e.Code, Status: e.Status, Detail: e.Error()}
+	return &protocol.RPCError{Code: code, Status: e.Status, Detail: e.Error()}
 }
 
 type Lease struct {
@@ -75,9 +77,7 @@ func (c *Client) Do(ctx context.Context, method, path string, input, output any,
 		}
 		code := protocol.CodeRequestFailed
 		if json.Unmarshal(data, &failure) == nil {
-			if len(failure.Code) == 0 {
-				code = "" // Old server response; the compatibility adapter owns it.
-			} else if json.Unmarshal(failure.Code, &code) != nil || code == "" {
+			if json.Unmarshal(failure.Code, &code) != nil || code == "" {
 				code = protocol.CodeRequestFailed
 			}
 		}

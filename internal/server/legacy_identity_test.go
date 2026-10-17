@@ -48,8 +48,10 @@ func TestRegisteredStepOperationsBindRequestIdentity(t *testing.T) {
 			t.Run(kind+"/"+op, func(t *testing.T) {
 				f := newExecutionProtocolFixture(t)
 				if kind == "reason" {
-					f = newDecisionBatchFixture(t)
-					f.intent = f.newIntent().ID
+					intent := f.newIntent()
+					f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "Reassess the pending fixture direction"}, false, http.StatusCreated, nil)
+					f.register("reason")
+					f.intent = intent.ID
 				} else {
 					f.register(kind)
 					f.request("POST", f.base()+"/intents/"+f.intent+"/release", map[string]string{"worker": f.lease}, true, http.StatusOK, nil)

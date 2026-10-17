@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"pwnmesh/internal/board"
-	executioncase "pwnmesh/internal/execution"
 )
 
 // Exercise the HTTP application boundary with real SQLite transactions. No
@@ -49,11 +48,6 @@ func (f *executionProtocolFixture) base() string { return "/projects/" + f.proje
 
 func (f *executionProtocolFixture) request(method, path string, body any, fenced bool, want int, out any) string {
 	f.t.Helper()
-	return f.requestWithHandler(f.handler, method, path, body, fenced, want, out)
-}
-
-func (f *executionProtocolFixture) requestWithHandler(handler http.Handler, method, path string, body any, fenced bool, want int, out any) string {
-	f.t.Helper()
 	var raw []byte
 	var err error
 	if body != nil {
@@ -69,7 +63,7 @@ func (f *executionProtocolFixture) requestWithHandler(handler http.Handler, meth
 		r.Header.Set("X-PwnMesh-Intent", f.intent)
 	}
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
+	f.handler.ServeHTTP(w, r)
 	if w.Code != want {
 		f.t.Fatalf("%s %s: HTTP %d, want %d: %s", method, path, w.Code, want, w.Body.String())
 	}
@@ -81,21 +75,9 @@ func (f *executionProtocolFixture) requestWithHandler(handler http.Handler, meth
 	return w.Body.String()
 }
 
-// Seed a current immutable inline job for focused HTTP application tests.
-// Production callers use server-owned snapshot preparation.
-func (f *executionProtocolFixture) registerInline(body any, want int) string {
+func (f *executionProtocolFixture) prepare(body any, want int) string {
 	f.t.Helper()
-	server := &Server{Store: f.store}
-	handler := server.wrap(func(tx *board.Tx, q *request, r *http.Request) (int, any, error) {
-		var execution board.Execution
-		if err := decodeFields(q, &execution); err != nil {
-			return 0, nil, board.Err(422, "Invalid execution")
-		}
-		execution.ProjectID = f.project
-		saved, err := executioncase.Register(tx, execution, decisionFence(r))
-		return http.StatusCreated, saved, err
-	})
-	return f.requestWithHandler(handler, "POST", f.base()+"/executions", body, true, want, nil)
+	return f.request("POST", f.base()+"/executions/prepare", body, true, want, nil)
 }
 
 func (f *executionProtocolFixture) executionRecords() []board.Execution {
@@ -133,46 +115,24 @@ func (f *executionProtocolFixture) state() board.State {
 
 func (f *executionProtocolFixture) newIntent(descriptions ...string) board.Intent {
 	f.t.Helper()
-	var intent board.Intent
-	// Seed unrelated work through the board command. HTTP planning itself is
-	// covered by the decision-batch suite; fixture creation needs no extra run.
-	err := f.store.Do(context.Background(), func(tx *board.Tx) error {
-		g, err := tx.Load(f.project)
-		if err != nil {
-			return err
-		}
-		previous := g.Project.Reason
-		lease := "fixture-planner"
-		g.Project.Reason = &board.Reason{Worker: lease, StartedAt: tx.Now, Heartbeat: tx.Now}
-		if err = tx.Save(g); err != nil {
-			return err
-		}
-		key := fmt.Sprintf("fixture-step-%d", len(g.Intents))
-		description := "Observe the synthetic fixture " + key
-		if len(descriptions) > 0 {
-			description = descriptions[0]
-		}
-		payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": description})
-		created, err := tx.StateAction(f.project, board.ExecutionFence{Run: lease, Lease: "reason"}, board.StateAction{Op: "step", IdempotencyKey: key, Payload: payload})
-		if err != nil {
-			return err
-		}
-		g, err = tx.Load(f.project)
-		if err != nil {
-			return err
-		}
-		g.Project.Reason = previous
-		for _, step := range g.Intents {
-			if step.ID == created.ID {
-				intent = step
-			}
-		}
-		return tx.Save(g)
-	})
-	if err != nil {
-		f.t.Fatal(err)
+	// Authorize fixture work through a real prepared planner and committed
+	// decision. Caller identity remains unchanged for the operation under test.
+	planner := *f
+	description := fmt.Sprintf("Observe the synthetic fixture step %d", len(f.state().Steps))
+	if len(descriptions) > 0 {
+		description = descriptions[0]
 	}
-	return intent
+	if len(f.state().Steps) > 0 {
+		f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": fmt.Sprintf("Authorize fixture step %d", len(f.state().Steps)+1)}, false, http.StatusCreated, nil)
+	}
+	created := planner.planAction("step", map[string]any{"action": "add", "from": []string{"origin"}, "description": description})
+	for _, intent := range f.state().Graph.Intents {
+		if intent.ID == created.ID {
+			return intent
+		}
+	}
+	f.t.Fatal("committed fixture step is missing")
+	return board.Intent{}
 }
 
 func (f *executionProtocolFixture) completeStep(intent board.Intent, description string) board.Conclusion {
@@ -232,12 +192,19 @@ func (f *executionProtocolFixture) completeProject(fact string) board.Intent {
 	return board.Intent{}
 }
 
-func (f *executionProtocolFixture) planAction(op, key string, payload any) board.StateActionResult {
+func (f *executionProtocolFixture) planAction(op string, payload any) board.StateActionResult {
 	f.t.Helper()
 	f.kind, f.intent = "reason", ""
 	f.run = fmt.Sprintf("fixture-plan-%d", f.state().Revision)
 	f.lease = "planner@" + f.run
-	_, job := prepareSnapshot(f.t, f, snapshotTemplate(f, "reason"))
+	template := snapshotTemplate(f, "reason")
+	var configuration map[string]any
+	if err := json.Unmarshal(template.Job, &configuration); err != nil {
+		f.t.Fatal(err)
+	}
+	configuration["budget"] = map[string]int{"max_intents": len(f.state().Steps) + 1}
+	template.Job, _ = json.Marshal(configuration)
+	_, job := prepareSnapshot(f.t, f, template)
 	raw, _ := json.Marshal(payload)
 	batch := f.batch(board.DecisionAction{Op: op, Payload: raw})
 	if job.Decision.ClosureProtocol == 1 {
@@ -256,47 +223,7 @@ func (f *executionProtocolFixture) planAction(op, key string, payload any) board
 
 func (f *executionProtocolFixture) register(kind string) {
 	f.t.Helper()
-	f.registerWithFields(kind, 2, nil, http.StatusCreated)
-}
-
-func (f *executionProtocolFixture) registerWithFields(kind string, version int, fields map[string]any, want int) {
-	f.t.Helper()
-	f.kind = kind
-	var intent *board.Intent
-	if kind == "reason" {
-		f.request("POST", f.base()+"/reason/claim", map[string]string{"worker": f.lease, "trigger": "initial"}, false, http.StatusOK, nil)
-	} else {
-		created := f.newIntent()
-		f.intent = created.ID
-		f.request("POST", f.base()+"/intents/"+created.ID+"/heartbeat", map[string]string{"worker": f.lease}, false, http.StatusOK, &created)
-		intent = &created
-	}
-	state := f.state()
-	job := map[string]any{
-		"run_id": f.run, "kind": kind, "workspace": "/workspace",
-		"graph": state.Graph, "state": state, "intent": intent,
-		"graph_rpc": true,
-		"budget":    map[string]int{"max_intents": 3, "conclude_timeout": 60},
-	}
-	if version != 0 {
-		job["result_contract_version"] = version
-	}
-	if kind == "reason" {
-		job["decision"] = map[string]any{"version": 2, "state_version": board.DecisionStateVersion(state)}
-	}
-	for key, value := range fields {
-		job[key] = value
-	}
-	raw, err := json.Marshal(job)
-	if err != nil {
-		f.t.Fatal(err)
-	}
-	key := "reason:protocol-fixture"
-	if kind != "reason" {
-		key = kind + ":" + f.intent
-	}
-	e := board.Execution{ProjectID: f.project, ID: f.run, Namespace: "protocol-test", Backend: "planner", Kind: kind, Intent: f.intent, Lease: f.lease, Job: raw, RetryKey: key}
-	f.registerInline(e, want)
+	prepareSnapshot(f.t, f, snapshotTemplate(f, kind))
 }
 
 func (f *executionProtocolFixture) action(op, key string, payload any) board.StateActionResult {
@@ -380,18 +307,6 @@ var invalidExecutionProtocols = []struct {
 	{"negative_version", "result_contract_version", -1},
 	{"fractional_version", "result_contract_version", 1.5},
 	{"unsupported_version", "result_contract_version", 3},
-}
-
-func TestExecutionRegistrationRejectsInvalidProtocolFields(t *testing.T) {
-	for _, tt := range invalidExecutionProtocols {
-		t.Run(tt.name, func(t *testing.T) {
-			f := newExecutionProtocolFixture(t)
-			f.registerWithFields("reason", 2, map[string]any{tt.field: tt.value}, http.StatusUnprocessableEntity)
-			if len(f.executionRecords()) != 0 {
-				t.Fatal("invalid protocol was saved as a resumable execution")
-			}
-		})
-	}
 }
 
 func TestRegisteredExecutionContractCannotBeDowngraded(t *testing.T) {

@@ -18,8 +18,11 @@ type stepOrderRunner struct {
 }
 
 func (r *stepOrderRunner) Run(ctx context.Context, backend config.Worker, job protocol.Job) (protocol.Result, error) {
+	if job.Kind != "reason" {
+		return r.batchProtocolRunner.Run(ctx, backend, job)
+	}
 	steps, _, _ := fixturePlanInput(job)
-	if job.Kind != "reason" || steps != 2 {
+	if steps != 2 {
 		return r.batchProtocolRunner.Run(ctx, backend, job)
 	}
 	payload, _ := json.Marshal(map[string]any{"action": "add", "from": []string{"origin"}, "description": "Newly authorized fixture", "priority": r.newPriority})

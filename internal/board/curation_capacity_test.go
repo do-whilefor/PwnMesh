@@ -39,41 +39,10 @@ func seedCurationGroups(f *orchestrationFixture, groups, notes int, source strin
 	})
 }
 
-func capacityCurator(f *orchestrationFixture, label string) (Execution, State) {
-	f.t.Helper()
-	e := Execution{ProjectID: "p", ID: label, Namespace: "test", Backend: "curator", Kind: "curate", Lease: "curator@" + label}
-	var state State
-	f.do(func(tx *Tx) error {
-		if _, err := tx.ClaimCurator("p", e.Lease, "capacity"); err != nil {
-			return err
-		}
-		var err error
-		state, err = tx.State("p")
-		if err != nil {
-			return err
-		}
-		ref, err := tx.FreezeInput(state)
-		if err != nil {
-			return err
-		}
-		view, err := CurationContextView(state, DefaultContextViewBytes)
-		if err != nil {
-			return err
-		}
-		e.Job, err = json.Marshal(map[string]any{"kind": "curate", "run_id": e.ID, "graph": Graph{Project: state.Graph.Project}, "input_snapshot": ref, "input_view": view, "graph_rpc": true, "result_contract_version": 2})
-		if err != nil {
-			return err
-		}
-		e.RetryKey = CurationRetryKey(state)
-		return tx.RegisterExecution(e)
-	})
-	return e, state
-}
-
 func TestCurationCapacityDrainsWholeGroupsAcrossExecutions(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	seedCurationGroups(f, 129, 2, "")
-	e, input := capacityCurator(f, "first-page")
+	e, input := f.curator("first-page")
 	groups := []CurateGroup{}
 	for group := range 128 {
 		groups = append(groups, CurateGroup{CandidateIDs: []string{fmt.Sprintf("capacity_%d_0", group), fmt.Sprintf("capacity_%d_1", group)}, Status: "candidate", Reason: "Retain tentative observations"})
@@ -84,7 +53,7 @@ func TestCurationCapacityDrainsWholeGroupsAcrossExecutions(t *testing.T) {
 		t.Fatalf("partial batch lost its remaining work: findings=%d pending=%d cursor=%d", len(partial.Findings), len(partial.PendingCurationCandidateIDs()), partial.Curation.ThroughRevision)
 	}
 	assertCurationNeeded(t, f, true)
-	e, input = capacityCurator(f, "second-page")
+	e, input = f.curator("second-page")
 	f.curate(e, input, CurateGroup{CandidateIDs: []string{"capacity_128_0", "capacity_128_1"}, Status: "candidate", Reason: "Finish the remaining identity group"})
 	final := f.state()
 	if len(final.Findings) != 129 || len(final.PendingCurationCandidateIDs()) != 0 || final.Curation.ThroughRevision != input.Revision {
@@ -97,11 +66,11 @@ func TestCurationReceiptsRetainOnlyTheSubmittedGroups(t *testing.T) {
 	f := newOrchestrationFixture(t)
 	producer := f.worker("source", "")
 	source, old, correction := f.fact(producer, "support"), f.fact(producer, "old"), f.fact(producer, "correction")
-	previous, prior := capacityCurator(f, "previous-relation")
+	previous, prior := f.curator("previous-relation")
 	f.action(previous.Fence(), "curate", "previous-relation", CuratePayload{ThroughRevision: prior.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: correction, Target: old, Reason: "An unrelated earlier correction"}}}, DecisionStateVersion(prior))
 	seedCurationGroups(f, 8, 2, source)
 	for group := range 8 {
-		e, input := capacityCurator(f, fmt.Sprintf("batch-%d", group))
+		e, input := f.curator(fmt.Sprintf("batch-%d", group))
 		key := model.FindingIdentity(fmt.Sprintf("Capacity claim %d", group), "fixture")
 		payload := CurateGroup{GroupKey: key, Status: "candidate", Reason: "Retain this complete group", Question: "Which producer observation is supported?"}
 		receipt := f.curate(e, input, payload)
@@ -149,7 +118,7 @@ func TestCurationGroupKeyIncludesConflictsBeyondExplicitIDLimit(t *testing.T) {
 	producer := f.worker("support", "")
 	fact := f.fact(producer, "support")
 	seedCurationGroups(f, 1, 257, fact)
-	e, input := capacityCurator(f, "large-group")
+	e, input := f.curator("large-group")
 	key := input.CandidateView(input.Candidates[0]).GroupKey
 	group := map[string]any{"group_key": key, "status": "verified", "reason": "Assess the complete identity group"}
 	try := func(key string, group map[string]any) error {
@@ -176,7 +145,7 @@ func TestPartialCurationRetainsRequestAndRejectsNonprogressingBatch(t *testing.T
 	fact := f.fact(producer, "request-source")
 	seedCurationGroups(f, 2, 2, "")
 	f.action(f.planner, "curation_request", "request", map[string]any{"sources": []string{fact}, "reason": "Review both pending groups before accepting the observations"}, "")
-	e, input := capacityCurator(f, "partial-request")
+	e, input := f.curator("partial-request")
 	group := CurateGroup{GroupKey: model.FindingIdentity("Capacity claim 0", "fixture"), Status: "candidate", Reason: "Retain the complete first group"}
 	review := &CurationRequestReview{Disposition: "no_change", CheckedSources: []string{fact}, Reason: "Retain the original observation; reconcile the pending interpretations separately"}
 	f.action(e.Fence(), "curate", e.ID+":curate", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{group}, RequestReview: review}, DecisionStateVersion(input))
@@ -184,7 +153,7 @@ func TestPartialCurationRetainsRequestAndRejectsNonprogressingBatch(t *testing.T
 	if partial.PendingCurationRequest() == nil || partial.Curation.ThroughRevision != input.Curation.ThroughRevision {
 		t.Fatal("partial curation acknowledged the complete request")
 	}
-	e, input = capacityCurator(f, "remaining-request")
+	e, input = f.curator("remaining-request")
 	for _, groups := range [][]CurateGroup{{}, {group}, {{GroupKey: group.GroupKey, CandidateIDs: []string{"capacity_0_0"}, Status: "candidate", Reason: "Ambiguous selector"}}} {
 		raw, _ := json.Marshal(CuratePayload{ThroughRevision: input.Revision, Groups: groups, RequestReview: review})
 		err := f.store.Do(context.Background(), func(tx *Tx) error {

@@ -318,13 +318,9 @@ func TestRetiredDecisionCannotRegisterReadOrWrite(t *testing.T) {
 				if err := json.Unmarshal(execution.Job, &job); err != nil {
 					return err
 				}
-				if input == "snapshot" {
-					ref, err := tx.FreezeInput(state)
-					if err != nil {
-						return err
-					}
-					delete(job, "state")
-					job["input_snapshot"] = ref
+				if input == "inline" {
+					delete(job, "input_snapshot")
+					job["graph"], job["state"] = state.Graph, state
 				}
 				// Both current input forms retain their immutable version binding.
 				current, _ := json.Marshal(job)

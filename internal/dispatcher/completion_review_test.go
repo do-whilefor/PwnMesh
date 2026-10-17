@@ -55,11 +55,12 @@ func TestCompletionPreviewBridgeRetainsReviewWithinFrameBudget(t *testing.T) {
 	if err := board.ValidateContextCapacity(state); err != nil {
 		t.Fatalf("large but legitimate Steps exceeded admission: %v", err)
 	}
-	job := protocol.Job{RunID: "completion-review", Kind: "reason", Graph: state.Graph, State: &state, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: config.Task{MaxIntents: 3}, Decision: &board.DecisionContext{Version: 2, StateVersion: board.DecisionStateVersion(state)}}
-	raw, _ := json.Marshal(job)
-	execution := board.Execution{ProjectID: graph.Project.ID, ID: job.RunID, Namespace: "pwnmesh", Backend: "retry-fixture", Kind: "reason", Lease: lease.Run, Job: raw, RetryKey: "reason:completion-review"}
-	registerLegacyExecution(t, store, execution)
-	batch := board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion}
+	run := &task{Job: protocol.Job{RunID: "completion-review", Kind: "reason", Graph: state.Graph, GraphRPC: true, ResultContractVersion: 2, Workspace: "/workspace", Budget: config.Task{MaxIntents: 3}}, Worker: s.Config.Workers[0], Lease: lease}
+	if err := s.register(ctx, run); err != nil {
+		t.Fatal(err)
+	}
+	job := run.Job
+	batch := board.DecisionBatch{ExpectedVersion: job.Decision.StateVersion, Assessment: &board.RootAssessment{Status: "satisfied", From: []string{fact.ID}, Description: "The retained observation covers the original fixture condition"}}
 	for _, step := range steps {
 		payload, _ := json.Marshal(map[string]any{"action": "abandon", "id": step.ID, "reason": strings.Repeat("r", 8000)})
 		batch.Actions = append(batch.Actions, board.DecisionAction{Op: "step", Payload: payload})

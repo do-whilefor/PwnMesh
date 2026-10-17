@@ -15,26 +15,19 @@ import (
 // Scripted planners read the same bounded input that the model receives.
 // They must not depend on a second, hidden full graph inside new Jobs.
 func fixturePlanInput(job protocol.Job) (steps, open int, facts []board.FactRecord) {
-	if ref := job.InputSnapshot; ref != nil {
-		var view struct {
-			Facts []board.FactRecord `json:"fact_records"`
-		}
-		if job.Decision != nil {
-			_ = json.Unmarshal(job.Decision.View, &view)
-			if review := job.Decision.CompletionAssessment; review != nil {
-				view.Facts = review.FactRecords
-			}
-		}
-		return ref.StepCount, ref.OpenCount, view.Facts
+	if job.InputSnapshot == nil || job.Decision == nil {
+		panic("scripted planner requires a server-prepared decision snapshot")
 	}
-	if job.State != nil {
-		facts = job.State.FactRecords
-	} else {
-		for _, fact := range job.Graph.Facts {
-			facts = append(facts, board.FactRecord{ID: fact.ID, Description: fact.Description})
-		}
+	var view struct {
+		Facts []board.FactRecord `json:"fact_records"`
 	}
-	return len(job.Graph.Intents), job.Graph.OpenCount(), facts
+	if err := json.Unmarshal(job.Decision.View, &view); err != nil {
+		panic(err)
+	}
+	if review := job.Decision.CompletionAssessment; review != nil {
+		view.Facts = review.FactRecords
+	}
+	return job.InputSnapshot.StepCount, job.InputSnapshot.OpenCount, view.Facts
 }
 
 // Scripted model fixtures explicitly supply the same root judgment required
@@ -140,23 +133,6 @@ func testExecutions(t *testing.T, store *board.Store) []board.Execution {
 		t.Fatal(err)
 	}
 	return executions
-}
-
-// Preserve historical job shapes for recovery/bridge fixtures. New execution
-// registration tests use the production /executions/prepare path instead.
-func registerLegacyExecution(t *testing.T, store *board.Store, execution board.Execution) board.Execution {
-	t.Helper()
-	if err := store.Do(context.Background(), func(tx *board.Tx) error {
-		if err := tx.RegisterExecution(execution); err != nil {
-			return err
-		}
-		var err error
-		execution, err = tx.Execution(execution.ProjectID, execution.ID)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	return execution
 }
 
 // Seed observations in current storage without discarding other normalized

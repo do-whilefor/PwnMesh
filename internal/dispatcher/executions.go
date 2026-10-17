@@ -400,8 +400,8 @@ func (s *Scheduler) runRegistered(ctx context.Context, t *task, stopHeartbeat fu
 			return s.resultDeliveryFailure(ctx, t, result, err)
 		}
 	}
-	// Finish the business transaction before another heartbeat can observe a
-	// concluded bootstrap step and cancel its project completion.
+	// Stop lease renewal before settlement revokes the lease, so its final
+	// heartbeat cannot cancel delivery of the accepted result.
 	stopHeartbeat()
 	var receipt struct {
 		Status string `json:"status"`

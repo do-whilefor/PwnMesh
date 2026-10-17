@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/protocol"
 )
 
 func TestExecutionQueryRoutesReturnCompactIdentityAndExactDetail(t *testing.T) {
@@ -16,16 +17,13 @@ func TestExecutionQueryRoutesReturnCompactIdentityAndExactDetail(t *testing.T) {
 	base := f.base() + "/executions/" + f.run
 	var full board.Execution
 	f.request("GET", base+"?namespace=protocol-test", nil, false, http.StatusOK, &full)
-	var saved struct {
-		State *board.State `json:"state"`
-		Graph board.Graph  `json:"graph"`
-	}
-	if err := json.Unmarshal(full.Job, &saved); err != nil || saved.State == nil {
+	var saved protocol.Job
+	if err := json.Unmarshal(full.Job, &saved); err != nil || saved.InputSnapshot == nil || saved.State != nil {
 		t.Fatalf("detail lost immutable input: %v", err)
 	}
 	var identity board.ExecutionSummary
 	raw := f.request("GET", base+"/identity?namespace=protocol-test", nil, false, http.StatusOK, &identity)
-	if strings.Contains(raw, `"job"`) || strings.Contains(raw, `"result"`) || identity.ID != full.ID || identity.Lease != full.Lease || identity.StateVersion != board.DecisionStateVersion(*saved.State) || !identity.HasState || identity.FactCount != len(saved.Graph.Facts) {
+	if strings.Contains(raw, `"job"`) || strings.Contains(raw, `"result"`) || identity.ID != full.ID || identity.Lease != full.Lease || identity.StateVersion != saved.InputSnapshot.StateVersion || !identity.HasState || identity.FactCount != saved.InputSnapshot.FactCount {
 		t.Fatalf("invalid compact identity: %s", raw)
 	}
 	var page board.ExecutionPage
@@ -45,7 +43,7 @@ func TestExecutionQueryRoutesReturnCompactIdentityAndExactDetail(t *testing.T) {
 	for _, query := range []string{"namespace=protocol-test&limit=101", "namespace=protocol-test&after=-1", "namespace=protocol-test&limit=0", "namespace=protocol-test&after=NaN", "limit=1"} {
 		f.request("GET", "/executions/pending?"+query, nil, false, http.StatusUnprocessableEntity, nil)
 	}
-	for _, query := range []string{"namespace=protocol-test&kind=reason&generation=-1", "namespace=protocol-test&kind=unknown", "namespace=protocol-test&kind=explore", "namespace=protocol-test&kind=reason&intent=some-step"} {
+	for _, query := range []string{"namespace=protocol-test&kind=reason&generation=-1", "namespace=protocol-test&kind=unknown", "namespace=protocol-test&kind=bootstrap&intent=some-step", "namespace=protocol-test&kind=explore", "namespace=protocol-test&kind=reason&intent=some-step"} {
 		f.request("GET", f.base()+"/executions/check?"+query, nil, false, http.StatusUnprocessableEntity, nil)
 	}
 }

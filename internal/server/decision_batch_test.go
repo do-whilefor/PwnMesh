@@ -13,7 +13,7 @@ import (
 
 func newDecisionBatchFixture(t *testing.T) *executionProtocolFixture {
 	f := newExecutionProtocolFixture(t)
-	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.register("reason")
 	return f
 }
 func batchAction(op, ref, payload string) board.DecisionAction {
@@ -116,16 +116,9 @@ func TestDecisionBatchRechecksStateAfterPreview(t *testing.T) {
 	}
 }
 
-func TestDecisionBatchRequiresRegisteredVersionAndFencesDirectWrites(t *testing.T) {
+func TestDecisionBatchFencesDirectWrites(t *testing.T) {
 	f := newDecisionBatchFixture(t)
 	f.request("POST", f.base()+"/state/actions", map[string]any{"op": "step", "idempotency_key": "bypass", "payload": map[string]any{"action": "add", "from": []string{"origin"}, "description": "bypass"}, "expected_version": board.DecisionStateVersion(f.state())}, true, http.StatusForbidden, nil)
-	for _, version := range []int{0, 1} {
-		legacy := newExecutionProtocolFixture(t)
-		legacy.registerWithFields("reason", version, nil, http.StatusUnprocessableEntity)
-		if len(legacy.executionRecords()) != 0 {
-			t.Fatal("retired protocol was registered")
-		}
-	}
 }
 
 func TestMainAgentCannotBypassBatchWithoutRegistration(t *testing.T) {
@@ -182,7 +175,8 @@ func TestDecisionCanWithdrawAuxiliaryPlanAndCompleteAtomically(t *testing.T) {
 	f.run = "completion-planner"
 	f.request("POST", f.base()+"/intents/"+step.ID+"/heartbeat", map[string]string{"worker": "existing-executor"}, false, http.StatusOK, nil)
 	f.lease = "planner@" + f.run
-	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "Reassess whether the original observation already satisfies the goal"}, false, http.StatusCreated, nil)
+	f.register("reason")
 	marshal := func(value any) string {
 		raw, err := json.Marshal(value)
 		if err != nil {
@@ -191,14 +185,20 @@ func TestDecisionCanWithdrawAuxiliaryPlanAndCompleteAtomically(t *testing.T) {
 		return string(raw)
 	}
 	complete := batchAction("complete", "", marshal(map[string]any{"from": []string{result.Fact.ID}, "description": "User condition is supported by this observation"}))
-	f.decision("commit", f.batch(complete), http.StatusConflict)
+	completion := f.batch(complete)
+	completion.Assessment = &board.RootAssessment{Status: "satisfied", From: []string{result.Fact.ID}, Description: "The original observation already satisfies the user condition"}
+	f.decision("commit", completion, http.StatusConflict)
 	abandon := batchAction("step", "", marshal(map[string]any{"action": "abandon", "id": step.ID, "reason": "Existing witness meets the root condition; this auxiliary check is unnecessary"}))
 	withdraw := batchAction("goal", "", marshal(map[string]any{"action": "withdraw", "id": goal.ID, "reason": "Existing witness meets the root condition"}))
 	batch := f.batch(abandon, withdraw, complete)
+	batch.Assessment = completion.Assessment
 	before := f.state()
 	// Even cancellation and its lease revocation must roll back when a later
 	// replacement in the same proposed plan is invalid.
-	f.decision("commit", f.batch(abandon, batchAction("step", "", `{"action":"add","from":["missing"],"description":"Invalid replacement"}`)), http.StatusNotFound)
+	invalid := f.batch(abandon, batchAction("step", "", `{"action":"add","from":["missing"],"description":"Invalid replacement"}`))
+	invalid.Assessment = &board.RootAssessment{Status: "missing", Description: "The fixture proposes an invalid follow-up", Gaps: []board.RequirementGap{{ID: "fixture", InputIDs: []string{"goal"}, Description: "Check the outstanding fixture condition"}}}
+	invalid.Actions[1].GapID = "fixture"
+	f.decision("commit", invalid, http.StatusNotFound)
 	if !reflect.DeepEqual(before, f.state()) {
 		t.Fatal("invalid replacement left the original task abandoned")
 	}
@@ -235,7 +235,8 @@ func TestDecisionCannotWithdrawRootOrCompleteWithoutObservedSupport(t *testing.T
 func TestDecisionBatchNoopEndsExecutionWithoutChangingSharedState(t *testing.T) {
 	f := newExecutionProtocolFixture(t)
 	f.newIntent()
-	f.registerWithFields("reason", 2, map[string]any{"decision": map[string]any{"version": 2, "state_version": board.DecisionStateVersion(f.state())}}, http.StatusCreated)
+	f.request("POST", f.base()+"/hints", map[string]string{"creator": "user", "content": "Confirm that the existing direction is sufficient for now"}, false, http.StatusCreated, nil)
+	f.register("reason")
 	before := f.state()
 	receipt := f.decision("commit", f.batch([]board.DecisionAction{}...), http.StatusOK)
 	after := f.state()

@@ -37,7 +37,13 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 	if err := j.Budget.ValidateTimeouts(); err != nil {
 		return Prepared{}, b.Err(422, err.Error())
 	}
-	if (j.Kind == "reason" || j.Kind == "curate") && j.Intent != nil {
+	if !b.ValidExecutionID(e.ID) || e.Namespace == "" || len(e.Namespace) > 128 || e.Backend == "" || len(e.Backend) > 256 || e.Lease != e.Backend+"@"+e.ID || j.RunID != e.ID || j.Kind != e.Kind || j.Workspace == "" {
+		return Prepared{}, b.Err(422, "Invalid execution identity")
+	}
+	if e.Kind != "reason" && e.Kind != "curate" && e.Kind != "explore" {
+		return Prepared{}, b.Err(422, "Invalid execution kind")
+	}
+	if (e.Kind == "reason" || e.Kind == "curate") && (e.Intent != "" || j.Intent != nil) {
 		return Prepared{}, b.Err(422, "Control preparation must not carry an intent")
 	}
 	if len(j.InputFiles) != 0 {
@@ -71,7 +77,7 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 	if state.Graph.Project.Generation != j.Graph.Project.Generation {
 		return Prepared{}, b.CodedErr(409, b.CodeStateChanged, "state_changed: project round changed before preparation")
 	}
-	if state.Graph.Project.OrchestrationVersion != 1 || (j.Kind != "reason" && j.Kind != "curate" && j.Kind != "explore") {
+	if state.Graph.Project.OrchestrationVersion != 1 {
 		return Prepared{}, b.Err(422, "Orchestration version 1 requires a live version 2 reason, curate or explore execution")
 	}
 	if err = state.Graph.RequireActive(); err != nil {
@@ -85,6 +91,9 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 		e.RetryKey = b.DecisionRetryKey(state.Graph, state.DecisionRevision)
 	} else if e.Kind == "curate" {
 		e.RetryKey = b.CurationRetryKey(state)
+	}
+	if len(e.RetryKey) > 1024 {
+		return Prepared{}, b.Err(422, "Invalid execution retry key")
 	}
 	check, err := t.CheckExecutions(b.ExecutionCheckQuery{ProjectID: e.ProjectID, Namespace: e.Namespace, Generation: state.Graph.Project.Generation, Kind: e.Kind, Intent: e.Intent, RetryKey: e.RetryKey, StateVersion: b.DecisionStateVersion(state)})
 	if err != nil {
@@ -124,7 +133,7 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 		if err != nil {
 			return Prepared{}, err
 		}
-		if state.Graph.Project.OrchestrationVersion == 1 && b.HasCompletionEvidence(state) {
+		if b.HasCompletionEvidence(state) {
 			j.Decision.ClosureProtocol = 1
 		}
 		j.DecisionRepeated = check.Repeated
@@ -155,11 +164,7 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 		if err != nil {
 			return Prepared{}, err
 		}
-		step := ""
-		if e.Kind == "explore" {
-			step = e.Intent
-		}
-		j.InputView, err = b.ContextView(state, step, b.DefaultContextViewBytes)
+		j.InputView, err = b.ContextView(state, e.Intent, b.DefaultContextViewBytes)
 		if err != nil {
 			return Prepared{}, b.Err(422, err.Error())
 		}
@@ -176,7 +181,10 @@ func PrepareRun(t *b.Tx, e b.Execution, fence b.ExecutionFence) (Prepared, error
 	if e.Kind == "curate" && len(e.Job) > b.MaxCurationInputBytes {
 		return Prepared{}, b.Err(422, "Curation input exceeds the supported immutable input limit")
 	}
-	saved, err := Register(t, e, fence)
+	if err := t.RegisterExecution(e); err != nil {
+		return Prepared{}, err
+	}
+	saved, err := t.Execution(e.ProjectID, e.ID)
 	return Prepared{Execution: saved, Created: err == nil}, err
 }
 

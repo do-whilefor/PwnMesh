@@ -29,7 +29,7 @@ func newStepInvalidationFixture(t *testing.T) *stepInvalidationFixture {
 	}
 	decider := *worker
 	decider.run, decider.lease = "invalidation-decider", "planner@invalidation-decider"
-	step := decider.planAction("step", "dependent-direction", map[string]any{
+	step := decider.planAction("step", map[string]any{
 		"action": "add", "from": []string{facts[0]}, "description": "Check the public endpoint's response scope",
 	})
 	worker.kind, worker.intent = "explore", step.ID
@@ -77,7 +77,7 @@ func (f *stepInvalidationFixture) registration() board.Execution {
 	}
 	job, err := json.Marshal(map[string]any{
 		"run_id": f.run, "kind": f.kind, "workspace": "/workspace",
-		"graph": state.Graph, "state": state, "intent": intent,
+		"graph": board.Graph{Project: state.Graph.Project}, "intent": intent,
 		"graph_rpc": true, "result_contract_version": 2,
 	})
 	if err != nil {
@@ -125,9 +125,9 @@ func TestStepInvalidationRejectsNewHTTPClaim(t *testing.T) {
 func TestStepInvalidationRejectsHTTPRegistrationAfterClaim(t *testing.T) {
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
-	job := f.registration() // Immutable input was read while its premise was valid.
+	job := f.registration() // The claim was acquired before its premise changed.
 	f.refute()
-	body := f.registerInline(job, http.StatusConflict)
+	body := f.prepare(job, http.StatusConflict)
 	if !strings.Contains(body, "not effective evidence") {
 		t.Fatalf("registration failed for an unrelated reason: %s", body)
 	}
@@ -139,7 +139,7 @@ func TestStepInvalidationRejectsHTTPRegistrationAfterClaim(t *testing.T) {
 func TestStepInvalidationRejectsHTTPStartAfterRegistration(t *testing.T) {
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
-	f.registerInline(f.registration(), http.StatusCreated)
+	f.prepare(f.registration(), http.StatusCreated)
 	f.refute()
 	body := f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusConflict, nil)
 	if !strings.Contains(body, "not effective evidence") {
@@ -156,7 +156,7 @@ func TestStepInvalidationHeartbeatRequiresRunningRegisteredOwner(t *testing.T) {
 			f := newStepInvalidationFixture(t)
 			f.claim(http.StatusOK)
 			if phase != "unregistered" {
-				f.registerInline(f.registration(), http.StatusCreated)
+				f.prepare(f.registration(), http.StatusCreated)
 				if phase != "prepared" {
 					f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
 				}
@@ -186,7 +186,7 @@ func TestStepInvalidationHeartbeatRequiresRunningRegisteredOwner(t *testing.T) {
 func TestStepInvalidationKeepsRunningObservationUntilHTTPAbandon(t *testing.T) {
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
-	f.registerInline(f.registration(), http.StatusCreated)
+	f.prepare(f.registration(), http.StatusCreated)
 	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
 	f.refute()
 	step := f.step()
@@ -224,10 +224,10 @@ func TestStepInvalidationAllowsExistingHTTPRegistrationReplay(t *testing.T) {
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
 	registration := f.registration()
-	f.registerInline(registration, http.StatusCreated)
+	f.prepare(registration, http.StatusCreated)
 	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
 	f.refute()
-	f.registerInline(registration, http.StatusCreated)
+	f.prepare(registration, http.StatusOK)
 	if stored := f.execution(); stored == nil || stored.Status != "running" || stored.Resumes != 0 {
 		t.Fatalf("registration replay restarted or mutated the existing execution: %+v", stored)
 	}
@@ -236,7 +236,7 @@ func TestStepInvalidationAllowsExistingHTTPRegistrationReplay(t *testing.T) {
 func TestStepInvalidationRejectsPendingHTTPResultRecovery(t *testing.T) {
 	f := newStepInvalidationFixture(t)
 	f.claim(http.StatusOK)
-	f.registerInline(f.registration(), http.StatusCreated)
+	f.prepare(f.registration(), http.StatusCreated)
 	f.request("POST", f.base()+"/executions/"+f.run+"/status", map[string]string{"status": "running"}, true, http.StatusOK, nil)
 	raw, _ := json.Marshal(map[string]any{"accepted": true, "outcome": "completed", "data": map[string]any{"fact": evidenceFixtureFact(f.run)}})
 	f.pending(string(raw))
