@@ -57,31 +57,6 @@ func TestDecisionBatchReusesPersistedTransitionsThroughCompletion(t *testing.T) 
 	}
 }
 
-func TestDecisionBatchLaterActionsObserveInvalidatedSources(t *testing.T) {
-	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, true)
-	batch := DecisionBatch{ExpectedVersion: f.version, Actions: []DecisionAction{
-		{Op: "fact_relation", Payload: json.RawMessage(`{"kind":"refutes","source":"source001","target":"source000","reason":"corrected observation"}`)},
-		{Op: "step", Payload: json.RawMessage(`{"action":"add","from":["source000"],"description":"Must reject invalidated input"}`)},
-	}}
-	if err := f.store.Do(context.Background(), func(tx *Tx) error {
-		_, err := tx.CommitDecision(stateBenchmarkProject, stateBenchmarkPlanner, batch)
-		var api *APIError
-		if !errors.As(err, &api) || api.Status != 409 {
-			t.Fatalf("stale batch source accepted: %v", err)
-		}
-		state, err := tx.State(stateBenchmarkProject)
-		if err != nil {
-			return err
-		}
-		if DecisionStateVersion(state) != f.version || len(state.FactRelations) != 0 || state.Revision != 0 {
-			t.Fatal("rejected dependent action left a relation or revision")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestDecisionBatchSQLFailureDiscardsReusableStateAndCounters(t *testing.T) {
 	f := newStateBenchmarkFixture(t, stateBenchmarkSize{16, 128, 2}, true)
 	batch := f.batch(2)
@@ -125,7 +100,7 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 	defer store.Close()
 	err = store.Do(context.Background(), func(tx *Tx) error {
 		fence := ExecutionFence{Run: "planner@batch-run", Lease: "reason"}
-		g := Graph{Project: Project{ID: "project", Title: "Fixture", Status: "active", CreatedAt: tx.Now, Reason: &Reason{Worker: fence.Run, Trigger: "initial", StartedAt: tx.Now, Heartbeat: tx.Now}}, Facts: []Fact{{ID: "origin", Description: "Fixture input"}, {ID: "goal", Description: "Inspect fixture"}}, Intents: []Intent{}, Hints: []Hint{}}
+		g := Graph{Project: Project{ID: "project", Title: "Fixture", Status: "active", CreatedAt: tx.Now, OrchestrationVersion: 1, Reason: &Reason{Worker: fence.Run, Trigger: "initial", StartedAt: tx.Now, Heartbeat: tx.Now}}, Facts: []Fact{{ID: "origin", Description: "Fixture input"}, {ID: "goal", Description: "Inspect fixture"}}, Intents: []Intent{}, Hints: []Hint{}}
 		if err := tx.Save(g); err != nil {
 			return err
 		}
@@ -133,7 +108,7 @@ func TestDecisionBatchSavepointProtectsCallerThatHandlesFailure(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		job, _ := json.Marshal(map[string]any{"kind": "reason", "run_id": "batch-run", "graph": g, "state": state, "decision": map[string]any{"version": 2, "state_version": DecisionStateVersion(state)}, "budget": map[string]int{"max_intents": 3}})
+		job, _ := json.Marshal(map[string]any{"kind": "reason", "run_id": "batch-run", "graph": g, "state": state, "graph_rpc": true, "result_contract_version": 2, "decision": map[string]any{"version": 2, "state_version": DecisionStateVersion(state)}, "budget": map[string]int{"max_intents": 3}})
 		if err = tx.RegisterExecution(Execution{ProjectID: g.Project.ID, ID: "batch-run", Namespace: "fixture", Backend: "planner", Kind: "reason", Lease: fence.Run, Job: job, RetryKey: "reason:fixture"}); err != nil {
 			return err
 		}

@@ -283,20 +283,7 @@ func TestMainRetryRejectsRoleAndTaskInputChanges(t *testing.T) {
 		})
 		requireAPIStatus(t, err, 422)
 	}
-	legacy := newPlanFixture(t)
-	err := legacy.store.Do(context.Background(), func(tx *Tx) error {
-		s, err := tx.State("proj_001")
-		if err != nil {
-			return err
-		}
-		d, _, _, err := tx.stateData("proj_001")
-		if err != nil {
-			return err
-		}
-		_, _, _, err = tx.retryStep(s, &d, "step", "run", "reason")
-		return err
-	})
-	requireAPIStatus(t, err, 422)
+
 }
 
 func TestRetryRunIdentityChangesVersionButOrdinaryStartDoesNot(t *testing.T) {

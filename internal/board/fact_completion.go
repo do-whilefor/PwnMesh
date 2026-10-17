@@ -26,21 +26,32 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 	if err = t.CheckExecution(s.Graph, fence); err != nil {
 		return Conclusion{}, err
 	}
-	if s.Graph.Project.OrchestrationVersion == 1 {
-		e, err := t.executionForLease(project, fence.Run)
-		if err != nil {
-			return Conclusion{}, err
-		}
-		if err = t.CheckExecutionDependencies(e); err != nil {
-			return Conclusion{}, err
-		}
+	if s.Graph.Project.OrchestrationVersion != 1 {
+		return Conclusion{}, Err(409, "evidence conclusion requires orchestration version 1")
+	}
+	e, err := t.executionForLease(project, fence.Run)
+	if err != nil {
+		return Conclusion{}, err
+	}
+	if err = t.CheckExecutionDependencies(e); err != nil {
+		return Conclusion{}, err
 	}
 	// A final Fact, its receipt and the Step completion event must roll back
 	// together even when the enclosing caller handles a rejected conclusion.
-	if _, err = t.transactionQueries.Exec("SAVEPOINT pwnmesh_management"); err != nil {
+	err = sqlstore.Atomic(t.transactionQueries, func() error {
+		var innerErr error
+		out, innerErr = t.concludeEvidenceStep(s, fence, factID, factPayload)
+		return innerErr
+	})
+	if err != nil {
 		return Conclusion{}, err
 	}
-	defer t.finishManagement(&err)
+	return out, nil
+}
+
+func (t *Tx) concludeEvidenceStep(s State, fence ExecutionFence, factID string, factPayload json.RawMessage) (Conclusion, error) {
+	project := s.Graph.Project.ID
+	var err error
 	if len(factPayload) != 0 {
 		created, err := t.StateAction(project, fence, StateAction{Op: "fact", IdempotencyKey: fence.Run + ":final-fact", Payload: factPayload})
 		if err != nil {
@@ -65,7 +76,7 @@ func (t *Tx) ConcludeEvidenceStep(project string, fence ExecutionFence, factID s
 	if fact.Legacy || fact.Status != "valid" || fact.SupportInvalid || fact.SourceStepID != fence.Intent || len(fact.Evidence) == 0 {
 		return Conclusion{}, Err(409, "conclusion requires an effective evidence-backed observation from this Step")
 	}
-	if s.Graph.Project.OrchestrationVersion == 1 && !runMatches(fence.Run, fact.RunID) {
+	if !runMatches(fence.Run, fact.RunID) {
 		return Conclusion{}, Err(409, "conclusion observation must come from the current execution")
 	}
 	for n := range s.Graph.Intents {

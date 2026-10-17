@@ -12,9 +12,6 @@ func validateStepDependencies(s State, ids []string) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	if s.Graph.Project.OrchestrationVersion != 1 {
-		return Err(422, "depends_on requires orchestration version 1")
-	}
 	if len(ids) > 64 {
 		return Err(422, "a Step may depend on at most 64 upstream Steps")
 	}

@@ -1,7 +1,6 @@
 package board
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -77,30 +76,23 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	if !slices.Contains([]string{"fact", "fact_relation", "finding", "goal", "step", "candidate", "curate", "curation_request"}, action.Op) && !(scope == batchedDecisionAction && action.Op == "complete") {
 		return StateActionResult{}, Err(422, "unknown state action")
 	}
-	if s.Graph.Project.OrchestrationVersion == 1 {
-		allowed := false
-		switch fence.Lease {
-		case "reason":
-			allowed = action.Op == "goal" || action.Op == "step" || action.Op == "complete" || action.Op == "curation_request"
-		case "curate":
-			allowed = action.Op == "curate"
-		case "explore":
-			allowed = action.Op == "fact" || action.Op == "candidate"
-		}
-		if !allowed {
-			return StateActionResult{}, Err(403, "operation is not permitted for this orchestration role")
-		}
-		if fence.Lease == "curate" && action.ExpectedVersion == "" {
-			return StateActionResult{}, Err(422, "curation writes require expected_version")
-		}
-	} else if action.Op == "candidate" || action.Op == "curate" || action.Op == "curation_request" || fence.Lease == "curate" {
-		return StateActionResult{}, Err(403, "operation requires orchestration version 1")
+	if s.Graph.Project.OrchestrationVersion != 1 {
+		return StateActionResult{}, Err(409, "state actions require orchestration version 1")
 	}
-	if (action.Op == "goal" || action.Op == "step") && fence.Lease != "reason" {
-		return StateActionResult{}, Err(403, "only Decide can modify goals or steps")
+	allowed := false
+	switch fence.Lease {
+	case "reason":
+		allowed = action.Op == "goal" || action.Op == "step" || action.Op == "complete" || action.Op == "curation_request"
+	case "curate":
+		allowed = action.Op == "curate"
+	case "explore":
+		allowed = action.Op == "fact" || action.Op == "candidate"
 	}
-	if (action.Op == "fact" || action.Op == "finding") && fence.Lease == "reason" {
-		return StateActionResult{}, Err(403, "Decide cannot turn planning into observed evidence")
+	if !allowed {
+		return StateActionResult{}, Err(403, "operation is not permitted for this orchestration role")
+	}
+	if fence.Lease == "curate" && action.ExpectedVersion == "" {
+		return StateActionResult{}, Err(422, "curation writes require expected_version")
 	}
 	canonical, err := canonicalStateAction(fence, action)
 	if err != nil {
@@ -144,10 +136,6 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	switch action.Op {
 	case "fact":
 		id, result, err = t.addStateFact(&s, &d, fence, action.Payload)
-	case "fact_relation":
-		id, result, changed, err = t.addFactRelation(s, &d, fence, action.Payload)
-	case "finding":
-		id, result, changed, err = t.upsertFinding(s, &d, fence, action.Payload)
 	case "candidate":
 		id, result, err = t.addCandidate(s, &d, fence, action.Payload)
 	case "curate":
@@ -178,7 +166,7 @@ func (t *Tx) stateAction(snapshot *State, fence ExecutionFence, action StateActi
 	}
 	if changed {
 		s.Revision++
-		if action.Op == "fact" || action.Op == "finding" || action.Op == "candidate" || action.Op == "curate" || (action.Op == "fact_relation" && fence.Lease != "reason") {
+		if action.Op == "fact" || action.Op == "candidate" || action.Op == "curate" {
 			s.DecisionRevision++
 		}
 		if action.Op == "fact" || action.Op == "candidate" {
@@ -270,9 +258,6 @@ func (t *Tx) addStateFact(s *State, d *stateData, fence ExecutionFence, raw json
 		return "", nil, err
 	}
 	if len(derivedFrom) > 0 {
-		if s.Graph.Project.OrchestrationVersion != 1 {
-			return "", nil, Err(422, "derived_from requires orchestration version 1")
-		}
 		if err = s.ValidateFactSources(derivedFrom, true); err != nil {
 			return "", nil, err
 		}
@@ -329,8 +314,7 @@ func (t *Tx) addFactRelation(s State, d *stateData, fence ExecutionFence, raw js
 		// Curators publish one semantic edge per kind and pair of facts. A
 		// rephrased explanation remains in that batch's request/event history;
 		// it must not duplicate the edge or replace its original provenance.
-		// Legacy fact_relation clients retain their reason-sensitive identity.
-		if relation.Kind == input.Kind && relation.Source == input.Source && relation.Target == input.Target && (s.Graph.Project.OrchestrationVersion == 1 || relation.Reason == input.Reason) {
+		if relation.Kind == input.Kind && relation.Source == input.Source && relation.Target == input.Target {
 			return input.Target, relation, false, nil
 		}
 	}
@@ -365,93 +349,6 @@ func (t *Tx) addFactRelation(s State, d *stateData, fence ExecutionFence, raw js
 	relation := FactRelation{Kind: input.Kind, Source: input.Source, Target: input.Target, Reason: input.Reason, RunID: fence.Run, CreatedAt: t.Now}
 	d.FactRelations = append(d.FactRelations, relation)
 	return input.Target, relation, true, nil
-}
-
-func (t *Tx) upsertFinding(s State, d *stateData, fence ExecutionFence, raw json.RawMessage) (string, any, bool, error) {
-	var input struct {
-		Claim          string          `json:"claim"`
-		Scope          string          `json:"scope"`
-		Status         string          `json:"status"`
-		Sources        []string        `json:"sources"`
-		Evidence       []EvidenceRef   `json:"evidence"`
-		Reason         string          `json:"reason"`
-		ReplaceSupport json.RawMessage `json:"replace_support"`
-	}
-	if err := decodeAction(raw, &input); err != nil {
-		return "", nil, false, err
-	}
-	if !required(input.Claim, 16384) || !required(input.Scope, 4096) || !slices.Contains([]string{"candidate", "verified", "refuted"}, input.Status) || len(input.Reason) > 8192 {
-		return "", nil, false, Err(422, "finding requires claim, scope and candidate/verified/refuted status")
-	}
-	replaceSupport := false
-	switch string(bytes.TrimSpace(input.ReplaceSupport)) {
-	case "", "false":
-	case "true":
-		replaceSupport = true
-	default:
-		return "", nil, false, Err(422, "replace_support must be a boolean")
-	}
-	if replaceSupport && !required(input.Reason, 8192) {
-		return "", nil, false, Err(422, "replacing finding support requires a reason")
-	}
-	if len(input.Sources) > 0 || input.Status != "candidate" || replaceSupport {
-		if err := s.ValidateFactSources(input.Sources, true); err != nil {
-			return "", nil, false, err
-		}
-	}
-	allowed := []EvidenceRef{}
-	for _, f := range s.FactRecords {
-		if slices.Contains(input.Sources, f.ID) {
-			allowed = append(allowed, f.Evidence...)
-		}
-	}
-	if err := validateEvidence(input.Evidence, fence.Run, allowed, false); err != nil {
-		return "", nil, false, err
-	}
-	if input.Status != "candidate" && len(allowed)+len(input.Evidence) == 0 {
-		return "", nil, false, Err(422, "verified or refuted findings require retained evidence excerpts")
-	}
-	claim, scope := strings.Join(strings.Fields(input.Claim), " "), strings.TrimSpace(input.Scope)
-	id := model.FindingIdentity(claim, scope)
-	finding := Finding{ID: id, Claim: claim, Scope: scope, Status: input.Status, Sources: []string{}, Evidence: []EvidenceRef{}, CreatedAt: t.Now, UpdatedAt: t.Now, Reason: input.Reason}
-	index := -1
-	for n, old := range d.Findings {
-		if old.ID == id {
-			finding.CreatedAt = old.CreatedAt
-			if !replaceSupport {
-				finding.Sources, finding.Evidence = append([]string{}, old.Sources...), append([]EvidenceRef{}, old.Evidence...)
-			}
-			index = n
-			break
-		}
-	}
-	if replaceSupport && index < 0 {
-		return "", nil, false, Err(409, "support replacement requires an existing finding")
-	}
-	for _, source := range input.Sources {
-		if !slices.Contains(finding.Sources, source) {
-			finding.Sources = append(finding.Sources, source)
-		}
-	}
-	for _, ref := range input.Evidence {
-		if !slices.Contains(finding.Evidence, ref) {
-			finding.Evidence = append(finding.Evidence, ref)
-		}
-	}
-	finding.SupportValid = len(finding.Sources) > 0 && s.ValidateFactSources(finding.Sources, true) == nil
-	if index >= 0 {
-		old := d.Findings[index]
-		if old.Status == finding.Status && old.Reason == finding.Reason && sameSupportSet(old.Sources, finding.Sources) && sameSupportSet(old.Evidence, finding.Evidence) {
-			old.SupportValid = finding.SupportValid
-			return id, old, false, nil
-		}
-		// Explicit replacement updates current support only. Earlier immutable
-		// action events retain the previous sources and evidence references.
-		d.Findings[index] = finding
-	} else {
-		d.Findings = append(d.Findings, finding)
-	}
-	return id, finding, true, nil
 }
 
 func (t *Tx) stateID(project, kind, prefix string) (string, error) {
@@ -574,8 +471,8 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 			return "", nil, false, err
 		}
 		if input.Repair != nil {
-			if s.Graph.Project.OrchestrationVersion != 1 || input.DisputeID != "" {
-				return "", nil, false, Err(422, "repair requires orchestration version 1 and cannot be an independent dispute review")
+			if input.DisputeID != "" {
+				return "", nil, false, Err(422, "repair cannot be an independent dispute review")
 			}
 			if err := artifactcheck.Validate(*input.Repair); err != nil {
 				return "", nil, false, Err(422, err.Error())
@@ -670,7 +567,7 @@ func (t *Tx) changeStep(s *State, d *stateData, fence ExecutionFence, raw json.R
 		if current.ID != input.ID {
 			continue
 		}
-		canRetireUnsupported := s.Graph.Project.OrchestrationVersion == 1 && input.Action == "abandon" && current.Status == "completed" && !current.SupportValid && !s.ExternalFeedbackStep(current)
+		canRetireUnsupported := input.Action == "abandon" && current.Status == "completed" && !current.SupportValid && !s.ExternalFeedbackStep(current)
 		if current.Status == "abandoned" || (current.Status == "completed" && !canRetireUnsupported) {
 			return "", nil, false, Err(409, "step is already terminal")
 		}

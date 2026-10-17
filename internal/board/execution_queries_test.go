@@ -539,6 +539,9 @@ func TestExecutionRegistrationValidatesMetadataBeforeConsumingRetry(t *testing.T
 	s := executionQueryStore(t)
 	executionQueryTx(t, s, func(tx *Tx) {
 		putQueryExecution(t, tx, Execution{ID: "original", Status: "retry_requested", Job: json.RawMessage(`unavailable`)}, 0, "")
+		if _, err := tx.transactionQueries.Exec("INSERT INTO pwnmesh_project_orchestration(project_id,version) VALUES('p',1)"); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := tx.transactionQueries.Exec("UPDATE projects SET reason_worker='planner@successor',reason_trigger='retry' WHERE id='p'"); err != nil {
 			t.Fatal(err)
 		}
@@ -551,7 +554,7 @@ func TestExecutionRegistrationValidatesMetadataBeforeConsumingRetry(t *testing.T
 		if err != nil || grant.Status != "retry_requested" {
 			t.Fatalf("invalid successor consumed its grant: %+v err=%v", grant, err)
 		}
-		e.Job = json.RawMessage(`{"graph":{"project":{"id":"p"}},"previous_run_id":"original"}`)
+		e.Job = fixtureExecutionJob(t, tx, "p", "reason", "original")
 		e.Status, e.Result, e.Resumes = "succeeded", json.RawMessage(`{"status":"success"}`), 99
 		e.CreatedAt, e.UpdatedAt = "caller-created", "caller-updated"
 		if err := tx.RegisterExecution(e); err != nil {

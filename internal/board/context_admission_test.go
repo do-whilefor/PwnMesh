@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 func TestStepAdmissionIncludesFullGoalAncestry(t *testing.T) {
@@ -44,6 +46,17 @@ func TestContextAdmissionAllowsTerminalActionsOnHistoricalOversize(t *testing.T)
 				id = f.action("step", "initial", stepInput("Inspect fixture", []string{"origin"}, "goal", 0)).ID
 			} else {
 				id = f.action("goal", "initial", map[string]any{"action": "add", "condition": "Inspect fixture"}).ID
+			}
+			if transition == "achieve" {
+				f.tx(func(tx *Tx) error {
+					data, revision, decisionRevision, err := tx.stateData("proj_001")
+					if err != nil {
+						return err
+					}
+					data.Facts = append(data.Facts, FactRecord{ID: "f001", Description: "Verified observation", Scope: "fixture", Status: "valid", ObservedAt: tx.Now, Evidence: []EvidenceRef{{RunID: "historical", Path: "evidence/f001", Excerpt: "verified observation"}}})
+					raw, _ := json.Marshal(data)
+					return sqlstore.SaveStateMetadata(tx.transactionQueries, "proj_001", string(raw), revision, decisionRevision)
+				})
 			}
 			// Older versions accepted human requirements beyond the context budget.
 			// Releasing obsolete work must not require dropping those requirements.

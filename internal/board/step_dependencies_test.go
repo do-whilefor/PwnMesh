@@ -132,15 +132,7 @@ func TestStepDependenciesRejectMalformedAndImmutableEdges(t *testing.T) {
 		return err
 	})
 	requireAPIStatus(t, err, 422)
-	legacy := newPlanFixture(t)
-	err = legacy.store.Do(context.Background(), func(tx *Tx) error {
-		s, err := tx.State("proj_001")
-		if err != nil {
-			return err
-		}
-		return validateStepDependencies(s, []string{upstream})
-	})
-	requireAPIStatus(t, err, 422)
+
 }
 
 func TestExecutionRejectsUnboundOrChangedDependencyResult(t *testing.T) {

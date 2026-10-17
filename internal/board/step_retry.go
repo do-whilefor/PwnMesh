@@ -11,9 +11,6 @@ import (
 // revoked and its lease remains held until the dispatcher finishes cleanup.
 // Registration consumes the existing previous_run_id grant transactionally.
 func (t *Tx) retryStep(s State, d *stateData, id, run, reason string) (string, any, bool, error) {
-	if s.Graph.Project.OrchestrationVersion != 1 {
-		return "", nil, false, Err(422, "main-agent retry requires orchestration version 1")
-	}
 	var step *Step
 	for n := range s.Steps {
 		if s.Steps[n].ID == id {

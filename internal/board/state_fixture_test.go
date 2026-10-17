@@ -27,11 +27,11 @@ const stateBenchmarkProject = "benchmark"
 
 var (
 	stateBenchmarkPlanner = ExecutionFence{Run: "planner@benchmark", Lease: "reason"}
-	stateBenchmarkWorker  = ExecutionFence{Run: "worker@benchmark", Lease: "explore", Intent: "active"}
+	stateBenchmarkWorker  = ExecutionFence{Run: "worker@benchmark-worker", Lease: "explore", Intent: "active"}
 )
 
 // Share persisted graph fixtures between regressions and benchmarks. Direct
-// domain mutations remain unregistered; decision batches register protocol 2.
+// planner domain mutations remain unregistered; executions use current protocols.
 func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registeredDecision bool) *stateBenchmarkFixture {
 	tb.Helper()
 	store, err := Open(filepath.Join(tb.TempDir(), "state.db"))
@@ -43,7 +43,7 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registered
 	f := &stateBenchmarkFixture{store: store, size: size}
 	err = store.Do(context.Background(), func(tx *Tx) error {
 		g := Graph{
-			Project: Project{ID: stateBenchmarkProject, Title: "Synthetic benchmark", Status: "active", CreatedAt: tx.Now,
+			Project: Project{ID: stateBenchmarkProject, Title: "Synthetic benchmark", Status: "active", CreatedAt: tx.Now, OrchestrationVersion: 1,
 				Reason: &Reason{Worker: stateBenchmarkPlanner.Run, Trigger: "initial", StartedAt: tx.Now, Heartbeat: tx.Now}},
 			Facts:   []Fact{{ID: "origin", Description: "Inspect the synthetic fixture"}, {ID: "goal", Description: "Explain the synthetic fixture"}},
 			Intents: []Intent{}, Hints: []Hint{},
@@ -72,22 +72,46 @@ func newStateBenchmarkFixture(tb testing.TB, size stateBenchmarkSize, registered
 				return err
 			}
 		}
-		raw, err := json.Marshal(map[string]any{"goals": []Goal{}, "steps": steps, "facts": []FactRecord{}, "findings": []Finding{}, "fact_relations": []FactRelation{}})
+		facts := []FactRecord{}
+		for _, fact := range g.Facts {
+			if fact.ID == "origin" || fact.ID == "goal" {
+				continue
+			}
+			record := FactRecord{ID: fact.ID, Description: fact.Description, Scope: "fixture", ObservedAt: tx.Now, Status: "valid", RunID: "worker@history", Evidence: []EvidenceRef{{RunID: "worker@history", Path: "evidence/" + fact.ID, Excerpt: fact.Description}}}
+			if strings.HasPrefix(fact.ID, "f") {
+				record.SourceStepID = "i" + fact.ID[1:]
+				record.RunID = "worker@history-" + fact.ID[1:]
+				record.Evidence[0].RunID = record.RunID
+			}
+			facts = append(facts, record)
+		}
+		raw, err := json.Marshal(map[string]any{"goals": []Goal{}, "steps": steps, "facts": facts, "findings": []Finding{}, "fact_relations": []FactRelation{}})
 		if err != nil {
 			return err
 		}
 		if err = sqlstore.SaveStateMetadata(tx.transactionQueries, stateBenchmarkProject, string(raw), 0, 0); err != nil {
 			return err
 		}
+		// Historical bodies may be archived; support projection uses their durable identities.
+		for n := 1; n <= size.intents; n++ {
+			step, run := fmt.Sprintf("i%03d", n), fmt.Sprintf("history-%03d", n)
+			e := Execution{ProjectID: stateBenchmarkProject, ID: run, Namespace: "benchmark", Backend: "worker", Kind: "explore", Intent: step, Lease: "worker@" + run, RetryKey: "explore:" + step, Status: "succeeded", Job: json.RawMessage(`{}`), CreatedAt: tx.Now, UpdatedAt: tx.Now}
+			if err := sqlstore.InsertExecution(tx.transactionQueries, e, ExecutionSummary{}, ""); err != nil {
+				return err
+			}
+		}
 		state, err := tx.State(stateBenchmarkProject)
 		if err != nil {
 			return err
 		}
 		f.version = DecisionStateVersion(state)
+		if err := tx.RegisterExecution(Execution{ProjectID: stateBenchmarkProject, ID: "benchmark-worker", Namespace: "benchmark", Backend: "worker", Kind: "explore", Intent: "active", Lease: stateBenchmarkWorker.Run, RetryKey: "explore:active", Job: fixtureExecutionJob(tb, tx, stateBenchmarkProject, "explore", "")}); err != nil {
+			return err
+		}
 		if !registeredDecision {
 			return nil
 		}
-		job, err := json.Marshal(map[string]any{"kind": "reason", "run_id": "benchmark", "graph": state.Graph, "state": state,
+		job, err := json.Marshal(map[string]any{"kind": "reason", "run_id": "benchmark", "graph": state.Graph, "state": state, "graph_rpc": true, "result_contract_version": 2,
 			"decision": map[string]any{"version": 2, "state_version": f.version}, "budget": map[string]int{"max_intents": 64}})
 		if err != nil {
 			return err

@@ -21,7 +21,7 @@ func TestEmptyDecisionRequiresExecutableWork(t *testing.T) {
 					f.action("step", "abandon", map[string]any{"action": "abandon", "id": id, "reason": "Direction ruled out"})
 				}
 				if strings.HasPrefix(status, "invalid_") {
-					f.action("fact_relation", "correction", map[string]any{"kind": "refutes", "source": "f002", "target": "f001", "reason": "Corrected observation"})
+					invalidatePlanSource(f)
 				}
 				f.tx(func(tx *Tx) error {
 					if status == "failed" {
@@ -47,7 +47,7 @@ func TestEmptyDecisionRequiresExecutableWork(t *testing.T) {
 				}
 				before, _ := json.Marshal(state)
 				version := DecisionStateVersion(state)
-				job, _ := json.Marshal(map[string]any{"kind": "reason", "run_id": "first", "graph": state.Graph, "state": state,
+				job, _ := json.Marshal(map[string]any{"kind": "reason", "run_id": "first", "graph": state.Graph, "state": state, "graph_rpc": true, "result_contract_version": 2,
 					"decision": map[string]any{"version": 2, "state_version": version}, "budget": map[string]int{"max_intents": 3}})
 				if err := tx.RegisterExecution(Execution{ProjectID: "proj_001", ID: "first", Namespace: "fixture", Backend: "planner", Kind: "reason", Lease: f.fence.Run, Job: job, RetryKey: "reason:idle"}); err != nil {
 					return err

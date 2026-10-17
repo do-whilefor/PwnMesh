@@ -13,7 +13,10 @@ func TestEventOnlyChangesPreserveStoredMetadata(t *testing.T) {
 			fence := ExecutionFence{Run: "worker@event", Lease: "explore", Intent: id}
 			f.tx(func(tx *Tx) error {
 				_, err := tx.transactionQueries.Exec("UPDATE intents SET worker=?,last_heartbeat_at=? WHERE project_id='proj_001' AND id=?", fence.Run, tx.Now, id)
-				return err
+				if err != nil {
+					return err
+				}
+				return tx.RegisterExecution(Execution{ProjectID: "proj_001", ID: "event", Namespace: "test", Backend: "worker", Kind: "explore", Intent: id, Lease: fence.Run, RetryKey: "explore:" + id, Job: fixtureExecutionJob(t, tx, "proj_001", "explore", "")})
 			})
 			fact := ""
 			if op == "conclusion" {

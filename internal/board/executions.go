@@ -58,20 +58,21 @@ func (t *Tx) RegisterExecution(e Execution) (err error) {
 	if metadata.Generation != g.Project.Generation {
 		return Err(409, "Execution input belongs to a previous project round")
 	}
-	if g.Project.OrchestrationVersion == 1 {
-		var policy struct {
-			Graph                 Graph  `json:"graph"`
-			Kind                  string `json:"kind"`
-			GraphRPC              bool   `json:"graph_rpc"`
-			ResultContractVersion int    `json:"result_contract_version"`
-			WorkerType            string `json:"worker_type"`
-			Decision              *struct {
-				Version int `json:"version"`
-			} `json:"decision"`
-		}
-		if json.Unmarshal(e.Job, &policy) != nil || policy.Graph.Project.OrchestrationVersion != 1 || policy.Kind != e.Kind || !policy.GraphRPC || policy.ResultContractVersion != 2 || policy.WorkerType == "mock" || !slices.Contains([]string{"reason", "curate", "explore"}, e.Kind) || (e.Kind == "reason" && (policy.Decision == nil || policy.Decision.Version != 2)) {
-			return Err(422, "orchestration version 1 requires graph RPC, evidence result version 2 and registered role protocols")
-		}
+	if g.Project.OrchestrationVersion != 1 {
+		return Err(409, "execution registration requires orchestration version 1")
+	}
+	var policy struct {
+		Graph                 Graph  `json:"graph"`
+		Kind                  string `json:"kind"`
+		GraphRPC              bool   `json:"graph_rpc"`
+		ResultContractVersion int    `json:"result_contract_version"`
+		WorkerType            string `json:"worker_type"`
+		Decision              *struct {
+			Version int `json:"version"`
+		} `json:"decision"`
+	}
+	if json.Unmarshal(e.Job, &policy) != nil || policy.Graph.Project.OrchestrationVersion != 1 || policy.Kind != e.Kind || !policy.GraphRPC || policy.ResultContractVersion != 2 || policy.WorkerType == "mock" || !slices.Contains([]string{"reason", "curate", "explore"}, e.Kind) || (e.Kind == "reason" && (policy.Decision == nil || policy.Decision.Version != 2)) {
+		return Err(422, "orchestration version 1 requires graph RPC, evidence result version 2 and registered role protocols")
 	}
 	if e.Kind == "curate" {
 		if len(e.Job) > MaxCurationInputBytes {

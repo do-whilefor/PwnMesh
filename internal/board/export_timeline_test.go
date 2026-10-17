@@ -14,21 +14,26 @@ func TestGraphOnlyExportCannotSilentlyDropFGSHistory(t *testing.T) {
 }
 
 func TestTimelinePreservesCorrectionsAndWithdrawnPlans(t *testing.T) {
-	f := newFindingFixture(t)
-	finding := f.action("finding", "first-finding", findingInput(f.first))
-	f.correctFirst()
-	f.fence = ExecutionFence{Run: "planner@first", Lease: "reason"}
-	goal := f.action("goal", "goal", map[string]any{"action": "add", "condition": "WITHDRAWN_CONDITION"})
-	step := f.action("step", "step", stepInput("ABANDONED_DIRECTION", []string{"origin"}, goal.ID, 1))
-	f.action("step", "priority", map[string]any{"action": "priority", "id": step.ID, "priority": 10, "reason": "REORDER_REASON"})
-	f.action("step", "abandon", map[string]any{"action": "abandon", "id": step.ID, "reason": "ABANDON_REASON"})
-	f.action("goal", "withdraw", map[string]any{"action": "withdraw", "id": goal.ID, "reason": "WITHDRAW_REASON"})
-	f.tx(func(tx *Tx) error {
-		timeline, err := tx.ExportTimeline("proj_001")
+	f := newOrchestrationFixture(t)
+	producer := f.worker("timeline-producer", "")
+	first, second := f.fact(producer, "first observation"), f.fact(producer, "controlled replacement")
+	candidate := f.candidate(producer, first, "verified")
+	curator, input := f.curator("initial-finding")
+	f.curate(curator, input, CurateGroup{CandidateIDs: []string{candidate}, Status: "verified", Reason: "Initial observation"})
+	finding := f.state().Findings[0]
+	curator, input = f.curator("correction")
+	f.action(curator.Fence(), "curate", "correction", CuratePayload{ThroughRevision: input.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "supersedes", Source: second, Target: first, Reason: "The controlled request supersedes the earlier observation"}}}, DecisionStateVersion(input))
+	goal := f.action(f.planner, "goal", "goal", map[string]any{"action": "add", "condition": "WITHDRAWN_CONDITION"}, "")
+	step := f.action(f.planner, "step", "step", stepInput("ABANDONED_DIRECTION", []string{"origin"}, goal.ID, 1), "")
+	f.action(f.planner, "step", "priority", map[string]any{"action": "priority", "id": step.ID, "priority": 10, "reason": "REORDER_REASON"}, "")
+	f.action(f.planner, "step", "abandon", map[string]any{"action": "abandon", "id": step.ID, "reason": "ABANDON_REASON"}, "")
+	f.action(f.planner, "goal", "withdraw", map[string]any{"action": "withdraw", "id": goal.ID, "reason": "WITHDRAW_REASON"}, "")
+	f.do(func(tx *Tx) error {
+		timeline, err := tx.ExportTimeline("p")
 		if err != nil {
 			return err
 		}
-		for _, content := range []string{"first observation", "controlled replacement", "/runs/first.raw", "/runs/second.raw", "FACT_RELATION", "supersedes", "WITHDRAWN_CONDITION", "WITHDRAW_REASON", "ABANDONED_DIRECTION", "ABANDON_REASON", "REORDER_REASON", "FACT " + f.first.ID + " status=superseded", "FINDING " + finding.ID + " status=verified support_valid=false", "GOAL " + goal.ID + " status=withdrawn"} {
+		for _, content := range []string{"first observation", "controlled replacement", "/workspace/timeline-producer/first observation.txt", "/workspace/timeline-producer/controlled replacement.txt", "FACT_RELATION", "supersedes", "WITHDRAWN_CONDITION", "WITHDRAW_REASON", "ABANDONED_DIRECTION", "ABANDON_REASON", "REORDER_REASON", "FACT " + first + " status=superseded", "FINDING " + finding.ID + " status=verified support_valid=false", "GOAL " + goal.ID + " status=withdrawn"} {
 			if !strings.Contains(timeline, content) {
 				t.Errorf("timeline omitted %q", content)
 			}

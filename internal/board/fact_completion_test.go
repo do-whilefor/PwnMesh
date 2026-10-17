@@ -22,7 +22,10 @@ func TestEvidenceConclusionRollsBackWithItsOwningTransaction(t *testing.T) {
 			}
 		}
 		g.Intents = []Intent{{ID: fence.Intent, From: []string{"origin"}, Description: "Check fixture authentication", Creator: "planner", Worker: Ptr(fence.Run), Heartbeat: Ptr(tx.Now), CreatedAt: tx.Now}}
-		return tx.Save(g)
+		if err := tx.Save(g); err != nil {
+			return err
+		}
+		return tx.RegisterExecution(Execution{ProjectID: "proj_001", ID: "run", Namespace: "test", Backend: "executor", Kind: "explore", Intent: fence.Intent, Lease: fence.Run, RetryKey: "explore:" + fence.Intent, Job: fixtureExecutionJob(t, tx, "proj_001", "explore", "")})
 	})
 	payload, _ := json.Marshal(map[string]any{"description": "Fixture refused the request", "scope": "one request", "observed_at": "2026-09-22T10:00:00Z", "evidence": []EvidenceRef{{RunID: "run", Path: "/run/frozen.raw", Excerpt: "401 Unauthorized"}}})
 	before := f.state()

@@ -6,14 +6,46 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"pwnmesh/internal/board/internal/sqlstore"
 )
 
 func invalidatePlanSource(f *planFixture) {
-	f.action("fact_relation", "refute-first", map[string]any{"kind": "refutes", "source": "f002", "target": "f001", "reason": "The independent second observation disproves the initial premise"})
+	f.t.Helper()
+	f.tx(func(tx *Tx) error {
+		data, revision, decisionRevision, err := tx.stateData("proj_001")
+		if err != nil {
+			return err
+		}
+		// The fixture's imported observations predate action events. Preserve
+		// that historical shape while assigning evidence before curation.
+		for _, id := range []string{"f001", "f002"} {
+			data.Facts = append(data.Facts, FactRecord{ID: id, Description: "Historical observation " + id, Scope: "fixture", ObservedAt: tx.Now, Status: "valid", RunID: "historical", Evidence: []EvidenceRef{{RunID: "historical", Path: "evidence/" + id, Excerpt: "retained observation"}}})
+		}
+		raw, _ := json.Marshal(data)
+		return sqlstore.SaveStateMetadata(tx.transactionQueries, "proj_001", string(raw), revision, decisionRevision)
+	})
+	e := Execution{ProjectID: "proj_001", ID: "correct-premise", Namespace: "test", Backend: "curator", Kind: "curate", Lease: "curator@correct-premise"}
+	f.tx(func(tx *Tx) error {
+		if _, err := tx.ClaimCurator(e.ProjectID, e.Lease, "correct imported observations"); err != nil {
+			return err
+		}
+		state, err := tx.State(e.ProjectID)
+		if err != nil {
+			return err
+		}
+		e.Job, e.RetryKey = fixtureExecutionJob(f.t, tx, e.ProjectID, e.Kind, ""), CurationRetryKey(state)
+		if err := tx.RegisterExecution(e); err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(CuratePayload{ThroughRevision: state.Revision, Groups: []CurateGroup{}, Relations: []CurateRelation{{Kind: "refutes", Source: "f002", Target: "f001", Reason: "The independent second observation disproves the initial premise"}}})
+		_, err = tx.StateAction(e.ProjectID, e.Fence(), StateAction{Op: "curate", IdempotencyKey: "correct-premise", Payload: raw, ExpectedVersion: DecisionStateVersion(state)})
+		return err
+	})
 }
 
 func claimedPlanExecution(f *planFixture, step string) Execution {
-	e := Execution{ProjectID: "proj_001", ID: "execute-one", Namespace: "test", Backend: "runner", Kind: "explore", Intent: step, Lease: "runner@execute-one", RetryKey: "explore:" + step, Job: json.RawMessage(`{"graph":{"project":{"generation":0}}}`)}
+	e := Execution{ProjectID: "proj_001", ID: "execute-one", Namespace: "test", Backend: "runner", Kind: "explore", Intent: step, Lease: "runner@execute-one", RetryKey: "explore:" + step}
 	f.tx(func(tx *Tx) error {
 		g, err := tx.Load(e.ProjectID)
 		if err != nil {
@@ -24,7 +56,11 @@ func claimedPlanExecution(f *planFixture, step string) Execution {
 				g.Intents[n].Worker = Ptr(e.Lease)
 			}
 		}
-		return tx.Save(g)
+		if err := tx.Save(g); err != nil {
+			return err
+		}
+		e.Job = fixtureExecutionJob(f.t, tx, e.ProjectID, e.Kind, "")
+		return nil
 	})
 	return e
 }

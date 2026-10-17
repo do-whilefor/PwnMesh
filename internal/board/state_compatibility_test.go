@@ -296,3 +296,27 @@ func TestNormalizedFactMatchesProjectionAndFrozenInput(t *testing.T) {
 		return err
 	})
 }
+
+// Retained projects can still be inspected, but cannot revive retired writes.
+func TestRetiredProjectIsReadableWithoutMutationProtocols(t *testing.T) {
+	f := newPlanFixture(t)
+	step := f.action("step", "current-step", stepInput("Inspect fixture", []string{"origin"}, "goal", 0)).ID
+	e := claimedPlanExecution(f, step)
+	f.tx(func(tx *Tx) error {
+		_, err := tx.transactionQueries.Exec("UPDATE pwnmesh_project_orchestration SET version=0 WHERE project_id='proj_001'")
+		return err
+	})
+	before, _ := json.Marshal(f.state())
+	f.tx(func(tx *Tx) error {
+		requireAPIStatus(t, tx.RegisterExecution(e), 409)
+		_, err := tx.StateAction(e.ProjectID, f.fence, StateAction{Op: "step", IdempotencyKey: "retired-step", Payload: json.RawMessage(`{"action":"add","description":"Retired write","from":["origin"]}`)})
+		requireAPIStatus(t, err, 409)
+		_, err = tx.ConcludeEvidenceStep(e.ProjectID, e.Fence(), "f001", nil)
+		requireAPIStatus(t, err, 409)
+		return nil
+	})
+	after, _ := json.Marshal(f.state())
+	if !bytes.Equal(before, after) {
+		t.Fatal("retired mutation changed retained state")
+	}
+}

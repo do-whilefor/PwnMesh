@@ -91,7 +91,7 @@ func newPlanFixture(t *testing.T) *planFixture {
 	f := &planFixture{t: t, store: store, fence: ExecutionFence{Run: "planner@first", Lease: "reason"}}
 	f.tx(func(tx *Tx) error {
 		return tx.Save(Graph{
-			Project: Project{ID: "proj_001", Title: "Plan fixture", Status: "active", CreatedAt: tx.Now, Reason: &Reason{Worker: f.fence.Run, StartedAt: tx.Now, Heartbeat: tx.Now}},
+			Project: Project{ID: "proj_001", Title: "Plan fixture", Status: "active", CreatedAt: tx.Now, OrchestrationVersion: 1, Reason: &Reason{Worker: f.fence.Run, StartedAt: tx.Now, Heartbeat: tx.Now}},
 			Facts:   []Fact{{ID: "origin", Description: "Synthetic input"}, {ID: "goal", Description: "Synthetic goal"}, {ID: "f001", Description: "First observation"}, {ID: "f002", Description: "Second observation"}},
 		})
 	})
@@ -148,7 +148,7 @@ func TestRepeatedPlanDoesNotCreateOrReprioritizeStep(t *testing.T) {
 	register := func(run string) {
 		t.Helper()
 		state := f.state()
-		job, _ := json.Marshal(map[string]any{"kind": "reason", "graph": state.Graph, "state": state,
+		job, _ := json.Marshal(map[string]any{"kind": "reason", "run_id": run, "graph": state.Graph, "state": state, "graph_rpc": true, "result_contract_version": 2,
 			"decision": map[string]any{"version": 2, "state_version": DecisionStateVersion(state)}, "budget": map[string]int{"max_intents": 1}})
 		f.tx(func(tx *Tx) error {
 			return tx.RegisterExecution(Execution{ProjectID: "proj_001", ID: run, Namespace: "test", Backend: "planner", Kind: "reason", Lease: f.fence.Run, RetryKey: "reason:" + run, Job: job})
@@ -227,7 +227,7 @@ func TestRepeatedPlanPreservesExistingStepState(t *testing.T) {
 					if err = tx.Save(g); err != nil || status != "failed" {
 						return err
 					}
-					e := Execution{ProjectID: "proj_001", ID: "attempt", Namespace: "test", Backend: "executor", Kind: "explore", Intent: first.ID, Lease: "executor@attempt", RetryKey: "explore:" + first.ID, Job: json.RawMessage(`{}`)}
+					e := Execution{ProjectID: "proj_001", ID: "attempt", Namespace: "test", Backend: "executor", Kind: "explore", Intent: first.ID, Lease: "executor@attempt", RetryKey: "explore:" + first.ID, Job: fixtureExecutionJob(t, tx, "proj_001", "explore", "")}
 					if err = tx.RegisterExecution(e); err != nil {
 						return err
 					}
@@ -257,7 +257,7 @@ func TestRepeatedPlanPreservesExistingStepState(t *testing.T) {
 				if err = tx.Save(g); err != nil {
 					return err
 				}
-				e := Execution{ProjectID: "proj_001", ID: "retry", Namespace: "test", Backend: "executor", Kind: "explore", Intent: first.ID, Lease: "executor@retry", RetryKey: "explore:" + first.ID, Job: json.RawMessage(`{}`)}
+				e := Execution{ProjectID: "proj_001", ID: "retry", Namespace: "test", Backend: "executor", Kind: "explore", Intent: first.ID, Lease: "executor@retry", RetryKey: "explore:" + first.ID, Job: fixtureExecutionJob(t, tx, "proj_001", "explore", "")}
 				var api *APIError
 				if err = tx.RegisterExecution(e); !errors.As(err, &api) || api.Status != 409 {
 					t.Fatalf("retry without authorization: %v", err)
@@ -269,7 +269,7 @@ func TestRepeatedPlanPreservesExistingStepState(t *testing.T) {
 				if err = tx.ExecutionStatus(previous, "retry_requested", previous.Result); err != nil {
 					return err
 				}
-				e.Job = json.RawMessage(`{"previous_run_id":"attempt"}`)
+				e.Job = fixtureExecutionJob(t, tx, "proj_001", "explore", "attempt")
 				return tx.RegisterExecution(e)
 			})
 		})
@@ -317,4 +317,27 @@ func TestRepeatedGoalDoesNotDuplicateItsSteps(t *testing.T) {
 	if child.ID == first.ID || child.Unchanged {
 		t.Fatalf("same condition under a different parent was suppressed: %+v", child)
 	}
+}
+
+// Domain tests may exercise unregistered planner actions. Persisted executions
+// always use the same role and result protocols as current production jobs.
+func fixtureExecutionJob(tb testing.TB, tx *Tx, project, kind, previous string) json.RawMessage {
+	tb.Helper()
+	state, err := tx.State(project)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	job := map[string]any{"kind": kind, "graph": state.Graph, "state": state, "graph_rpc": true, "result_contract_version": 2}
+	if previous != "" {
+		job["previous_run_id"] = previous
+	}
+	if kind == "reason" {
+		job["decision"] = map[string]any{"version": 2, "state_version": DecisionStateVersion(state)}
+		job["budget"] = map[string]int{"max_intents": 64}
+	}
+	raw, err := json.Marshal(job)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	return raw
 }
