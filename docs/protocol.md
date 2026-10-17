@@ -157,6 +157,9 @@ Input, output, cache-read and cache-write tokens remain provider-reported values
 Late responses and failure settlement retain known usage without accepting late
 content or business results. Same-run cumulative metrics replace previous values;
 they are not added on redelivery and do not constitute a billing ledger.
+Decoded final metrics survive Docker transport failure or cancellation. Cancellation
+before final metrics emission may leave usage only in journals, outside the reported
+aggregate; missing observations are not reconstructed.
 
 Graph RPC is limited to 128 KiB; pages reserve 1 KiB for the envelope. Requests
 validate IDs, digests, offsets and operations against the Job. Read observations

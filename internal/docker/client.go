@@ -579,6 +579,9 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (prot
 		}
 	}
 	if err != nil || ctx.Err() != nil {
+		// Usage already received remains an observation even when execution fails.
+		// Keep business content discarded and cancellation/stop errors authoritative.
+		observed := protocol.Result{Metrics: sink.result.Metrics}
 		dir := path.Dir(target)
 		hard := ctx.Err() != nil && !errors.Is(context.Cause(ctx), protocol.ErrInterrupted)
 		c.pendingStops.Store(dir, pendingStop{project: j.Graph.Project.ID, hard: hard})
@@ -589,13 +592,13 @@ func (c *Client) Run(ctx context.Context, w config.Worker, j protocol.Job) (prot
 			stopErr = c.interrupt(name, dir)
 		}
 		if stopErr != nil {
-			return protocol.Result{}, errors.Join(err, ctx.Err(), fmt.Errorf("execution stop is unconfirmed; project remains quarantined: %w", stopErr))
+			return observed, errors.Join(err, ctx.Err(), fmt.Errorf("execution stop is unconfirmed; project remains quarantined: %w", stopErr))
 		}
 		c.pendingStops.Delete(dir)
 		if ctx.Err() != nil {
-			return protocol.Result{}, ctx.Err()
+			return observed, ctx.Err()
 		}
-		return protocol.Result{}, err
+		return observed, err
 	}
 	return sink.result, nil
 }
