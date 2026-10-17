@@ -12,7 +12,7 @@ formats are rejected without migration or replay; see [protocol](protocol.md).
 | Project | Orchestration version `1` |
 | Execution | Registered Job, live graph bridge, result contract `2`, Decide context `2`; roles `reason`, `explore`, `curate` |
 | Recovery environment | Version `2` digest covers provider settings, container settings and configured tool environment; provider tokens are excluded |
-| Worker session | Schema `1`, matching run, input, workspace and budget identity |
+| Worker session | Reads schema `1` or `2`; writes `2`, with matching run, input, workspace and budget identity |
 | Acceptance | Schema `1` in `acceptance.json`; old `graph.json` alone is rejected before callbacks or writes |
 | Worker graph | Schema `1`, matching graph and per-node definition digests; missing bindings cannot be reconstructed |
 | Evidence | Validated `.pwnmesh/runs/.../evidence/` references; no `.xloom` fallback |
@@ -31,6 +31,11 @@ cannot be reconstructed. Planners publish through version `2` decision batches;
 retained version `1` decision jobs cannot use live reads or direct writes.
 HTTP timeouts require JSON integers of at least `5`, without string, decimal or
 exponent coercion.
+
+Session schema `2` preserves excluded crash-tail ranges across later journal
+checkpoints. Schema `1` sessions upgrade on save; older binaries reject schema `2`.
+Legacy checkpoints cannot identify crash records already promoted by an older
+recovery. Keep a pre-upgrade workspace backup when planning a binary rollback.
 
 Current receipts take precedence over old graph files but still require identity
 and evidence checks. Unsupported files remain untouched. Missing current receipts

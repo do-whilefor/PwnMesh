@@ -13,7 +13,7 @@ Canonical values live in `internal/board/model`.
 | Execution result | `result_contract_version: 2`, `graph_rpc: true` for all roles |
 | Decide context | Version `2` |
 | Immutable input | Version `1`, bound to project, generation and state digest |
-| Worker session | `schema_version: 1`, immutable session identity |
+| Worker session | Reads `schema_version: 1` or `2`, writes `2`; immutable session identity |
 | Acceptance receipt | `schema_version: 1` in `acceptance.json` |
 | Agent checkpoint | Version `1`, independent of session and acceptance |
 | SQLite | Schema `4`, `pwnmesh_*` objects |
@@ -157,9 +157,18 @@ Input, output, cache-read and cache-write tokens remain provider-reported values
 Late responses and failure settlement retain known usage without accepting late
 content or business results. Same-run cumulative metrics replace previous values;
 they are not added on redelivery and do not constitute a billing ledger.
-Decoded final metrics survive Docker transport failure or cancellation. Cancellation
-before final metrics emission may leave usage only in journals, outside the reported
-aggregate; missing observations are not reconstructed.
+Decoded final metrics survive Docker transport failure or cancellation. Before a
+final result, Worker emits `usage_snapshot` after syncing completed model calls and
+on journal recovery. Docker binds these cumulative parent totals to the run and
+increasing journal offset; the final result supersedes them. Execute snapshots
+are partial. Dispatcher retains known child subtotals once when merging a newer
+parent snapshot or incomplete aggregate; these remain observed lower bounds.
+Legacy child records can omit runtime counters; reported usage implies at least
+that many completed calls, without reconstructing other missing observations.
+Unreported child work or a Dispatcher crash before settlement can still leave
+observations only in journals; missing usage is not reconstructed.
+Cancellation and management transitions retain saved metrics when their new
+diagnostic omits them; explicit newer metrics and immutable pending results prevail.
 
 Graph RPC is limited to 128 KiB; pages reserve 1 KiB for the envelope. Requests
 validate IDs, digests, offsets and operations against the Job. Read observations

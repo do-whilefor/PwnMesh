@@ -22,6 +22,8 @@ Malformed new tool arguments receive the existing bounded correction attempt;
 historical non-object inputs use explicit placeholders in requests while their
 original journal bytes remain unchanged. A truncated summary has one concise
 retry, persisted before the request and reset only after compaction commits.
+Context-overflow recovery renews only after a complete response is durably saved.
+Compaction reserves the summary's escaped wire size before selecting recent history.
 
 Execute retains a small script/artifact and command index across compaction and
 recovery. Its sequence IDs point to historical receipts, not current file checks
@@ -36,7 +38,9 @@ Failed-output quotes retain their original coordinates, hash and error status.
   saves restore the caller's in-memory changes. Session replacement is atomic,
   but a directory-sync failure after replacement leaves durability uncertain.
 - Verify the journal's saved offset and checksum before recovery. Complete crash
-  records remain append-only; archive and sync an incomplete tail before truncation.
+  records remain append-only and excluded from evidence across later checkpoints;
+  their reported model usage remains observable. Archive and sync an incomplete
+  tail before truncation.
   Acceptance reads only the identity-bound transcript or verified committed prefix.
   Unknown historical events remain intact without advancing current replay state.
 - Execute receipts bind the run and input to session/artifact hashes, which are
@@ -54,6 +58,7 @@ Failed-output quotes retain their original coordinates, hash and error status.
   after verifying its run/node/input identity, committed final journal message,
   output and artifact hashes. This performs no model or tool calls. Commands,
   unfinished Agents and sessions without a terminal receipt remain fail-closed.
+  Cancellation stops recovery callbacks and leaves late receipts unresolved.
 - An interrupted receipt import re-verifies its source without replaying it.
   Graph resume and inspection share a regular-file reader that rejects symlinks,
   special files, trailing JSON and detected changes during reading. Retained error
