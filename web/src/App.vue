@@ -12,9 +12,9 @@ import ProjectSidebar from './workspace/ProjectSidebar.vue';
 import ProjectForms from './workspace/dialogs/ProjectForms.vue';
 import ProjectManagement from './workspace/dialogs/ProjectManagement.vue';
 import ActionDialog from './workspace/dialogs/ActionDialog.vue';
-const route = useRoute(), router = useRouter(), returnId = ref(''), toastText = ref(''), modelSummary = ref('尚未配置模型');
+const route = useRoute(), router = useRouter(), returnId = ref(''), toastText = ref(''), toastVisible = ref(false), modelSummary = ref('尚未配置模型');
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
-function toast(message: string) { toastText.value = message; clearTimeout(toastTimer); toastTimer = setTimeout(() => toastText.value = '', 3200); }
+function toast(message: string) { toastText.value = message; toastVisible.value = !!message; clearTimeout(toastTimer); toastTimer = setTimeout(() => toastVisible.value = false, 3200); }
 const projectId = computed(() => typeof route.params.id === 'string' ? route.params.id : returnId.value);
 const { resource, commands, projects, current, connected, mutating, mutate, publish } = useWorkspaceSync(projectId, toast);
 const disabled = computed(() => mutating.value || !connected.value);
@@ -66,7 +66,7 @@ onBeforeUnmount(() => { clearTimeout(toastTimer); document.removeEventListener('
   <ProjectForms ref="forms" :get-project="id => projects.find(project => project.id === id)" :create="create" :hint="hint" :is-hint-retry="(id, values) => commands.isHintRetry(id, values)" :disabled="disabled" @toast="toast"/>
   <ProjectManagement ref="management" :project="latestManagement" :disabled="disabled" @action="action"/>
   <ActionDialog ref="confirmation" :perform="perform" :disabled="disabled"/>
-  <div id="toast" role="status" aria-live="polite" :hidden="!toastText">{{ toastText }}</div>
+  <Transition name="toast"><div id="toast" v-show="toastVisible" role="status" aria-live="polite" :aria-hidden="!toastVisible">{{ toastText }}</div></Transition>
 </template>
 
 <!-- Keep the existing global cascade order across pages and dialogs. -->
@@ -469,9 +469,7 @@ dialog{padding:25px;border-color:#e2e9ed;border-radius:14px;box-shadow:0 20px 65
   .log-title>.lucide{transition:transform 160ms ease,color 140ms ease}
   .log-title:hover>.lucide{transform:translateX(2px)}
   .log-expand>.lucide{transition:transform 160ms ease}
-  .log-long-content[open]>.log-body{animation:log-body-reveal 180ms ease-out both}
 }
-@keyframes log-body-reveal{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:translateY(0)}}
 
 /* Inputs and results share one reading area, with controls above the content. */
 .tab-content{min-height:0;min-width:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-color:#cdd7dd transparent;scroll-padding-top:16px}
@@ -835,14 +833,16 @@ dialog.inspector-reader::backdrop{background:#26374330;backdrop-filter:blur(2px)
 .page-leave-to{opacity:0;transform:translateY(-3px)}
 dialog[data-motion="enter"]::backdrop{animation:overlay-in 220ms ease both}
 dialog[data-motion="leave"]::backdrop{animation:overlay-out 160ms ease both}
-.project-menu-popover:not([hidden]){animation:menu-in 180ms cubic-bezier(.22,1,.36,1)}
-@keyframes overlay-in{from{opacity:0}to{opacity:1}}
-@keyframes overlay-out{from{opacity:1}to{opacity:0}}
-@keyframes menu-in{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.menu-enter-active,.toast-enter-active{transition:opacity 180ms ease,transform 220ms cubic-bezier(.22,1,.36,1),translate 220ms cubic-bezier(.22,1,.36,1)}
+.menu-leave-active,.toast-leave-active{transition:opacity 140ms ease,transform 160ms ease,translate 160ms ease;pointer-events:none}
+.menu-enter-from,.menu-leave-to{opacity:0;transform:translateY(-4px)}
+.toast-enter-from,.toast-leave-to{opacity:0;translate:0 5px}
+@keyframes overlay-in{from{opacity:var(--dialog-backdrop-from,0)}to{opacity:1}}
+@keyframes overlay-out{from{opacity:var(--dialog-backdrop-from,1)}to{opacity:0}}
 @media(prefers-reduced-motion:reduce){
-  .page-enter-active,.page-leave-active{transition:none}
+  .page-enter-active,.page-leave-active,.menu-enter-active,.menu-leave-active,.toast-enter-active,.toast-leave-active{transition:none}
   .page-enter-from,.page-leave-to{transform:none}
-  dialog[data-motion]::backdrop,.project-menu-popover:not([hidden]){animation:none}
+  dialog[data-motion]::backdrop{animation:none}
   .llm-select-wrap select::picker(select){transition:none}
 }
 </style>

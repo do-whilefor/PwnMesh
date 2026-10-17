@@ -170,3 +170,31 @@ it('respects reduced motion for opening, Escape, and close buttons', async () =>
     expect(hintDialog.open).toBe(false); expect(hintDialog.dataset.motion).toBeUndefined();
   } finally {wrapper.unmount();}
 });
+
+it('ignores a queued native close event after the action dialog has reopened', async () => {
+  vi.spyOn(HTMLDialogElement.prototype, 'close').mockImplementation(function (this: HTMLDialogElement) {this.open = false;});
+  const wrapper = mount(ActionDialog, {props: {perform: async () => undefined}});
+  try {
+    wrapper.vm.open(project(), 'restart'); wrapper.vm.close();
+    await vi.advanceTimersByTimeAsync(241);
+    const dialog = wrapper.get<HTMLDialogElement>('dialog').element;
+    expect(dialog.open).toBe(false);
+    wrapper.vm.open(project(), 'delete');
+    dialog.dispatchEvent(new Event('close')); await flushPromises();
+    expect(dialog.open).toBe(true); expect(wrapper.get('#action-title').text()).toBe('删除项目');
+    expect(wrapper.emitted('closed')).toBeUndefined();
+    wrapper.vm.close(); await vi.advanceTimersByTimeAsync(241);
+    dialog.dispatchEvent(new Event('close')); await flushPromises();
+    expect(wrapper.emitted('closed')).toHaveLength(1); expect(wrapper.get('#action-title').text()).toBe('');
+  } finally {wrapper.unmount();}
+});
+
+it('cancels a management open requested before an immediate close in the same tick', async () => {
+  const wrapper = mount(ProjectManagement, {props: {project: project()}});
+  try {
+    const pending = wrapper.vm.open(); void wrapper.vm.close(true); await pending;
+    expect(wrapper.get<HTMLDialogElement>('dialog').element.open).toBe(false);
+    await wrapper.vm.open();
+    expect(wrapper.get<HTMLDialogElement>('dialog').element.open).toBe(true);
+  } finally {wrapper.unmount();}
+});

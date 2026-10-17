@@ -2,6 +2,7 @@
 import {computed, nextTick, onBeforeUnmount, reactive, ref} from 'vue';
 import Icon from '@/ui/Icon.vue';
 import {useDialogMotion} from '@/ui/useDialogMotion';
+import {useDisclosureMotion} from '@/ui/useDisclosureMotion';
 import {PROJECT_TYPES, fileSize, isProjectClosed, validateFiles, validateHint, validateProject} from '../model/project-model';
 import type {CreateDraft, HintDraft, ProjectView} from '../model/types';
 import MaterialPicker from './MaterialPicker.vue';
@@ -19,6 +20,7 @@ const createDialog = ref<HTMLDialogElement>(), hintDialog = ref<HTMLDialogElemen
 const createMotion = useDialogMotion(createDialog), hintMotion = useDialogMotion(hintDialog);
 const createForm = ref<HTMLFormElement>(), hintForm = ref<HTMLFormElement>();
 const imported = ref<HTMLDetailsElement>();
+const importedExpanded = ref(false), importedMotion = useDisclosureMotion(importedExpanded, imported), importedDisplayed = importedMotion.displayed;
 const emptyCreate = (): CreateDraft => ({name: '', target: '', goal: '', type: 'pentest', files: []});
 const createDraft = reactive<CreateDraft>(emptyCreate());
 const hintDraft = reactive<HintDraft>({text: '', files: []});
@@ -42,6 +44,8 @@ function clearError(kind: 'create' | 'hint') {
   else {hintError.value = ''; hintInvalid.value = '';}
 }
 function captureHint() {if (hintProjectId.value) hintDrafts.set(hintProjectId.value, {text: hintDraft.text, files: hintDraft.files.slice()});}
+function resetImported() {importedExpanded.value = false;importedMotion.reset();}
+function hintClosed() {captureHint();if (!hintDialog.value?.open) resetImported();}
 function closeCreate(immediate = false) {if (!createBusy.value) void createMotion.close(immediate);}
 function closeHint(immediate = false) {if (!hintBusy.value) {captureHint(); void hintMotion.close(immediate);}}
 async function openCreate() {
@@ -57,7 +61,7 @@ async function openHint(id: string) {
   closeCreate(true); captureHint(); hintProjectId.value = id;
   const draft = hintDrafts.get(id) || {text: '', files: []};
   Object.assign(hintDraft, {text: draft.text, files: draft.files.slice()}); clearError('hint');
-  if (imported.value) imported.value.open = false;
+  resetImported();
   hintMotion.show();
   await nextTick(); hintForm.value?.querySelector<HTMLTextAreaElement>('#hint-text')?.focus(); return true;
 }
@@ -122,11 +126,11 @@ defineExpose({openCreate, openHint, resetCreate, close});
       <p id="create-error" class="form-error" role="alert">{{ createError }}</p><footer class="dialog-footer"><button type="button" class="button secondary" data-close="create-dialog" :disabled="createBusy" @click="closeCreate()">取消</button><button type="submit" class="button primary" :disabled="createBusy || createUncertain || disabled">{{ createBusy ? '创建中…' : '创建并开始' }}</button></footer>
     </form>
   </dialog>
-  <dialog ref="hintDialog" id="hint-dialog" class="forms-dialog" aria-labelledby="hint-title" @cancel.prevent="closeHint()" @close="captureHint">
+  <dialog ref="hintDialog" id="hint-dialog" class="forms-dialog" aria-labelledby="hint-title" @cancel.prevent="closeHint()" @close="hintClosed">
     <form ref="hintForm" id="hint-form" novalidate :aria-busy="hintBusy" @submit.prevent="submitHint" @input="clearError('hint')" @keydown="shortcut($event, 'hint')">
       <header class="dialog-header"><div><h2 id="hint-title">补充信息</h2><p id="hint-project-name" class="forms-project-name">{{ hintProject?.name }}</p></div><button type="button" class="icon-button" data-close="hint-dialog" aria-label="关闭补充信息" :disabled="hintBusy" @click="closeHint()"><Icon name="x" /></button></header>
       <p id="hint-status" class="forms-status" role="status" :hidden="!hintStatus">{{ hintStatus }}</p><label class="field-label" for="hint-text">补充内容</label><textarea id="hint-text" v-model="hintDraft.text" name="text" rows="4" maxlength="32768" placeholder="补充线索、测试范围或需要关注的问题…" :disabled="hintBusy || disabled" :aria-invalid="hintInvalid === 'text' || undefined"></textarea>
-      <details ref="imported" id="hint-imported" class="forms-imported" :hidden="!hintProject?.files.length"><summary><span>已导入材料</span><span id="hint-imported-count">{{ hintProject?.files.length || 0 }}</span><Icon name="chevron-down" /></summary><ul id="hint-imported-files" class="file-list forms-files"><li v-for="file in hintProject?.files || []" :key="file.id"><Icon name="file" /><span :title="file.name">{{ file.name }}</span><small>{{ fileSize(file.size) }}</small></li></ul></details>
+      <details ref="imported" id="hint-imported" class="forms-imported" :hidden="!hintProject?.files.length" :open="importedDisplayed"><summary :aria-expanded="importedExpanded" @click.prevent="importedExpanded = !importedExpanded"><span>已导入材料</span><span id="hint-imported-count">{{ hintProject?.files.length || 0 }}</span><Icon name="chevron-down" /></summary><ul id="hint-imported-files" class="file-list forms-files"><li v-for="file in hintProject?.files || []" :key="file.id"><Icon name="file" /><span :title="file.name">{{ file.name }}</span><small>{{ fileSize(file.size) }}</small></li></ul></details>
       <MaterialPicker kind="hint" :files="hintDraft.files" :imported-count="hintProject?.files.length || 0" :disabled="hintBusy || disabled" :invalid="hintInvalid === 'files'" @add="addFiles('hint', $event)" @remove="removeFile('hint', $event)" />
       <p class="form-error" id="hint-error" role="alert">{{ hintError }}</p><footer class="dialog-footer"><span class="forms-shortcut">Ctrl / ⌘ + Enter</span><button type="button" class="button secondary" data-close="hint-dialog" :disabled="hintBusy" @click="closeHint()">取消</button><button type="submit" class="button primary" :disabled="hintBusy || disabled || !!unavailable(hintProject)">{{ hintBusy ? '添加中…' : '添加' }}</button></footer>
     </form>

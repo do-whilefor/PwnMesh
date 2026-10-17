@@ -1,7 +1,7 @@
 import {nextTick, onBeforeUnmount, onDeactivated, onMounted, shallowRef, watch, type Ref} from 'vue';
 
 /** Swap one live view at the fade boundary; newer selections cancel older work. */
-export function useViewMotion<T>(selected: Ref<T>, panel: Ref<HTMLElement | undefined>) {
+export function useViewMotion<T>(selected: Ref<T>, panel: Ref<HTMLElement | undefined>, options: {inert?: boolean} = {}) {
   const displayed = shallowRef(selected.value);
   let version = 0, stop: (() => void) | undefined, preference: MediaQueryList | undefined;
   let pending = Promise.resolve();
@@ -32,7 +32,7 @@ export function useViewMotion<T>(selected: Ref<T>, panel: Ref<HTMLElement | unde
     pending = (async () => {
       let entering: Keyframe = from;
       if (displayed.value !== value) {
-        element.inert = true; element.dataset.viewMotion = 'leave';
+        element.inert = options.inert !== false; element.dataset.viewMotion = 'leave';
         await play(element, [from, {opacity: 0, transform: 'translateY(-4px)'}], 110);
         if (ticket !== version) return;
         displayed.value = value;
@@ -51,5 +51,5 @@ export function useViewMotion<T>(selected: Ref<T>, panel: Ref<HTMLElement | unde
   onMounted(() => {preference = window.matchMedia?.('(prefers-reduced-motion: reduce)'); preference?.addEventListener('change', reduce);});
   onDeactivated(reset);
   onBeforeUnmount(() => {reset(); preference?.removeEventListener('change', reduce);});
-  return {displayed, ready: () => pending};
+  return {displayed, ready: () => pending, reset};
 }

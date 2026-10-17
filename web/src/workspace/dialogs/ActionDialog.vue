@@ -25,7 +25,7 @@ function open(project: ProjectView, action: ProjectAction) {
   motion.show(); return true;
 }
 function close() {if (!busy.value) void motion.close();}
-function onClose() {operation.value = null; emit('closed');}
+function onClose() {if (!dialog.value?.open) {operation.value = null; emit('closed');}}
 async function submit() {
   if (!operation.value || busy.value || props.disabled || invalid.value) return;
   const captured = {...operation.value}; busy.value = true; error.value = '';

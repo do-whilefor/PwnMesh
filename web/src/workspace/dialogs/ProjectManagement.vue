@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import {computed, nextTick, ref} from 'vue';
+import {computed, nextTick, onBeforeUnmount, ref} from 'vue';
 import Icon from '@/ui/Icon.vue';
 import {useDialogMotion} from '@/ui/useDialogMotion';
 import {dateTime} from '@/ui/format';
@@ -12,12 +12,13 @@ const props = defineProps<{project?: ProjectView; disabled?: boolean}>();
 const emit = defineEmits<{action: [operation: ProjectOperation]; closed: []}>();
 const dialog = ref<HTMLDialogElement>();
 const motion = useDialogMotion(dialog);
+let openVersion = 0;
 const labels = {running: '探索中', done: '已完成', paused: '已暂停', pending: '待开始', terminated: '已终止'};
 const controls = computed(() => props.project ? actions(props.project).filter(action => ['pause', 'resume', 'terminate'].includes(action)) : []);
 const projectType = computed(() => PROJECT_TYPES.find(type => type.value === props.project?.type)?.label || '通用');
 const footer = computed(() => props.project?.archived ? '历史记录 · 仅供查看' : props.project?.readOnly ? '历史项目只读，请新建项目继续' : props.project?.status === 'paused' ? '已暂停，现有记录已保留' : ['terminated', 'done'].includes(props.project?.status || '') ? '项目已结束，记录已保留' : '暂停可继续，终止保留记录');
-async function open() {await nextTick(); if (props.project) motion.show();}
-function close(immediate = false) {return motion.close(immediate);}
+async function open() {const ticket = ++openVersion; await nextTick(); if (ticket === openVersion && props.project) motion.show();}
+function close(immediate = false) {openVersion++; return motion.close(immediate);}
 function action(value: ProjectAction) {
   const project = props.project;
   if (!project || props.disabled) return;
@@ -25,6 +26,7 @@ function action(value: ProjectAction) {
   emit('action', {id: project.id, action: value, generation: project.generation, status: project.status});
 }
 function focusAction() {dialog.value?.querySelector<HTMLButtonElement>('[data-action]')?.focus({preventScroll: true});}
+onBeforeUnmount(() => {openVersion++;});
 defineExpose({open, close, focusAction});
 </script>
 <template>

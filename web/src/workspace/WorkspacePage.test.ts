@@ -19,7 +19,7 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-const graphStub = defineComponent({name: 'GraphCanvas', setup(_, {expose}) { expose({clearSelection() {}, setStatusFilter() {}}); return () => h('div', {class: 'graph-stub'}); }});
+const graphStub = defineComponent({name: 'GraphCanvas', props: ['state'], setup(_, {expose}) { expose({clearSelection() {}, setStatusFilter() {}}); return () => h('div', {class: 'graph-stub'}); }});
 const readerStub = defineComponent({name: 'RecordReader', setup(_, {expose}) { expose({close() {}, open() {}}); return () => h('div'); }});
 const materialsStub = defineComponent({name: 'MaterialsView', setup(_, {expose}) { expose({cancel() {}}); return () => h('div'); }});
 function project(id = 'project', generation = 1): ProjectView {
@@ -105,6 +105,49 @@ test.each(['round', 'reset'])('a %s change cancels node location pending behind 
     expect(selectNode).not.toHaveBeenCalled(); expect(focusNode).not.toHaveBeenCalled();
     expect(wrapper.get<HTMLElement>('#project-view').element.inert).toBe(false);
     expect(wrapper.get<HTMLButtonElement>('[data-filter="done"]').element.disabled).toBe(false);
+  } finally {wrapper.unmount(); vi.useRealTimers();}
+});
+
+test('project transitions retain outgoing state, block stale actions, and accept only the latest selection', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  vi.spyOn(window, 'matchMedia').mockReturnValue({matches: false, addEventListener() {}, removeEventListener() {}} as unknown as MediaQueryList);
+  const first = {...project('first'), name: 'First project'}, second = {...project('second'), name: 'Second project'}, latest = {...project('latest'), name: 'Latest project'};
+  const wrapper = mount(WorkspacePage, {props: {project: first, disabled: false, modelSummary: '', loadRound: async () => undefined}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
+  try {
+    const pane = wrapper.get<HTMLElement>('.project-content').element, graph = wrapper.getComponent(GraphCanvas).element;
+    await wrapper.setProps({project: second});
+    expect(pane.dataset.viewMotion).toBe('leave'); expect(pane.inert).toBe(false);
+    expect(wrapper.get<HTMLButtonElement>('#project-manage').element.disabled).toBe(true);
+    expect(wrapper.get('h1').text()).toBe('First project');
+    expect(wrapper.getComponent(GraphCanvas).props('state')).toEqual(first.state);
+    await wrapper.get('#project-manage').trigger('click'); await wrapper.get('#add-hint').trigger('click');
+    expect(wrapper.emitted('manage')).toBeUndefined(); expect(wrapper.emitted('hint')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(30); await wrapper.setProps({project: latest});
+    expect(wrapper.get('h1').text()).toBe('First project');
+    await vi.advanceTimersByTimeAsync(600); await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('Latest project'); expect(wrapper.getComponent(GraphCanvas).element).toBe(graph);
+    expect(pane.inert).toBe(false); expect(pane.dataset.viewMotion).toBeUndefined();
+    await wrapper.get('#add-hint').trigger('click'); expect(wrapper.emitted('hint')).toEqual([['latest']]);
+    await wrapper.setProps({project: {...latest, name: 'Latest refreshed'}});
+    expect(wrapper.get('h1').text()).toBe('Latest refreshed'); expect(pane.dataset.viewMotion).toBeUndefined();
+  } finally {wrapper.unmount(); vi.useRealTimers();}
+});
+
+test('round transitions retain outgoing graph while the selector follows accepted requests and can reverse rapidly', async () => {
+  vi.useFakeTimers({toFake: ['setTimeout', 'clearTimeout']});
+  vi.spyOn(window, 'matchMedia').mockReturnValue({matches: false, addEventListener() {}, removeEventListener() {}} as unknown as MediaQueryList);
+  const current = project(), wrapper = mount(WorkspacePage, {props: {project: current, disabled: false, modelSummary: '', loadRound: async () => current.history[0]}, global: {stubs: {GraphCanvas: graphStub, RecordReader: readerStub, ActivityPanel: true, MaterialsView: materialsStub, ResultsView: true}}});
+  try {
+    const pane = wrapper.get<HTMLElement>('.project-content').element;
+    await wrapper.get('#run-select').setValue('0'); await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('Current'); expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('0');
+    expect(pane.dataset.viewMotion).toBe('leave');
+    await vi.advanceTimersByTimeAsync(30); await wrapper.get('#run-select').setValue('current'); await flushPromises();
+    await vi.advanceTimersByTimeAsync(600); await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('Current'); expect(pane.inert).toBe(false);
+    await wrapper.get('#run-select').setValue('0'); await flushPromises(); await vi.advanceTimersByTimeAsync(600); await flushPromises();
+    expect(wrapper.get('h1').text()).toBe('Historical round'); expect(wrapper.get<HTMLSelectElement>('#run-select').element.value).toBe('0');
+    expect(pane.dataset.viewMotion).toBeUndefined();
   } finally {wrapper.unmount(); vi.useRealTimers();}
 });
 

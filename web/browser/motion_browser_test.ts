@@ -29,6 +29,70 @@ async function mockSettings(page: Page) {
   await page.route('**/projects',route => route.fulfill({contentType:'application/json',body:'[]'}));
 }
 
+test('project menus fade both ways and rapid dismissal never leaves invisible actions active',options,async () => {
+  const server = await staticServer(), browser = await launch();
+  try {
+    const page = await browser.newPage({viewport:{width:1440,height:1000}}), errors: string[] = [];
+    page.on('pageerror',error => errors.push(error.message));
+    const fixture = workspaceFixture(); await interceptProject(page,fixture);
+    await page.goto(server.url+'/#project/'+fixture.state.graph.project.id,{waitUntil:'networkidle'});
+    const sample = (closing: boolean) => page.evaluate(async closing => {
+      if (closing) document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+      else document.querySelector<HTMLButtonElement>('[data-project-menu]')!.click();
+      const frames: MotionFrame[] = [], start = performance.now();
+      do {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const menu = document.querySelector<HTMLElement>('#project-menu')!, style = getComputedStyle(menu);
+        if (style.display !== 'none') frames.push({opacity:Number(style.opacity),offset:new DOMMatrixReadOnly(style.transform).m42});
+      } while (performance.now() - start < 350);
+      return frames;
+    },closing);
+    eases(await sample(false),'project menu opening');
+    eases(await sample(true),'project menu closing');
+    assert.equal(await page.locator('[data-project-menu]').evaluate(element => document.activeElement === element),true);
+    await page.evaluate(async () => {
+      const trigger = document.querySelector<HTMLButtonElement>('[data-project-menu]')!;
+      for (let index = 0; index < 9; index++) {trigger.click();await new Promise(resolve => setTimeout(resolve,25));}
+    });
+    await page.waitForFunction(() => {
+      const menu = document.querySelector<HTMLElement>('#project-menu')!;
+      return !menu.inert && getComputedStyle(menu).opacity === '1' && !menu.getAnimations().length;
+    });
+    assert.equal(await page.locator('#project-menu [role="menuitem"]').first().evaluate(element => document.activeElement === element),true);
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#project-menu').evaluate(element => (element as HTMLElement).inert),true,'closing menu cannot receive clicks or keyboard focus');
+    await page.locator('#project-menu').waitFor({state:'hidden'});
+    await page.emulateMedia({reducedMotion:'reduce'});
+    await sample(false); await sample(true);
+    assert.equal(await page.locator('#project-menu').isVisible(),false);
+    assert.deepEqual(errors,[]);
+  } finally {await browser.close();await server.close();}
+});
+
+test('toast keeps its message throughout a soft entrance and exit',options,async () => {
+  const server = await staticServer(), browser = await launch();
+  try {
+    const page = await browser.newPage({viewport:{width:1440,height:1000}});
+    await interceptProject(page,workspaceFixture());
+    await page.goto(server.url+'/#project/motion-fixture',{waitUntil:'networkidle'});
+    await page.locator('#view-tab-result').click(); await page.locator('#export-results').waitFor();
+    const samples = await page.evaluate(async () => {
+      document.querySelector<HTMLButtonElement>('#export-results')!.click();
+      const frames: (MotionFrame & {elapsed:number; text:string})[] = [], start = performance.now();
+      do {
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const toast = document.querySelector<HTMLElement>('#toast')!, style = getComputedStyle(toast);
+        if (style.display !== 'none') frames.push({elapsed:performance.now()-start,text:toast.textContent || '',opacity:Number(style.opacity),offset:parseFloat(style.translate.split(' ')[1] || '0')});
+      } while (performance.now() - start < 3600);
+      return frames;
+    });
+    eases(samples.filter(frame => frame.elapsed < 300),'toast opening');
+    eases(samples.filter(frame => frame.elapsed > 3150),'toast closing');
+    assert.ok(samples.every(frame => frame.text.trim()),'message survives until the exit finishes');
+    assert.equal(await page.locator('#toast').isVisible(),false);
+  } finally {await browser.close();await server.close();}
+});
+
 // Trigger the change and sample layout in the same browser task, so Playwright's
 // actionability waits cannot hide the intermediate frames being tested.
 async function heights(page: Page, change: Change, checkAuthReveal = false): Promise<number[]> {
@@ -333,15 +397,25 @@ test('log, material and result readers ease with their backdrop and rapid reopen
     }
     await page.locator('#view-tab-graph').click();
     await page.locator(log).click();
-    await page.evaluate(async selector => {
+    const backdropJumps = await page.evaluate(async selector => {
+      const dialog = document.querySelector<HTMLDialogElement>('.inspector-reader')!;
+      const opacity = () => Number(getComputedStyle(dialog,'::backdrop').opacity);
+      const jumps: number[] = [];
       for (let index = 0; index < 4; index++) {
+        const beforeClose = opacity();
         document.querySelector<HTMLButtonElement>('.inspector-reader[open] [data-inspector-action="close"]')!.click();
+        jumps.push(Math.abs(opacity() - beforeClose));
         await new Promise(resolve => setTimeout(resolve,25));
+        const beforeOpen = opacity();
         document.querySelector<HTMLElement>(selector)!.click();
+        await Promise.resolve(); await Promise.resolve();
+        jumps.push(Math.abs(opacity() - beforeOpen));
         await new Promise(resolve => setTimeout(resolve,25));
       }
       await new Promise(resolve => setTimeout(resolve,400));
+      return jumps;
     },log);
+    assert.ok(backdropJumps.every(jump => jump < .08),`backdrop reversal preserves its rendered opacity: ${backdropJumps.join(', ')}`);
     assert.equal(await page.locator('.inspector-reader[open]').count(),1);
     assert.deepEqual(await page.locator('.inspector-reader[open]').evaluate((dialog: HTMLDialogElement) => ({inert:dialog.inert,running:dialog.getAnimations().filter(animation => animation.playState === 'running').length})),{inert:false,running:0});
     await page.keyboard.press('Escape');
