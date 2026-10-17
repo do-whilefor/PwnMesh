@@ -24,9 +24,7 @@ func TestGraphActionSchemaDescribesModeFields(t *testing.T) {
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
 			opts := Options{Tools: []agent.Tool{}}
-			if err := ConfigureRuntimeTools(Job{Kind: tc.kind}, &opts); err != nil {
-				t.Fatal(err)
-			}
+			configureRoleTools(t, Job{Kind: tc.kind}, &opts)
 			var schema struct {
 				Properties struct {
 					Payload struct {
@@ -106,9 +104,7 @@ func TestGraphActionSchemaPreservesOperationPayloads(t *testing.T) {
 				job.Decision = &board.DecisionContext{Version: 2, StateVersion: strings.Repeat("a", 64)}
 			}
 			opts := Options{Tools: []agent.Tool{}}
-			if err := ConfigureRuntimeTools(job, &opts); err != nil {
-				t.Fatal(err)
-			}
+			configureRoleTools(t, job, &opts)
 			raw := json.RawMessage(`{"op":"` + tc.op + `","idempotency_key":"probe","payload":` + tc.payload + `}`)
 			if err := agent.ValidateArguments(opts.Tools[1].Schema, raw); err != nil {
 				t.Fatalf("valid operation payload rejected: %v", err)
@@ -155,9 +151,7 @@ func TestGraphActionSchemaPreservesFrozenAndHistoricalEvidence(t *testing.T) {
 		submissions = append(submissions, request.Action.Payload)
 		return board.StateActionResult{ID: "candidate001"}, nil
 	}}
-	if err := ConfigureRuntimeTools(job, &opts); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, job, &opts)
 	action := opts.Tools[1]
 	raw := json.RawMessage(`{"op":"candidate","idempotency_key":"probe","payload":{"claim":"Observed","scope":"fixture","status":"verified","sources":["fact001"],"evidence":[{"path":"result.txt","start_line":2,"end_line":2},{"path":"retained.txt","run_id":"previous-run","excerpt":"exact text","start_line":0,"end_line":0}]}}`)
 	for range 2 {
@@ -209,9 +203,7 @@ func TestGraphActionFactRejectsHistoricalEvidenceWithCorrectionGuidance(t *testi
 		submissions = append(submissions, request.Action.Payload)
 		return board.StateActionResult{ID: "fact001"}, nil
 	}}
-	if err := ConfigureRuntimeTools(job, &opts); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, job, &opts)
 	action := opts.Tools[1]
 	invalid := json.RawMessage(`{"op":"fact","idempotency_key":"observation","payload":{"description":"Checked original bytes","scope":"fixture","observed_at":"2026-10-08T10:00:00Z","evidence":[{"path":"producer.txt","run_id":"producer","excerpt":"independently observed producer bytes\n"}]}}`)
 	if err := agent.ValidateArguments(action.Schema, invalid); err != nil {

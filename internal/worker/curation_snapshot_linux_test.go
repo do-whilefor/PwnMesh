@@ -14,6 +14,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/board"
+	"pwnmesh/internal/board/model"
 )
 
 func TestCuratorSnapshotReadsRetainedPagesAndBindsCommit(t *testing.T) {
@@ -113,7 +114,7 @@ func TestCuratorReadsImmutableSnapshotLocallyAndKeepsCommitCAS(t *testing.T) {
 	if err != nil || json.Unmarshal([]byte(raw), &page) != nil || len(page.Items) != 1 {
 		t.Fatalf("missing assembled candidate: %v", err)
 	}
-	var candidate board.CandidateView
+	var candidate model.CandidateView
 	want := j.State.CandidateView(j.State.Candidates[0])
 	if json.Unmarshal(page.Items[0], &candidate) != nil || candidate.Reason != j.State.Candidates[0].Reason || candidate.GroupKey != want.GroupKey || candidate.SupportValid == nil || *candidate.SupportValid != *want.SupportValid {
 		t.Fatal("snapshot paging changed original candidate bytes")
@@ -148,18 +149,16 @@ func TestCuratorPromptAndCandidateReadsShareGroupingAndConfidenceHints(t *testin
 		t.Fatal(err)
 	}
 	var initial struct {
-		Candidates []board.CandidateView `json:"candidates"`
+		Candidates []model.CandidateView `json:"candidates"`
 	}
 	if json.Unmarshal(raw, &initial) != nil || len(initial.Candidates) != 1 {
 		t.Fatal("curator input omitted its available candidate")
 	}
 	o := Options{RunDir: t.TempDir()}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, j, &o)
 	rawPage, err := o.Tools[0].Execute(context.Background(), json.RawMessage(`{"section":"candidates","ids":["candidate_a"]}`))
 	var page graphPage
-	var candidate board.CandidateView
+	var candidate model.CandidateView
 	if err != nil || json.Unmarshal([]byte(rawPage), &page) != nil || len(page.Items) != 1 || json.Unmarshal(page.Items[0], &candidate) != nil {
 		t.Fatalf("candidate hint page failed: %v", err)
 	}
@@ -189,9 +188,7 @@ func TestCuratorPromptAndCandidateReadsShareGroupingAndConfidenceHints(t *testin
 func TestGraphReadFieldHintsKeepSupportSelectorsExplicit(t *testing.T) {
 	j := curationJob(t)
 	o := Options{RunDir: t.TempDir()}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, j, &o)
 	var schema struct {
 		Properties map[string]struct{ Description string }
 	}

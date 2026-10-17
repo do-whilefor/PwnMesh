@@ -17,6 +17,7 @@ import (
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/process"
+	"pwnmesh/internal/protocol"
 )
 
 func TestWorkerRejectsInvalidBudgetBeforeSessionEffects(t *testing.T) {
@@ -62,7 +63,7 @@ func TestSessionReleasePreservesCancellationMeaning(t *testing.T) {
 		marked bool
 	}{
 		{name: "completed"},
-		{name: "interrupted", cause: ErrInterrupted},
+		{name: "interrupted", cause: protocol.ErrInterrupted},
 		{name: "cancelled", cause: context.Canceled, marked: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -126,9 +127,7 @@ func TestRuntimeToolClosuresOwnTheirRunWhenCallerReusesSpareCapacity(t *testing.
 		job.Graph.Facts[0].Description = marker
 		o := Options{Tools: base, RunDir: t.TempDir()}
 		o.Output = sessionTestBridge(job, o.RunDir)
-		if err := ConfigureRuntimeTools(job, &o); err != nil {
-			t.Fatal(err)
-		}
+		configureRoleTools(t, job, &o)
 		options = append(options, o)
 	}
 	for i, marker := range []string{"only-agent-a", "only-agent-b"} {

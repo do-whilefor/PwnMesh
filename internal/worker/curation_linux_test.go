@@ -38,9 +38,7 @@ func TestCuratorPreservesExplicitRequestReview(t *testing.T) {
 		}
 		return board.StateActionResult{Committed: true, StateVersion: board.DecisionStateVersion(*j.State)}, nil
 	}}
-	if err := ConfigureRuntimeTools(j, &opts); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, j, &opts)
 	raw := json.RawMessage(`{"op":"curate","payload":{"groups":[],"request_review":{"disposition":"needs_review","checked_sources":["fact_a"],"reason":"An independent observation is still needed"}}}`)
 	action := snapshotRuntimeTool(t, opts, "graph_action")
 	if err := agent.ValidateArguments(action.Schema, raw); err != nil {
@@ -72,7 +70,7 @@ func TestCuratorRejectsMixedOrMismatchedInput(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			j := curationJob(t)
 			mutate(&j)
-			if err := ConfigureRuntimeTools(j, &Options{}); err == nil {
+			if _, err := newRoleRuntime(j, Options{}, nil); err == nil {
 				t.Fatal("accepted incompatible curator input")
 			}
 		})
@@ -231,9 +229,7 @@ func TestOrchestrationRuntimePermissionsAndCandidateEvidence(t *testing.T) {
 				t.Fatalf("bridge permission differs: allowed=%v err=%v", tc.allowed, err)
 			}
 			options := Options{Tools: []agent.Tool{}}
-			if err := ConfigureRuntimeTools(j, &options); err != nil {
-				t.Fatal(err)
-			}
+			configureRoleTools(t, j, &options)
 			tool := snapshotRuntimeTool(t, options, "graph_action")
 			fields := map[string]any{"op": tc.op, "payload": payload}
 			if tc.kind != "curate" {
@@ -276,9 +272,7 @@ func TestCuratorSchemaAndPayloadBoundary(t *testing.T) {
 		t.Fatalf("invalid curation input reached the bridge: %+v", request)
 		return nil, nil
 	}}
-	if err := ConfigureRuntimeTools(j, &o); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, j, &o)
 	action := o.Tools[1]
 	var schema struct {
 		Properties map[string]json.RawMessage `json:"properties"`

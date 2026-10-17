@@ -44,9 +44,7 @@ func TestCTFSubmissionCapabilityRequiresConfiguredChannel(t *testing.T) {
 					t.Fatalf("%s prompt lost the general submission evidence policy", kind)
 				}
 				options := Options{RunDir: t.TempDir()}
-				if err := ConfigureRuntimeTools(job, &options); err != nil {
-					t.Fatal(err)
-				}
+				configureRoleTools(t, job, &options)
 				var recipe bool
 				availableTools := map[string]bool{}
 				for _, tool := range options.Tools {

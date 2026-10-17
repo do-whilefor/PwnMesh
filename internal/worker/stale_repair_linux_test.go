@@ -17,6 +17,7 @@ import (
 	"golang.org/x/sys/unix"
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/artifactcheck"
+	"pwnmesh/internal/protocol"
 )
 
 func repairJob(t *testing.T, content string) Job {
@@ -157,7 +158,7 @@ func TestRepairRecoveryPreservesAnExecutedAttempt(t *testing.T) {
 		if err := os.WriteFile(j.Repair.Path, []byte(`{"ok":true}`), 0600); err != nil {
 			t.Fatal(err)
 		}
-		cancel(ErrInterrupted)
+		cancel(protocol.ErrInterrupted)
 		return agent.Message{}, context.Canceled
 	})
 	if _, err := runSession(ctx, j, Options{RunDir: dir, Provider: p, Tools: []agent.Tool{}, Output: repairTestBridge(dir)}); !errors.Is(err, context.Canceled) {

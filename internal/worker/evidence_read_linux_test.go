@@ -50,9 +50,7 @@ func retainedReadTool(t *testing.T, workspace string, state *board.State) agent.
 	options := Options{RunDir: runDir, Output: &draftTestBridge{dir: runDir, handle: func(request GraphRequest) (any, error) {
 		return protocol.GraphPage(*state, request)
 	}}}
-	if err := ConfigureRuntimeTools(job, &options); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, job, &options)
 	return snapshotRuntimeTool(t, options, "read_evidence")
 }
 
@@ -239,9 +237,7 @@ func TestCuratorReadEvidenceUsesFrozenSnapshotBridge(t *testing.T) {
 		return protocol.GraphPage(frozen, r)
 	}}
 	options := Options{RunDir: runDir, Output: bridge}
-	if err := ConfigureRuntimeTools(j, &options); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, j, &options)
 	for _, tool := range options.Tools {
 		if tool.Name != "read_graph" && tool.Name != "graph_action" && tool.Name != "read_evidence" {
 			t.Fatalf("curator gained arbitrary execution capability: %s", tool.Name)

@@ -58,9 +58,7 @@ func TestCuratorNormalizesOnlyOptionalDisputeNullsThroughLoop(t *testing.T) {
 
 func TestCuratorNullableSchemaRejectsOtherMalformedFields(t *testing.T) {
 	opts := Options{}
-	if err := ConfigureRuntimeTools(curationJob(t), &opts); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, curationJob(t), &opts)
 	var schema json.RawMessage
 	for _, tool := range opts.Tools {
 		if tool.Name == "graph_action" {

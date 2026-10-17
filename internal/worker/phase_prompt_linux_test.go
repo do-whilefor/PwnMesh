@@ -47,9 +47,7 @@ func TestFixedPromptOverhead(t *testing.T) {
 					}
 				}
 				o := Options{RunDir: t.TempDir()}
-				if err := ConfigureRuntimeTools(j, &o); err != nil {
-					t.Fatal(err)
-				}
+				configureRoleTools(t, j, &o)
 				definitions := make([]agent.Definition, len(o.Tools))
 				for i, tool := range o.Tools {
 					definitions[i] = tool.Definition

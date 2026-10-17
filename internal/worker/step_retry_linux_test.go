@@ -14,9 +14,7 @@ func TestStepRetryToolsAndPromptDescribeAuthorization(t *testing.T) {
 	const protocol = 1
 	j := Job{Kind: "reason", GraphRPC: true, Graph: board.Graph{Project: board.Project{OrchestrationVersion: protocol}}}
 	opts := Options{}
-	if err := ConfigureRuntimeTools(j, &opts); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, j, &opts)
 	action := opts.Tools[1]
 	err := agent.ValidateArguments(action.Schema, json.RawMessage(`{"op":"step","idempotency_key":"retry","payload":{"action":"retry","id":"failed-step","latest_run_id":"failed-run","reason":"The prerequisite is now ready"}}`))
 	if err != nil {

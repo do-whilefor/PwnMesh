@@ -24,9 +24,7 @@ func TestGraphReadSchemasPreserveCurrentSectionsAndSnapshotContract(t *testing.T
 	} {
 		t.Run(name, func(t *testing.T) {
 			opts := Options{Tools: []agent.Tool{}}
-			if err := ConfigureRuntimeTools(job, &opts); err != nil {
-				t.Fatal(err)
-			}
+			configureRoleTools(t, job, &opts)
 			reads := map[string]json.RawMessage{}
 			for _, tool := range opts.Tools {
 				if tool.Name == "read_graph" || tool.Name == "read_snapshot" {
@@ -201,9 +199,7 @@ func TestGraphActionCorrectedArrayReusesKeyAndPreviews(t *testing.T) {
 
 func TestGraphActionCollectionSchemaPreservesSupportedPayloads(t *testing.T) {
 	opts := Options{Tools: []agent.Tool{}}
-	if err := ConfigureRuntimeTools(Job{Kind: "explore"}, &opts); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, Job{Kind: "explore"}, &opts)
 	action := opts.Tools[1]
 	for _, payload := range []string{
 		`{}`,
@@ -337,9 +333,7 @@ func TestGraphActionOptionalPayloadOnlyForDraftControls(t *testing.T) {
 	}
 	for _, kind := range []string{"reason", "explore"} {
 		opts := Options{Tools: []agent.Tool{}}
-		if err := ConfigureRuntimeTools(Job{Kind: kind}, &opts); err != nil {
-			t.Fatal(err)
-		}
+		configureRoleTools(t, Job{Kind: kind}, &opts)
 		if err := agent.ValidateArguments(opts.Tools[1].Schema, json.RawMessage(`{"op":"step","idempotency_key":"missing"}`)); err == nil || !strings.Contains(err.Error(), "missing argument arguments.payload") {
 			t.Fatalf("non-batch %s no longer requires payload: %v", kind, err)
 		}

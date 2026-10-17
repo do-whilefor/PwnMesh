@@ -92,9 +92,7 @@ func TestRuntimeGraphReadRequiresDispatcherBridge(t *testing.T) {
 			job.GraphRPC = false
 			var output bytes.Buffer
 			options := Options{RunDir: t.TempDir(), Output: &output}
-			if err := ConfigureRuntimeTools(job, &options); err != nil {
-				t.Fatal(err)
-			}
+			configureRoleTools(t, job, &options)
 			read := snapshotRuntimeTool(t, options, "read_graph")
 			raw, err := read.Execute(context.Background(), json.RawMessage(`{"section":"facts","ids":["origin"]}`))
 			if err == nil || !strings.Contains(err.Error(), "requires the dispatcher graph bridge") || raw != "" || output.Len() != 0 {

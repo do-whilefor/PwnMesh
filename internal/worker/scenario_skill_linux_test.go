@@ -130,9 +130,7 @@ func TestScenarioSkillDoesNotReachCurator(t *testing.T) {
 			j.Graph.Project.Scenario = scenario
 			j.State.Graph.Project.Scenario = scenario
 			o := Options{RunDir: t.TempDir()}
-			if err := ConfigureRuntimeTools(j, &o); err != nil {
-				t.Fatal(err)
-			}
+			configureRoleTools(t, j, &o)
 			for _, tool := range o.Tools {
 				if tool.Name == "read_pentest_skill" || tool.Name == "read_audit_skill" || tool.Name == "cvss31" {
 					t.Fatalf("scenario capability reached Curate: %s", tool.Name)

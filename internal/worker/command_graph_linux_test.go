@@ -202,9 +202,7 @@ func TestCommandGraphActualLoopUsesDefaultToolWithoutExtraPlanning(t *testing.T)
 	}
 	job.Kind = "reason"
 	options := Options{RunDir: dir}
-	if err := ConfigureRuntimeTools(job, &options); err != nil {
-		t.Fatal(err)
-	}
+	configureRoleTools(t, job, &options)
 	if slices.ContainsFunc(options.Tools, func(tool agent.Tool) bool { return tool.Name == "run_graph" }) {
 		t.Fatal("command graph leaked into reason")
 	}

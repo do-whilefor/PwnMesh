@@ -25,9 +25,7 @@ func TestRootAssessmentPromptRequiresEvaluationBeforeCompletionReuse(t *testing.
 			t.Fatal(err)
 		}
 		opts := Options{}
-		if err := ConfigureRuntimeTools(job, &opts); err != nil {
-			t.Fatal(err)
-		}
+		configureRoleTools(t, job, &opts)
 		instructions := prompt
 		for _, tool := range opts.Tools {
 			instructions += "\n" + tool.Description

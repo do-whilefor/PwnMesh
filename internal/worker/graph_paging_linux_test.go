@@ -65,9 +65,7 @@ func TestReadGraphRuntimeContinuesOversizedOverview(t *testing.T) {
 			}
 			runDir := t.TempDir()
 			options := Options{RunDir: runDir, Output: &draftTestBridge{dir: runDir, handle: func(request GraphRequest) (any, error) { return protocol.GraphPage(state, request) }}}
-			if err := ConfigureRuntimeTools(job, &options); err != nil {
-				t.Fatal(err)
-			}
+			configureRoleTools(t, job, &options)
 			for _, tool := range options.Tools {
 				if tool.Definition.Name != "read_graph" {
 					continue
