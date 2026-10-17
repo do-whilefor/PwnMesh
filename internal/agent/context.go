@@ -21,7 +21,8 @@ type ContextCheckpoint struct {
 	Version         int    `json:"version"`
 	LastSequence    uint64 `json:"last_sequence"`
 	CompactionCount uint64 `json:"compaction_count"`
-	OverflowRetries int    `json:"overflow_retries"`
+	// OverflowRetries counts recovery attempts since the last saved complete response.
+	OverflowRetries int `json:"overflow_retries"`
 	// ToolArgumentRetries counts corrections since the last successful tool receipt.
 	ToolArgumentRetries int `json:"tool_argument_retries,omitempty"`
 	// SummaryRetries is consumed before recovery and reset only on compaction commit.
@@ -269,18 +270,23 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 	if summaryBudget > available {
 		return -1, budgetError("summary allowance exceeds remaining input budget")
 	}
+	// The memory is already JSON when resolveSummary returns it, then is
+	// escaped once more inside a message text string. Quotes and backslashes
+	// can therefore double its wire size. Reserve this before selecting the
+	// tail, so displaced evidence is summarized instead of discarded later.
+	summaryBudget = min(summaryBudget, available/2)
+	summaryWireBudget := summaryBudget * 2
 	recentBudget := l.RecentBytes
 	if recentBudget <= 0 {
 		recentBudget = available / 2
 		if l.ContextTargetTokens > 0 {
 			// Fill the target with complete recent groups instead of halving
-			// it again. Reserve the summary's worst-case JSON escaping (six
-			// wire bytes per source byte); short histories need no padding.
-			recentBudget = max(0, available-summaryBudget*6)
+			// it again, reserving the summary's escaped wire representation.
+			recentBudget = available - summaryWireBudget
 		}
 	}
-	if recentBudget > available-summaryBudget {
-		recentBudget = available - summaryBudget
+	if recentBudget > available-summaryWireBudget {
+		recentBudget = available - summaryWireBudget
 	}
 	// Choose a suffix of whole messages/tool groups by bytes. A single huge
 	// tool group may be summarized in full instead of defeating compaction.

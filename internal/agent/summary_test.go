@@ -661,3 +661,45 @@ func TestSummaryRejectsCorruptOrUncommittedRetainedQuotes(t *testing.T) {
 		})
 	}
 }
+
+func TestSummaryCompactionReservesEscapedMemoryBeforeChoosingTail(t *testing.T) {
+	for _, summaryBudget := range []int{4096, 10000} {
+		t.Run(fmt.Sprintf("summary_bytes=%d", summaryBudget), func(t *testing.T) {
+			loop := summaryTestLoop(nil)
+			loop.SummaryBytes = summaryBudget
+			loop.RecentBytes = 6000
+			retained := Text("user", "Important recent evidence: "+strings.Repeat("r", 5400))
+			retained.Sequence = 5
+			loop.History = append(loop.History, retained)
+			loop.Checkpoint.LastSequence = 5
+			summarizedRecent := false
+			loop.Provider = summaryTestProvider(func(messages []Message) (Message, error) {
+				// Choosing the safe tail before the request ensures any excluded
+				// recent evidence still reaches the summarizer.
+				summarizedRecent = strings.Contains(messages[0].Text(), "Important recent evidence:")
+				_, allowance, ok := strings.Cut(messages[0].Text(), "together must fit ")
+				var advertisedBudget int
+				if _, err := fmt.Sscanf(allowance, "%d UTF-8 JSON bytes.", &advertisedBudget); !ok || err != nil {
+					t.Fatalf("summary request lost its byte allowance: %v", err)
+				}
+				draft, err := json.Marshal(struct {
+					Notes  string `json:"notes"`
+					Quotes []any  `json:"quotes"`
+				}{strings.Repeat(`"`, (advertisedBudget-128)/2), []any{}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return Text("assistant", string(draft)), nil
+			})
+			if _, err := loop.compactRequest(context.Background(), false); err != nil {
+				t.Fatalf("valid escaped summary did not fit its reserved budget: %v", err)
+			}
+			if loop.Checkpoint.LastCompaction.AfterBytes > loop.ContextBytes {
+				t.Fatal("escaped summary exceeded the final request limit")
+			}
+			if !summarizedRecent {
+				t.Fatal("recent evidence was dropped outside the summary")
+			}
+		})
+	}
+}

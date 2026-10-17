@@ -212,7 +212,15 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 				}
 			}
 		}
+		overflowRetries := l.Checkpoint.OverflowRetries
+		if m.StopReason != "max_tokens" && m.StopReason != "length" {
+			// An accepted, durably saved response proves recovery succeeded.
+			// Later independent overflows in a long task get their own attempt;
+			// failed or truncated responses cannot replenish this allowance.
+			l.Checkpoint.OverflowRetries = 0
+		}
 		if err = l.append(m); err != nil {
+			l.Checkpoint.OverflowRetries = overflowRetries
 			return last, err
 		}
 		last = m.Text()

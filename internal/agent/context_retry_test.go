@@ -131,3 +131,74 @@ func TestSummaryRetryFailurePreservesHistoryAndConsumedAllowance(t *testing.T) {
 		})
 	}
 }
+
+func TestContextOverflowRecoveryRenewsAfterDurableResponse(t *testing.T) {
+	for _, scenario := range []string{"accepted", "truncated", "save_failure"} {
+		t.Run(scenario, func(t *testing.T) {
+			loop := summaryTestLoop(nil)
+			loop.ContextBytes = 1 << 20
+			loop.Checkpoint.OverflowRetries = 1
+			boundary := errors.New("stop at saved response")
+			var saved []byte
+			type state struct {
+				History    []Message
+				Checkpoint *ContextCheckpoint
+			}
+			loop.SaveState = func(history []Message, checkpoint *ContextCheckpoint) error {
+				if scenario == "save_failure" {
+					return boundary
+				}
+				var err error
+				saved, err = json.Marshal(state{history, checkpoint})
+				return err
+			}
+			loop.Provider = summaryTestProvider(func([]Message) (Message, error) {
+				message := Text("assistant", "The retained context was accepted.")
+				if scenario == "truncated" {
+					message.StopReason = "max_tokens"
+				}
+				return message, nil
+			})
+			loop.OnTurnEnd = func(context.Context, *Loop, Message) (context.Context, string, error) {
+				return nil, "", boundary
+			}
+			if _, err := loop.Run(context.Background(), ""); !errors.Is(err, boundary) {
+				t.Fatalf("unexpected first boundary: %v", err)
+			}
+			wantAllowance := 1
+			if scenario == "accepted" {
+				wantAllowance = 0
+			}
+			if loop.Checkpoint.OverflowRetries != wantAllowance {
+				t.Fatalf("overflow allowance after %s response = %d, want %d", scenario, loop.Checkpoint.OverflowRetries, wantAllowance)
+			}
+			if scenario != "accepted" {
+				return
+			}
+			var restored state
+			if err := json.Unmarshal(saved, &restored); err != nil {
+				t.Fatal(err)
+			}
+			turns, summaries := 0, 0
+			restarted := &Loop{History: restored.History, Checkpoint: restored.Checkpoint, TaskPrompt: loop.TaskPrompt,
+				SummaryBytes: 4096, RecentBytes: 128,
+				Provider: observedProvider{
+					generate: func(context.Context, []Message, []Definition, Emit) (Message, error) {
+						turns++
+						if turns == 1 {
+							return Message{}, &ModelError{Kind: ErrorContextOverflow, Err: errors.New("a later context overflow")}
+						}
+						return Text("assistant", "Recovered from the later overflow."), nil
+					},
+					summary: func(context.Context, []Message, int, Emit) (Message, error) {
+						summaries++
+						return Text("assistant", `{"notes":"Continue from the retained evidence.","quotes":[]}`), nil
+					},
+				},
+			}
+			if _, err := restarted.Run(context.Background(), ""); err != nil || turns != 2 || summaries != 1 || restarted.Checkpoint.OverflowRetries != 0 {
+				t.Fatalf("later independent overflow could not recover: err=%v turns=%d summaries=%d checkpoint=%+v", err, turns, summaries, restarted.Checkpoint)
+			}
+		})
+	}
+}
