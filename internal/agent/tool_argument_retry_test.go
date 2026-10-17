@@ -90,13 +90,15 @@ func TestToolArgumentRetryStopsAtPersistenceAndRuntimeBoundaries(t *testing.T) {
 }
 
 func TestRetryAllowancesRejectInvalidCheckpoint(t *testing.T) {
-	for _, allowance := range []string{"tool_arguments", "context_overflow"} {
+	for _, allowance := range []string{"tool_arguments", "context_overflow", "summary"} {
 		for _, count := range []int{-1, 2} {
 			checkpoint := &ContextCheckpoint{Version: ContextCheckpointVersion, LastSequence: 1}
 			if allowance == "tool_arguments" {
 				checkpoint.ToolArgumentRetries = count
-			} else {
+			} else if allowance == "context_overflow" {
 				checkpoint.OverflowRetries = count
+			} else {
+				checkpoint.SummaryRetries = count
 			}
 			requests, saves := 0, 0
 			message := Text("user", "retained task")

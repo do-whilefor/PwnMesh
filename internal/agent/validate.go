@@ -8,6 +8,11 @@ import (
 	"math"
 )
 
+func objectArguments(input json.RawMessage) bool {
+	input = bytes.TrimSpace(input)
+	return len(input) > 0 && input[0] == '{' && json.Valid(input)
+}
+
 // ValidateArguments supports the object/primitive/array schema vocabulary used
 // by the seven built-in tools. Tools retain their own semantic validation.
 func ValidateArguments(schema, input json.RawMessage) error {

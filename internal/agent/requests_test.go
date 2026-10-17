@@ -135,3 +135,16 @@ func TestRequestObservationIncludesSummaryAndFailedUsage(t *testing.T) {
 		t.Fatalf("failed request usage not observed exactly once: %+v", events)
 	}
 }
+
+func TestRejectedToolInputKeepsFailedRequestUsage(t *testing.T) {
+	usage := &Usage{InputTokens: 7, OutputTokens: 3, CacheReadTokens: 11, CacheWriteTokens: 13}
+	var events []Event
+	loop := &Loop{ObserveRequests: true, Emit: func(event Event) { events = append(events, event) }, Provider: observedProvider{generate: func(context.Context, []Message, []Definition, Emit) (Message, error) {
+		return Message{Role: "assistant", Content: []Block{{Type: "tool_use", ID: "bad", Name: "work", Input: json.RawMessage(`[]`)}}, Usage: usage}, nil
+	}}}
+	message, err := loop.generate(context.Background(), []Message{Text("user", "task")}, nil, 0)
+	var modelErr *ModelError
+	if !errors.As(err, &modelErr) || modelErr.Kind != ErrorToolArguments || !reflect.DeepEqual(message.Usage, usage) || len(events) != 2 || !events[1].Request.Failed || !reflect.DeepEqual(events[1].Request.Usage, usage) {
+		t.Fatalf("rejected response lost failure or usage: message=%+v error=%v events=%+v", message, err, events)
+	}
+}

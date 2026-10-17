@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"time"
 )
 
@@ -50,6 +51,14 @@ func (l *Loop) generateMeasured(ctx context.Context, messages []Message, defs []
 		}
 	} else {
 		message, err = l.Provider.Generate(ctx, messages, defs, l.emit)
+	}
+	if err == nil && summaryTokens == 0 && message.StopReason != "max_tokens" && message.StopReason != "length" {
+		for _, block := range message.Content {
+			if block.Type == "tool_use" && !objectArguments(block.Input) {
+				err = &ModelError{Kind: ErrorToolArguments, Err: errors.New("tool arguments must be a JSON object")}
+				break
+			}
+		}
 	}
 	if l.ObserveRequests {
 		completed := observation

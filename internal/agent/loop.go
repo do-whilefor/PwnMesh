@@ -183,7 +183,7 @@ func (l *Loop) Run(ctx context.Context, prompt string) (string, error) {
 				// The provider rejected the whole response before any calls ran.
 				// Persist one allowance until a tool succeeds, including across restarts.
 				l.Checkpoint.ToolArgumentRetries++
-				if saveErr := l.append(Text("user", "The previous response had invalid JSON tool arguments; none of its calls ran. Return valid JSON tool arguments.")); saveErr != nil {
+				if saveErr := l.append(Text("user", "The previous response had invalid tool arguments; none of its calls ran. Return a valid JSON object for each tool's arguments.")); saveErr != nil {
 					return last, saveErr
 				}
 				l.emit(Event{Type: "tool_argument_retry", Error: err.Error()})

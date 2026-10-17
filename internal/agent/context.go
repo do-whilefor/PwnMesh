@@ -22,8 +22,10 @@ type ContextCheckpoint struct {
 	CompactionCount uint64 `json:"compaction_count"`
 	OverflowRetries int    `json:"overflow_retries"`
 	// ToolArgumentRetries counts corrections since the last successful tool receipt.
-	ToolArgumentRetries int                   `json:"tool_argument_retries,omitempty"`
-	LastCompaction      *CompactionCheckpoint `json:"last_compaction,omitempty"`
+	ToolArgumentRetries int `json:"tool_argument_retries,omitempty"`
+	// SummaryRetries is consumed before recovery and reset only on compaction commit.
+	SummaryRetries int                   `json:"summary_retries,omitempty"`
+	LastCompaction *CompactionCheckpoint `json:"last_compaction,omitempty"`
 }
 
 // CompactionCheckpoint retains the metadata needed to continue compaction.
@@ -38,7 +40,7 @@ type CompactionCheckpoint struct {
 	AtSequence        uint64 `json:"at_sequence"`
 	FirstKeptSequence uint64 `json:"first_kept_sequence,omitempty"`
 	Summary           string `json:"summary"`
-	// Quotes are copied by Go from successful tool results, never model text.
+	// Quotes are copied by Go from tool results, never model text.
 	Quotes               []SummaryQuote `json:"quotes,omitempty"`
 	BeforeBytes          int            `json:"before_bytes"`
 	AfterBytes           int            `json:"after_bytes"`
@@ -67,6 +69,9 @@ func (l *Loop) initCheckpoint() error {
 		}
 		if l.Checkpoint.ToolArgumentRetries < 0 || l.Checkpoint.ToolArgumentRetries > 1 {
 			return errors.New("invalid tool argument recovery allowance")
+		}
+		if l.Checkpoint.SummaryRetries < 0 || l.Checkpoint.SummaryRetries > 1 {
+			return errors.New("invalid summary recovery allowance")
 		}
 		for _, m := range l.History {
 			if m.Sequence > l.Checkpoint.LastSequence {
@@ -103,6 +108,20 @@ func WireHistory(messages []Message) []Message {
 	result := make([]Message, len(messages))
 	for i, m := range messages {
 		result[i] = Message{Role: m.Role, Content: m.Content}
+		copied := false
+		for n, b := range m.Content {
+			if b.Type != "tool_use" || objectArguments(b.Input) {
+				continue
+			}
+			// Retained evidence is immutable. Normalize only the request view,
+			// retaining tool IDs/results and never replaying historical effects.
+			if !copied {
+				result[i].Content = append([]Block(nil), m.Content...)
+				copied = true
+			}
+			result[i].Content[n].Input = json.RawMessage(`{}`)
+			result[i].Content = append(result[i].Content, Block{Type: "text", Text: fmt.Sprintf("Historical tool arguments for %q were invalid; {} is a protocol placeholder. Use the original transcript for execution evidence.", b.ID)})
+		}
 	}
 	return result
 }
@@ -311,10 +330,53 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 	if maxTokens <= 0 {
 		maxTokens = DefaultSummaryMaxTokens
 	}
+	if l.Checkpoint.SummaryRetries > 0 {
+		return -1, budgetError("context summary recovery allowance exhausted")
+	}
 	summary, err := l.generate(ctx, summaryInput, nil, maxTokens)
-	attemptRecord.Usage = summary.Usage
+	attemptRecord.Usage = cloneUsage(summary.Usage)
 	if err != nil {
 		return -1, fmt.Errorf("context summary: %w", err)
+	}
+	if summary.StopReason == "max_tokens" || summary.StopReason == "length" {
+		if err := ctx.Err(); err != nil {
+			return -1, err
+		}
+		// Persist before sending the retry. A crash or failed retry cannot
+		// grant another attempt, extend the deadline, or replace original data.
+		l.Checkpoint.SummaryRetries++
+		if err := l.saveState(); err != nil {
+			l.Checkpoint.SummaryRetries--
+			return -1, err
+		}
+		const guidance = "The previous summary hit its output limit. Rewrite it more briefly with only essential notes and quotes, using the same JSON contract.\n"
+		encoded, _ := json.Marshal(guidance)
+		summaryInput, sources, err = l.summaryRequest(body[:cut], inputLimit-(len(encoded)-2), summaryBudget)
+		if err != nil {
+			return -1, err
+		}
+		summaryInput[0].Content[0].Text = guidance + summaryInput[0].Text()
+		if size, err := l.inputBytes(summaryInput, nil); err != nil {
+			return -1, err
+		} else if size > inputLimit {
+			return -1, budgetError("summary retry input exceeds its allowance")
+		}
+		if err := ctx.Err(); err != nil {
+			return -1, err
+		}
+		summary, err = l.generate(ctx, summaryInput, nil, maxTokens)
+		if summary.Usage != nil {
+			if attemptRecord.Usage == nil {
+				attemptRecord.Usage = &Usage{}
+			}
+			attemptRecord.Usage.InputTokens += summary.Usage.InputTokens
+			attemptRecord.Usage.OutputTokens += summary.Usage.OutputTokens
+			attemptRecord.Usage.CacheReadTokens += summary.Usage.CacheReadTokens
+			attemptRecord.Usage.CacheWriteTokens += summary.Usage.CacheWriteTokens
+		}
+		if err != nil {
+			return -1, fmt.Errorf("context summary retry: %w", err)
+		}
 	}
 	if summary.Role != "assistant" || summary.StopReason == "max_tokens" || summary.StopReason == "length" {
 		return -1, budgetError("context summary was invalid or truncated")
@@ -355,6 +417,7 @@ func (l *Loop) compactRequest(ctx context.Context, force bool) (size int, result
 	l.emit(Event{Type: "context_compaction_prepared", Compaction: &prepared})
 	oldHistory, oldCheckpoint := l.History, l.Checkpoint
 	copyCheckpoint := *l.Checkpoint
+	copyCheckpoint.SummaryRetries = 0
 	copyCheckpoint.CompactionCount = record.ID
 	metadata := record.CompactionCheckpoint
 	copyCheckpoint.LastCompaction = &metadata

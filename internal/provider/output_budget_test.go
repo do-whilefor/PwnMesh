@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -46,6 +47,113 @@ func TestGenerateOutputBudgetDefaultsAndOverrides(t *testing.T) {
 				t.Fatalf("response=%q requests=%d error=%v", message.Text(), calls, err)
 			}
 		})
+	}
+}
+
+func TestNonObjectToolArgumentsRegenerateBeforeSavingOrExecuting(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, input := range []string{"", `null`, `[]`, `"bad"`, `123`} {
+			t.Run(map[bool]string{false: "json", true: "stream"}[stream]+"/"+input, func(t *testing.T) {
+				requests, effects := 0, 0
+				p := testProvider(func(req *http.Request) (*http.Response, error) {
+					requests++
+					if requests == 1 {
+						if stream {
+							body := toolResponseStream(t, "tool_use", streamedToolCall{"good-in-rejected-batch", `{}`}, streamedToolCall{"bad", input})
+							if input == "" {
+								body = strings.ReplaceAll(body, `"input":{},`, "")
+							}
+							return testResponse(req, http.StatusOK, "text/event-stream", body), nil
+						}
+						field := ""
+						if input != "" {
+							field = `,"input":` + input
+						}
+						return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"tool_use","id":"good-in-rejected-batch","name":"record","input":{}},{"type":"tool_use","id":"bad","name":"record"`+field+`}],"stop_reason":"tool_use"}`), nil
+					}
+					if requests == 2 {
+						if effects != 0 {
+							t.Fatal("a call from the rejected response executed")
+						}
+						return testResponse(req, http.StatusOK, "text/event-stream", toolResponseStream(t, "tool_use", streamedToolCall{"replacement", `{}`})), nil
+					}
+					return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`), nil
+				})
+				loop := &agent.Loop{Provider: p, SaveState: func(history []agent.Message, _ *agent.ContextCheckpoint) error {
+					for _, m := range history {
+						for _, b := range m.Content {
+							if b.ID == "bad" || b.ID == "good-in-rejected-batch" {
+								t.Fatal("invalid response entered saved history")
+							}
+						}
+					}
+					return nil
+				}, Tools: []agent.Tool{{Definition: agent.Definition{Name: "record"}, Execute: func(context.Context, json.RawMessage) (string, error) {
+					effects++
+					return "recorded", nil
+				}}}}
+				result, err := loop.Run(context.Background(), "Record once")
+				if err != nil || result != "done" || requests != 3 || effects != 1 {
+					t.Fatalf("result=%q requests=%d effects=%d error=%v", result, requests, effects, err)
+				}
+			})
+		}
+	}
+}
+
+func TestMalformedHistoricalArgumentsUseSafeWireViewWithoutChangingEvidence(t *testing.T) {
+	for _, input := range []string{"", `null`, `[]`, `"bad"`, `123`} {
+		for _, interrupted := range []bool{false, true} {
+			t.Run(input+map[bool]string{false: "/settled", true: "/interrupted"}[interrupted], func(t *testing.T) {
+				var rawInput json.RawMessage
+				if input != "" {
+					rawInput = json.RawMessage(input)
+				}
+				history := []agent.Message{agent.Text("user", "Continue"), {Role: "assistant", Content: []agent.Block{{Type: "tool_use", ID: "old", Name: "record", Input: rawInput}}}}
+				if !interrupted {
+					history = append(history, agent.Message{Role: "user", Content: []agent.Block{{Type: "tool_result", ToolUseID: "old", Content: json.RawMessage(`"retained original receipt"`)}}})
+				}
+				for i := range history {
+					history[i].Sequence = uint64(i + 1)
+				}
+				saved, err := json.Marshal(history)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var restored []agent.Message
+				if err := json.Unmarshal(saved, &restored); err != nil {
+					t.Fatal(err)
+				}
+				requests := 0
+				p := testProvider(func(req *http.Request) (*http.Response, error) {
+					requests++
+					var payload struct {
+						Messages []agent.Message `json:"messages"`
+					}
+					if err := json.NewDecoder(req.Body).Decode(&payload); err != nil {
+						t.Fatal(err)
+					}
+					call := payload.Messages[1]
+					if string(call.Content[0].Input) != `{}` || !strings.Contains(call.Text(), "Historical tool arguments") || payload.Messages[2].Content[0].ToolUseID != "old" {
+						t.Fatalf("unsafe historical view or broken pairing: %+v", payload.Messages)
+					}
+					return testResponse(req, http.StatusOK, "application/json", `{"role":"assistant","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn"}`), nil
+				})
+				loop := &agent.Loop{Provider: p, History: restored, ContextBytes: 12000, SaveState: func(saved []agent.Message, _ *agent.ContextCheckpoint) error {
+					if !reflect.DeepEqual(saved[:len(history)], history) {
+						t.Fatal("persistence rewrote original evidence")
+					}
+					return nil
+				}, Tools: []agent.Tool{{Definition: agent.Definition{Name: "record"}, Execute: func(context.Context, json.RawMessage) (string, error) {
+					t.Fatal("historical tool was executed")
+					return "", nil
+				}}}}
+				result, err := loop.Run(context.Background(), "")
+				if err != nil || result != "done" || requests != 1 || !reflect.DeepEqual(loop.History[:len(history)], history) {
+					t.Fatalf("result=%q requests=%d error=%v", result, requests, err)
+				}
+			})
+		}
 	}
 }
 
