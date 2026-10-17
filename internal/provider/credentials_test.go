@@ -19,6 +19,7 @@ func TestKimiCredentialRefreshRetainsRetryClassification(t *testing.T) {
 		kind   agent.ErrorKind
 	}{
 		{"network", 0, agent.ErrorTransport},
+		{"request_timeout", 408, agent.ErrorTransport},
 		{"rate_limit", 429, agent.ErrorRateLimit},
 		{"unavailable", 503, agent.ErrorUnavailable},
 		{"revoked", 401, agent.ErrorProvider},
@@ -48,9 +49,9 @@ func TestKimiCredentialRefreshRetainsRetryClassification(t *testing.T) {
 			if !errors.As(err, &modelErr) || modelErr.Kind != tc.kind || strings.Contains(err.Error(), "private-") || requests == 0 {
 				t.Fatalf("refresh classification or redaction failed: %v", err)
 			}
-			if tc.status == 429 || tc.status == 503 {
+			if tc.status == 408 || tc.status == 429 || tc.status == 503 {
 				var endpoint *HTTPError
-				if !errors.As(err, &endpoint) || endpoint.Status != tc.status {
+				if !errors.As(err, &endpoint) || endpoint.Status != tc.status || requests != 2 {
 					t.Fatal("refresh HTTP status was lost", err)
 				}
 			}

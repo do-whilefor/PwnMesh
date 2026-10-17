@@ -173,3 +173,50 @@ func TestStartRejectsMalformedAndUntrustedResponses(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshTimeoutsPreserveCallerCancellationAndClientPolicy(t *testing.T) {
+	for _, caller := range []string{"active", "deadline", "cancelled"} {
+		t.Run(caller, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if caller == "deadline" {
+				var deadlineCancel context.CancelFunc
+				ctx, deadlineCancel = context.WithTimeout(ctx, time.Millisecond)
+				defer deadlineCancel()
+			} else if caller == "cancelled" {
+				cancel()
+			}
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				<-r.Context().Done()
+				return nil, r.Context().Err()
+			})
+			httpClient := &http.Client{Transport: transport, Timeout: 5 * time.Millisecond}
+			client := &Client{HTTP: httpClient}
+			_, err := client.Refresh(ctx, "private-refresh")
+			if caller == "active" {
+				var failure *Error
+				if !errors.As(err, &failure) || failure.Kind != "network" || errors.Is(err, context.DeadlineExceeded) {
+					t.Fatalf("local HTTP timeout lost network classification: %v", err)
+				}
+			} else if !errors.Is(err, ctx.Err()) {
+				t.Fatalf("caller cancellation changed: %v", err)
+			}
+			if httpClient.Timeout != 5*time.Millisecond || httpClient.CheckRedirect != nil || strings.Contains(err.Error(), "private-refresh") {
+				t.Fatal("request mutated its shared client or exposed credentials")
+			}
+		})
+	}
+}
+
+func TestAuthorizationBoundsLongClientTimeoutWithoutChangingSharedClient(t *testing.T) {
+	client := &Client{HTTP: &http.Client{Timeout: time.Minute, Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		deadline, ok := r.Context().Deadline()
+		if !ok || time.Until(deadline) > requestTimeout || time.Until(deadline) < requestTimeout-time.Second {
+			t.Fatal("authorization request lost its bounded timeout")
+		}
+		return nil, errors.New("fixture network failure")
+	})}}
+	if _, err := client.Refresh(context.Background(), "private-refresh"); err == nil || client.HTTP.Timeout != time.Minute {
+		t.Fatal("authorization timeout mutated the shared client")
+	}
+}

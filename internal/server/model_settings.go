@@ -24,21 +24,22 @@ func registerModelSettings(m *http.ServeMux, path string) {
 	})
 }
 
-func registerModelSettingsWithKimi(m *http.ServeMux, path string, factory kimiClientFactory) *kimiLogins {
+func registerModelSettingsWithKimi(m *http.ServeMux, path string, factory kimiClientFactory) *modelSettings {
 	getenv := func(string) string { return "" }
 	if path != "" {
 		getenv = os.Getenv
 	}
 	settings := &modelconfig.Store{Path: path, Defaults: modelconfig.Defaults(getenv)}
-	logins := &kimiLogins{settings: settings, factory: factory, sessions: make(map[string]*kimiLogin)}
-	logins.register(m)
+	logins := &kimiLogins{factory: factory, sessions: make(map[string]*kimiLogin)}
+	models := &modelSettings{store: settings, logins: logins, credentials: &kimi.Store{Dir: modelconfig.AuthDir(path)}}
+	logins.register(m, path != "")
 	m.HandleFunc("GET /model-settings", func(w http.ResponseWriter, r *http.Request) {
 		current, err := settings.Load()
 		if err != nil {
 			writeError(w, r, b.Err(503, err.Error()))
 			return
 		}
-		modelJSON(w, logins.public(current))
+		modelJSON(w, models.public(current))
 	})
 	m.HandleFunc("PUT /model-settings", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := modelPatch(w, r)
@@ -46,12 +47,20 @@ func registerModelSettingsWithKimi(m *http.ServeMux, path string, factory kimiCl
 			writeError(w, r, b.Err(422, err.Error()))
 			return
 		}
-		current, err := logins.save(raw)
+		current, err := models.save(raw)
 		if err != nil {
 			writeError(w, r, b.Err(422, err.Error()))
 			return
 		}
-		modelJSON(w, logins.public(current))
+		modelJSON(w, models.public(current))
+	})
+	m.HandleFunc("POST /model-settings/kimi/logout", func(w http.ResponseWriter, r *http.Request) {
+		current, err := models.logout()
+		if err != nil {
+			writeError(w, r, b.Err(422, err.Error()))
+			return
+		}
+		modelJSON(w, current.Public())
 	})
 	m.HandleFunc("POST /model-settings/test", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := modelPatch(w, r)
@@ -139,7 +148,7 @@ func registerModelSettingsWithKimi(m *http.ServeMux, path string, factory kimiCl
 		}
 		modelJSON(w, map[string]any{"ok": err == nil, "latency_ms": time.Since(started).Milliseconds(), "message": message, "model": current.Model, "connection_mode": current.ConnectionMode})
 	})
-	return logins
+	return models
 }
 
 func modelPatch(w http.ResponseWriter, r *http.Request) ([]byte, error) {

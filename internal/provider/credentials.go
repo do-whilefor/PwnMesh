@@ -3,14 +3,11 @@ package provider
 import (
 	"context"
 	"errors"
-	"net/http"
 	"sync"
 
 	"pwnmesh/internal/agent"
 	"pwnmesh/internal/kimi"
 )
-
-func ConnectionClient(mode, proxy string) (*http.Client, error) { return connectionClient(mode, proxy) }
 
 func (p *Client) configureKimi(dir, id string) error {
 	store := &kimi.Store{Dir: dir, Client: &kimi.Client{HTTP: p.Client}}

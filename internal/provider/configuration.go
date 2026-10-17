@@ -74,7 +74,7 @@ func FromEnvironment(getenv func(string) string, effort string) (*Client, error)
 	if strings.TrimSpace(p.Token) == "" && p.AuthMode != "kimi_oauth" {
 		return nil, fmt.Errorf("%s is required", tokenKey)
 	}
-	p.Client, err = connectionClient(getenv("PWNMESH_CONNECTION_MODE"), getenv("PWNMESH_PROXY_URL"))
+	p.Client, err = ConnectionClient(getenv("PWNMESH_CONNECTION_MODE"), getenv("PWNMESH_PROXY_URL"))
 	if err != nil {
 		return nil, err
 	}

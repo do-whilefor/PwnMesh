@@ -45,7 +45,7 @@ func publicModelSettings(p *provider.Client) modelrpc.Settings {
 	if model == "" {
 		model = provider.DefaultModel
 	}
-	return modelrpc.Settings{Protocol: p.Protocol, AuthMode: p.AuthMode, Model: model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Timeout: p.Timeout, Adaptive: p.AdaptiveThinking()}
+	return modelrpc.Settings{Protocol: p.Protocol, Model: model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort, Timeout: p.Timeout, Adaptive: p.AdaptiveThinking()}
 }
 
 func modelWorkerEnv(w config.Worker, secrets ...string) ([]string, error) {

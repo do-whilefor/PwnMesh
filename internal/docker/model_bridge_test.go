@@ -130,10 +130,11 @@ func TestPublicModelSettingsPreservesSubscriptionRequestSizing(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := &provider.Client{Protocol: tc.protocol, AuthMode: tc.mode, BaseURL: tc.base, Model: "fixture-model", MaxTokens: 2048, ReasoningEffort: "high"}
 			settings := publicModelSettings(p)
-			sizer := &provider.Client{Protocol: settings.Protocol, AuthMode: settings.AuthMode, Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
-			if settings.Adaptive {
-				sizer.BaseURL = "https://openrouter.ai"
+			raw, _ := json.Marshal(settings)
+			if strings.Contains(string(raw), "auth_mode") || strings.Contains(string(raw), tc.base) {
+				t.Fatal("worker sizing policy includes dispatcher authentication or endpoint selection")
 			}
+			sizer := settings.RequestFormat()
 			messages := []agent.Message{agent.Text("user", "fixture request")}
 			actual, err := p.InputBytes(messages, nil)
 			if err != nil {

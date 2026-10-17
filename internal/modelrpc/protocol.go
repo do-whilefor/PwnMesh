@@ -17,13 +17,16 @@ const MaxResponseBytes = 64 << 20
 const DeliveryTimeout = 30 * time.Second
 
 type Settings struct {
-	AuthMode        string        `json:"auth_mode,omitempty"`
 	Protocol        string        `json:"protocol,omitempty"`
 	Model           string        `json:"model"`
 	MaxTokens       int           `json:"max_tokens"`
 	ReasoningEffort string        `json:"reasoning_effort"`
 	Timeout         time.Duration `json:"timeout"`
 	Adaptive        bool          `json:"adaptive"`
+}
+
+func (s Settings) RequestFormat() provider.RequestFormat {
+	return provider.RequestFormat{Protocol: s.Protocol, Model: s.Model, MaxTokens: s.MaxTokens, ReasoningEffort: s.ReasoningEffort, Adaptive: s.Adaptive}
 }
 
 type Request struct {

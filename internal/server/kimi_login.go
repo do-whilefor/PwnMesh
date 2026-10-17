@@ -35,21 +35,7 @@ type kimiLogin struct {
 type kimiLogins struct {
 	mu       sync.Mutex
 	sessions map[string]*kimiLogin
-	settings *modelconfig.Store
 	factory  kimiClientFactory
-}
-
-func (l *kimiLogins) credentials() *kimi.Store {
-	return &kimi.Store{Dir: modelconfig.AuthDir(l.settings.Path)}
-}
-
-func (l *kimiLogins) public(s modelconfig.Settings) modelconfig.Public {
-	if s.AuthMode == "kimi_oauth" && s.CredentialID != "" {
-		if _, err := l.credentials().Read(s.CredentialID); err != nil {
-			s.CredentialID = ""
-		}
-	}
-	return s.Public()
 }
 
 // remove runs under mu. Authorized drafts never reach disk until save succeeds.
@@ -80,9 +66,9 @@ func (l *kimiLogins) expire(id string, session *kimiLogin, duration time.Duratio
 	})
 }
 
-func (l *kimiLogins) register(m *http.ServeMux) {
+func (l *kimiLogins) register(m *http.ServeMux, configured bool) {
 	m.HandleFunc("POST /model-settings/kimi/login", func(w http.ResponseWriter, r *http.Request) {
-		if l.settings.Path == "" {
+		if !configured {
 			writeError(w, r, b.Err(422, "model settings storage is not configured"))
 			return
 		}
@@ -151,27 +137,6 @@ func (l *kimiLogins) register(m *http.ServeMux) {
 		l.remove(r.PathValue("id"))
 		l.mu.Unlock()
 		modelJSON(w, map[string]string{"status": "cancelled"})
-	})
-	m.HandleFunc("POST /model-settings/kimi/logout", func(w http.ResponseWriter, r *http.Request) {
-		l.mu.Lock()
-		defer l.mu.Unlock()
-		current, err := l.settings.Update(func(s *modelconfig.Settings) error {
-			if s.AuthMode != "kimi_oauth" {
-				return errors.New("no saved Kimi subscription connection")
-			}
-			if s.CredentialID != "" {
-				if err := l.credentials().Delete(s.CredentialID); err != nil {
-					return err
-				}
-			}
-			s.CredentialID, s.Token = "", ""
-			return nil
-		})
-		if err != nil {
-			writeError(w, r, b.Err(422, err.Error()))
-			return
-		}
-		modelJSON(w, current.Public())
 	})
 }
 
@@ -249,46 +214,4 @@ func (l *kimiLogins) authorized(id string, settings modelconfig.Settings) (*kimi
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.authorizedLocked(id, settings)
-}
-
-func (l *kimiLogins) save(raw []byte) (modelconfig.Settings, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	created := ""
-	current, err := l.settings.Update(func(s *modelconfig.Settings) error {
-		id, err := decodeModelPatch(raw, s)
-		if err != nil || id == "" {
-			return err
-		}
-		// A completed PUT may lose its response. Retrying its login ID must
-		// reuse the saved credential, never replay or overwrite rotated tokens.
-		if id == s.CredentialID {
-			_, err := l.credentials().Read(id)
-			return err
-		}
-		session, err := l.authorizedLocked(id, *s)
-		if err != nil {
-			return err
-		}
-		s.CredentialID = id
-		if err := s.Validate(true); err != nil {
-			return err
-		}
-		if err := l.credentials().Save(id, session.credential); err != nil {
-			return err
-		}
-		created = id
-		return nil
-	})
-	if err != nil {
-		if created != "" {
-			_ = l.credentials().Delete(created)
-		}
-		return current, err
-	}
-	if created != "" {
-		l.remove(created)
-	}
-	// Older saved references remain valid for already running tasks.
-	return current, nil
 }

@@ -75,58 +75,11 @@ func (p *Client) GenerateSummary(ctx context.Context, messages []agent.Message, 
 // InputBytes counts the complete serialized request, including system text,
 // tools and output controls, without exposing local transcript metadata.
 func (p *Client) InputBytes(messages []agent.Message, tools []agent.Definition) (int, error) {
-	raw, err := p.payload(messages, tools, p.MaxTokens)
-	return len(raw), err
+	return p.RequestFormat().InputBytes(messages, tools)
 }
 
 func (p *Client) payload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
-	if p.Protocol == "openai" {
-		return p.openAIPayload(messages, tools, limit)
-	}
-	if p.Protocol != "" && p.Protocol != "anthropic" {
-		return nil, errors.New("unsupported model protocol")
-	}
-	model := p.Model
-	if model == "" {
-		model = DefaultModel
-	}
-	if limit <= 0 {
-		limit = DefaultMaxTokens
-	}
-	effort := p.ReasoningEffort
-	if effort == "" {
-		effort = DefaultReasoningEffort
-	}
-	switch effort {
-	case "low", "high", "max":
-	default:
-		return nil, errors.New("reasoning effort must be low, high, or max")
-	}
-	payload := struct {
-		Model     string             `json:"model"`
-		MaxTokens int                `json:"max_tokens"`
-		System    string             `json:"system"`
-		Messages  []agent.Message    `json:"messages"`
-		Tools     []agent.Definition `json:"tools,omitempty"`
-		Stream    bool               `json:"stream"`
-		Thinking  struct {
-			Type string `json:"type"`
-		} `json:"thinking"`
-		OutputConfig struct {
-			Effort string `json:"effort"`
-		} `json:"output_config"`
-	}{Model: model, MaxTokens: limit, System: System, Messages: agent.WireHistory(messages), Tools: tools, Stream: true}
-	// The default DeepSeek gateway accepts enabled with output_config.effort.
-	// GLM Coding Plan supports the same field for low/high/max:
-	// https://docs.bigmodel.cn/cn/coding-plan/latest-model
-	// OpenRouter's Messages schema requires a token budget for enabled; adaptive
-	// uses output_config.effort without a second, independent thinking budget.
-	payload.Thinking.Type = "enabled"
-	if p.AdaptiveThinking() {
-		payload.Thinking.Type = "adaptive"
-	}
-	payload.OutputConfig.Effort = effort
-	return json.Marshal(payload)
+	return p.RequestFormat().payload(messages, tools, limit)
 }
 
 func (p *Client) generate(ctx context.Context, messages []agent.Message, tools []agent.Definition, maxTokens int, emit agent.Emit) (agent.Message, error) {

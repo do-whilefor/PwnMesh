@@ -55,7 +55,7 @@ func (p *Client) openAIEndpoint() string {
 	return base + "/v1/chat/completions"
 }
 
-func (p *Client) openAIPayload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
+func (p RequestFormat) openAIPayload(messages []agent.Message, tools []agent.Definition, limit int) ([]byte, error) {
 	if strings.TrimSpace(p.Model) == "" {
 		return nil, errors.New("missing OpenAI model")
 	}

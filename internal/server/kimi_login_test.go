@@ -27,6 +27,7 @@ type kimiHarness struct {
 	t          *testing.T
 	mux        *http.ServeMux
 	logins     *kimiLogins
+	settings   *modelSettings
 	path       string
 	client     *kimi.Client
 	pollBody   string
@@ -45,7 +46,8 @@ func newKimiHarness(t *testing.T) *kimiHarness {
 	t.Setenv("PWNMESH_MODEL_PROTOCOL", "anthropic")
 	h := &kimiHarness{t: t, mux: http.NewServeMux(), path: filepath.Join(t.TempDir(), "models.json"), pollStatus: 200, pollBody: `{"access_token":"oauth-access-secret","refresh_token":"oauth-refresh-secret","expires_in":3600}`}
 	h.client = &kimi.Client{HTTP: &http.Client{Transport: kimiRoundTrip(h.roundTrip)}}
-	h.logins = registerModelSettingsWithKimi(h.mux, h.path, func(mode, proxy string) (*kimi.Client, error) { return h.client, nil })
+	h.settings = registerModelSettingsWithKimi(h.mux, h.path, func(mode, proxy string) (*kimi.Client, error) { return h.client, nil })
+	h.logins = h.settings.logins
 	t.Cleanup(func() {
 		h.logins.mu.Lock()
 		defer h.logins.mu.Unlock()
@@ -152,6 +154,31 @@ func kimiDraft(id string) map[string]any {
 }
 
 func encodeKimiDraft(body map[string]any) string { raw, _ := json.Marshal(body); return string(raw) }
+
+func TestAPISettingsSaveDoesNotWaitForKimiSessionLock(t *testing.T) {
+	h := newKimiHarness(t)
+	h.logins.mu.Lock()
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- modelSettingsRequest(t, h.mux, "PUT", "/model-settings", `{"auth_mode":"api_key","token":"general-api-secret","model":"independent-save"}`)
+	}()
+	var response *httptest.ResponseRecorder
+	select {
+	case response = <-done:
+		h.logins.mu.Unlock()
+	case <-time.After(time.Second):
+		h.logins.mu.Unlock()
+		<-done
+		t.Fatal("ordinary API settings depend on the Kimi session lock")
+	}
+	if response.Code != http.StatusOK {
+		t.Fatalf("save failed: %d %s", response.Code, response.Body.String())
+	}
+	saved, found, err := modelconfig.Read(h.path)
+	if err != nil || !found || saved.Model != "independent-save" || saved.Token != "general-api-secret" {
+		t.Fatal("API settings were not persisted independently")
+	}
+}
 
 func TestKimiLoginPollingThrottlesAndHonorsSlowDown(t *testing.T) {
 	h := newKimiHarness(t)
@@ -341,12 +368,13 @@ func TestKimiInvalidDraftsCannotPersistOrRedirectCredentials(t *testing.T) {
 func TestKimiFailedSettingsWriteRollsBackNewCredentials(t *testing.T) {
 	h := newKimiHarness(t)
 	id := h.authorized()
-	h.logins.settings.Path = filepath.Join(t.TempDir(), "directory-instead-of-settings") + string(os.PathSeparator)
+	h.settings.store.Path = filepath.Join(t.TempDir(), "directory-instead-of-settings") + string(os.PathSeparator)
+	h.settings.credentials = &kimi.Store{Dir: modelconfig.AuthDir(h.settings.store.Path)}
 	r := h.request("PUT", "/model-settings", encodeKimiDraft(kimiDraft(id)))
 	if r.Code != 422 {
 		t.Fatalf("expected failed settings write, got %d", r.Code)
 	}
-	if _, err := os.Stat(filepath.Join(modelconfig.AuthDir(h.logins.settings.Path), id+".json")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(modelconfig.AuthDir(h.settings.store.Path), id+".json")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("failed settings save retained credentials")
 	}
 	h.logins.mu.Lock()
@@ -354,6 +382,61 @@ func TestKimiFailedSettingsWriteRollsBackNewCredentials(t *testing.T) {
 	h.logins.mu.Unlock()
 	if session == nil || session.credential.AccessToken == "" {
 		t.Fatal("failed settings save destroyed the retryable login draft")
+	}
+}
+
+type failedCredentialSync struct{ *kimi.Store }
+
+func (s failedCredentialSync) Save(id string, credential kimi.Credential) error {
+	if err := s.Store.Save(id, credential); err != nil {
+		return err
+	}
+	return errors.New("credential directory sync failed after rename")
+}
+
+func TestKimiPartialCredentialWriteRollsBackAndKeepsRetryableDraft(t *testing.T) {
+	h := newKimiHarness(t)
+	id := h.authorized()
+	credentials := &kimi.Store{Dir: modelconfig.AuthDir(h.path)}
+	h.settings.credentials = failedCredentialSync{credentials}
+	body := encodeKimiDraft(kimiDraft(id))
+	if r := h.request("PUT", "/model-settings", body); r.Code != 422 {
+		t.Fatal("credential sync failure was accepted")
+	}
+	if _, err := credentials.Read(id); !errors.Is(err, kimi.ErrLoginRequired) {
+		t.Fatal("failed credential save left an unreferenced credential")
+	}
+	if _, found, err := modelconfig.Read(h.path); err != nil || found {
+		t.Fatal("failed credential save persisted settings")
+	}
+	h.settings.credentials = credentials
+	if r := h.request("PUT", "/model-settings", body); r.Code != 200 {
+		t.Fatal("credential sync failure destroyed the retryable login draft")
+	}
+}
+
+func TestKimiLogoutRemainsRevokedAfterSettingsWriteFailure(t *testing.T) {
+	h := newKimiHarness(t)
+	id := h.authorized()
+	if r := h.request("PUT", "/model-settings", encodeKimiDraft(kimiDraft(id))); r.Code != 200 {
+		t.Fatal("subscription setup failed")
+	}
+	// A trailing slash lets Load fall back to defaults but prevents the rename.
+	saved, _, err := modelconfig.Read(h.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.settings.store.Defaults = saved
+	h.settings.store.Path = filepath.Join(t.TempDir(), "unwritable-settings") + string(os.PathSeparator)
+	if r := h.request("POST", "/model-settings/kimi/logout", ""); r.Code != 422 {
+		t.Fatal("logout did not report settings persistence failure")
+	}
+	if _, err := h.settings.credentials.Read(id); !errors.Is(err, kimi.ErrLoginRequired) {
+		t.Fatal("failed settings write restored revoked credentials")
+	}
+	h.settings.store.Path = h.path
+	if r := h.request("GET", "/model-settings", ""); r.Code != 200 || !strings.Contains(r.Body.String(), `"has_token":false`) {
+		t.Fatal("stale settings reported a revoked credential as connected")
 	}
 }
 

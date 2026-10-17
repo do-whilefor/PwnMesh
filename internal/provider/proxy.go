@@ -38,7 +38,7 @@ func InContainer() bool {
 	return err == nil || os.Getenv("PWNMESH_IN_CONTAINER") == "1"
 }
 
-func connectionClient(mode, proxy string) (*http.Client, error) {
+func ConnectionClient(mode, proxy string) (*http.Client, error) {
 	if mode == "" {
 		return nil, nil // Preserve explicitly configured legacy transports.
 	}

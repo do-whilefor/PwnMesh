@@ -89,8 +89,6 @@ type response struct {
 }
 
 func (c *Client) request(ctx context.Context, path string, values url.Values) (response, int, error) {
-	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
-	defer cancel()
 	base := c.BaseURL
 	if base == "" {
 		base = OAuthURL
@@ -107,6 +105,10 @@ func (c *Client) request(ctx context.Context, path string, values url.Values) (r
 		client = http.DefaultClient
 	}
 	bounded := *client
+	// Keep local HTTP timeouts transient without masking caller cancellation.
+	if bounded.Timeout <= 0 || bounded.Timeout > requestTimeout {
+		bounded.Timeout = requestTimeout
+	}
 	bounded.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	res, err := bounded.Do(req)
 	if err != nil {
@@ -135,6 +137,9 @@ func (c *Client) request(ctx context.Context, path string, values url.Values) (r
 
 func statusError(status int) error {
 	kind := "authorization"
+	if status == http.StatusRequestTimeout {
+		kind = "network"
+	}
 	if status == http.StatusTooManyRequests {
 		kind = "rate_limit"
 	}
@@ -239,7 +244,7 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Credential, 
 		if status == 401 || status == 403 || data.Error == "invalid_grant" {
 			return Credential{}, ErrLoginRequired
 		}
-		if attempt == 0 && (status == 429 || status >= 500) {
+		if attempt == 0 && (status == http.StatusRequestTimeout || status == 429 || status >= 500) {
 			timer := time.NewTimer(250 * time.Millisecond)
 			select {
 			case <-ctx.Done():

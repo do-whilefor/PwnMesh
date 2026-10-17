@@ -67,7 +67,7 @@ func TestModelForJobUsesOnlyPublicSettingsAndPersistedEffort(t *testing.T) {
 	var _ agent.Provider = p
 	var _ agent.SummaryProvider = p
 	var _ agent.RequestSizer = p
-	if p.sizer.Token != "" || p.sizer.BaseURL != "https://openrouter.ai" || p.sizer.Model != settings.Model || p.sessionID != j.RunID || p.timeout != settings.Timeout {
+	if !p.sizer.Adaptive || p.sizer.Model != settings.Model || p.sessionID != j.RunID || p.timeout != settings.Timeout {
 		t.Fatal("bridge used private environment settings or lost its session policy")
 	}
 	history := []agent.Message{agent.Text("user", "fixture")}
@@ -101,7 +101,7 @@ func TestModelForJobSizesOpenAIRequestsWithPublicProtocol(t *testing.T) {
 	expected := &provider.Client{Protocol: "openai", Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
 	want, wantErr := expected.InputBytes(history, definitions)
 	got, gotErr := p.InputBytes(history, definitions)
-	if p.sizer.Protocol != "openai" || p.sizer.Token != "" || p.sizer.BaseURL != "" || wantErr != nil || gotErr != nil || got != want {
+	if p.sizer.Protocol != "openai" || p.sizer.Adaptive || wantErr != nil || gotErr != nil || got != want {
 		t.Fatalf("OpenAI worker sizing mismatch: got=%d want=%d errors=%v/%v", got, want, gotErr, wantErr)
 	}
 }
@@ -143,7 +143,7 @@ func TestModelForJobSizesSubscriptionRequestsWithoutCredentials(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			dir := t.TempDir()
 			settings := modelSettingsFixture(t, dir)
-			settings.Protocol, settings.AuthMode, settings.Adaptive = "anthropic", mode, mode == "kimi_oauth"
+			settings.Protocol, settings.Adaptive = "anthropic", mode == "kimi_oauth"
 			raw, _ := json.Marshal(settings)
 			if err := os.WriteFile(filepath.Join(dir, "model-settings.json"), raw, 0600); err != nil {
 				t.Fatal(err)
@@ -156,16 +156,22 @@ func TestModelForJobSizesSubscriptionRequestsWithoutCredentials(t *testing.T) {
 			expected := &provider.Client{Protocol: "anthropic", AuthMode: mode, BaseURL: base, Model: settings.Model, MaxTokens: settings.MaxTokens, ReasoningEffort: settings.ReasoningEffort}
 			want, wantErr := expected.InputBytes(history, nil)
 			got, gotErr := p.InputBytes(history, nil)
-			if p.sizer.AuthMode != mode || p.sizer.Token != "" || p.sizer.TokenSource != nil || wantErr != nil || gotErr != nil || got != want {
+			if p.sizer.Adaptive != settings.Adaptive || wantErr != nil || gotErr != nil || got != want {
 				t.Fatalf("subscription sizing mismatch: got=%d want=%d errors=%v/%v", got, want, gotErr, wantErr)
 			}
-			settings.AuthMode = "unknown"
-			raw, _ = json.Marshal(settings)
+			// Settings are regenerated for every launch. Older launch files can
+			// still contain auth_mode, which is irrelevant to request sizing.
+			var previous map[string]any
+			if err := json.Unmarshal(raw, &previous); err != nil {
+				t.Fatal(err)
+			}
+			previous["auth_mode"] = mode
+			raw, _ = json.Marshal(previous)
 			if err := os.WriteFile(filepath.Join(dir, "model-settings.json"), raw, 0600); err != nil {
 				t.Fatal(err)
 			}
-			if _, err := modelForJob(Job{RunID: "run"}, Options{RunDir: dir, Output: io.Discard}, ""); err == nil {
-				t.Fatal("accepted unknown authentication mode")
+			if previousModel, err := modelForJob(Job{RunID: "run"}, Options{RunDir: dir, Output: io.Discard}, ""); err != nil || previousModel.sizer != p.sizer {
+				t.Fatal("obsolete launch metadata changed request sizing", err)
 			}
 		})
 	}

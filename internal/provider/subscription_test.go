@@ -60,7 +60,7 @@ func TestKimiOAuthResolvesFreshBearerWithoutChangingSharedClient(t *testing.T) {
 				resolved++
 				return fmt.Sprintf("token-%d", resolved), nil
 			}
-			sizer := &Client{AuthMode: p.AuthMode, Protocol: p.Protocol, Model: p.Model, MaxTokens: p.MaxTokens, ReasoningEffort: p.ReasoningEffort}
+			sizer := p.RequestFormat()
 			wantBytes, err := sizer.InputBytes(messages, nil)
 			if err != nil {
 				t.Fatal(err)
@@ -167,7 +167,7 @@ func TestGLMCodingPlanTransmitsEffortForTurnsAndSummaries(t *testing.T) {
 			}
 			messages := []agent.Message{agent.Text("user", "fixture")}
 			p := &Client{AuthMode: "glm_coding_plan", Protocol: "anthropic", BaseURL: "https://open.bigmodel.cn/api/anthropic", Token: "plan-key", Model: "glm-5.3", MaxTokens: 512, ReasoningEffort: effort}
-			sizer := &Client{AuthMode: p.AuthMode, Protocol: p.Protocol, Model: p.Model, MaxTokens: p.MaxTokens, ReasoningEffort: effort}
+			sizer := p.RequestFormat()
 			wantBytes, err := sizer.InputBytes(messages, nil)
 			if err != nil {
 				t.Fatal(err)
